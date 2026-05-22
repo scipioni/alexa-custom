@@ -77,39 +77,6 @@ class STTStatus(Static):
         self.refresh()
 
 
-class STTStatus(Static):
-    state: reactive[str] = reactive("idle")
-    text: reactive[str] = reactive("")
-
-    def render(self) -> str:
-        if self.state == "listening":
-            words = self.text or "…"
-            return f"[dim]○[/]  [dim]wake words:[/] [dim italic]{words}[/]"
-        elif self.state == "transcribing":
-            return f"[dim]◌[/]  [dim]{self.text}[/] [dim]…[/]"
-        elif self.state == "wake":
-            return f'[bold yellow]◉[/]  [yellow]"{self.text}"[/] [dim]— listening for command…[/]'
-        elif self.state == "partial":
-            return f"[bold yellow]◉[/]  [yellow]{self.text}[/] [dim]…[/]"
-        elif self.state == "matched":
-            parts = self.text.split("→", 1)
-            transcript = parts[0].strip()
-            trigger = parts[1].strip() if len(parts) > 1 else ""
-            return f'[bold green]✓[/]  [green]"{transcript}"[/] [dim]→[/] [bold]{trigger}[/]'
-        elif self.state == "nomatch":
-            t = f'"{self.text}" ' if self.text else ""
-            return f"[bold red]✗[/]  {t}[dim red]no match[/]"
-        elif self.state == "gated":
-            return "[dim]⏸[/]  [dim]STT paused during call[/]"
-        return "[dim]○[/]  [dim]STT inactive[/]"
-
-    def watch_state(self, _: str) -> None:
-        self.refresh()
-
-    def watch_text(self, _: str) -> None:
-        self.refresh()
-
-
 class AudioStatus(Static):
     connected: reactive[bool] = reactive(False)
     conn_type: reactive[str] = reactive("unknown")

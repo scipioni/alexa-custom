@@ -181,7 +181,7 @@ class AudioWatcher(threading.Thread):
         self,
         input_spec: str | None = None,
         output_spec: str | None = None,
-        on_status_change: callable[[bool, str], None] | None = None,
+        on_status_change: "Callable[[bool, str], None] | None" = None,
     ):
         super().__init__(daemon=True, name="audio-watcher")
         self.input_spec = input_spec
