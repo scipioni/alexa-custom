@@ -89,7 +89,8 @@ def browser_join_url(identity: str = "browser-user") -> str:
 
 async def run_session(
     mic,
-    player,
+    devices: MediaDevices,
+    pw_device: int,
     stop_event: asyncio.Event,
     on_event: Callable[[str, dict], None] | None = None,
 ):
@@ -105,8 +106,14 @@ async def run_session(
     disconnected = asyncio.Event()
     call_connected = False
     subscribed_tracks: dict[str, AudioStream] = {}
+    player_tracks: set[str] = set()
     volumes = {"mic": 0.0, "spk": 0.0}
     tap_tasks: list[asyncio.Task] = []
+
+    # Create a fresh player for this session to ensure clean state and avoid mixer timeouts
+    player = devices.open_output(output_device=pw_device)
+    await player.start()
+    logger.debug("Session player started")
 
     async def _tap_mic(track: LocalAudioTrack):
         stream = AudioStream(track)
@@ -119,7 +126,6 @@ async def run_session(
         stream = AudioStream(track)
         subscribed_tracks[identity] = stream
         async for event in stream:
-            # We track the max peak across all remote participants for the "Speaker" meter
             volumes["spk"] = max(volumes["spk"], calculate_peak(event.frame))
             if (
                 identity not in subscribed_tracks
@@ -130,9 +136,8 @@ async def run_session(
 
     async def _volume_emitter():
         while not disconnected.is_set() and not stop_event.is_set():
-            await asyncio.sleep(0.1)  # 10Hz throttle
+            await asyncio.sleep(0.1)
             emit("volume_update", {"mic": volumes["mic"], "spk": volumes["spk"]})
-            # Decay levels so meters drop when silent
             volumes["mic"] *= 0.6
             volumes["spk"] *= 0.6
 
@@ -151,7 +156,6 @@ async def run_session(
                 {"identity": participant.identity, "track_sid": track.sid},
             )
 
-            # Start tapping remote track
             tap_tasks.append(
                 asyncio.create_task(_tap_remote(participant.identity, track))
             )
@@ -159,7 +163,8 @@ async def run_session(
             async def _add():
                 try:
                     await player.add_track(track)
-                    logger.info(f"Track {track.sid} added to player OK")
+                    player_tracks.add(track.sid)
+                    logger.debug(f"Track {track.sid} added to player")
                 except Exception as e:
                     logger.error(f"add_track failed: {e}")
 
@@ -171,7 +176,9 @@ async def run_session(
             logger.info(f"Audio track unsubscribed from {participant.identity}")
             emit("track_unsubscribed", {"identity": participant.identity})
             subscribed_tracks.pop(participant.identity, None)
-            asyncio.create_task(player.remove_track(track))
+            if track.sid in player_tracks:
+                asyncio.create_task(player.remove_track(track))
+                player_tracks.discard(track.sid)
 
     @room.on("participant_connected")
     def on_participant_connected(participant):
@@ -196,17 +203,8 @@ async def run_session(
         call_connected = True
         asyncio.create_task(asyncio.to_thread(play_call_start))
 
-        # Emit events for participants already in the room at connect time.
         for p in room.remote_participants.values():
-            logger.info(
-                f"Existing participant: {p.identity} ({len(p.track_publications)} tracks)"
-            )
             emit("participant_joined", {"identity": p.identity})
-
-        if not room.remote_participants:
-            logger.info(
-                "No other participants in room yet — waiting for browser to join"
-            )
 
         track = LocalAudioTrack.create_audio_track("microphone", mic.source)
         opts = TrackPublishOptions()
@@ -214,7 +212,6 @@ async def run_session(
         await room.local_participant.publish_track(track, opts)
         logger.info("Microphone track published — full duplex active")
 
-        # Start microphone tap and volume emitter
         tap_tasks.append(asyncio.create_task(_tap_mic(track)))
         tap_tasks.append(asyncio.create_task(_volume_emitter()))
 
@@ -224,15 +221,9 @@ async def run_session(
             empty_since: float | None = (
                 None if room.remote_participants else _time.monotonic()
             )
-            if empty_since is not None:
-                logger.info(
-                    f"Room empty at connect — disconnecting in {empty_room_timeout:.0f}s"
-                )
             while not disconnected.is_set() and not stop_event.is_set():
                 await asyncio.sleep(1.0)
                 if room.remote_participants:
-                    if empty_since is not None:
-                        logger.debug("Participants rejoined — empty-room timer reset")
                     empty_since = None
                 else:
                     now = _time.monotonic()
@@ -250,20 +241,6 @@ async def run_session(
         if empty_room_timeout > 0:
             tap_tasks.append(asyncio.create_task(_empty_room_watchdog()))
 
-        async def _status_loop():
-            while True:
-                await asyncio.sleep(15)
-                n_participants = len(room.remote_participants)
-                n_tracks = len(subscribed_tracks)
-                buf_bytes = len(player._buffer)
-                logger.info(
-                    f"Status: {n_participants} remote participant(s), "
-                    f"{n_tracks} subscribed audio track(s), "
-                    f"playback buffer {buf_bytes} bytes"
-                )
-
-        status_task = asyncio.create_task(_status_loop())
-
         await asyncio.wait(
             [
                 asyncio.create_task(disconnected.wait()),
@@ -271,8 +248,8 @@ async def run_session(
             ],
             return_when=asyncio.FIRST_COMPLETED,
         )
-        status_task.cancel()
     finally:
+        logger.debug("Cleaning up session tasks and player...")
         for t in tap_tasks:
             t.cancel()
         tap_tasks.clear()
@@ -283,6 +260,8 @@ async def run_session(
             except Exception:
                 pass
         await room.disconnect()
+        await player.aclose()
+        logger.debug("Session cleanup complete")
 
 
 async def _async_main(
@@ -316,8 +295,18 @@ async def _async_main(
     except Exception as e:
         logger.warning(f"Startup chime skipped: {e}")
 
+    # Use 16kHz for Bluetooth (if we can detect it) or 48kHz for USB/Internal.
+    # High sample rates on weak hardware (like Arduino Uno Q) cause mixer timeouts.
+    samplerate = 48000
+    from alexa_custom.audio import check_newpie_ready
+
+    _, conn_type = await asyncio.to_thread(check_newpie_ready)
+    if conn_type == "bluetooth":
+        samplerate = 16000
+        logger.info("Bluetooth detected — using 16kHz sample rate for session")
+
     devices = MediaDevices(
-        input_sample_rate=48000, output_sample_rate=48000, num_channels=1
+        input_sample_rate=samplerate, output_sample_rate=samplerate, num_channels=1
     )
 
     # Use the provided stop event (TUI mode) or create one and wire signals.
@@ -338,7 +327,9 @@ async def _async_main(
     aec = _flag("MIC_AEC")
     ns = _flag("MIC_NOISE_SUPPRESSION")
     hpf = _flag("MIC_HIGH_PASS_FILTER")
-    logger.info(f"Opening microphone (AEC={aec} NS={ns} HPF={hpf} AGC={agc})...")
+    logger.info(
+        f"Opening microphone (AEC={aec} NS={ns} HPF={hpf} AGC={agc} rate={samplerate})..."
+    )
     mic = devices.open_input(
         enable_aec=aec,
         noise_suppression=ns,
@@ -347,11 +338,6 @@ async def _async_main(
         input_device=pw_device,
         queue_capacity=200,
     )
-
-    logger.info("Opening speaker output...")
-    player = devices.open_output(output_device=pw_device)
-    await player.start()
-    logger.info("Speaker output started")
 
     def _wrapped_on_event(event: str, data: dict) -> None:
         if livekit_connected_flag is not None:
@@ -377,7 +363,9 @@ async def _async_main(
 
             _wrapped_on_event("reconnecting", {})
             try:
-                await run_session(mic, player, stop_event, on_event=_wrapped_on_event)
+                await run_session(
+                    mic, devices, pw_device, stop_event, on_event=_wrapped_on_event
+                )
             except Exception as e:
                 logger.error(f"Session error: {e}")
 
@@ -398,9 +386,8 @@ async def _async_main(
             except asyncio.TimeoutError:
                 pass
     finally:
-        logger.info("Shutting down...")
+        logger.info("Shutting down LiveKit loop...")
         await mic.aclose()
-        await player.aclose()
         logger.info("Done.")
 
 

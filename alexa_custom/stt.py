@@ -247,10 +247,9 @@ def _recognition_loop(
 ) -> None:
     stage1 = vosk.KaldiRecognizer(model, 16000, _grammar_json(config.wake_words))
     stage1.SetWords(True)
-    # Full-transcription recognizer for live display only — only instantiated when
-    # a UI callback is present, so headless mode pays no extra CPU cost.
     display_rec = vosk.KaldiRecognizer(model, 16000) if on_stt_event else None
     cooldown_until = 0.0
+    was_gated = False
 
     if on_stt_event:
         on_stt_event("listening", {"wake_words": config.wake_words})
@@ -266,9 +265,18 @@ def _recognition_loop(
 
         if livekit_connected_flag.is_set():
             cooldown_until = time.monotonic() + _STT_COOLDOWN
-            if on_stt_event:
-                on_stt_event("gated", {})
+            if not was_gated:
+                logger.info("STT gated (call active)")
+                if on_stt_event:
+                    on_stt_event("gated", {})
+                was_gated = True
             continue
+
+        if was_gated:
+            logger.info("STT resumed (call ended)")
+            was_gated = False
+            if on_stt_event:
+                on_stt_event("listening", {"wake_words": config.wake_words})
 
         if time.monotonic() < cooldown_until:
             stage1.Reset()
