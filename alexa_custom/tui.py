@@ -5,13 +5,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
-import subprocess
 import threading
 from datetime import datetime
 from collections.abc import Coroutine
 from typing import Any, Callable
 
-import numpy as np
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.reactive import reactive
@@ -68,6 +66,8 @@ class STTStatus(Static):
         elif self.state == "nomatch":
             t = f'"{self.text}" ' if self.text else ""
             return f"[bold red]✗[/]  {t}[dim red]no match[/]"
+        elif self.state == "gated":
+            return "[dim]⏸[/]  [dim]STT paused during call[/]"
         return "[dim]○[/]  [dim]STT inactive[/]"
 
     def watch_state(self, _: str) -> None:
@@ -320,14 +320,20 @@ class AlexaTUI(App[None]):
 
     def _read_volumes(self) -> tuple[float, float]:
         import pulsectl
+
         mic_vol = spk_vol = -1.0
         with pulsectl.Pulse("tui-vol") as pulse:
             if self._input_spec:
                 needle = self._input_spec.lower()
                 src = next(
-                    (s for s in pulse.source_list()
-                     if "monitor" not in s.name
-                     and (needle in s.description.lower() or needle in s.name.lower())),
+                    (
+                        s
+                        for s in pulse.source_list()
+                        if "monitor" not in s.name
+                        and (
+                            needle in s.description.lower() or needle in s.name.lower()
+                        )
+                    ),
                     None,
                 )
                 if src:
@@ -335,8 +341,11 @@ class AlexaTUI(App[None]):
             if self._output_spec:
                 needle = self._output_spec.lower()
                 snk = next(
-                    (s for s in pulse.sink_list()
-                     if needle in s.description.lower() or needle in s.name.lower()),
+                    (
+                        s
+                        for s in pulse.sink_list()
+                        if needle in s.description.lower() or needle in s.name.lower()
+                    ),
                     None,
                 )
                 if snk:
@@ -456,6 +465,9 @@ class AlexaTUI(App[None]):
         elif event == "nomatch":
             widget.state = "nomatch"
             widget.text = data.get("transcript", "")
+        elif event == "gated":
+            widget.state = "gated"
+            widget.text = ""
 
 
 # ── public entry point ────────────────────────────────────────────────────────

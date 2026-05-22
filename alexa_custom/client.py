@@ -82,7 +82,7 @@ def browser_join_url(identity: str = "browser-user") -> str:
     import urllib.parse
 
     token = make_browser_token(identity)
-    room = require_env("LIVEKIT_ROOM")
+    require_env("LIVEKIT_ROOM")
     params = urllib.parse.urlencode({"liveKitUrl": ROOM_URL, "token": token})
     return f"https://meet.livekit.io/custom/?{params}"
 
@@ -220,6 +220,7 @@ async def run_session(
 
         async def _empty_room_watchdog() -> None:
             import time as _time
+
             empty_since: float | None = (
                 None if room.remote_participants else _time.monotonic()
             )
@@ -409,7 +410,9 @@ def ensure_setup() -> None:
 
     # 1. Vosk model - download automatically if missing
     if not os.path.isdir(_MODEL_PATH):
-        logger.info(f"Vosk model not found at {_MODEL_PATH}. Downloading automatically...")
+        logger.info(
+            f"Vosk model not found at {_MODEL_PATH}. Downloading automatically..."
+        )
         try:
             download_model()
         except Exception as e:
@@ -493,8 +496,10 @@ def main() -> None:
         # LiveKit's Rust FFI leaves non-cooperative threads that block Python
         # 3.13's finalizer.  The terminal is already restored by this point
         # (Textual's cleanup ran inside app.run()), so a hard exit is safe.
+        import time as _time
         import os as _os
 
+        _time.sleep(0.2)
         _os._exit(0)
 
     else:
@@ -510,7 +515,7 @@ def main() -> None:
             async def _livekit_connect_fn() -> None:
                 connect_trigger.set()
 
-            stt_thread = start_stt_thread(
+            start_stt_thread(
                 config=config,
                 stop_event=stt_stop,
                 telegram_client=telegram_client,

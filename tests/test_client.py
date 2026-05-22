@@ -4,7 +4,14 @@ import unittest
 from unittest.mock import patch, MagicMock, AsyncMock
 import numpy as np
 import pytest
-from alexa_custom.client import calculate_peak, get_token, make_browser_token, browser_join_url, run_session
+from alexa_custom.client import (
+    calculate_peak,
+    get_token,
+    make_browser_token,
+    browser_join_url,
+    run_session,
+)
+
 
 class TestClientAsync:
     @pytest.mark.asyncio
@@ -13,7 +20,9 @@ class TestClientAsync:
     @patch("alexa_custom.client.get_token")
     @patch("alexa_custom.client.LocalAudioTrack")
     @patch("alexa_custom.client.TrackPublishOptions")
-    async def test_run_session_basic(self, mock_opts, mock_local_track, mock_get_token, mock_room_class):
+    async def test_run_session_basic(
+        self, mock_opts, mock_local_track, mock_get_token, mock_room_class
+    ):
         mock_room = MagicMock()
         mock_room.connect = AsyncMock()
         mock_room.disconnect = AsyncMock()
@@ -27,25 +36,28 @@ class TestClientAsync:
         mic = MagicMock()
         player = MagicMock()
         stop_event = asyncio.Event()
-        
+
         # We need to trigger the stop event so it doesn't run forever
         async def stop_soon():
             await asyncio.sleep(0.1)
             stop_event.set()
-        
+
         asyncio.create_task(stop_soon())
-        
-        with patch.dict(os.environ, {"LIVEKIT_URL": "http://test.url", "LIVEKIT_ROOM": "test-room"}):
+
+        with patch.dict(
+            os.environ, {"LIVEKIT_URL": "http://test.url", "LIVEKIT_ROOM": "test-room"}
+        ):
             await run_session(mic, player, stop_event)
-            
+
         mock_room.connect.assert_called_once_with("http://test.url", "test-token")
         mock_room.local_participant.publish_track.assert_called_once()
         mock_room.disconnect.assert_called_once()
 
+
 class TestClientUtils(unittest.TestCase):
     def test_calculate_peak_empty(self):
         frame = MagicMock()
-        frame.data = b''
+        frame.data = b""
         assert calculate_peak(frame) == 0.0
 
     def test_calculate_peak_silence(self):
@@ -65,14 +77,17 @@ class TestClientUtils(unittest.TestCase):
         frame.data = np.array([-32768], dtype=np.int16).tobytes()
         assert calculate_peak(frame) == pytest.approx(32768.0 / 32768.0)
 
-    @patch.dict(os.environ, {
-        "LIVEKIT_API_KEY": "test_key",
-        "LIVEKIT_API_SECRET": "test_secret",
-        "LIVEKIT_ROOM": "test_room",
-        "LIVEKIT_URL": "http://test.url"
-    })
+    @patch.dict(
+        os.environ,
+        {
+            "LIVEKIT_API_KEY": "test_key",
+            "LIVEKIT_API_SECRET": "test_secret",
+            "LIVEKIT_ROOM": "test_room",
+            "LIVEKIT_URL": "http://test.url",
+        },
+    )
     def test_tokens(self):
-        # We can't easily verify the JWT content without a library, 
+        # We can't easily verify the JWT content without a library,
         # but we can ensure they return strings and don't crash.
         token = get_token()
         assert isinstance(token, str)
@@ -83,12 +98,15 @@ class TestClientUtils(unittest.TestCase):
         assert len(token2) > 0
 
     @patch("alexa_custom.client.ROOM_URL", "http://test.url")
-    @patch.dict(os.environ, {
-        "LIVEKIT_API_KEY": "test_key",
-        "LIVEKIT_API_SECRET": "test_secret",
-        "LIVEKIT_ROOM": "test_room",
-        "LIVEKIT_URL": "http://test.url"
-    })
+    @patch.dict(
+        os.environ,
+        {
+            "LIVEKIT_API_KEY": "test_key",
+            "LIVEKIT_API_SECRET": "test_secret",
+            "LIVEKIT_ROOM": "test_room",
+            "LIVEKIT_URL": "http://test.url",
+        },
+    )
     def test_browser_join_url(self):
         url = browser_join_url("test-user")
         assert "https://meet.livekit.io/custom/?" in url

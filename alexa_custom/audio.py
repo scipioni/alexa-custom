@@ -247,11 +247,55 @@ def speakerphone():
         sys.exit(1)
 
 
+def _play_raw(data: bytes, samplerate: int, channels: int) -> None:
+    """Play raw float32 audio via pw-play (native PipeWire) or aplay (ALSA fallback)."""
+    import shutil
+
+    pw_play = shutil.which("pw-play")
+    if pw_play:
+        cmd = [
+            pw_play,
+            "--rate",
+            str(samplerate),
+            "--channels",
+            str(channels),
+            "--format",
+            "f32",
+            "-",
+        ]
+    else:
+        cmd = [
+            "aplay",
+            "-D",
+            "pipewire",
+            "-r",
+            str(samplerate),
+            "-f",
+            "FLOAT_LE",
+            "-c",
+            str(channels),
+            "-q",
+        ]
+
+    try:
+        subprocess.run(
+            cmd,
+            input=data,
+            timeout=5,
+            check=False,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception:
+        # We don't want to crash the main app if a beep fails
+        pass
+
+
 def play_startup_chime():
     """Play a short ascending chime (C5-E5-G5) through the PipeWire default sink.
 
-    Uses aplay instead of PortAudio because PortAudio's ALSA backend hangs on
-    the pipewire virtual device after a routing change.
+    Uses pw-play (native PipeWire) or aplay instead of PortAudio because
+    PortAudio's ALSA backend hangs on the pipewire virtual device after
+    a routing change.
     """
     samplerate = 48000
     channels = 2
@@ -281,23 +325,7 @@ def play_startup_chime():
             _note(783.99),  # G5
         ]
     )
-    subprocess.run(
-        [
-            "aplay",
-            "-D",
-            "pipewire",
-            "-r",
-            str(samplerate),
-            "-f",
-            "FLOAT_LE",
-            "-c",
-            str(channels),
-            "-q",
-        ],
-        input=chime.tobytes(),
-        timeout=5,
-        check=True,
-    )
+    _play_raw(chime.tobytes(), samplerate, channels)
 
 
 def list_env_devices():
@@ -330,7 +358,7 @@ def list_env_devices():
 
 
 def play_beep(frequency_hz: float, duration_ms: int) -> None:
-    """Play a pure-tone beep through the PipeWire default sink via aplay."""
+    """Play a pure-tone beep through the PipeWire default sink via aplay or pw-play."""
     samplerate = 48000
     channels = 2
     n = int(samplerate * duration_ms / 1000)
@@ -342,23 +370,7 @@ def play_beep(frequency_hz: float, duration_ms: int) -> None:
     envelope[-fade:] = np.linspace(1, 0, fade)
     mono = wave * envelope
     audio = np.column_stack([mono, mono])
-    subprocess.run(
-        [
-            "aplay",
-            "-D",
-            "pipewire",
-            "-r",
-            str(samplerate),
-            "-f",
-            "FLOAT_LE",
-            "-c",
-            str(channels),
-            "-q",
-        ],
-        input=audio.tobytes(),
-        timeout=3,
-        check=False,
-    )
+    _play_raw(audio.tobytes(), samplerate, channels)
 
 
 def play_wake_beep() -> None:
@@ -387,6 +399,7 @@ _UDEV_PATH = "/etc/udev/rules.d/89-alsa-usb-volume.rules"
 def _find_alsa_card(needle: str) -> tuple[int, str] | None:
     """Return (card_index, card_id) for the first ALSA card whose id contains needle."""
     import os
+
     for entry in os.listdir("/proc/asound"):
         if not entry.startswith("card"):
             continue
@@ -404,7 +417,8 @@ def _usb_ids_for_alsa_card(card_index: int) -> tuple[str, str] | None:
     """Return (vendor_id, model_id) by querying udevadm for the ALSA control device."""
     result = subprocess.run(
         ["udevadm", "info", "--name", f"/dev/snd/controlC{card_index}"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     vendor = model = None
     for line in result.stdout.splitlines():
@@ -420,6 +434,7 @@ def _usb_ids_for_alsa_card(card_index: int) -> tuple[str, str] | None:
 def setup_audio() -> None:
     """Set output device PCM hardware volume to 100% and persist it across reboots."""
     from alexa_custom._env import load_env
+
     load_env()
 
     output_spec = os.environ.get("OUTPUT_DEVICE", "").strip()
@@ -434,12 +449,15 @@ def setup_audio() -> None:
         sys.exit(1)
 
     card_index, card_id = card
-    print(f"Found {card_id!r} at ALSA card {card_index} (OUTPUT_DEVICE={output_spec!r})")
+    print(
+        f"Found {card_id!r} at ALSA card {card_index} (OUTPUT_DEVICE={output_spec!r})"
+    )
 
     # Set PCM Playback Volume to 100%
     result = subprocess.run(
         ["amixer", "-c", str(card_index), "set", "PCM", "100%"],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     if result.returncode != 0:
         print(f"ERROR: amixer failed: {result.stderr.strip()}")
@@ -447,7 +465,9 @@ def setup_audio() -> None:
     print("PCM Playback Volume set to 100%")
 
     # Save ALSA state
-    result = subprocess.run(["sudo", "alsactl", "store"], capture_output=True, text=True)
+    result = subprocess.run(
+        ["sudo", "alsactl", "store"], capture_output=True, text=True
+    )
     if result.returncode != 0:
         print(f"ERROR: alsactl store failed: {result.stderr.strip()}")
         sys.exit(1)
@@ -456,7 +476,9 @@ def setup_audio() -> None:
     # Build and install udev rule based on the device's actual USB IDs
     ids = _usb_ids_for_alsa_card(card_index)
     if ids is None:
-        print("WARNING: Could not read USB IDs — skipping udev rule (device may not be USB)")
+        print(
+            "WARNING: Could not read USB IDs — skipping udev rule (device may not be USB)"
+        )
         return
 
     vendor_id, model_id = ids
@@ -469,7 +491,9 @@ def setup_audio() -> None:
 
     result = subprocess.run(
         ["sudo", "tee", _UDEV_PATH],
-        input=udev_rule, capture_output=True, text=True,
+        input=udev_rule,
+        capture_output=True,
+        text=True,
     )
     if result.returncode != 0:
         print(f"ERROR: writing udev rule failed: {result.stderr.strip()}")
@@ -484,18 +508,22 @@ def setup_audio() -> None:
         needle = input_spec.lower()
         source = next(
             (
-                s for s in pulse.source_list()
+                s
+                for s in pulse.source_list()
                 if "monitor" not in s.name
                 and (needle in s.description.lower() or needle in s.name.lower())
             ),
             None,
         )
     if source is None:
-        print(f"WARNING: No PipeWire source found for {input_spec!r} — skipping mic gain")
+        print(
+            f"WARNING: No PipeWire source found for {input_spec!r} — skipping mic gain"
+        )
     else:
         result = subprocess.run(
             ["pactl", "set-source-volume", source.name, "300%"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         if result.returncode == 0:
             print(f"Microphone gain set to 3x on {source.name}")

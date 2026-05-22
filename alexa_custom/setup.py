@@ -40,6 +40,7 @@ def download_model(large: bool = False, force: bool = False) -> None:
 
     if dest.exists() and force:
         import shutil
+
         print(f"Removing existing model at {dest.resolve()} …")
         shutil.rmtree(dest)
 

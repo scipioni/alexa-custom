@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 _CHUNK = 4096
 _MODEL_PATH = os.environ.get("VOSK_MODEL_PATH", "models/it")
+_STT_COOLDOWN = 1.0
 
 
 def resolve_parec_source(input_spec: str | None) -> str | None:
@@ -53,7 +54,7 @@ def start_parec(source: str | None) -> subprocess.Popen:
     ]
     if source:
         cmd.append(f"--device={source}")
-    return subprocess.Popen(cmd, stdout=subprocess.PIPE)
+    return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 
 
 def _load_model() -> vosk.Model:
@@ -73,7 +74,7 @@ def _rms_level(data: bytes) -> float:
     samples = np.frombuffer(data, dtype=np.int16).astype(np.float32)
     if len(samples) == 0:
         return 0.0
-    return float(np.sqrt(np.mean(samples ** 2))) / 32768.0
+    return float(np.sqrt(np.mean(samples**2))) / 32768.0
 
 
 def run_stt_worker(
@@ -99,7 +100,11 @@ def run_stt_worker(
         f"source={source or 'default'}"
     )
 
-    loop_fn = _single_stage_loop if config.recognition_mode == "single-stage" else _recognition_loop
+    loop_fn = (
+        _single_stage_loop
+        if config.recognition_mode == "single-stage"
+        else _recognition_loop
+    )
 
     while not stop_event.is_set():
         proc: subprocess.Popen | None = None
@@ -132,7 +137,7 @@ def _extract_wake_command(text: str, wake_words: list[str]) -> tuple[str, str]:
     lower = text.lower()
     for word in wake_words:
         if lower.startswith(word.lower()):
-            command = text[len(word):].strip()
+            command = text[len(word) :].strip()
             return word, command
     return "", ""
 
@@ -149,6 +154,7 @@ def _single_stage_loop(
 ) -> None:
     """Single-stage: full transcription always; wake word + command in one phrase."""
     rec = vosk.KaldiRecognizer(model, 16000)
+    cooldown_until = 0.0
 
     if on_stt_event:
         on_stt_event("listening", {"wake_words": config.wake_words})
@@ -161,6 +167,16 @@ def _single_stage_loop(
 
         if on_stt_event:
             on_stt_event("level", {"mic": _rms_level(data)})
+
+        if livekit_connected_flag.is_set():
+            cooldown_until = time.monotonic() + _STT_COOLDOWN
+            if on_stt_event:
+                on_stt_event("gated", {})
+            continue
+
+        if time.monotonic() < cooldown_until:
+            rec.Reset()
+            continue
 
         if not rec.AcceptWaveform(data):
             if on_stt_event:
@@ -207,7 +223,12 @@ def _single_stage_loop(
         try:
             loop = asyncio.new_event_loop()
             loop.run_until_complete(
-                dispatch(trigger, telegram_client, livekit_connect_fn, livekit_connected=connected)
+                dispatch(
+                    trigger,
+                    telegram_client,
+                    livekit_connect_fn,
+                    livekit_connected=connected,
+                )
             )
             loop.close()
         except Exception as e:
@@ -229,6 +250,7 @@ def _recognition_loop(
     # Full-transcription recognizer for live display only — only instantiated when
     # a UI callback is present, so headless mode pays no extra CPU cost.
     display_rec = vosk.KaldiRecognizer(model, 16000) if on_stt_event else None
+    cooldown_until = 0.0
 
     if on_stt_event:
         on_stt_event("listening", {"wake_words": config.wake_words})
@@ -241,6 +263,18 @@ def _recognition_loop(
 
         if on_stt_event:
             on_stt_event("level", {"mic": _rms_level(data)})
+
+        if livekit_connected_flag.is_set():
+            cooldown_until = time.monotonic() + _STT_COOLDOWN
+            if on_stt_event:
+                on_stt_event("gated", {})
+            continue
+
+        if time.monotonic() < cooldown_until:
+            stage1.Reset()
+            if display_rec:
+                display_rec.Reset()
+            continue
 
         # Feed display recognizer and emit live partial text.
         if display_rec is not None:
@@ -277,7 +311,9 @@ def _recognition_loop(
                     model, 16000, _grammar_json(config.wake_words)
                 )
                 stage1.SetWords(True)
-                display_rec = vosk.KaldiRecognizer(model, 16000) if on_stt_event else None
+                display_rec = (
+                    vosk.KaldiRecognizer(model, 16000) if on_stt_event else None
+                )
                 if on_stt_event:
                     on_stt_event("listening", {"wake_words": config.wake_words})
 
