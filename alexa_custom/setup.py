@@ -28,32 +28,17 @@ def _progress(count: int, block_size: int, total: int) -> None:
     print(f"\r  [{'█' * filled}{'░' * (50 - filled)}] {pct:3d}%", end="", flush=True)
 
 
-def download_model() -> None:
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Download Italian Vosk model")
-    parser.add_argument(
-        "--large",
-        action="store_true",
-        help="Download the full model (~1.2 GB, better accuracy) instead of the small one (~50 MB)",
-    )
-    parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Re-download even if a model is already present",
-    )
-    args = parser.parse_args()
-
-    size = "large" if args.large else "small"
+def download_model(large: bool = False, force: bool = False) -> None:
+    size = "large" if large else "small"
     url, zip_name, unpacked = _MODELS[size]
     dest = Path(_DEST)
 
-    if dest.exists() and not args.force:
+    if dest.exists() and not force:
         print(f"Model already present at {dest.resolve()} — nothing to do.")
         print("Use --force to replace it, or --large to download the full model.")
         return
 
-    if dest.exists() and args.force:
+    if dest.exists() and force:
         import shutil
         print(f"Removing existing model at {dest.resolve()} …")
         shutil.rmtree(dest)
@@ -83,5 +68,23 @@ def download_model() -> None:
     print(f"Model ready at {dest.resolve()}")
 
 
+def main() -> None:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Download Italian Vosk model")
+    parser.add_argument(
+        "--large",
+        action="store_true",
+        help="Download the full model (~1.2 GB, better accuracy) instead of the small one (~50 MB)",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Re-download even if a model is already present",
+    )
+    args = parser.parse_args()
+    download_model(large=args.large, force=args.force)
+
+
 if __name__ == "__main__":
-    download_model()
+    main()

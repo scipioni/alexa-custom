@@ -402,11 +402,38 @@ async def _async_main(
         logger.info("Done.")
 
 
+def ensure_setup() -> None:
+    """Check if Vosk model and audio hardware setup are present; download/warn as needed."""
+    from alexa_custom.setup import download_model
+    from alexa_custom.stt import _MODEL_PATH
+
+    # 1. Vosk model - download automatically if missing
+    if not os.path.isdir(_MODEL_PATH):
+        logger.info(f"Vosk model not found at {_MODEL_PATH}. Downloading automatically...")
+        try:
+            download_model()
+        except Exception as e:
+            logger.error(f"Failed to download Vosk model: {e}")
+
+    # 2. Audio hardware setup - warn if udev rule is missing and OUTPUT_DEVICE is set
+    udev_path = "/etc/udev/rules.d/89-alsa-usb-volume.rules"
+    if not os.path.exists(udev_path):
+        output_spec = os.environ.get("OUTPUT_DEVICE", "").strip()
+        if output_spec:
+            print("\n" + "!" * 60)
+            print("WARNING: Audio hardware volume setup seems incomplete.")
+            print(f"Udev rule {udev_path} is missing.")
+            print("Please run 'alexa-audio-setup' manually to fix this.")
+            print("!" * 60 + "\n")
+
+
 def main() -> None:
     import argparse
     import threading
 
     from alexa_custom.config import load_actions_config
+
+    ensure_setup()
 
     parser = argparse.ArgumentParser(description="alexa-custom LiveKit client")
     parser.add_argument("--tui", action="store_true", help="Launch terminal UI")
