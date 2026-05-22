@@ -380,7 +380,10 @@ class AlexaTUI(App[None]):
 
     def _on_event(self, event: str, data: dict) -> None:
         """Thread-safe: called from the asyncio task or event callbacks."""
-        self.call_from_thread(self._handle_event, event, data)
+        try:
+            self.call_from_thread(self._handle_event, event, data)
+        except Exception:
+            pass
 
     def _handle_event(self, event: str, data: dict) -> None:
         status = self.query_one("#status", StatusLine)
@@ -424,7 +427,10 @@ class AlexaTUI(App[None]):
 
     def _on_stt_event(self, event: str, data: dict) -> None:
         """Thread-safe: called from the STT daemon thread."""
-        self.call_from_thread(self._handle_stt_event, event, data)
+        try:
+            self.call_from_thread(self._handle_stt_event, event, data)
+        except Exception:
+            pass
 
     def _handle_stt_event(self, event: str, data: dict) -> None:
         if event == "level":
