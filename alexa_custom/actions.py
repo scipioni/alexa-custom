@@ -81,6 +81,9 @@ async def _run_action(
                 "telegram action: no chat_id in action or TELEGRAM_CHAT_ID env var"
             )
             return
+        if "<room>" in text:
+            from alexa_custom.client import browser_join_url
+            text = text.replace("<room>", browser_join_url())
         await telegram_client.send_message(chat_id, text)
 
     elif action.type == "livekit_join":
