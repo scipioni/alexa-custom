@@ -79,6 +79,7 @@ class STTStatus(Static):
 
 class VUMeter(Static):
     level: reactive[float] = reactive(0.0)
+    vol: reactive[float] = reactive(-1.0)
 
     def __init__(self, label: str, device: str = "", **kw) -> None:
         super().__init__(**kw)
@@ -86,10 +87,14 @@ class VUMeter(Static):
         self._device = device
 
     def render(self) -> str:
-        dev = f"[dim]{self._device[:32]}[/]  " if self._device else ""
-        return f"[bold]{self._label}[/]  {dev}{_bar(self.level)}"
+        dev = f"[dim]{self._device[:24]}[/]  " if self._device else ""
+        vol_str = f"[cyan]{self.vol * 100:.0f}%[/]  " if self.vol >= 0 else ""
+        return f"[bold]{self._label}[/]  {dev}{vol_str}{_bar(self.level)}"
 
     def watch_level(self, _: float) -> None:
+        self.refresh()
+
+    def watch_vol(self, _: float) -> None:
         self.refresh()
 
 
@@ -257,6 +262,8 @@ class AlexaTUI(App[None]):
     async def on_mount(self) -> None:
         self.sub_title = f"Room: {self._room}"
         self._install_log_handler()
+        await self._refresh_volumes()
+        self.set_interval(5.0, self._refresh_volumes)
         # LiveKit's Rust FFI must run in its own thread with a dedicated event
         # loop — sharing Textual's loop causes a SIGSEGV in the FFI layer.
         self._livekit_thread = threading.Thread(
@@ -309,6 +316,41 @@ class AlexaTUI(App[None]):
         finally:
             loop.close()
 
+    # ── volume polling ────────────────────────────────────────────────────────
+
+    def _read_volumes(self) -> tuple[float, float]:
+        import pulsectl
+        mic_vol = spk_vol = -1.0
+        with pulsectl.Pulse("tui-vol") as pulse:
+            if self._input_spec:
+                needle = self._input_spec.lower()
+                src = next(
+                    (s for s in pulse.source_list()
+                     if "monitor" not in s.name
+                     and (needle in s.description.lower() or needle in s.name.lower())),
+                    None,
+                )
+                if src:
+                    mic_vol = src.volume.value_flat
+            if self._output_spec:
+                needle = self._output_spec.lower()
+                snk = next(
+                    (s for s in pulse.sink_list()
+                     if needle in s.description.lower() or needle in s.name.lower()),
+                    None,
+                )
+                if snk:
+                    spk_vol = snk.volume.value_flat
+        return mic_vol, spk_vol
+
+    async def _refresh_volumes(self) -> None:
+        try:
+            mic_vol, spk_vol = await asyncio.to_thread(self._read_volumes)
+            self.query_one("#mic-meter", VUMeter).vol = mic_vol
+            self.query_one("#spk-meter", VUMeter).vol = spk_vol
+        except Exception:
+            pass
+
     # ── log forwarding ────────────────────────────────────────────────────────
 
     def _install_log_handler(self) -> None:
@@ -347,6 +389,8 @@ class AlexaTUI(App[None]):
             status.room = data.get("room", "")
         elif event == "disconnected":
             status.status = "Disconnected — reconnecting…"
+        elif event == "empty_room_timeout":
+            status.status = "Disconnected — empty room"
         elif event == "reconnecting":
             status.status = "Reconnecting…"
         elif event == "participant_joined":

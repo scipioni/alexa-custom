@@ -23,6 +23,8 @@ import sounddevice as sd
 
 from alexa_custom.audio import (
     find_pipewire_device,
+    play_call_end,
+    play_call_start,
     play_startup_chime,
     set_pipewire_defaults,
 )
@@ -97,8 +99,11 @@ async def run_session(
         if on_event:
             on_event(event, data or {})
 
+    empty_room_timeout = float(os.environ.get("EMPTY_ROOM_TIMEOUT", "0") or "0")
+
     room = Room()
     disconnected = asyncio.Event()
+    call_connected = False
     subscribed_tracks: dict[str, AudioStream] = {}
     volumes = {"mic": 0.0, "spk": 0.0}
     tap_tasks: list[asyncio.Task] = []
@@ -188,6 +193,8 @@ async def run_session(
             "connected",
             {"room": room_name, "identity": room.local_participant.identity},
         )
+        call_connected = True
+        asyncio.create_task(asyncio.to_thread(play_call_start))
 
         # Emit events for participants already in the room at connect time.
         for p in room.remote_participants.values():
@@ -210,6 +217,37 @@ async def run_session(
         # Start microphone tap and volume emitter
         tap_tasks.append(asyncio.create_task(_tap_mic(track)))
         tap_tasks.append(asyncio.create_task(_volume_emitter()))
+
+        async def _empty_room_watchdog() -> None:
+            import time as _time
+            empty_since: float | None = (
+                None if room.remote_participants else _time.monotonic()
+            )
+            if empty_since is not None:
+                logger.info(
+                    f"Room empty at connect — disconnecting in {empty_room_timeout:.0f}s"
+                )
+            while not disconnected.is_set() and not stop_event.is_set():
+                await asyncio.sleep(1.0)
+                if room.remote_participants:
+                    if empty_since is not None:
+                        logger.debug("Participants rejoined — empty-room timer reset")
+                    empty_since = None
+                else:
+                    now = _time.monotonic()
+                    if empty_since is None:
+                        empty_since = now
+                        logger.info(
+                            f"Room empty — disconnecting in {empty_room_timeout:.0f}s"
+                        )
+                    elif now - empty_since >= empty_room_timeout:
+                        logger.info("Empty room timeout — disconnecting session")
+                        emit("empty_room_timeout", {})
+                        disconnected.set()
+                        return
+
+        if empty_room_timeout > 0:
+            tap_tasks.append(asyncio.create_task(_empty_room_watchdog()))
 
         async def _status_loop():
             while True:
@@ -238,6 +276,11 @@ async def run_session(
             t.cancel()
         tap_tasks.clear()
         subscribed_tracks.clear()
+        if call_connected:
+            try:
+                await asyncio.to_thread(play_call_end)
+            except Exception:
+                pass
         await room.disconnect()
 
 
@@ -267,11 +310,10 @@ async def _async_main(
     logger.info(f"Input device:  {input_spec or sd.query_devices(pw_device)['name']}")
     logger.info(f"Output device: {output_spec or sd.query_devices(pw_device)['name']}")
 
-    if ext_stop_event is None:  # TUI plays the chime before starting
-        try:
-            await asyncio.to_thread(play_startup_chime)
-        except Exception as e:
-            logger.warning(f"Startup chime skipped: {e}")
+    try:
+        await asyncio.to_thread(play_startup_chime)
+    except Exception as e:
+        logger.warning(f"Startup chime skipped: {e}")
 
     devices = MediaDevices(
         input_sample_rate=48000, output_sample_rate=48000, num_channels=1
@@ -374,12 +416,7 @@ def main() -> None:
 
     if args.tui:
         from alexa_custom.tui import run_tui
-        from alexa_custom.audio import play_startup_chime as _chime
 
-        try:
-            _chime()
-        except Exception as e:
-            logger.warning(f"Startup chime skipped: {e}")
         input_spec = os.environ.get("INPUT_DEVICE", "").strip() or None
         output_spec = os.environ.get("OUTPUT_DEVICE", "").strip() or None
         room = os.environ.get("LIVEKIT_ROOM", "")

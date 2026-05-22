@@ -369,6 +369,142 @@ def play_timeout_beep() -> None:
     play_beep(400, 150)
 
 
+def play_call_start() -> None:
+    """Two rising tones — call connected."""
+    play_beep(600, 120)
+    play_beep(900, 180)
+
+
+def play_call_end() -> None:
+    """Two falling tones — call ended."""
+    play_beep(900, 120)
+    play_beep(600, 180)
+
+
+_UDEV_PATH = "/etc/udev/rules.d/89-alsa-usb-volume.rules"
+
+
+def _find_alsa_card(needle: str) -> tuple[int, str] | None:
+    """Return (card_index, card_id) for the first ALSA card whose id contains needle."""
+    import os
+    for entry in os.listdir("/proc/asound"):
+        if not entry.startswith("card"):
+            continue
+        try:
+            with open(f"/proc/asound/{entry}/id") as f:
+                card_id = f.read().strip()
+            if needle.lower() in card_id.lower():
+                return int(entry[4:]), card_id
+        except OSError:
+            pass
+    return None
+
+
+def _usb_ids_for_alsa_card(card_index: int) -> tuple[str, str] | None:
+    """Return (vendor_id, model_id) by querying udevadm for the ALSA control device."""
+    result = subprocess.run(
+        ["udevadm", "info", "--name", f"/dev/snd/controlC{card_index}"],
+        capture_output=True, text=True,
+    )
+    vendor = model = None
+    for line in result.stdout.splitlines():
+        if "ID_VENDOR_ID=" in line:
+            vendor = line.split("=", 1)[1]
+        elif "ID_MODEL_ID=" in line:
+            model = line.split("=", 1)[1]
+    if vendor and model:
+        return vendor, model
+    return None
+
+
+def setup_audio() -> None:
+    """Set output device PCM hardware volume to 100% and persist it across reboots."""
+    from alexa_custom._env import load_env
+    load_env()
+
+    output_spec = os.environ.get("OUTPUT_DEVICE", "").strip()
+    if not output_spec:
+        print("ERROR: OUTPUT_DEVICE is not set in .env")
+        sys.exit(1)
+
+    card = _find_alsa_card(output_spec)
+    if card is None:
+        print(f"ERROR: No ALSA card matching OUTPUT_DEVICE={output_spec!r}")
+        print("  Is the device connected?")
+        sys.exit(1)
+
+    card_index, card_id = card
+    print(f"Found {card_id!r} at ALSA card {card_index} (OUTPUT_DEVICE={output_spec!r})")
+
+    # Set PCM Playback Volume to 100%
+    result = subprocess.run(
+        ["amixer", "-c", str(card_index), "set", "PCM", "100%"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        print(f"ERROR: amixer failed: {result.stderr.strip()}")
+        sys.exit(1)
+    print("PCM Playback Volume set to 100%")
+
+    # Save ALSA state
+    result = subprocess.run(["sudo", "alsactl", "store"], capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"ERROR: alsactl store failed: {result.stderr.strip()}")
+        sys.exit(1)
+    print("ALSA state saved")
+
+    # Build and install udev rule based on the device's actual USB IDs
+    ids = _usb_ids_for_alsa_card(card_index)
+    if ids is None:
+        print("WARNING: Could not read USB IDs — skipping udev rule (device may not be USB)")
+        return
+
+    vendor_id, model_id = ids
+    udev_rule = (
+        f"# Restore ALSA mixer state for {card_id} on connect\n"
+        f'ACTION=="add", SUBSYSTEM=="sound", \\\n'
+        f'  ENV{{ID_VENDOR_ID}}=="{vendor_id}", ENV{{ID_MODEL_ID}}=="{model_id}", \\\n'
+        f'  RUN+="/usr/sbin/alsactl restore"\n'
+    )
+
+    result = subprocess.run(
+        ["sudo", "tee", _UDEV_PATH],
+        input=udev_rule, capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        print(f"ERROR: writing udev rule failed: {result.stderr.strip()}")
+        sys.exit(1)
+
+    subprocess.run(["sudo", "udevadm", "control", "--reload-rules"], check=True)
+    print(f"udev rule installed at {_UDEV_PATH}")
+
+    # Boost microphone input gain via PipeWire (persisted by WirePlumber state).
+    input_spec = os.environ.get("INPUT_DEVICE", "").strip() or output_spec
+    with pulsectl.Pulse("alexa-setup") as pulse:
+        needle = input_spec.lower()
+        source = next(
+            (
+                s for s in pulse.source_list()
+                if "monitor" not in s.name
+                and (needle in s.description.lower() or needle in s.name.lower())
+            ),
+            None,
+        )
+    if source is None:
+        print(f"WARNING: No PipeWire source found for {input_spec!r} — skipping mic gain")
+    else:
+        result = subprocess.run(
+            ["pactl", "set-source-volume", source.name, "300%"],
+            capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            print(f"Microphone gain set to 3x on {source.name}")
+        else:
+            print(f"WARNING: pactl set-source-volume failed: {result.stderr.strip()}")
+
+    print(f"Done. {card_id!r} volumes will be restored automatically on every connect.")
+
+
 def main():
     if len(sys.argv) > 1 and sys.argv[1] in ("--list", "-l", "list"):
         list_devices()
