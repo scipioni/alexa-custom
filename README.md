@@ -80,7 +80,7 @@ systemctl --user restart wireplumber
 alexa-setup
 ```
 
-This downloads, unpacks, and renames the Italian model to `model-it/` in the current directory. It is a no-op if the model is already present.
+This downloads, unpacks, and places the Italian model at `models/it/` in the current directory. It is a no-op if the model is already present.
 
 ### 4. Continue with normal setup
 

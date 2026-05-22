@@ -10,7 +10,7 @@ from pathlib import Path
 _MODEL_URL = "https://alphacephei.com/vosk/models/vosk-model-small-it-0.22.zip"
 _ZIP_NAME = "vosk-model-small-it-0.22.zip"
 _UNPACKED = "vosk-model-small-it-0.22"
-_DEST = "model-it"
+_DEST = "models/it"
 
 
 def _progress(count: int, block_size: int, total: int) -> None:
@@ -45,6 +45,7 @@ def download_model() -> None:
     finally:
         zip_path.unlink(missing_ok=True)
 
+    dest.parent.mkdir(parents=True, exist_ok=True)
     Path(_UNPACKED).rename(dest)
     print(f"Model ready at {dest.resolve()}")
 
