@@ -232,7 +232,7 @@ class AlexaTUI(App[None]):
     }
 
     #meters {
-        height: 6;
+        height: 8;
         border: solid $accent;
         padding: 1 2;
     }
@@ -307,13 +307,12 @@ class AlexaTUI(App[None]):
     async def on_unmount(self) -> None:
         self._stop.set()
         self._levels.stop()
-        if self._livekit_thread:
-            self._livekit_thread.join(timeout=5)
+        # livekit worker and level-monitor threads are all daemon=True, so they
+        # are killed when the process exits. Joining here blocks on room.disconnect()
+        # / mic.aclose() which can take seconds — skip it for instant q-to-exit.
         root = logging.getLogger()
         if self._handler:
             root.removeHandler(self._handler)
-        # Process exits right after run_tui() returns; silence any stray logs
-        # from threads still winding down rather than restoring console output.
         root.addHandler(logging.NullHandler())
 
     def _livekit_worker(self) -> None:
