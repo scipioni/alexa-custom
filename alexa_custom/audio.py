@@ -47,7 +47,7 @@ def device_from_env(key: str) -> int | None:
 def set_pipewire_defaults(input_spec: str | None, output_spec: str | None):
     """Set PipeWire default source/sink by matching INPUT_DEVICE/OUTPUT_DEVICE name."""
     with pulsectl.Pulse("alexa-routing") as pulse:
-        if output_spec:
+        if output_spec and output_spec.lower() not in ("pipewire", "default"):
             needle = output_spec.lower()
             match = next(
                 (
@@ -64,7 +64,7 @@ def set_pipewire_defaults(input_spec: str | None, output_spec: str | None):
                     f"PipeWire sink not found for OUTPUT_DEVICE={output_spec!r}"
                 )
 
-        if input_spec:
+        if input_spec and input_spec.lower() not in ("pipewire", "default"):
             needle = input_spec.lower()
             match = next(
                 (
