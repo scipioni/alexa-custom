@@ -2,9 +2,14 @@
 import os
 import subprocess
 import sys
+import threading
+import time
+import logging
 import sounddevice as sd
 import numpy as np
 import pulsectl
+
+logger = logging.getLogger(__name__)
 
 # Sample rates by connection type
 _SAMPLERATE = {"usb": 48000, "bluetooth": 16000}
@@ -42,7 +47,7 @@ def device_from_env(key: str) -> int | None:
 def set_pipewire_defaults(input_spec: str | None, output_spec: str | None):
     """Set PipeWire default source/sink by matching INPUT_DEVICE/OUTPUT_DEVICE name."""
     with pulsectl.Pulse("alexa-routing") as pulse:
-        if output_spec:
+        if output_spec and output_spec.lower() not in ("pipewire", "default"):
             needle = output_spec.lower()
             match = next(
                 (
@@ -59,7 +64,7 @@ def set_pipewire_defaults(input_spec: str | None, output_spec: str | None):
                     f"PipeWire sink not found for OUTPUT_DEVICE={output_spec!r}"
                 )
 
-        if input_spec:
+        if input_spec and input_spec.lower() not in ("pipewire", "default"):
             needle = input_spec.lower()
             match = next(
                 (
@@ -78,44 +83,166 @@ def set_pipewire_defaults(input_spec: str | None, output_spec: str | None):
                 )
 
 
-def find_newpie_card(pulse):
-    """Return the pulsectl card object for the NewPie, or None."""
+def find_alexa_card(pulse, spec: str | None = None):
+    """Return the pulsectl card object matching the spec (name, desc, or index)."""
+    if not spec:
+        spec = "NewPie"
+
+    spec_lower = spec.lower()
+    is_numeric = spec.strip().isdigit()
+    spec_index = int(spec) if is_numeric else -1
+
     for card in pulse.card_list():
-        if "NewPie" in card.proplist.get("device.description", ""):
+        if is_numeric and card.index == spec_index:
+            return card
+        desc = card.proplist.get("device.description", "").lower()
+        name = card.name.lower()
+        if spec_lower in desc or spec_lower in name:
             return card
     return None
 
 
 def detect_connection(card) -> str:
-    """Return 'usb' or 'bluetooth' based on the card's device.bus property."""
-    return "usb" if card.proplist.get("device.bus", "") == "usb" else "bluetooth"
+    """Return 'usb', 'bluetooth', or 'internal' based on the card's device.bus property."""
+    bus = card.proplist.get("device.bus", "").lower()
+    if bus == "usb":
+        return "usb"
+    if bus == "bluetooth":
+        return "bluetooth"
+    return "internal"
+
+
+def enforce_audio_state(
+    pulse: pulsectl.Pulse, input_spec: str | None = None, output_spec: str | None = None
+) -> tuple[bool, str]:
+    """
+    Find the configured card, force correct profile if it exists, and set as default sink/source.
+    Returns (ok, connection_type).
+    """
+    # If explicitly using the PipeWire virtual device, consider us connected if PW is alive.
+    is_virtual = (output_spec or "").lower() in ("pipewire", "default")
+
+    card = find_alexa_card(pulse, output_spec)
+    if not card:
+        if is_virtual and pulse.sink_list() and pulse.source_list():
+            return True, "virtual"
+        return False, "disconnected"
+
+    conn = detect_connection(card)
+
+    # 1. Force Profile if appropriate
+    target_profile = None
+    if conn == "bluetooth":
+        target_profile = "headset-head-unit"
+    elif conn == "usb":
+        if any(p.name == "pro-audio" for p in card.profile_list):
+            target_profile = "pro-audio"
+
+    if target_profile and card.profile_active.name != target_profile:
+        if any(p.name == target_profile for p in card.profile_list):
+            logger.info(f"Enforcing profile {target_profile} on {card.name}")
+            pulse.card_profile_set(card, target_profile)
+            time.sleep(0.5)
+            card = find_alexa_card(pulse, output_spec)
+            if not card:
+                return False, "disconnected"
+
+    # 2. Force Routing (Defaults)
+    sinks = [s for s in pulse.sink_list() if s.card == card.index]
+    sources = [
+        s
+        for s in pulse.source_list()
+        if s.card == card.index and "monitor" not in s.name
+    ]
+
+    info = pulse.server_info()
+
+    if sinks:
+        sink = next((s for s in sinks if "output" in s.name.lower()), sinks[0])
+        if info.default_sink_name != sink.name:
+            logger.info(f"Setting default sink: {sink.name}")
+            pulse.sink_default_set(sink)
+
+    if sources:
+        source = next((s for s in sources if "input" in s.name.lower()), sources[0])
+        if info.default_source_name != source.name:
+            logger.info(f"Setting default source: {source.name}")
+            pulse.source_default_set(source)
+
+    return True, conn
+
+
+class AudioWatcher(threading.Thread):
+    """
+    Daemon thread that monitors PipeWire events and enforces audio state.
+    """
+
+    def __init__(
+        self,
+        input_spec: str | None = None,
+        output_spec: str | None = None,
+        on_status_change: callable[[bool, str], None] | None = None,
+    ):
+        super().__init__(daemon=True, name="audio-watcher")
+        self.input_spec = input_spec
+        self.output_spec = output_spec
+        self.on_status_change = on_status_change
+        self._stop = threading.Event()
+        self.connected = False
+        self.conn_type = "unknown"
+
+    def stop(self):
+        self._stop.set()
+
+    def run(self):
+        logger.info(f"Audio watcher started (target: {self.output_spec or 'NewPie'})")
+        while not self._stop.is_set():
+            try:
+                with pulsectl.Pulse("alexa-watcher") as pulse:
+                    self._check_and_enforce(pulse)
+                    pulse.event_mask_set("card", "sink", "source")
+                    pulse.event_callback_set(lambda _: None)
+
+                    while not self._stop.is_set():
+                        pulse.event_listen(timeout=2.0)
+                        self._check_and_enforce(pulse)
+            except Exception as e:
+                if not self._stop.is_set():
+                    logger.error(f"Audio watcher error: {e}")
+                    time.sleep(2)
+
+    def _check_and_enforce(self, pulse: pulsectl.Pulse):
+        ok, conn = enforce_audio_state(pulse, self.input_spec, self.output_spec)
+        if ok != self.connected or conn != self.conn_type:
+            if ok and not self.connected:
+                logger.info(f"Audio device {conn} connected and configured")
+                threading.Thread(
+                    target=lambda: [play_beep(660, 100), play_beep(880, 150)],
+                    daemon=True,
+                ).start()
+
+            self.connected = ok
+            self.conn_type = conn
+            if self.on_status_change:
+                self.on_status_change(ok, conn)
 
 
 def check_newpie_ready() -> tuple[bool, str]:
     """
-    Verify NewPie is connected and ready for full-duplex audio.
-    Returns (ok, connection_type) where connection_type is 'usb' or 'bluetooth'.
-    Prints warnings for anything wrong.
+    Verify configured audio device is connected and ready.
     """
-    ok = True
-    with pulsectl.Pulse("newpie-check") as pulse:
-        card = find_newpie_card(pulse)
-        if card is None:
-            print("ERROR: NewPie not found. Is it connected (USB or Bluetooth)?")
-            print("  USB:       plug in the USB cable")
-            print("  Bluetooth: bluetoothctl connect <MAC>")
+    input_spec = os.environ.get("INPUT_DEVICE", "").strip() or None
+    output_spec = os.environ.get("OUTPUT_DEVICE", "").strip() or None
+    is_virtual = (output_spec or "").lower() in ("pipewire", "default")
+
+    with pulsectl.Pulse("alexa-check") as pulse:
+        ok, conn = enforce_audio_state(pulse, input_spec, output_spec)
+        if not ok:
+            print(f"ERROR: Audio device {output_spec or 'NewPie'!r} not found.")
             return False, "unknown"
 
-        conn = detect_connection(card)
-
-        if conn == "bluetooth":
-            profile = card.profile_active.name if card.profile_active else "off"
-            if profile != "headset-head-unit":
-                print(
-                    f"WARNING: NewPie Bluetooth profile is '{profile}', expected 'headset-head-unit'"
-                )
-                print(f"  Fix: pactl set-card-profile {card.name} headset-head-unit")
-                ok = False
+        if is_virtual:
+            return True, "virtual"
 
         info = pulse.server_info()
         sinks = {s.name: s for s in pulse.sink_list()}
@@ -124,21 +251,28 @@ def check_newpie_ready() -> tuple[bool, str]:
         default_sink = sinks.get(info.default_sink_name)
         default_source = sources.get(info.default_source_name)
 
-        if default_sink is None or "NewPie" not in default_sink.description:
+        target_out = (output_spec or "NewPie").lower()
+        if not default_sink or (
+            target_out not in default_sink.description.lower()
+            and target_out not in default_sink.name.lower()
+        ):
             print(
-                f"WARNING: Default sink is not NewPie (got: {info.default_sink_name})"
+                f"WARNING: Default sink is not the expected device (got: {info.default_sink_name})"
             )
-            print("  Fix: wpctl set-default <newpie-sink-id>")
             ok = False
 
-        if default_source is None or "NewPie" not in default_source.description:
+        target_in = (input_spec or "NewPie").lower()
+        if not default_source or (
+            target_in not in default_source.description.lower()
+            and target_in not in default_source.name.lower()
+        ):
             print(
-                f"WARNING: Default source is not NewPie (got: {info.default_source_name})"
+                f"WARNING: Default source is not the expected device (got: {info.default_source_name})"
             )
-            print("  Fix: wpctl set-default <newpie-source-id>")
             ok = False
 
     return ok, conn
+
 
 
 def list_devices():

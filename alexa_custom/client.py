@@ -504,6 +504,14 @@ def main() -> None:
         _os._exit(0)
 
     else:
+        from alexa_custom.audio import AudioWatcher
+
+        input_spec = os.environ.get("INPUT_DEVICE", "").strip() or None
+        output_spec = os.environ.get("OUTPUT_DEVICE", "").strip() or None
+
+        audio_watcher = AudioWatcher(input_spec=input_spec, output_spec=output_spec)
+        audio_watcher.start()
+
         if config is not None:
             from alexa_custom.actions import TelegramClient
             from alexa_custom.stt import start_stt_thread
@@ -537,8 +545,12 @@ def main() -> None:
                 )
             finally:
                 stt_stop.set()
+                audio_watcher.stop()
         else:
-            asyncio.run(_async_main())
+            try:
+                asyncio.run(_async_main())
+            finally:
+                audio_watcher.stop()
 
 
 if __name__ == "__main__":
