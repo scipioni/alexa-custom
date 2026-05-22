@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import os
+import subprocess
 import sys
 import sounddevice as sd
 import numpy as np
@@ -220,26 +221,31 @@ def speakerphone():
         sys.exit(1)
 
 
-def play_startup_chime(output_device: int):
-    """Play a short ascending chime (C5-E5-G5) through the output device."""
-    samplerate = int(sd.query_devices(output_device)['default_samplerate'])
-    note_duration = 0.14  # seconds
-    gap_duration = 0.03   # silence between notes
+def play_startup_chime():
+    """Play a short ascending chime (C5-E5-G5) through the PipeWire default sink.
+
+    Uses aplay instead of PortAudio because PortAudio's ALSA backend hangs on
+    the pipewire virtual device after a routing change.
+    """
+    samplerate = 48000
+    channels = 2
+    note_duration = 0.14
+    gap_duration = 0.03
     fade_samples = int(samplerate * 0.04)
 
     def _note(freq: float) -> np.ndarray:
         n = int(samplerate * note_duration)
         t = np.linspace(0, note_duration, n, endpoint=False)
         wave = np.sin(2 * np.pi * freq * t).astype(np.float32)
-        # add a subtle second harmonic for warmth
         wave += 0.3 * np.sin(2 * np.pi * freq * 2 * t).astype(np.float32)
         wave /= np.max(np.abs(wave))
         envelope = np.ones(n, dtype=np.float32)
         envelope[:fade_samples] = np.linspace(0, 1, fade_samples)
         envelope[-fade_samples:] = np.linspace(1, 0, fade_samples)
-        return wave * envelope * 0.45
+        mono = wave * envelope * 0.45
+        return np.column_stack([mono, mono])
 
-    gap = np.zeros(int(samplerate * gap_duration), dtype=np.float32)
+    gap = np.zeros((int(samplerate * gap_duration), channels), dtype=np.float32)
     chime = np.concatenate([
         _note(523.25),  # C5
         gap,
@@ -247,7 +253,13 @@ def play_startup_chime(output_device: int):
         gap,
         _note(783.99),  # G5
     ])
-    sd.play(chime, samplerate=samplerate, device=output_device, blocking=True)
+    subprocess.run(
+        ['aplay', '-D', 'pipewire', '-r', str(samplerate),
+         '-f', 'FLOAT_LE', '-c', str(channels), '-q'],
+        input=chime.tobytes(),
+        timeout=5,
+        check=True,
+    )
 
 
 def list_env_devices():

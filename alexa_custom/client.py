@@ -164,20 +164,16 @@ async def _async_main():
     if input_spec or output_spec:
         await asyncio.to_thread(set_pipewire_defaults, input_spec, output_spec)
         logger.info(f"PipeWire routed — input: {input_spec or 'default'}, output: {output_spec or 'default'}")
-        await asyncio.sleep(0.5)  # let PipeWire finish switching before opening streams
 
     pw_device = find_pipewire_device()
     if pw_device is None:
         raise RuntimeError("PipeWire ALSA device not found. Is PipeWire running?")
 
-    pw_name = sd.query_devices(pw_device)['name']
-    logger.info(f"Input device:  {pw_device} ({input_spec or pw_name})")
-    logger.info(f"Output device: {pw_device} ({output_spec or pw_name})")
+    logger.info(f"Input device:  {input_spec or sd.query_devices(pw_device)['name']}")
+    logger.info(f"Output device: {output_spec or sd.query_devices(pw_device)['name']}")
 
     try:
-        await asyncio.wait_for(asyncio.to_thread(play_startup_chime, pw_device), timeout=3.0)
-    except asyncio.TimeoutError:
-        logger.warning("Startup chime skipped: audio device not ready in time")
+        await asyncio.to_thread(play_startup_chime)
     except Exception as e:
         logger.warning(f"Startup chime skipped: {e}")
 
