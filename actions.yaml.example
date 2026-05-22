@@ -42,7 +42,8 @@ triggers:
       - type: telegram
         # Optional: target chat. Defaults to TELEGRAM_CHAT_ID env var.
         # chat_id: "123456789"
-        text: "Qualcuno ti chiama dal salotto"
+        # Use <room> to embed the LiveKit browser join URL in the message.
+        text: "Qualcuno ti chiama dal salotto — unisciti: <room>"
 
   # Example: trigger both actions in sequence
   - phrase: "emergenza"
