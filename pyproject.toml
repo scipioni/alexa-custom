@@ -24,6 +24,7 @@ dependencies = [
 alexa-client = "alexa_custom.client:main"
 alexa-audio = "alexa_custom.audio:main"
 alexa-devices = "alexa_custom.audio:main_devices"
+alexa-setup = "alexa_custom.setup:download_model"
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -77,10 +77,10 @@ systemctl --user restart wireplumber
 ### 3. Download the Vosk speech recognition model
 
 ```bash
-wget https://alphacephei.com/vosk/models/vosk-model-small-it-0.22.zip
-unzip vosk-model-small-it-0.22.zip
-mv vosk-model-small-it-0.22 model-it
+alexa-setup
 ```
+
+This downloads, unpacks, and renames the Italian model to `model-it/` in the current directory. It is a no-op if the model is already present.
 
 ### 4. Continue with normal setup
 
