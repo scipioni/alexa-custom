@@ -3,6 +3,7 @@ import asyncio
 import logging
 import os
 import signal
+import threading
 from typing import Callable
 
 from livekit.api import AccessToken, VideoGrants
@@ -43,7 +44,7 @@ def calculate_peak(frame) -> float:
     samples = np.frombuffer(frame.data, dtype=np.int16)
     if len(samples) == 0:
         return 0.0
-    return float(np.max(np.abs(samples))) / 32768.0
+    return float(np.max(np.abs(samples.astype(np.float32)))) / 32768.0
 
 
 def get_token() -> str:
@@ -243,6 +244,8 @@ async def run_session(
 async def _async_main(
     ext_stop_event: asyncio.Event | None = None,
     on_event: Callable[[str, dict], None] | None = None,
+    connect_trigger: threading.Event | None = None,
+    livekit_connected_flag: threading.Event | None = None,
 ) -> None:
     logger.info(f"Browser join URL:\n  {browser_join_url()}")
 
@@ -306,17 +309,44 @@ async def _async_main(
     await player.start()
     logger.info("Speaker output started")
 
+    def _wrapped_on_event(event: str, data: dict) -> None:
+        if livekit_connected_flag is not None:
+            if event == "connected":
+                livekit_connected_flag.set()
+            elif event == "disconnected":
+                livekit_connected_flag.clear()
+        if on_event:
+            on_event(event, data)
+
     try:
         while not stop_event.is_set():
-            if on_event:
-                on_event("reconnecting", {})
+            # On-demand mode: wait for STT to signal a connect trigger.
+            if connect_trigger is not None:
+                logger.info("Waiting for voice trigger to connect to LiveKit…")
+                while not stop_event.is_set():
+                    if connect_trigger.is_set():
+                        connect_trigger.clear()
+                        break
+                    await asyncio.sleep(0.5)
+                if stop_event.is_set():
+                    break
+
+            _wrapped_on_event("reconnecting", {})
             try:
-                await run_session(mic, player, stop_event, on_event=on_event)
+                await run_session(mic, player, stop_event, on_event=_wrapped_on_event)
             except Exception as e:
                 logger.error(f"Session error: {e}")
 
+            if livekit_connected_flag is not None:
+                livekit_connected_flag.clear()
+
             if stop_event.is_set():
                 break
+
+            # In on-demand mode don't auto-reconnect; wait for another trigger.
+            if connect_trigger is not None:
+                logger.info("LiveKit session ended — waiting for next voice trigger")
+                continue
 
             logger.info(f"Reconnecting in {RECONNECT_DELAY}s...")
             try:
@@ -334,9 +364,13 @@ def main() -> None:
     import argparse
     import threading
 
+    from alexa_custom.config import load_actions_config
+
     parser = argparse.ArgumentParser(description="alexa-custom LiveKit client")
     parser.add_argument("--tui", action="store_true", help="Launch terminal UI")
     args = parser.parse_args()
+
+    config = load_actions_config()
 
     if args.tui:
         from alexa_custom.tui import run_tui
@@ -350,26 +384,91 @@ def main() -> None:
         output_spec = os.environ.get("OUTPUT_DEVICE", "").strip() or None
         room = os.environ.get("LIVEKIT_ROOM", "")
 
+        connect_trigger: threading.Event | None = None
+        livekit_connected_flag: threading.Event | None = None
+        stt_params: dict | None = None
+
+        if config is not None:
+            from alexa_custom.actions import TelegramClient
+
+            connect_trigger = threading.Event()
+            livekit_connected_flag = threading.Event()
+
+            async def _livekit_connect_fn() -> None:
+                assert connect_trigger is not None
+                connect_trigger.set()
+
+            stt_params = {
+                "config": config,
+                "stop_event": threading.Event(),
+                "telegram_client": TelegramClient(),
+                "connect_fn": _livekit_connect_fn,
+                "connected_flag": livekit_connected_flag,
+            }
+
         async def _run_for_tui(
             stop_threading: threading.Event,
             on_event: Callable,
             stop_asyncio: asyncio.Event,
         ) -> None:
-            await _async_main(ext_stop_event=stop_asyncio, on_event=on_event)
+            await _async_main(
+                ext_stop_event=stop_asyncio,
+                on_event=on_event,
+                connect_trigger=connect_trigger,
+                livekit_connected_flag=livekit_connected_flag,
+            )
 
         run_tui(
             run_fn=_run_for_tui,
             input_spec=input_spec,
             output_spec=output_spec,
             room=room,
+            stt_params=stt_params,
         )
+
         # LiveKit's Rust FFI leaves non-cooperative threads that block Python
         # 3.13's finalizer.  The terminal is already restored by this point
         # (Textual's cleanup ran inside app.run()), so a hard exit is safe.
         import os as _os
+
         _os._exit(0)
+
     else:
-        asyncio.run(_async_main())
+        if config is not None:
+            from alexa_custom.actions import TelegramClient
+            from alexa_custom.stt import start_stt_thread
+
+            connect_trigger = threading.Event()
+            livekit_connected_flag = threading.Event()
+            telegram_client = TelegramClient()
+            stt_stop = threading.Event()
+
+            async def _livekit_connect_fn() -> None:
+                connect_trigger.set()
+
+            stt_thread = start_stt_thread(
+                config=config,
+                stop_event=stt_stop,
+                telegram_client=telegram_client,
+                livekit_connect_fn=_livekit_connect_fn,
+                livekit_connected_flag=livekit_connected_flag,
+            )
+            logger.info(
+                f"STT started — wake words: {config.wake_words}, "
+                f"{len(config.triggers)} trigger(s) configured"
+            )
+
+            try:
+                asyncio.run(
+                    _async_main(
+                        connect_trigger=connect_trigger,
+                        livekit_connected_flag=livekit_connected_flag,
+                    )
+                )
+            finally:
+                stt_stop.set()
+        else:
+            asyncio.run(_async_main())
 
 
 if __name__ == "__main__":

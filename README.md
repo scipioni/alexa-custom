@@ -332,6 +332,69 @@ Open that URL on any browser or device to join the same room as the speakerphone
 
 ---
 
+## Voice Actions
+
+When `actions.yaml` is present, the client starts a continuous wake word listener using Vosk. Spoken wake words trigger a 3-second command window; the recognized phrase is matched against configured triggers and the corresponding actions execute.
+
+### Setup
+
+```bash
+cp actions.yaml.example actions.yaml
+nano actions.yaml
+```
+
+Configure your wake words and triggers:
+
+```yaml
+wake_words:
+  - "galileo"
+  - "aiuto"
+
+command_timeout: 3.0
+
+triggers:
+  - phrase: "chiama"
+    actions:
+      - type: livekit_join
+
+  - phrase: "manda messaggio"
+    actions:
+      - type: telegram
+        text: "Qualcuno ti chiama dal salotto"
+```
+
+### Telegram setup
+
+1. Create a bot via [@BotFather](https://t.me/BotFather) and copy the token
+2. Get your chat ID from [@userinfobot](https://t.me/userinfobot)
+3. Add to `.env`:
+
+```ini
+TELEGRAM_BOT_TOKEN=123456789:AABBccDD-your-token
+TELEGRAM_CHAT_ID=123456789
+```
+
+### Environment variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `TELEGRAM_BOT_TOKEN` | For telegram actions | Bot API token from @BotFather |
+| `TELEGRAM_CHAT_ID` | For telegram actions | Default target chat ID |
+| `VOSK_MODEL_PATH` | No | Override model path (default: `models/it`) |
+
+### Action types
+
+| Type | Description |
+|------|-------------|
+| `livekit_join` | Connect to the configured LiveKit room |
+| `telegram` | Send a message via Telegram Bot API |
+
+### Behavior without actions.yaml
+
+If `actions.yaml` is absent the client behaves exactly as before — it auto-connects to LiveKit at startup with no wake word detection.
+
+---
+
 ## Project Structure
 
 ```
@@ -339,11 +402,16 @@ alexa-custom/
 ├── alexa_custom/
 │   ├── __init__.py
 │   ├── _env.py         # .env loader
-│   ├── audio.py        # NewPie preflight check and loopback test
-│   └── client.py       # LiveKit conference client with auto-reconnect
+│   ├── audio.py        # NewPie preflight check, loopback test, beep helpers
+│   ├── client.py       # LiveKit conference client with on-demand connect
+│   ├── config.py       # actions.yaml loader and validator
+│   ├── actions.py      # TelegramClient and action dispatcher
+│   └── stt.py          # Vosk two-stage STT pipeline (wake word + command)
 ├── pyproject.toml      # Package metadata and dependencies
 ├── .env                # Credentials — git-ignored, fill this in
 ├── .env.example        # Credentials template
+├── actions.yaml        # Voice action config — git-ignored, fill this in
+├── actions.yaml.example # Voice action config template
 ├── .gitignore
 └── README.md
 

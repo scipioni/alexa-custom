@@ -1,0 +1,42 @@
+version: '3'
+
+vars:
+  VENV_SITE: .venv/lib/python3.14/site-packages
+  PYTHONPATH: ".:{{.VENV_SITE}}"
+  PYTEST: pytest
+
+tasks:
+  test:
+    desc: Run regression tests
+    cmds:
+      - PYTHONPATH={{.PYTHONPATH}} {{.PYTEST}} tests/
+
+  lint:
+    desc: Run ruff for linting and formatting
+    cmds:
+      - ruff check .
+      - ruff format --check .
+
+  format:
+    desc: Format code with ruff
+    cmds:
+      - ruff format .
+
+  run:
+    desc: Run the alexa-client
+    cmds:
+      - PYTHONPATH={{.PYTHONPATH}} python3 alexa_custom/client.py {{.CLI_ARGS}}
+
+  run-tui:
+    desc: Run the alexa-client with TUI
+    cmds:
+      - PYTHONPATH={{.PYTHONPATH}} python3 alexa_custom/client.py --tui
+
+  clean:
+    desc: Clean up temporary files
+    cmds:
+      - find . -type d -name "__pycache__" -exec rm -rf {} +
+      - rm -rf .pytest_cache
+      - rm -rf alexa_custom.egg-info
+      - rm -rf build
+      - rm -rf dist

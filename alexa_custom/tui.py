@@ -46,6 +46,37 @@ def _bar(level: float) -> str:
 # ── widgets ───────────────────────────────────────────────────────────────────
 
 
+class STTStatus(Static):
+    state: reactive[str] = reactive("idle")
+    text: reactive[str] = reactive("")
+
+    def render(self) -> str:
+        if self.state == "listening":
+            words = self.text or "…"
+            return f"[dim]○[/]  [dim]wake words:[/] [dim italic]{words}[/]"
+        elif self.state == "transcribing":
+            return f"[dim]◌[/]  [dim]{self.text}[/] [dim]…[/]"
+        elif self.state == "wake":
+            return f'[bold yellow]◉[/]  [yellow]"{self.text}"[/] [dim]— listening for command…[/]'
+        elif self.state == "partial":
+            return f"[bold yellow]◉[/]  [yellow]{self.text}[/] [dim]…[/]"
+        elif self.state == "matched":
+            parts = self.text.split("→", 1)
+            transcript = parts[0].strip()
+            trigger = parts[1].strip() if len(parts) > 1 else ""
+            return f'[bold green]✓[/]  [green]"{transcript}"[/] [dim]→[/] [bold]{trigger}[/]'
+        elif self.state == "nomatch":
+            t = f'"{self.text}" ' if self.text else ""
+            return f"[bold red]✗[/]  {t}[dim red]no match[/]"
+        return "[dim]○[/]  [dim]STT inactive[/]"
+
+    def watch_state(self, _: str) -> None:
+        self.refresh()
+
+    def watch_text(self, _: str) -> None:
+        self.refresh()
+
+
 class VUMeter(Static):
     level: reactive[float] = reactive(0.0)
 
@@ -154,7 +185,7 @@ class AlexaTUI(App[None]):
     }
 
     #meters {
-        height: 8;
+        height: 10;
         border: solid $accent;
         padding: 1 2;
     }
@@ -163,16 +194,24 @@ class AlexaTUI(App[None]):
         height: 1;
         margin-bottom: 1;
     }
+
+    STTStatus {
+        height: 1;
+        margin-top: 1;
+    }
     """
 
     BINDINGS = [("q", "quit", "Quit")]
 
     def __init__(
         self,
-        run_fn: Callable[[threading.Event, Callable, asyncio.Event], Coroutine[Any, Any, None]],
+        run_fn: Callable[
+            [threading.Event, Callable, asyncio.Event], Coroutine[Any, Any, None]
+        ],
         input_spec: str | None,
         output_spec: str | None,
         room: str,
+        stt_params: dict | None = None,
         **kw,
     ) -> None:
         super().__init__(**kw)
@@ -180,6 +219,7 @@ class AlexaTUI(App[None]):
         self._input_spec = input_spec
         self._output_spec = output_spec
         self._room = room
+        self._stt_params = stt_params  # keys: config, stop_event, telegram_client, connect_fn, connected_flag
         self._stop = threading.Event()
         self._livekit_loop: asyncio.AbstractEventLoop | None = None
         self._livekit_stop: asyncio.Event | None = None
@@ -209,6 +249,7 @@ class AlexaTUI(App[None]):
                 device=self._output_spec or "pipewire default",
                 id="spk-meter",
             )
+            yield STTStatus(id="stt-status")
         yield Footer()
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
@@ -222,6 +263,17 @@ class AlexaTUI(App[None]):
             target=self._livekit_worker, daemon=True, name="livekit"
         )
         self._livekit_thread.start()
+        if self._stt_params is not None:
+            from alexa_custom.stt import start_stt_thread
+
+            start_stt_thread(
+                config=self._stt_params["config"],
+                stop_event=self._stt_params["stop_event"],
+                telegram_client=self._stt_params["telegram_client"],
+                livekit_connect_fn=self._stt_params["connect_fn"],
+                livekit_connected_flag=self._stt_params["connected_flag"],
+                on_stt_event=self._on_stt_event,
+            )
 
     async def on_unmount(self) -> None:
         # Signal the livekit asyncio loop directly so it stops immediately,
@@ -231,6 +283,8 @@ class AlexaTUI(App[None]):
         if loop is not None and stop is not None and not loop.is_closed():
             loop.call_soon_threadsafe(stop.set)
         self._stop.set()
+        if self._stt_params is not None:
+            self._stt_params["stop_event"].set()
         root = logging.getLogger()
         if self._handler:
             root.removeHandler(self._handler)
@@ -243,7 +297,9 @@ class AlexaTUI(App[None]):
         self._livekit_loop = loop
         self._livekit_stop = asyncio.Event()
         try:
-            loop.run_until_complete(self._run_fn(self._stop, self._on_event, self._livekit_stop))
+            loop.run_until_complete(
+                self._run_fn(self._stop, self._on_event, self._livekit_stop)
+            )
         except Exception as e:
             self.call_from_thread(
                 self.query_one("#status", StatusLine).__setattr__,
@@ -320,19 +376,54 @@ class AlexaTUI(App[None]):
             f"PARTICIPANTS ({len(self._participants)})"
         )
 
+    # ── STT event bus ─────────────────────────────────────────────────────────
+
+    def _on_stt_event(self, event: str, data: dict) -> None:
+        """Thread-safe: called from the STT daemon thread."""
+        self.call_from_thread(self._handle_stt_event, event, data)
+
+    def _handle_stt_event(self, event: str, data: dict) -> None:
+        if event == "level":
+            self.query_one("#mic-meter", VUMeter).level = data.get("mic", 0.0)
+            return
+        widget = self.query_one("#stt-status", STTStatus)
+        if event == "listening":
+            words = ", ".join(data.get("wake_words", []))
+            widget.state = "listening"
+            widget.text = words
+        elif event == "transcribing":
+            widget.state = "transcribing"
+            widget.text = data.get("text", "")
+        elif event == "wake":
+            widget.state = "wake"
+            widget.text = data.get("word", "")
+        elif event == "partial":
+            widget.state = "partial"
+            widget.text = data.get("text", "")
+        elif event == "matched":
+            widget.state = "matched"
+            widget.text = f"{data.get('transcript', '')} → {data.get('trigger', '')}"
+        elif event == "nomatch":
+            widget.state = "nomatch"
+            widget.text = data.get("transcript", "")
+
 
 # ── public entry point ────────────────────────────────────────────────────────
 
 
 def run_tui(
-    run_fn: Callable[[threading.Event, Callable, asyncio.Event], Coroutine[Any, Any, None]],
+    run_fn: Callable[
+        [threading.Event, Callable, asyncio.Event], Coroutine[Any, Any, None]
+    ],
     input_spec: str | None,
     output_spec: str | None,
     room: str,
+    stt_params: dict | None = None,
 ) -> None:
     AlexaTUI(
         run_fn=run_fn,
         input_spec=input_spec,
         output_spec=output_spec,
         room=room,
+        stt_params=stt_params,
     ).run()

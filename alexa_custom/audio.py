@@ -329,6 +329,46 @@ def list_env_devices():
     _table("Speakers (OUTPUT_DEVICE):", "OUTPUT_DEVICE", speakers)
 
 
+def play_beep(frequency_hz: float, duration_ms: int) -> None:
+    """Play a pure-tone beep through the PipeWire default sink via aplay."""
+    samplerate = 48000
+    channels = 2
+    n = int(samplerate * duration_ms / 1000)
+    fade = min(int(samplerate * 0.01), n // 4)
+    t = np.linspace(0, duration_ms / 1000, n, endpoint=False)
+    wave = np.sin(2 * np.pi * frequency_hz * t).astype(np.float32) * 0.4
+    envelope = np.ones(n, dtype=np.float32)
+    envelope[:fade] = np.linspace(0, 1, fade)
+    envelope[-fade:] = np.linspace(1, 0, fade)
+    mono = wave * envelope
+    audio = np.column_stack([mono, mono])
+    subprocess.run(
+        [
+            "aplay",
+            "-D",
+            "pipewire",
+            "-r",
+            str(samplerate),
+            "-f",
+            "FLOAT_LE",
+            "-c",
+            str(channels),
+            "-q",
+        ],
+        input=audio.tobytes(),
+        timeout=3,
+        check=False,
+    )
+
+
+def play_wake_beep() -> None:
+    play_beep(800, 150)
+
+
+def play_timeout_beep() -> None:
+    play_beep(400, 150)
+
+
 def main():
     if len(sys.argv) > 1 and sys.argv[1] in ("--list", "-l", "list"):
         list_devices()
