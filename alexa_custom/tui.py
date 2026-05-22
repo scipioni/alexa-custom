@@ -169,7 +169,7 @@ class AlexaTUI(App[None]):
 
     def __init__(
         self,
-        run_fn: Callable[[threading.Event, Callable], Coroutine[Any, Any, None]],
+        run_fn: Callable[[threading.Event, Callable, asyncio.Event], Coroutine[Any, Any, None]],
         input_spec: str | None,
         output_spec: str | None,
         room: str,
@@ -180,9 +180,9 @@ class AlexaTUI(App[None]):
         self._input_spec = input_spec
         self._output_spec = output_spec
         self._room = room
-        # threading.Event so the LiveKit worker thread can read it without
-        # needing access to Textual's asyncio loop.
         self._stop = threading.Event()
+        self._livekit_loop: asyncio.AbstractEventLoop | None = None
+        self._livekit_stop: asyncio.Event | None = None
         self._livekit_thread: threading.Thread | None = None
         self._participants: dict[str, int] = {}
         self._handler: _TUIHandler | None = None
@@ -224,10 +224,13 @@ class AlexaTUI(App[None]):
         self._livekit_thread.start()
 
     async def on_unmount(self) -> None:
+        # Signal the livekit asyncio loop directly so it stops immediately,
+        # without waiting for _bridge() polling.
+        loop = self._livekit_loop
+        stop = self._livekit_stop
+        if loop is not None and stop is not None and not loop.is_closed():
+            loop.call_soon_threadsafe(stop.set)
         self._stop.set()
-        # livekit worker and level-monitor threads are all daemon=True, so they
-        # are killed when the process exits. Joining here blocks on room.disconnect()
-        # / mic.aclose() which can take seconds — skip it for instant q-to-exit.
         root = logging.getLogger()
         if self._handler:
             root.removeHandler(self._handler)
@@ -237,8 +240,10 @@ class AlexaTUI(App[None]):
         """Runs the LiveKit session in its own asyncio event loop."""
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+        self._livekit_loop = loop
+        self._livekit_stop = asyncio.Event()
         try:
-            loop.run_until_complete(self._run_fn(self._stop, self._on_event))
+            loop.run_until_complete(self._run_fn(self._stop, self._on_event, self._livekit_stop))
         except Exception as e:
             self.call_from_thread(
                 self.query_one("#status", StatusLine).__setattr__,
@@ -320,7 +325,7 @@ class AlexaTUI(App[None]):
 
 
 def run_tui(
-    run_fn: Callable[[threading.Event, Callable], Coroutine[Any, Any, None]],
+    run_fn: Callable[[threading.Event, Callable, asyncio.Event], Coroutine[Any, Any, None]],
     input_spec: str | None,
     output_spec: str | None,
     room: str,

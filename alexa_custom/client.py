@@ -353,17 +353,8 @@ def main() -> None:
         async def _run_for_tui(
             stop_threading: threading.Event,
             on_event: Callable,
+            stop_asyncio: asyncio.Event,
         ) -> None:
-            # Bridge the threading.Event to an asyncio.Event so _async_main
-            # can await it normally in the worker's own event loop.
-            stop_asyncio = asyncio.Event()
-
-            async def _bridge() -> None:
-                while not stop_threading.is_set():
-                    await asyncio.sleep(0.1)
-                stop_asyncio.set()
-
-            asyncio.create_task(_bridge())
             await _async_main(ext_stop_event=stop_asyncio, on_event=on_event)
 
         run_tui(
@@ -372,6 +363,11 @@ def main() -> None:
             output_spec=output_spec,
             room=room,
         )
+        # LiveKit's Rust FFI leaves non-cooperative threads that block Python
+        # 3.13's finalizer.  The terminal is already restored by this point
+        # (Textual's cleanup ran inside app.run()), so a hard exit is safe.
+        import os as _os
+        _os._exit(0)
     else:
         asyncio.run(_async_main())
 

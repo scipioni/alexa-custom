@@ -22,6 +22,64 @@ python3 -m venv .venv
 
 ---
 
+## Arduino Uno Q — First-Time Setup (Factory Board)
+
+On a fresh Arduino Uno Q board two things are missing from the factory image and must be fixed before `alexa-client` will run.
+
+### 1. Install the PipeWire ALSA plugin
+
+The factory image ships PipeWire but not the ALSA plugin that exposes it as a virtual sounddevice. Without it, `sounddevice` only sees raw `hw:` devices and the client fails with *"PipeWire ALSA device not found"*.
+
+```bash
+sudo apt-get install pipewire-alsa
+```
+
+Verify it worked — you should now see a `pipewire` entry:
+
+```bash
+python3 -c "import sounddevice as sd; [print(i, d['name']) for i, d in enumerate(sd.query_devices())]"
+# ...
+# 2 pipewire
+```
+
+### 2. Switch the NewPie card to `pro-audio` profile
+
+PipeWire defaults the NewPie USB device to `input:analog-stereo`, which exposes only a microphone source — no speaker sink. The client fails with *"PipeWire sink not found for OUTPUT_DEVICE='NewPie'"*. Switch to `pro-audio` to get both:
+
+```bash
+pactl set-card-profile alsa_card.usb-0a12_NewPie_SABINESMICDFU-00 pro-audio
+```
+
+Confirm both sink and source are now visible:
+
+```bash
+pactl list sinks short   # should include ...NewPie...pro-output-0
+pactl list sources short # should include ...NewPie...pro-input-0
+```
+
+**Make it persistent across reboots** with a WirePlumber rule:
+
+```bash
+mkdir -p ~/.config/wireplumber/wireplumber.conf.d
+cat > ~/.config/wireplumber/wireplumber.conf.d/40-newpie-pro-audio.conf << 'EOF'
+monitor.alsa.rules = [
+  {
+    matches = [ { device.name = "alsa_card.usb-0a12_NewPie_SABINESMICDFU-00" } ]
+    actions = {
+      update-props = { device.profile = "pro-audio" }
+    }
+  }
+]
+EOF
+systemctl --user restart wireplumber
+```
+
+### 3. Continue with normal setup
+
+With those two fixes in place, follow the [USB Setup](#usb-setup-recommended) and [LiveKit Configuration](#livekit-configuration) sections below to finish installation.
+
+---
+
 ## USB Setup (Recommended)
 
 Plug in the NewPie USB cable. Linux enumerates it as a standard USB Audio Class device — no drivers or profile configuration needed. Verify it appears:
