@@ -6,7 +6,7 @@ Headless Python client for joining LiveKit audio conferences using the NewLine N
 
 - Python 3.13+
 - PipeWire 1.x + WirePlumber 0.5.x
-- PortAudio (`libportaudio2`)
+- PortAudio (`libportaudio2` on Debian/Ubuntu, `portaudio` on Arch/Fedora)
 - BlueZ Bluetooth stack *(Bluetooth only)*
 
 ## Installation
@@ -290,6 +290,19 @@ alexa-custom/
 ---
 
 ## Troubleshooting
+
+### `OSError: PortAudio library not found` on startup
+
+`sounddevice` and `livekit-rtc` both require the PortAudio shared library at runtime. Install it for your distro:
+
+| Distro | Command |
+|--------|---------|
+| Debian / Ubuntu / Armbian | `sudo apt install libportaudio2` |
+| Arch / EndeavourOS | `sudo pacman -S portaudio` |
+| Fedora | `sudo dnf install portaudio` |
+| Alpine | `sudo apk add portaudio` |
+
+---
 
 ### `LIVEKIT_API_KEY is not set` on startup
 

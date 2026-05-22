@@ -1,4 +1,5 @@
 """Terminal UI for alexa-custom — activate with: alexa-client --tui"""
+
 from __future__ import annotations
 
 import asyncio
@@ -30,7 +31,7 @@ def _db(level: float) -> float:
 def _bar(level: float) -> str:
     """Return a Rich markup VU bar string with dB label."""
     db = _db(level)
-    filled = max(0, min(_METER_WIDTH, round(level ** 0.5 * _METER_WIDTH)))
+    filled = max(0, min(_METER_WIDTH, round(level**0.5 * _METER_WIDTH)))
     if db > -6:
         color = "bold red"
     elif db > -18:
@@ -42,90 +43,8 @@ def _bar(level: float) -> str:
     return f"{bar} {label}"
 
 
-# ── background level monitor ──────────────────────────────────────────────────
-
-def _audio_devices() -> tuple[str, str]:
-    """Return (default_source_name, default_sink_monitor_name) via pactl."""
-    try:
-        out = subprocess.run(
-            ['pactl', 'info'], capture_output=True, text=True, timeout=2
-        ).stdout
-        src, sink = '', ''
-        for line in out.splitlines():
-            if line.startswith('Default Source:'):
-                src = line.split(':', 1)[1].strip()
-            elif line.startswith('Default Sink:'):
-                sink = line.split(':', 1)[1].strip() + '.monitor'
-        return src or '@DEFAULT_SOURCE@', sink or '@DEFAULT_MONITOR@'
-    except Exception:
-        return '@DEFAULT_SOURCE@', '@DEFAULT_MONITOR@'
-
-
-class LevelMonitor:
-    """Reads PipeWire peak levels via parec subprocesses — no ctypes callbacks."""
-
-    _CHUNK = 3200  # 100 ms at 16 kHz mono s16le
-
-    def __init__(self) -> None:
-        self.mic: float = 0.0
-        self.spk: float = 0.0
-        self._stop = threading.Event()
-        self._procs: list[subprocess.Popen] = []
-
-    def start(self) -> None:
-        src, mon = _audio_devices()
-        for device, attr in ((src, 'mic'), (mon, 'spk')):
-            t = threading.Thread(
-                target=self._monitor, args=(device, attr),
-                daemon=True, name=f"level-{attr}",
-            )
-            t.start()
-
-    def stop(self) -> None:
-        self._stop.set()
-        for p in list(self._procs):
-            try:
-                p.terminate()
-            except Exception:
-                pass
-
-    def _monitor(self, device: str, attr: str) -> None:
-        while not self._stop.is_set():
-            proc: subprocess.Popen | None = None
-            try:
-                proc = subprocess.Popen(
-                    ['pw-record', '--target', device,
-                     '--format=s16', '--channels=1', '--rate=16000', '-'],
-                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                )
-                self._procs.append(proc)
-                assert proc.stdout is not None
-                while not self._stop.is_set():
-                    data = proc.stdout.read(self._CHUNK)
-                    if not data:
-                        break
-                    samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
-                    peak = float(np.max(np.abs(samples)))
-                    setattr(self, attr, max(peak, getattr(self, attr) * _DECAY))
-            except Exception:
-                pass
-            finally:
-                if proc is not None:
-                    if proc in self._procs:
-                        self._procs.remove(proc)
-                    try:
-                        proc.terminate()
-                        proc.wait(timeout=1)
-                    except Exception:
-                        try:
-                            proc.kill()
-                        except Exception:
-                            pass
-            if not self._stop.is_set():
-                self._stop.wait(0.5)
-
-
 # ── widgets ───────────────────────────────────────────────────────────────────
+
 
 class VUMeter(Static):
     level: reactive[float] = reactive(0.0)
@@ -154,7 +73,8 @@ class ParticipantsPanel(Static):
             dot = "[green]●[/]" if tracks else "[dim]○[/]"
             note = (
                 f"  [dim]{tracks} track{'s' if tracks != 1 else ''}[/]"
-                if tracks else ""
+                if tracks
+                else ""
             )
             lines.append(f"{dot} {identity}{note}")
         return "\n".join(lines)
@@ -177,12 +97,13 @@ class StatusLine(Static):
 
 # ── log handler ───────────────────────────────────────────────────────────────
 
+
 class _TUIHandler(logging.Handler):
     _COLORS: dict[int, str] = {
-        logging.DEBUG:    "dim",
-        logging.INFO:     "cyan",
-        logging.WARNING:  "yellow",
-        logging.ERROR:    "red",
+        logging.DEBUG: "dim",
+        logging.INFO: "cyan",
+        logging.WARNING: "yellow",
+        logging.ERROR: "red",
         logging.CRITICAL: "bold red",
     }
 
@@ -198,6 +119,7 @@ class _TUIHandler(logging.Handler):
 
 
 # ── main TUI app ──────────────────────────────────────────────────────────────
+
 
 class AlexaTUI(App[None]):
     TITLE = "alexa-custom"
@@ -262,7 +184,6 @@ class AlexaTUI(App[None]):
         # needing access to Textual's asyncio loop.
         self._stop = threading.Event()
         self._livekit_thread: threading.Thread | None = None
-        self._levels = LevelMonitor()
         self._participants: dict[str, int] = {}
         self._handler: _TUIHandler | None = None
         self._removed_handlers: list[logging.Handler] = []
@@ -295,8 +216,6 @@ class AlexaTUI(App[None]):
     async def on_mount(self) -> None:
         self.sub_title = f"Room: {self._room}"
         self._install_log_handler()
-        self._levels.start()
-        asyncio.create_task(self._poll_meters())
         # LiveKit's Rust FFI must run in its own thread with a dedicated event
         # loop — sharing Textual's loop causes a SIGSEGV in the FFI layer.
         self._livekit_thread = threading.Thread(
@@ -306,7 +225,6 @@ class AlexaTUI(App[None]):
 
     async def on_unmount(self) -> None:
         self._stop.set()
-        self._levels.stop()
         # livekit worker and level-monitor threads are all daemon=True, so they
         # are killed when the process exits. Joining here blocks on room.disconnect()
         # / mic.aclose() which can take seconds — skip it for instant q-to-exit.
@@ -323,7 +241,9 @@ class AlexaTUI(App[None]):
             loop.run_until_complete(self._run_fn(self._stop, self._on_event))
         except Exception as e:
             self.call_from_thread(
-                self.query_one("#status", StatusLine).__setattr__, "status", f"Error: {e}"
+                self.query_one("#status", StatusLine).__setattr__,
+                "status",
+                f"Error: {e}",
             )
         finally:
             loop.close()
@@ -335,7 +255,8 @@ class AlexaTUI(App[None]):
         # the terminal while Textual is rendering.
         root = logging.getLogger()
         self._removed_handlers = [
-            h for h in root.handlers[:]
+            h
+            for h in root.handlers[:]
             if isinstance(h, logging.StreamHandler) and not isinstance(h, _TUIHandler)
         ]
         for h in self._removed_handlers:
@@ -382,23 +303,21 @@ class AlexaTUI(App[None]):
             if identity in self._participants:
                 self._participants[identity] = max(0, self._participants[identity] - 1)
                 self._sync_participants()
+        elif event == "volume_update":
+            self.query_one("#mic-meter", VUMeter).level = data.get("mic", 0.0)
+            self.query_one("#spk-meter", VUMeter).level = data.get("spk", 0.0)
 
     def _sync_participants(self) -> None:
-        self.query_one("#participants", ParticipantsPanel).participants = dict(self._participants)
+        self.query_one("#participants", ParticipantsPanel).participants = dict(
+            self._participants
+        )
         self.query_one("#participants-title", Label).update(
             f"PARTICIPANTS ({len(self._participants)})"
         )
 
-    # ── VU meter refresh ──────────────────────────────────────────────────────
-
-    async def _poll_meters(self) -> None:
-        while True:
-            self.query_one("#mic-meter", VUMeter).level = self._levels.mic
-            self.query_one("#spk-meter", VUMeter).level = self._levels.spk
-            await asyncio.sleep(0.1)
-
 
 # ── public entry point ────────────────────────────────────────────────────────
+
 
 def run_tui(
     run_fn: Callable[[threading.Event, Callable], Coroutine[Any, Any, None]],

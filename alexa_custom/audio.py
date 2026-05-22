@@ -13,25 +13,27 @@ _SAMPLERATE = {"usb": 48000, "bluetooth": 16000}
 def find_pipewire_device():
     """Return the sounddevice index for the PipeWire ALSA device."""
     return next(
-        (i for i, d in enumerate(sd.query_devices()) if d['name'] == 'pipewire'),
+        (i for i, d in enumerate(sd.query_devices()) if d["name"] == "pipewire"),
         None,
     )
 
 
 def resolve_device(name_or_index: str) -> int:
     """Resolve a device name substring or numeric index string to a sounddevice index."""
-    if name_or_index.strip().lstrip('-').isdigit():
+    if name_or_index.strip().lstrip("-").isdigit():
         return int(name_or_index)
     needle = name_or_index.lower()
     for i, d in enumerate(sd.query_devices()):
-        if needle in d['name'].lower():
+        if needle in d["name"].lower():
             return i
-    raise RuntimeError(f"Audio device not found: {name_or_index!r} — run 'alexa-audio --list' to see available devices")
+    raise RuntimeError(
+        f"Audio device not found: {name_or_index!r} — run 'alexa-audio --list' to see available devices"
+    )
 
 
 def device_from_env(key: str) -> int | None:
     """Return the sounddevice index for INPUT_DEVICE or OUTPUT_DEVICE, or None if unset."""
-    val = os.environ.get(key, '').strip()
+    val = os.environ.get(key, "").strip()
     if not val:
         return None
     return resolve_device(val)
@@ -39,44 +41,54 @@ def device_from_env(key: str) -> int | None:
 
 def set_pipewire_defaults(input_spec: str | None, output_spec: str | None):
     """Set PipeWire default source/sink by matching INPUT_DEVICE/OUTPUT_DEVICE name."""
-    with pulsectl.Pulse('alexa-routing') as pulse:
+    with pulsectl.Pulse("alexa-routing") as pulse:
         if output_spec:
             needle = output_spec.lower()
             match = next(
-                (s for s in pulse.sink_list()
-                 if needle in s.description.lower() or needle in s.name.lower()),
+                (
+                    s
+                    for s in pulse.sink_list()
+                    if needle in s.description.lower() or needle in s.name.lower()
+                ),
                 None,
             )
             if match:
                 pulse.sink_default_set(match)
             else:
-                raise RuntimeError(f"PipeWire sink not found for OUTPUT_DEVICE={output_spec!r}")
+                raise RuntimeError(
+                    f"PipeWire sink not found for OUTPUT_DEVICE={output_spec!r}"
+                )
 
         if input_spec:
             needle = input_spec.lower()
             match = next(
-                (s for s in pulse.source_list()
-                 if 'monitor' not in s.name
-                 and (needle in s.description.lower() or needle in s.name.lower())),
+                (
+                    s
+                    for s in pulse.source_list()
+                    if "monitor" not in s.name
+                    and (needle in s.description.lower() or needle in s.name.lower())
+                ),
                 None,
             )
             if match:
                 pulse.source_default_set(match)
             else:
-                raise RuntimeError(f"PipeWire source not found for INPUT_DEVICE={input_spec!r}")
+                raise RuntimeError(
+                    f"PipeWire source not found for INPUT_DEVICE={input_spec!r}"
+                )
 
 
 def find_newpie_card(pulse):
     """Return the pulsectl card object for the NewPie, or None."""
     for card in pulse.card_list():
-        if 'NewPie' in card.proplist.get('device.description', ''):
+        if "NewPie" in card.proplist.get("device.description", ""):
             return card
     return None
 
 
 def detect_connection(card) -> str:
     """Return 'usb' or 'bluetooth' based on the card's device.bus property."""
-    return 'usb' if card.proplist.get('device.bus', '') == 'usb' else 'bluetooth'
+    return "usb" if card.proplist.get("device.bus", "") == "usb" else "bluetooth"
 
 
 def check_newpie_ready() -> tuple[bool, str]:
@@ -86,20 +98,22 @@ def check_newpie_ready() -> tuple[bool, str]:
     Prints warnings for anything wrong.
     """
     ok = True
-    with pulsectl.Pulse('newpie-check') as pulse:
+    with pulsectl.Pulse("newpie-check") as pulse:
         card = find_newpie_card(pulse)
         if card is None:
             print("ERROR: NewPie not found. Is it connected (USB or Bluetooth)?")
             print("  USB:       plug in the USB cable")
             print("  Bluetooth: bluetoothctl connect <MAC>")
-            return False, 'unknown'
+            return False, "unknown"
 
         conn = detect_connection(card)
 
-        if conn == 'bluetooth':
-            profile = card.profile_active.name if card.profile_active else 'off'
-            if profile != 'headset-head-unit':
-                print(f"WARNING: NewPie Bluetooth profile is '{profile}', expected 'headset-head-unit'")
+        if conn == "bluetooth":
+            profile = card.profile_active.name if card.profile_active else "off"
+            if profile != "headset-head-unit":
+                print(
+                    f"WARNING: NewPie Bluetooth profile is '{profile}', expected 'headset-head-unit'"
+                )
                 print(f"  Fix: pactl set-card-profile {card.name} headset-head-unit")
                 ok = False
 
@@ -110,13 +124,17 @@ def check_newpie_ready() -> tuple[bool, str]:
         default_sink = sinks.get(info.default_sink_name)
         default_source = sources.get(info.default_source_name)
 
-        if default_sink is None or 'NewPie' not in default_sink.description:
-            print(f"WARNING: Default sink is not NewPie (got: {info.default_sink_name})")
+        if default_sink is None or "NewPie" not in default_sink.description:
+            print(
+                f"WARNING: Default sink is not NewPie (got: {info.default_sink_name})"
+            )
             print("  Fix: wpctl set-default <newpie-sink-id>")
             ok = False
 
-        if default_source is None or 'NewPie' not in default_source.description:
-            print(f"WARNING: Default source is not NewPie (got: {info.default_source_name})")
+        if default_source is None or "NewPie" not in default_source.description:
+            print(
+                f"WARNING: Default source is not NewPie (got: {info.default_source_name})"
+            )
             print("  Fix: wpctl set-default <newpie-source-id>")
             ok = False
 
@@ -128,16 +146,16 @@ def list_devices():
     print("AUDIO DEVICES")
     print("=" * 60)
 
-    with pulsectl.Pulse('newpie-lister') as pulse:
+    with pulsectl.Pulse("newpie-lister") as pulse:
         info = pulse.server_info()
 
         cards = pulse.card_list()
         if cards:
             print("\n[Cards]")
             for card in cards:
-                desc = card.proplist.get('device.description', card.name)
+                desc = card.proplist.get("device.description", card.name)
                 conn = detect_connection(card)
-                profile = card.profile_active.name if card.profile_active else 'off'
+                profile = card.profile_active.name if card.profile_active else "off"
                 print(f"  {card.index}: {desc} [{conn}]")
                 print(f"      Name:    {card.name}")
                 print(f"      Profile: {profile}")
@@ -150,7 +168,7 @@ def list_devices():
 
         print("\n[Sources - Input]")
         for source in pulse.source_list():
-            if 'monitor' not in source.name:
+            if "monitor" not in source.name:
                 marker = " [DEFAULT]" if source.name == info.default_source_name else ""
                 print(f"  {source.index}: {source.description}{marker}")
                 print(f"      Name: {source.name}")
@@ -160,7 +178,9 @@ def list_devices():
     print("=" * 60)
     for i, device in enumerate(sd.query_devices()):
         print(f"  {i}: {device['name']}")
-        print(f"      In: {device['max_input_channels']} ch, Out: {device['max_output_channels']} ch")
+        print(
+            f"      In: {device['max_input_channels']} ch, Out: {device['max_output_channels']} ch"
+        )
 
 
 def speakerphone():
@@ -172,12 +192,14 @@ def speakerphone():
     if not ok:
         sys.exit(1)
 
-    input_device = device_from_env('INPUT_DEVICE')
-    output_device = device_from_env('OUTPUT_DEVICE')
+    input_device = device_from_env("INPUT_DEVICE")
+    output_device = device_from_env("OUTPUT_DEVICE")
     if input_device is None or output_device is None:
         pw_device = find_pipewire_device()
         if pw_device is None:
-            print("ERROR: PipeWire ALSA device not found and no INPUT_DEVICE/OUTPUT_DEVICE set.")
+            print(
+                "ERROR: PipeWire ALSA device not found and no INPUT_DEVICE/OUTPUT_DEVICE set."
+            )
             sys.exit(1)
         if input_device is None:
             input_device = pw_device
@@ -186,8 +208,12 @@ def speakerphone():
 
     samplerate = _SAMPLERATE[conn]
     print(f"\nConnection:        {conn}")
-    print(f"Input device:      {input_device} ({sd.query_devices(input_device)['name']})")
-    print(f"Output device:     {output_device} ({sd.query_devices(output_device)['name']})")
+    print(
+        f"Input device:      {input_device} ({sd.query_devices(input_device)['name']})"
+    )
+    print(
+        f"Output device:     {output_device} ({sd.query_devices(output_device)['name']})"
+    )
     print(f"Sample rate:       {samplerate} Hz")
     print("Starting loopback (mic → speaker). Press Ctrl+C to stop.\n")
 
@@ -246,16 +272,28 @@ def play_startup_chime():
         return np.column_stack([mono, mono])
 
     gap = np.zeros((int(samplerate * gap_duration), channels), dtype=np.float32)
-    chime = np.concatenate([
-        _note(523.25),  # C5
-        gap,
-        _note(659.25),  # E5
-        gap,
-        _note(783.99),  # G5
-    ])
+    chime = np.concatenate(
+        [
+            _note(523.25),  # C5
+            gap,
+            _note(659.25),  # E5
+            gap,
+            _note(783.99),  # G5
+        ]
+    )
     subprocess.run(
-        ['aplay', '-D', 'pipewire', '-r', str(samplerate),
-         '-f', 'FLOAT_LE', '-c', str(channels), '-q'],
+        [
+            "aplay",
+            "-D",
+            "pipewire",
+            "-r",
+            str(samplerate),
+            "-f",
+            "FLOAT_LE",
+            "-c",
+            str(channels),
+            "-q",
+        ],
         input=chime.tobytes(),
         timeout=5,
         check=True,
@@ -267,20 +305,24 @@ def list_env_devices():
     devices = list(sd.query_devices())
     pw_idx = find_pipewire_device()
 
-    col_name = max(len(d['name']) for d in devices)
+    col_name = max(len(d["name"]) for d in devices)
 
     def _table(title, env_key, entries):
         print(title)
         print(f"  {'Idx':>4}  {'Name':<{col_name}}  Channels")
         print(f"  {'─' * 4}  {'─' * col_name}  ────────")
         for i, d in entries:
-            note = '  ← PipeWire default' if i == pw_idx else ''
-            ch = d['max_input_channels'] if 'INPUT' in env_key else d['max_output_channels']
+            note = "  ← PipeWire default" if i == pw_idx else ""
+            ch = (
+                d["max_input_channels"]
+                if "INPUT" in env_key
+                else d["max_output_channels"]
+            )
             print(f"  {i:>4}  {d['name']:<{col_name}}  {ch}{note}")
         print(f"\n  → set {env_key}=<name or index>")
 
-    mics = [(i, d) for i, d in enumerate(devices) if d['max_input_channels'] > 0]
-    speakers = [(i, d) for i, d in enumerate(devices) if d['max_output_channels'] > 0]
+    mics = [(i, d) for i, d in enumerate(devices) if d["max_input_channels"] > 0]
+    speakers = [(i, d) for i, d in enumerate(devices) if d["max_output_channels"] > 0]
 
     _table("Microphones (INPUT_DEVICE):", "INPUT_DEVICE", mics)
     print()
@@ -288,7 +330,7 @@ def list_env_devices():
 
 
 def main():
-    if len(sys.argv) > 1 and sys.argv[1] in ('--list', '-l', 'list'):
+    if len(sys.argv) > 1 and sys.argv[1] in ("--list", "-l", "list"):
         list_devices()
     else:
         speakerphone()
@@ -298,5 +340,5 @@ def main_devices():
     list_env_devices()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

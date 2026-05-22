@@ -6,7 +6,9 @@ import signal
 from typing import Callable
 
 from livekit.api import AccessToken, VideoGrants
+import numpy as np
 from livekit.rtc import (
+    AudioStream,
     LocalAudioTrack,
     MediaDevices,
     Room,
@@ -18,7 +20,11 @@ from livekit.rtc import (
 from alexa_custom._env import load_env, require_env
 import sounddevice as sd
 
-from alexa_custom.audio import find_pipewire_device, play_startup_chime, set_pipewire_defaults
+from alexa_custom.audio import (
+    find_pipewire_device,
+    play_startup_chime,
+    set_pipewire_defaults,
+)
 
 load_env()
 
@@ -30,6 +36,14 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+def calculate_peak(frame) -> float:
+    """Calculate normalized peak level (0.0-1.0) from an AudioFrame."""
+    samples = np.frombuffer(frame.data, dtype=np.int16)
+    if len(samples) == 0:
+        return 0.0
+    return float(np.max(np.abs(samples))) / 32768.0
 
 
 def get_token() -> str:
@@ -63,6 +77,7 @@ def make_browser_token(identity: str = "browser-user") -> str:
 def browser_join_url(identity: str = "browser-user") -> str:
     """Return the meet.livekit.io URL a browser can open to join the same room."""
     import urllib.parse
+
     token = make_browser_token(identity)
     room = require_env("LIVEKIT_ROOM")
     params = urllib.parse.urlencode({"liveKitUrl": ROOM_URL, "token": token})
@@ -83,7 +98,37 @@ async def run_session(
 
     room = Room()
     disconnected = asyncio.Event()
-    subscribed_tracks: list = []
+    subscribed_tracks: dict[str, AudioStream] = {}
+    volumes = {"mic": 0.0, "spk": 0.0}
+    tap_tasks: list[asyncio.Task] = []
+
+    async def _tap_mic(track: LocalAudioTrack):
+        stream = AudioStream(track)
+        async for event in stream:
+            volumes["mic"] = max(volumes["mic"], calculate_peak(event.frame))
+            if disconnected.is_set() or stop_event.is_set():
+                break
+
+    async def _tap_remote(identity: str, track):
+        stream = AudioStream(track)
+        subscribed_tracks[identity] = stream
+        async for event in stream:
+            # We track the max peak across all remote participants for the "Speaker" meter
+            volumes["spk"] = max(volumes["spk"], calculate_peak(event.frame))
+            if (
+                identity not in subscribed_tracks
+                or disconnected.is_set()
+                or stop_event.is_set()
+            ):
+                break
+
+    async def _volume_emitter():
+        while not disconnected.is_set() and not stop_event.is_set():
+            await asyncio.sleep(0.1)  # 10Hz throttle
+            emit("volume_update", {"mic": volumes["mic"], "spk": volumes["spk"]})
+            # Decay levels so meters drop when silent
+            volumes["mic"] *= 0.6
+            volumes["spk"] *= 0.6
 
     @room.on("disconnected")
     def on_disconnected(reason):
@@ -95,14 +140,23 @@ async def run_session(
     def on_track_subscribed(track, publication, participant):
         if track.kind == TrackKind.KIND_AUDIO:
             logger.info(f"Audio track subscribed from {participant.identity}")
-            subscribed_tracks.append(track)
-            emit("track_subscribed", {"identity": participant.identity, "track_sid": track.sid})
+            emit(
+                "track_subscribed",
+                {"identity": participant.identity, "track_sid": track.sid},
+            )
+
+            # Start tapping remote track
+            tap_tasks.append(
+                asyncio.create_task(_tap_remote(participant.identity, track))
+            )
+
             async def _add():
                 try:
                     await player.add_track(track)
                     logger.info(f"Track {track.sid} added to player OK")
                 except Exception as e:
                     logger.error(f"add_track failed: {e}")
+
             asyncio.create_task(_add())
 
     @room.on("track_unsubscribed")
@@ -110,8 +164,7 @@ async def run_session(
         if track.kind == TrackKind.KIND_AUDIO:
             logger.info(f"Audio track unsubscribed from {participant.identity}")
             emit("track_unsubscribed", {"identity": participant.identity})
-            if track in subscribed_tracks:
-                subscribed_tracks.remove(track)
+            subscribed_tracks.pop(participant.identity, None)
             asyncio.create_task(player.remove_track(track))
 
     @room.on("participant_connected")
@@ -126,23 +179,36 @@ async def run_session(
 
     try:
         await room.connect(ROOM_URL, get_token())
-        room_name = require_env('LIVEKIT_ROOM')
-        logger.info(f"Connected to {ROOM_URL}/{room_name} as {room.local_participant.identity}")
-        emit("connected", {"room": room_name, "identity": room.local_participant.identity})
+        room_name = require_env("LIVEKIT_ROOM")
+        logger.info(
+            f"Connected to {ROOM_URL}/{room_name} as {room.local_participant.identity}"
+        )
+        emit(
+            "connected",
+            {"room": room_name, "identity": room.local_participant.identity},
+        )
 
         # Emit events for participants already in the room at connect time.
         for p in room.remote_participants.values():
-            logger.info(f"Existing participant: {p.identity} ({len(p.track_publications)} tracks)")
+            logger.info(
+                f"Existing participant: {p.identity} ({len(p.track_publications)} tracks)"
+            )
             emit("participant_joined", {"identity": p.identity})
 
         if not room.remote_participants:
-            logger.info("No other participants in room yet — waiting for browser to join")
+            logger.info(
+                "No other participants in room yet — waiting for browser to join"
+            )
 
         track = LocalAudioTrack.create_audio_track("microphone", mic.source)
         opts = TrackPublishOptions()
         opts.source = TrackSource.SOURCE_MICROPHONE
         await room.local_participant.publish_track(track, opts)
         logger.info("Microphone track published — full duplex active")
+
+        # Start microphone tap and volume emitter
+        tap_tasks.append(asyncio.create_task(_tap_mic(track)))
+        tap_tasks.append(asyncio.create_task(_volume_emitter()))
 
         async def _status_loop():
             while True:
@@ -159,17 +225,17 @@ async def run_session(
         status_task = asyncio.create_task(_status_loop())
 
         await asyncio.wait(
-            [asyncio.create_task(disconnected.wait()),
-             asyncio.create_task(stop_event.wait())],
+            [
+                asyncio.create_task(disconnected.wait()),
+                asyncio.create_task(stop_event.wait()),
+            ],
             return_when=asyncio.FIRST_COMPLETED,
         )
         status_task.cancel()
     finally:
-        for t in list(subscribed_tracks):
-            try:
-                await player.remove_track(t)
-            except Exception:
-                pass
+        for t in tap_tasks:
+            t.cancel()
+        tap_tasks.clear()
         subscribed_tracks.clear()
         await room.disconnect()
 
@@ -180,14 +246,16 @@ async def _async_main(
 ) -> None:
     logger.info(f"Browser join URL:\n  {browser_join_url()}")
 
-    input_spec = os.environ.get('INPUT_DEVICE', '').strip() or None
-    output_spec = os.environ.get('OUTPUT_DEVICE', '').strip() or None
+    input_spec = os.environ.get("INPUT_DEVICE", "").strip() or None
+    output_spec = os.environ.get("OUTPUT_DEVICE", "").strip() or None
 
     # Route PipeWire to the requested devices, then always talk to LiveKit
     # through the PipeWire virtual device — never open hw: devices directly.
     if input_spec or output_spec:
         await asyncio.to_thread(set_pipewire_defaults, input_spec, output_spec)
-        logger.info(f"PipeWire routed — input: {input_spec or 'default'}, output: {output_spec or 'default'}")
+        logger.info(
+            f"PipeWire routed — input: {input_spec or 'default'}, output: {output_spec or 'default'}"
+        )
 
     pw_device = find_pipewire_device()
     if pw_device is None:
@@ -202,7 +270,9 @@ async def _async_main(
         except Exception as e:
             logger.warning(f"Startup chime skipped: {e}")
 
-    devices = MediaDevices(input_sample_rate=48000, output_sample_rate=48000, num_channels=1)
+    devices = MediaDevices(
+        input_sample_rate=48000, output_sample_rate=48000, num_channels=1
+    )
 
     # Use the provided stop event (TUI mode) or create one and wire signals.
     stop_event = ext_stop_event or asyncio.Event()
@@ -212,12 +282,16 @@ async def _async_main(
             loop.add_signal_handler(sig, stop_event.set)
 
     def _flag(key: str, default: bool = True) -> bool:
-        return os.environ.get(key, "1" if default else "0").strip().lower() not in ("0", "false", "no")
+        return os.environ.get(key, "1" if default else "0").strip().lower() not in (
+            "0",
+            "false",
+            "no",
+        )
 
-    agc  = _flag("MIC_AGC")
-    aec  = _flag("MIC_AEC")
-    ns   = _flag("MIC_NOISE_SUPPRESSION")
-    hpf  = _flag("MIC_HIGH_PASS_FILTER")
+    agc = _flag("MIC_AGC")
+    aec = _flag("MIC_AEC")
+    ns = _flag("MIC_NOISE_SUPPRESSION")
+    hpf = _flag("MIC_HIGH_PASS_FILTER")
     logger.info(f"Opening microphone (AEC={aec} NS={ns} HPF={hpf} AGC={agc})...")
     mic = devices.open_input(
         enable_aec=aec,
@@ -259,6 +333,7 @@ async def _async_main(
 def main() -> None:
     import argparse
     import threading
+
     parser = argparse.ArgumentParser(description="alexa-custom LiveKit client")
     parser.add_argument("--tui", action="store_true", help="Launch terminal UI")
     args = parser.parse_args()
@@ -266,13 +341,14 @@ def main() -> None:
     if args.tui:
         from alexa_custom.tui import run_tui
         from alexa_custom.audio import play_startup_chime as _chime
+
         try:
             _chime()
         except Exception as e:
             logger.warning(f"Startup chime skipped: {e}")
-        input_spec = os.environ.get('INPUT_DEVICE', '').strip() or None
-        output_spec = os.environ.get('OUTPUT_DEVICE', '').strip() or None
-        room = os.environ.get('LIVEKIT_ROOM', '')
+        input_spec = os.environ.get("INPUT_DEVICE", "").strip() or None
+        output_spec = os.environ.get("OUTPUT_DEVICE", "").strip() or None
+        room = os.environ.get("LIVEKIT_ROOM", "")
 
         async def _run_for_tui(
             stop_threading: threading.Event,
