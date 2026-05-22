@@ -31,7 +31,7 @@ On a fresh Arduino Uno Q board two things are missing from the factory image and
 The factory image ships PipeWire but not the ALSA plugin that exposes it as a virtual sounddevice. Without it, `sounddevice` only sees raw `hw:` devices and the client fails with *"PipeWire ALSA device not found"*.
 
 ```bash
-sudo apt-get install pipewire-alsa
+sudo apt-get install pipewire-alsa portaudio19-dev
 ```
 
 Verify it worked — you should now see a `pipewire` entry:
@@ -74,9 +74,17 @@ EOF
 systemctl --user restart wireplumber
 ```
 
-### 3. Continue with normal setup
+### 3. Download the Vosk speech recognition model
 
-With those two fixes in place, follow the [USB Setup](#usb-setup-recommended) and [LiveKit Configuration](#livekit-configuration) sections below to finish installation.
+```bash
+wget https://alphacephei.com/vosk/models/vosk-model-small-it-0.22.zip
+unzip vosk-model-small-it-0.22.zip
+mv vosk-model-small-it-0.22 model-it
+```
+
+### 4. Continue with normal setup
+
+With those fixes in place, follow the [USB Setup](#usb-setup-recommended) and [LiveKit Configuration](#livekit-configuration) sections below to finish installation.
 
 ---
 

@@ -16,6 +16,8 @@ dependencies = [
     "numpy>=1.26.0",
     "pulsectl>=23.0.0",
     "textual>=0.70",
+    "vosk>=0.3.45",
+    "pyaudio>=0.2.14",
 ]
 
 [project.scripts]
