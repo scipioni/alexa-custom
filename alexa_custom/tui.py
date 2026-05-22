@@ -77,9 +77,59 @@ class STTStatus(Static):
         self.refresh()
 
 
+class STTStatus(Static):
+    state: reactive[str] = reactive("idle")
+    text: reactive[str] = reactive("")
+
+    def render(self) -> str:
+        if self.state == "listening":
+            words = self.text or "…"
+            return f"[dim]○[/]  [dim]wake words:[/] [dim italic]{words}[/]"
+        elif self.state == "transcribing":
+            return f"[dim]◌[/]  [dim]{self.text}[/] [dim]…[/]"
+        elif self.state == "wake":
+            return f'[bold yellow]◉[/]  [yellow]"{self.text}"[/] [dim]— listening for command…[/]'
+        elif self.state == "partial":
+            return f"[bold yellow]◉[/]  [yellow]{self.text}[/] [dim]…[/]"
+        elif self.state == "matched":
+            parts = self.text.split("→", 1)
+            transcript = parts[0].strip()
+            trigger = parts[1].strip() if len(parts) > 1 else ""
+            return f'[bold green]✓[/]  [green]"{transcript}"[/] [dim]→[/] [bold]{trigger}[/]'
+        elif self.state == "nomatch":
+            t = f'"{self.text}" ' if self.text else ""
+            return f"[bold red]✗[/]  {t}[dim red]no match[/]"
+        elif self.state == "gated":
+            return "[dim]⏸[/]  [dim]STT paused during call[/]"
+        return "[dim]○[/]  [dim]STT inactive[/]"
+
+    def watch_state(self, _: str) -> None:
+        self.refresh()
+
+    def watch_text(self, _: str) -> None:
+        self.refresh()
+
+
+class AudioStatus(Static):
+    connected: reactive[bool] = reactive(False)
+    conn_type: reactive[str] = reactive("unknown")
+    target: reactive[str] = reactive("")
+
+    def render(self) -> str:
+        if self.connected:
+            icon = "[bold green]✔[/]"
+            desc = f"[green]Connected {self.conn_type.upper()}[/]"
+        else:
+            icon = "[bold yellow]![/]"
+            t = f" '{self.target}'" if self.target else ""
+            desc = f"[yellow]Searching for{t}...[/]"
+        return f" {icon}  Audio: {desc}"
+
+
 class VUMeter(Static):
     level: reactive[float] = reactive(0.0)
     vol: reactive[float] = reactive(-1.0)
+    connected: reactive[bool] = reactive(True)
 
     def __init__(self, label: str, device: str = "", **kw) -> None:
         super().__init__(**kw)
@@ -87,6 +137,8 @@ class VUMeter(Static):
         self._device = device
 
     def render(self) -> str:
+        if not self.connected:
+            return f"[bold]{self._label}[/]  [dim red]OFFLINE[/]"
         dev = f"[dim]{self._device[:24]}[/]  " if self._device else ""
         vol_str = f"[cyan]{self.vol * 100:.0f}%[/]  " if self.vol >= 0 else ""
         return f"[bold]{self._label}[/]  {dev}{vol_str}{_bar(self.level)}"
@@ -244,6 +296,7 @@ class AlexaTUI(App[None]):
                 yield ParticipantsPanel(id="participants")
             yield RichLog(id="logs", highlight=True, markup=True, wrap=True)
         with Vertical(id="meters"):
+            yield AudioStatus(id="audio-status")
             yield VUMeter(
                 label="MIC ",
                 device=self._input_spec or "pipewire default",
@@ -262,6 +315,19 @@ class AlexaTUI(App[None]):
     async def on_mount(self) -> None:
         self.sub_title = f"Room: {self._room}"
         self._install_log_handler()
+
+        from alexa_custom.audio import AudioWatcher
+
+        status = self.query_one("#audio-status", AudioStatus)
+        status.target = self._output_spec or "NewPie"
+
+        self._audio_watcher = AudioWatcher(
+            input_spec=self._input_spec,
+            output_spec=self._output_spec,
+            on_status_change=self._on_audio_status,
+        )
+        self._audio_watcher.start()
+
         await self._refresh_volumes()
         self.set_interval(5.0, self._refresh_volumes)
         # LiveKit's Rust FFI must run in its own thread with a dedicated event
@@ -283,6 +349,8 @@ class AlexaTUI(App[None]):
             )
 
     async def on_unmount(self) -> None:
+        if hasattr(self, "_audio_watcher"):
+            self._audio_watcher.stop()
         # Signal the livekit asyncio loop directly so it stops immediately,
         # without waiting for _bridge() polling.
         loop = self._livekit_loop
@@ -431,6 +499,26 @@ class AlexaTUI(App[None]):
         self.query_one("#participants-title", Label).update(
             f"PARTICIPANTS ({len(self._participants)})"
         )
+
+    # ── audio event bus ───────────────────────────────────────────────────────
+
+    def _on_audio_status(self, connected: bool, conn_type: str) -> None:
+        """Thread-safe: called from the AudioWatcher thread."""
+        try:
+            self.call_from_thread(self._handle_audio_status, connected, conn_type)
+        except Exception:
+            pass
+
+    def _handle_audio_status(self, connected: bool, conn_type: str) -> None:
+        try:
+            status = self.query_one("#audio-status", AudioStatus)
+            status.connected = connected
+            status.conn_type = conn_type
+
+            self.query_one("#mic-meter", VUMeter).connected = connected
+            self.query_one("#spk-meter", VUMeter).connected = connected
+        except Exception:
+            pass
 
     # ── STT event bus ─────────────────────────────────────────────────────────
 
