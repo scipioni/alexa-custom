@@ -255,6 +255,7 @@ def _play_raw(data: bytes, samplerate: int, channels: int) -> None:
     if pw_play:
         cmd = [
             pw_play,
+            "-a",  # raw mode: honour --format/--rate/--channels instead of auto-detect
             "--rate",
             str(samplerate),
             "--channels",

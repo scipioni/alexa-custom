@@ -345,6 +345,7 @@ async def _async_main(
         high_pass_filter=hpf,
         auto_gain_control=agc,
         input_device=pw_device,
+        queue_capacity=200,
     )
 
     logger.info("Opening speaker output...")

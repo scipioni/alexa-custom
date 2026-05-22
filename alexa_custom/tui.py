@@ -148,10 +148,7 @@ class _TUIHandler(logging.Handler):
         self._app = app
 
     def emit(self, record: logging.LogRecord) -> None:
-        try:
-            self._app.call_from_thread(self._app._append_log, record)
-        except Exception:
-            pass
+        self._app._call_threadsafe(self._app._append_log, record)
 
 
 # ── main TUI app ──────────────────────────────────────────────────────────────
@@ -303,16 +300,30 @@ class AlexaTUI(App[None]):
         asyncio.set_event_loop(loop)
         self._livekit_loop = loop
         self._livekit_stop = asyncio.Event()
+
+        def _exc_handler(
+            loop: asyncio.AbstractEventLoop, context: dict
+        ) -> None:
+            # QueueFull is expected: livekit's media_devices.py checks q.full()
+            # before scheduling put_nowait, but the check and the put run on
+            # different threads (TOCTOU).  Dropped audio frames are harmless.
+            if isinstance(context.get("exception"), asyncio.QueueFull):
+                return
+            loop.default_exception_handler(context)
+
+        loop.set_exception_handler(_exc_handler)
+
         try:
             loop.run_until_complete(
                 self._run_fn(self._stop, self._on_event, self._livekit_stop)
             )
         except Exception as e:
-            self.call_from_thread(
-                self.query_one("#status", StatusLine).__setattr__,
-                "status",
-                f"Error: {e}",
-            )
+            err = f"Error: {e}"
+
+            def _set_err() -> None:
+                self.query_one("#status", StatusLine).status = err
+
+            self._call_threadsafe(_set_err)
         finally:
             loop.close()
 
@@ -385,14 +396,35 @@ class AlexaTUI(App[None]):
             f"[dim]{ts}[/] [{color}]{record.levelname:<8}[/] {msg}"
         )
 
+    # ── thread-safe non-blocking dispatch ────────────────────────────────────
+
+    def _call_threadsafe(self, fn: Callable, *args: Any) -> None:
+        """Schedule fn(*args) on Textual's event loop without blocking the caller.
+
+        Unlike call_from_thread, this never blocks.  Used for high-frequency
+        callbacks (volume/level updates, log lines) that come from the livekit
+        worker or STT thread.  Blocking those threads with call_from_thread
+        stalls the livekit asyncio loop, causing its bounded audio-frame queue
+        to overflow and emit 'Handle Queue.put_nowait() exception'.
+        """
+        loop = self._loop
+        if loop is None:
+            return
+
+        def _call() -> None:
+            with self._context():
+                fn(*args)
+
+        try:
+            loop.call_soon_threadsafe(_call)
+        except Exception:
+            pass
+
     # ── event bus from LiveKit session ────────────────────────────────────────
 
     def _on_event(self, event: str, data: dict) -> None:
         """Thread-safe: called from the asyncio task or event callbacks."""
-        try:
-            self.call_from_thread(self._handle_event, event, data)
-        except Exception:
-            pass
+        self._call_threadsafe(self._handle_event, event, data)
 
     def _handle_event(self, event: str, data: dict) -> None:
         status = self.query_one("#status", StatusLine)
@@ -436,10 +468,7 @@ class AlexaTUI(App[None]):
 
     def _on_stt_event(self, event: str, data: dict) -> None:
         """Thread-safe: called from the STT daemon thread."""
-        try:
-            self.call_from_thread(self._handle_stt_event, event, data)
-        except Exception:
-            pass
+        self._call_threadsafe(self._handle_stt_event, event, data)
 
     def _handle_stt_event(self, event: str, data: dict) -> None:
         if event == "level":
