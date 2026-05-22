@@ -96,5 +96,16 @@ async def _run_action(
             return
         await livekit_connect_fn()
 
+    elif action.type == "say":
+        from alexa_custom.tts import get_engine
+
+        text = action.params.get("text", "")
+        lang = action.params.get("lang", "it-IT")
+        if text:
+            # We run in a thread because TTS generation/playback is blocking
+            import asyncio
+
+            await asyncio.to_thread(get_engine().say, text, lang)
+
     else:
         logger.warning(f"Unknown action type '{action.type}' — skipping")

@@ -425,6 +425,22 @@ def _play_raw(data: bytes, samplerate: int, channels: int) -> None:
         pass
 
 
+def play_wav_file(file_path: str) -> None:
+    """Play a WAV file via pw-play (native PipeWire) or aplay (ALSA fallback)."""
+    import shutil
+
+    pw_play = shutil.which("pw-play")
+    if pw_play:
+        cmd = [pw_play, file_path]
+    else:
+        cmd = ["aplay", "-D", "pipewire", "-q", file_path]
+
+    try:
+        subprocess.run(cmd, timeout=30, check=False, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
+
+
 def play_startup_chime():
     """Play a short ascending chime (C5-E5-G5) through the PipeWire default sink.
 

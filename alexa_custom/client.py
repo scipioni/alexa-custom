@@ -445,9 +445,13 @@ def main() -> None:
 
         if config is not None:
             from alexa_custom.actions import TelegramClient
+            from alexa_custom.tts import init_engine
 
             connect_trigger = threading.Event()
             livekit_connected_flag = threading.Event()
+
+            # Initialize TTS with gating
+            init_engine(stt_gated_flag=livekit_connected_flag)
 
             async def _livekit_connect_fn() -> None:
                 assert connect_trigger is not None
@@ -502,11 +506,15 @@ def main() -> None:
         if config is not None:
             from alexa_custom.actions import TelegramClient
             from alexa_custom.stt import start_stt_thread
+            from alexa_custom.tts import init_engine
 
             connect_trigger = threading.Event()
             livekit_connected_flag = threading.Event()
             telegram_client = TelegramClient()
             stt_stop = threading.Event()
+
+            # Initialize TTS with gating
+            init_engine(stt_gated_flag=livekit_connected_flag)
 
             async def _livekit_connect_fn() -> None:
                 connect_trigger.set()

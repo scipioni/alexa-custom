@@ -33,17 +33,27 @@ triggers:
 
   - phrase: "chiama"
     actions:
+      - type: say
+        params:
+          text: "Chiamo subito."
       - type: livekit_join
-        # Optional: room name override. Defaults to LIVEKIT_ROOM env var.
-        # room: "sala-riunioni"
 
   - phrase: "manda messaggio"
     actions:
+      - type: say
+        params:
+          text: "Messaggio inviato."
       - type: telegram
         # Optional: target chat. Defaults to TELEGRAM_CHAT_ID env var.
         # chat_id: "123456789"
         # Use <room> to embed the LiveKit browser join URL in the message.
         text: "Qualcuno ti chiama dal salotto — unisciti: <room>"
+
+  - phrase: "ciao"
+    actions:
+      - type: say
+        params:
+          text: "Ciao! Come posso aiutarti oggi?"
 
   # Example: trigger both actions in sequence
   - phrase: "emergenza"
