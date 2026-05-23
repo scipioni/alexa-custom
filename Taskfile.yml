@@ -52,6 +52,24 @@ tasks:
       - task: _release
         vars: { BUMP: major }
 
+  release:rollback:
+    desc: Delete the latest release tag and undo its commit
+    cmds:
+      - |
+        TAG=$(git describe --tags --abbrev=0 2>/dev/null)
+        if [ -z "$TAG" ]; then
+          echo "No tags found — nothing to rollback"
+          exit 1
+        fi
+        COMMIT=$(git rev-list -n 1 "$TAG")
+        MSG=$(git log -1 --pretty=%s "$COMMIT")
+        echo "Rolling back tag ${TAG} (${COMMIT:0:7}: ${MSG})"
+        git tag -d "$TAG"
+        git revert --no-edit "$COMMIT"
+        echo ""
+        echo "Tag ${TAG} deleted and release commit reverted"
+        echo "Push with: git push && git push origin :refs/tags/${TAG}"
+
   _release:
     internal: true
     cmds:
