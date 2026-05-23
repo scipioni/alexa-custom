@@ -6,7 +6,7 @@ Listen for configured wake words in the background and trigger command listening
 ## Requirements
 
 ### Requirement: Continuous wake word listening
-The system SHALL run a background STT pipeline that listens continuously for configured wake words using Vosk grammar-mode recognition, independently of the LiveKit connection state.
+The system SHALL run a background STT pipeline that listens continuously for configured wake words using Vosk grammar-mode recognition. Recognition SHALL be automatically gated (paused) when a LiveKit call is active or when the TTS engine is speaking to prevent false triggers.
 
 #### Scenario: Wake word detected
 - **WHEN** a configured wake word is spoken clearly into the microphone
@@ -19,6 +19,10 @@ The system SHALL run a background STT pipeline that listens continuously for con
 #### Scenario: STT starts without LiveKit
 - **WHEN** the process starts and `actions.yaml` is present
 - **THEN** wake word listening begins before any LiveKit connection is established
+
+#### Scenario: STT paused during call
+- **WHEN** a LiveKit session is active
+- **THEN** the recognizer is gated and STT status shows "STT paused during call"
 
 ### Requirement: Configurable wake word list
 The system SHALL load wake words from the `wake_words` list in `actions.yaml`. At least one wake word MUST be defined.
