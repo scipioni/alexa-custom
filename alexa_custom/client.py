@@ -526,18 +526,30 @@ def make_mqtt_reload_callback(
 
 
 def ensure_setup() -> None:
-    """Download Vosk model if missing."""
-    from alexa_custom.setup import download_model
+    """Download Vosk model and the default Piper voice if missing."""
+    from alexa_custom.setup import download_piper_voice, download_vosk
     from alexa_custom.stt import _MODEL_PATH
+    from alexa_custom.tts import PIPER_VOICES_DIR
 
     if not os.path.isdir(_MODEL_PATH):
         logger.info(
             f"Vosk model not found at {_MODEL_PATH}. Downloading automatically..."
         )
         try:
-            download_model()
+            download_vosk()
         except Exception as e:
             logger.error(f"Failed to download Vosk model: {e}")
+
+    default_voice = "it_IT-paola-medium"
+    voice_onnx = PIPER_VOICES_DIR / f"{default_voice}.onnx"
+    if not voice_onnx.is_file():
+        logger.info(
+            f"Piper voice not found at {voice_onnx}. Downloading automatically..."
+        )
+        try:
+            download_piper_voice(default_voice)
+        except Exception as e:
+            logger.error(f"Failed to download Piper voice: {e}")
 
 
 def main() -> None:
@@ -587,6 +599,8 @@ def main() -> None:
             livekit_connected_flag = threading.Event()
 
             init_engine(
+                backend_type=config.tts_backend,
+                voice=config.tts_voice,
                 stt_gated_flag=livekit_connected_flag,
                 preroll_ms=config.tts_preroll_ms,
             )
@@ -668,6 +682,8 @@ def main() -> None:
 
             # Initialize TTS with gating
             init_engine(
+                backend_type=config.tts_backend,
+                voice=config.tts_voice,
                 stt_gated_flag=livekit_connected_flag,
                 preroll_ms=config.tts_preroll_ms,
             )

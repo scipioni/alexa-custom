@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import json
 import logging
 import os
+import select
 import subprocess
 import threading
 import time
@@ -17,7 +19,7 @@ if TYPE_CHECKING:
     from alexa_custom.mqtt import MQTTClient
 
 from alexa_custom.actions import TelegramClient, dispatch, match_trigger
-from alexa_custom.audio import play_timeout_beep, play_wake_beep
+from alexa_custom.audio import is_playback_active, play_timeout_beep, play_wake_beep
 from alexa_custom.config import ActionsConfig, Trigger, WakeWordGroup
 
 logger = logging.getLogger(__name__)
@@ -25,6 +27,10 @@ logger = logging.getLogger(__name__)
 _CHUNK = 4096
 _MODEL_PATH = os.environ.get("VOSK_MODEL_PATH", "models/it")
 _STT_COOLDOWN = 1.0
+# Once we have detected any speech, return as soon as the recognizer has been
+# idle (no new partial / no new final) for this many ms. Trims 1-4s off every
+# reply window vs. waiting for the full `timeout`. Override via env.
+_VAD_SILENCE_MS = int(os.environ.get("STT_VAD_SILENCE_MS", "700"))
 
 
 def normalize_text(text: str) -> str:
@@ -98,7 +104,12 @@ def start_capture(source: str | None, channels: int = 1) -> subprocess.Popen:
         if source:
             cmd.append(f"--device={source}")
 
-    return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    # bufsize=0 keeps proc.stdout as raw FileIO so os.read (used by _drain_pipe
+    # and _read_with_timeout) and the wake-loop's proc.stdout.read() see the
+    # same byte stream — no Python-side BufferedReader holding stale frames.
+    return subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0
+    )
 
 
 def _load_model() -> vosk.Model:
@@ -110,9 +121,14 @@ def _load_model() -> vosk.Model:
     return vosk.Model(_MODEL_PATH)
 
 
+def _phrases_to_grammar(phrases: list[str]) -> str:
+    """Convert a list of phrases to a Vosk grammar JSON string."""
+    return json.dumps(phrases + ["[unk]"])
+
+
 def _grammar_json(groups: list[WakeWordGroup]) -> str:
     phrases = [p for g in groups for p in [g.word] + g.aliases]
-    return json.dumps(phrases + ["[unk]"])
+    return _phrases_to_grammar(phrases)
 
 
 def _build_alias_map(groups: list[WakeWordGroup]) -> dict[str, WakeWordGroup]:
@@ -133,6 +149,50 @@ def _rms_level(data: bytes) -> float:
     if n == 0:
         return 0.0
     return float(np.linalg.norm(samples)) / (32768.0 * n**0.5)
+
+
+def _read_with_timeout(stdout, nbytes: int, timeout: float) -> bytes:
+    """Best-effort read of up to ``nbytes`` from ``stdout`` within ``timeout`` seconds.
+
+    Returns b'' if nothing arrived in the window. Prevents the recognizer thread
+    from hanging forever when parec stalls (USB unplug, sink reset, etc.).
+    """
+    if stdout is None:
+        return b""
+    fd = stdout.fileno()
+    ready, _, _ = select.select([fd], [], [], timeout)
+    if not ready:
+        return b""
+    try:
+        return os.read(fd, nbytes)
+    except OSError:
+        return b""
+
+
+def _drain_pipe(proc: subprocess.Popen, max_bytes: int = 1 << 20) -> int:
+    """Non-blocking: discard any audio already buffered in the capture pipe.
+
+    Used to wipe acoustic echo / stale frames accumulated while playback was
+    holding STT gated, before we hand fresh audio to the recognizer.
+    """
+    if proc.stdout is None:
+        return 0
+    fd = proc.stdout.fileno()
+    flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+    fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+    drained = 0
+    try:
+        while drained < max_bytes:
+            try:
+                chunk = os.read(fd, 8192)
+            except BlockingIOError:
+                break
+            if not chunk:
+                break
+            drained += len(chunk)
+    finally:
+        fcntl.fcntl(fd, fcntl.F_SETFL, flags)
+    return drained
 
 
 def _downmix_to_mono(data: bytes, channels: int) -> bytes:
@@ -253,21 +313,73 @@ def capture_transcript(
     timeout: float,
     stop_event: threading.Event,
     on_stt_event: Callable[[str, dict], None] | None = None,
+    flush_ms: int = 0,
+    phrases: list[str] | None = None,
+    start_after_playback: bool = False,
 ) -> str:
-    """Capture audio for a set duration and return the transcribed text."""
-    stage2 = vosk.KaldiRecognizer(model, 16000)
+    """Capture audio for a set duration and return the transcribed text.
+
+    If ``start_after_playback`` is True the deadline is (re-)initialised when
+    the playback gate drops. This lets the caller launch capture in parallel
+    with a TTS ``say()``: pipe frames produced during playback are discarded
+    in-flight (no backlog), and the full ``timeout`` window starts the moment
+    the TTS finishes.
+    """
+    # Drop any audio that piled up in the pipe while we were blocked elsewhere
+    # (e.g., during the preceding TTS in handle_ask). This is the echo of the
+    # assistant's own voice — feeding it to vosk produces doubled/mixed words.
+    assert proc.stdout is not None
+    drained = _drain_pipe(proc)
+    if drained:
+        logger.debug(f"Drained {drained} bytes of stale audio before capture")
+
+    # Active flush: read and discard a fixed window after the drain, as a guard
+    # against any echo tail that arrives after the playback flag is cleared.
+    # parec emits s16le -> 2 bytes per sample.
+    if flush_ms > 0:
+        bytes_to_flush = int(16000 * channels * 2 * (flush_ms / 1000))
+        proc.stdout.read(bytes_to_flush)
+
+    if phrases:
+        stage2 = vosk.KaldiRecognizer(model, 16000, _phrases_to_grammar(phrases))
+    else:
+        stage2 = vosk.KaldiRecognizer(model, 16000)
     deadline = time.monotonic() + timeout
     transcript_parts: list[str] = []
+    was_playing = False
+    last_partial = ""
+    last_activity = time.monotonic()
+    got_speech = False
 
-    assert proc.stdout is not None
     while not stop_event.is_set() and time.monotonic() < deadline:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
 
-        raw_data = proc.stdout.read(_CHUNK * channels)
+        raw_data = _read_with_timeout(proc.stdout, _CHUNK * channels, 1.0)
         if not raw_data:
-            break
+            if proc.poll() is not None:
+                logger.warning("Capture pipe closed mid-listen (parec exited)")
+                break
+            continue
+
+        if is_playback_active():
+            was_playing = True
+            continue
+
+        if was_playing:
+            # Just emerged from playback: discard pipe backlog and reset the
+            # recognizer so partial state from before the echo doesn't surface.
+            _drain_pipe(proc)
+            stage2.Reset()
+            was_playing = False
+            if start_after_playback:
+                # Restart the listen window now that the TTS is actually over.
+                deadline = time.monotonic() + timeout
+            last_partial = ""
+            last_activity = time.monotonic()
+            got_speech = False
+            continue
 
         data = _downmix_to_mono(raw_data, channels)
 
@@ -278,18 +390,34 @@ def capture_transcript(
             result = json.loads(stage2.Result())
             text = result.get("text", "").strip()
             if text:
-                transcript_parts.append(text)
-                logger.info(f"Capture partial: '{text}'")
+                logger.info(f"Capture match: '{text}'")
                 if on_stt_event:
-                    on_stt_event("partial", {"text": " ".join(transcript_parts)})
-        else:
-            if on_stt_event:
-                partial = json.loads(stage2.PartialResult()).get("partial", "").strip()
-                if partial:
-                    full = " ".join(transcript_parts + [partial])
-                    on_stt_event("partial", {"text": full})
+                    on_stt_event("partial", {"text": text})
 
-    # Collect final partial
+                # Grammar mode: first finalised match wins — return immediately.
+                if phrases:
+                    return text
+
+                transcript_parts.append(text)
+                got_speech = True
+                last_activity = time.monotonic()
+                last_partial = ""
+        else:
+            partial = json.loads(stage2.PartialResult()).get("partial", "").strip()
+            if partial != last_partial:
+                last_partial = partial
+                if partial:
+                    got_speech = True
+                    last_activity = time.monotonic()
+                    if on_stt_event:
+                        full = " ".join(transcript_parts + [partial])
+                        on_stt_event("partial", {"text": full})
+
+        # VAD endpoint: speech was heard, recognizer idle long enough → user done.
+        if got_speech and (time.monotonic() - last_activity) * 1000 >= _VAD_SILENCE_MS:
+            break
+
+    # Flush whatever vosk hadn't finalised yet (deadline path or VAD path).
     final = json.loads(stage2.FinalResult())
     final_text = final.get("text", "").strip()
     if final_text:
@@ -315,12 +443,18 @@ def _single_stage_loop(
     """Single-stage: full transcription always; wake word + command in one phrase."""
     rec = vosk.KaldiRecognizer(model, 16000)
     cooldown_until = 0.0
+    was_playing = False
     alias_map = _build_alias_map(config.wake_words)
 
     if on_stt_event:
         on_stt_event("listening", {"wake_words": [g.word for g in config.wake_words]})
 
-    async def _listen_fn(timeout: float) -> str:
+    async def _listen_fn(
+        timeout: float,
+        flush_ms: int = 0,
+        phrases: list[str] | None = None,
+        start_after_playback: bool = False,
+    ) -> str:
         # Emit event for UI to show we are listening for a reply
         if on_stt_event:
             on_stt_event("wake", {"word": "(reply)", "timeout": timeout})
@@ -332,6 +466,9 @@ def _single_stage_loop(
             timeout,
             stop_event,
             on_stt_event,
+            flush_ms=flush_ms,
+            phrases=phrases,
+            start_after_playback=start_after_playback,
         )
 
     assert proc.stdout is not None
@@ -340,6 +477,16 @@ def _single_stage_loop(
         raw_data = proc.stdout.read(_CHUNK * channels)
         if not raw_data:
             break
+
+        if is_playback_active():
+            was_playing = True
+            continue
+
+        if was_playing:
+            _drain_pipe(proc)
+            rec.Reset()
+            was_playing = False
+            continue
 
         data = _downmix_to_mono(raw_data, channels)
 
@@ -377,7 +524,7 @@ def _single_stage_loop(
             on_stt_event("wake", {"word": wake_group.word, "timeout": 0})
 
         try:
-            play_wake_beep()
+            play_wake_beep(config.wake_tone)
         except Exception as e:
             logger.debug(f"Wake beep failed: {e}")
 
@@ -411,6 +558,10 @@ def _single_stage_loop(
                     on_stt_event=on_stt_event,
                 )
             )
+            # Drop pipe backlog accumulated during dispatch (TTS/ask audio)
+            # and reset the recognizer so the next wake-word match starts clean.
+            _drain_pipe(proc)
+            rec.Reset()
             # Restore UI state after dispatch/dialogue
             if on_stt_event:
                 on_stt_event(
@@ -440,6 +591,7 @@ def _recognition_loop(
     display_rec = vosk.KaldiRecognizer(model, 16000) if on_stt_event else None
     cooldown_until = 0.0
     was_gated = False
+    was_playing = False
 
     if on_stt_event:
         on_stt_event("listening", {"wake_words": [g.word for g in config.wake_words]})
@@ -454,6 +606,18 @@ def _recognition_loop(
         raw_data = proc.stdout.read(_CHUNK * channels)
         if not raw_data:
             break
+
+        if is_playback_active():
+            was_playing = True
+            continue
+
+        if was_playing:
+            _drain_pipe(proc)
+            stage1.Reset()
+            if display_rec is not None:
+                display_rec.Reset()
+            was_playing = False
+            continue
 
         data = _downmix_to_mono(raw_data, channels)
 
@@ -527,7 +691,9 @@ def _recognition_loop(
                     loop=loop,
                     dispatch_loop=dispatch_loop,
                 )
-                # Re-create both recognizers after command window
+                # Drop any audio buffered while dispatch (TTS/ask) was running,
+                # and re-create both recognizers after the command window.
+                _drain_pipe(proc)
                 stage1 = vosk.KaldiRecognizer(
                     model, 16000, _grammar_json(config.wake_words)
                 )
@@ -574,12 +740,18 @@ def _wake_detected(
             loop=loop,
         )
     try:
-        play_wake_beep()
+        play_wake_beep(config.wake_tone)
     except Exception as e:
         logger.debug(f"Wake beep failed: {e}")
 
     transcript = capture_transcript(
-        proc, channels, model, config.command_timeout, stop_event, on_stt_event
+        proc,
+        channels,
+        model,
+        config.command_timeout,
+        stop_event,
+        on_stt_event,
+        flush_ms=0,
     )
     logger.info(f"Command transcript: '{transcript}'")
 
@@ -610,7 +782,12 @@ def _wake_detected(
     if on_stt_event:
         on_stt_event("matched", {"transcript": transcript, "trigger": trigger.phrase})
 
-    async def _listen_fn(timeout: float) -> str:
+    async def _listen_fn(
+        timeout: float,
+        flush_ms: int = 0,
+        phrases: list[str] | None = None,
+        start_after_playback: bool = False,
+    ) -> str:
         # Emit event for UI to show we are listening for a reply
         if on_stt_event:
             on_stt_event("wake", {"word": "(reply)", "timeout": timeout})
@@ -622,6 +799,9 @@ def _wake_detected(
             timeout,
             stop_event,
             on_stt_event,
+            flush_ms=flush_ms,
+            phrases=phrases,
+            start_after_playback=start_after_playback,
         )
 
     # Dispatch using the persistent loop (we're in a daemon thread, not async context)

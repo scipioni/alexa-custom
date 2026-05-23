@@ -182,28 +182,51 @@ async def handle_ask(
     lang = action.params.get("lang", "it-IT")
     timeout = float(action.params.get("timeout", 5.0))
 
-    if text:
-        if mqtt_client:
-            await mqtt_client.publish(
-                f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
-                "speaking",
-            )
-        await asyncio.to_thread(get_engine().say, text, lang)
-
     if listen_fn is None:
         logger.warning("ask action: no listen_fn available")
+        if text:
+            if mqtt_client:
+                await mqtt_client.publish(
+                    f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
+                    "speaking",
+                )
+            await asyncio.to_thread(get_engine().say, text, lang)
         if mqtt_client:
             await mqtt_client.publish(
                 f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "idle"
             )
         return
 
+    # Use constrained grammar if triggers are defined to improve accuracy (e.g., 'si' vs 'se')
+    phrases = [t.phrase for t in action.on_reply]
+
+    if text and mqtt_client:
+        await mqtt_client.publish(
+            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "speaking"
+        )
+
+    # Run listen in parallel with TTS: capture discards frames in-flight while
+    # the playback gate is set (no pipe backlog accumulation), then restarts
+    # the `timeout` countdown when the gate drops. This closes the dead-window
+    # where a fast reply right after the question used to be dropped.
+    listen_task = asyncio.create_task(
+        listen_fn(
+            timeout,
+            flush_ms=0,
+            phrases=phrases if phrases else None,
+            start_after_playback=bool(text),
+        )
+    )
+
+    if text:
+        await asyncio.to_thread(get_engine().say, text, lang)
+
     if mqtt_client:
         await mqtt_client.publish(
             f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "listening"
         )
 
-    transcript = await listen_fn(timeout)
+    transcript = await listen_task
     if transcript:
         reply_trigger = match_trigger(transcript, action.on_reply)
         if reply_trigger:

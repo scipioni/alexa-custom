@@ -12,6 +12,35 @@ import pulsectl
 
 logger = logging.getLogger(__name__)
 
+# Global flag to signal that playback is active and STT should ignore input
+_playback_active = threading.Event()
+
+# Serializes all internal playback (TTS, tones, beeps, WAVs) so they don't overlap,
+# and so the STT-gating flag is owned by exactly one playback at a time.
+_audio_lock = threading.Lock()
+
+# Hold the STT-gating flag this long after the playback subprocess returns, to let
+# PipeWire/ALSA buffers drain through hardware and the acoustic echo decay before
+# capture resumes. Override via env AUDIO_POST_PLAYBACK_MS.
+_POST_PLAYBACK_MS = int(os.environ.get("AUDIO_POST_PLAYBACK_MS", "100"))
+
+# Prepend this much silence to short tones/beeps so the PipeWire sink finishes its
+# cold-start (stream open + device wake) before the audible part begins. Override
+# via env AUDIO_TONE_PREROLL_MS.
+_TONE_PREROLL_MS = int(os.environ.get("AUDIO_TONE_PREROLL_MS", "300"))
+
+
+def set_stt_gated_flag(flag: threading.Event):
+    """Link an external event (like the STT gating flag) to our playback state."""
+    global _playback_active
+    _playback_active = flag
+
+
+def is_playback_active() -> bool:
+    """Check if any internal audio playback is currently in progress."""
+    return _playback_active.is_set()
+
+
 # Sample rates by connection type
 _SAMPLERATE = {"usb": 48000, "bluetooth": 16000}
 
@@ -22,6 +51,31 @@ def find_pipewire_device():
         (i for i, d in enumerate(sd.query_devices()) if d["name"] == "pipewire"),
         None,
     )
+
+
+_pw_device_resolved = False
+_pw_device_index: int | None = None
+
+
+def get_pipewire_device() -> int | None:
+    """Cached lookup of the PortAudio index of the PipeWire ALSA device.
+
+    sd.query_devices() is mildly expensive (PortAudio re-scans the host APIs).
+    The PipeWire virtual device's index is stable for the lifetime of the
+    process, so resolve once and reuse for every beep / tone / TTS frame.
+    """
+    global _pw_device_resolved, _pw_device_index
+    if not _pw_device_resolved:
+        _pw_device_index = find_pipewire_device()
+        _pw_device_resolved = True
+    return _pw_device_index
+
+
+def invalidate_pipewire_device_cache() -> None:
+    """Clear the cached PortAudio device index (call on hardware status change)."""
+    global _pw_device_resolved, _pw_device_index
+    _pw_device_resolved = False
+    _pw_device_index = None
 
 
 def resolve_device(name_or_index: str) -> int:
@@ -224,6 +278,8 @@ class AudioWatcher(threading.Thread):
 
             self.connected = ok
             self.conn_type = conn
+            # PortAudio's view of devices can shift on hot-plug — drop the cache.
+            invalidate_pipewire_device_cache()
             if self.on_status_change:
                 self.on_status_change(ok, conn)
 
@@ -391,6 +447,31 @@ def speakerphone():
         sys.exit(1)
 
 
+def _play_array(audio: np.ndarray, samplerate: int) -> None:
+    """Play a float32 numpy audio array in-process via PortAudio/PipeWire.
+
+    Routes through the "pipewire" ALSA virtual device so beeps share the same
+    sink as TTS (the configured OUTPUT_DEVICE). Falling back to PortAudio's
+    default would otherwise send tones to a different card (e.g., built-in HDA)
+    and produce the "silent beep" symptom even though playback succeeded.
+    """
+    with _audio_lock:
+        _playback_active.set()
+        try:
+            device = get_pipewire_device()
+            if device is not None:
+                sd.play(audio, samplerate, device=device)
+            else:
+                sd.play(audio, samplerate)
+            sd.wait()
+            if _POST_PLAYBACK_MS > 0:
+                time.sleep(_POST_PLAYBACK_MS / 1000.0)
+        except Exception as e:
+            logger.error(f"_play_array failed: {e}")
+        finally:
+            _playback_active.clear()
+
+
 def _play_raw(data: bytes, samplerate: int, channels: int) -> None:
     """Play raw float32 audio via pw-play (native PipeWire) or aplay (ALSA fallback)."""
     import shutil
@@ -422,17 +503,22 @@ def _play_raw(data: bytes, samplerate: int, channels: int) -> None:
             "-q",
         ]
 
-    try:
-        subprocess.run(
-            cmd,
-            input=data,
-            timeout=5,
-            check=False,
-            stderr=subprocess.DEVNULL,
-        )
-    except Exception:
-        # We don't want to crash the main app if a beep fails
-        pass
+    with _audio_lock:
+        _playback_active.set()
+        try:
+            subprocess.run(
+                cmd,
+                input=data,
+                timeout=10,
+                check=False,
+                stderr=subprocess.DEVNULL,
+            )
+            if _POST_PLAYBACK_MS > 0:
+                time.sleep(_POST_PLAYBACK_MS / 1000.0)
+        except Exception as e:
+            logger.error(f"Failed to run audio playback command: {e}")
+        finally:
+            _playback_active.clear()
 
 
 def play_wav_file(file_path: str) -> None:
@@ -445,10 +531,16 @@ def play_wav_file(file_path: str) -> None:
     else:
         cmd = ["aplay", "-D", "pipewire", "-q", file_path]
 
-    try:
-        subprocess.run(cmd, timeout=30, check=False, stderr=subprocess.DEVNULL)
-    except Exception:
-        pass
+    with _audio_lock:
+        _playback_active.set()
+        try:
+            subprocess.run(cmd, timeout=60, check=False, stderr=subprocess.DEVNULL)
+            if _POST_PLAYBACK_MS > 0:
+                time.sleep(_POST_PLAYBACK_MS / 1000.0)
+        except Exception:
+            pass
+        finally:
+            _playback_active.clear()
 
 
 def play_tone(name: str):
@@ -457,7 +549,7 @@ def play_tone(name: str):
     channels = 2
 
     def _generate_note(
-        freq: float, duration: float, volume: float = 0.45
+        freq: float, duration: float, volume: float = 0.60
     ) -> np.ndarray:
         n = int(samplerate * duration)
         t = np.linspace(0, duration, n, endpoint=False)
@@ -481,11 +573,19 @@ def play_tone(name: str):
     tones = {
         "startup": lambda: np.concatenate(
             [
+                _gap(1.0),  # Priming silence to wake up hardware
                 _generate_note(523.25, 0.14),  # C5
                 _gap(0.03),
                 _generate_note(659.25, 0.14),  # E5
                 _gap(0.03),
                 _generate_note(783.99, 0.14),  # G5
+            ]
+        ),
+        "wake": lambda: np.concatenate(
+            [
+                _generate_note(440.00, 0.10, volume=0.6),  # A4
+                _gap(0.02),
+                _generate_note(554.37, 0.15, volume=0.6),  # C#5
             ]
         ),
         "success": lambda: np.concatenate(
@@ -517,8 +617,13 @@ def play_tone(name: str):
         return
 
     try:
-        data = tones[name]().tobytes()
-        _play_raw(data, samplerate, channels)
+        audio = tones[name]()
+        if _TONE_PREROLL_MS > 0:
+            preroll = np.zeros(
+                (int(samplerate * _TONE_PREROLL_MS / 1000), channels), dtype=np.float32
+            )
+            audio = np.concatenate([preroll, audio])
+        _play_array(audio, samplerate)
     except Exception as e:
         logger.error(f"play_tone({name}) failed: {e}")
 
@@ -559,17 +664,24 @@ def play_beep(frequency_hz: float, duration_ms: int) -> None:
     n = int(samplerate * duration_ms / 1000)
     fade = min(int(samplerate * 0.01), n // 4)
     t = np.linspace(0, duration_ms / 1000, n, endpoint=False)
-    wave = np.sin(2 * np.pi * frequency_hz * t).astype(np.float32) * 0.4
+    wave = np.sin(2 * np.pi * frequency_hz * t).astype(np.float32) * 0.6
     envelope = np.ones(n, dtype=np.float32)
     envelope[:fade] = np.linspace(0, 1, fade)
     envelope[-fade:] = np.linspace(1, 0, fade)
     mono = wave * envelope
     audio = np.column_stack([mono, mono])
-    _play_raw(audio.tobytes(), samplerate, channels)
+    if _TONE_PREROLL_MS > 0:
+        preroll = np.zeros(
+            (int(samplerate * _TONE_PREROLL_MS / 1000), channels), dtype=np.float32
+        )
+        audio = np.concatenate([preroll, audio])
+    _play_array(audio, samplerate)
 
 
-def play_wake_beep() -> None:
-    play_beep(800, 150)
+def play_wake_beep(name: str = "wake") -> None:
+    if name.lower() == "none":
+        return
+    play_tone(name)
 
 
 def play_timeout_beep() -> None:

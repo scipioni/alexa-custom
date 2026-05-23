@@ -48,7 +48,9 @@ class ActionsConfig:
     recognition_mode: str = "two-stage"
     wake_confidence: float = 0.75
     wake_tone: str = "wake"
-    tts_preroll_ms: int = 1200
+    tts_preroll_ms: int = 400
+    tts_backend: str = "piper"
+    tts_voice: str = "it_IT-paola-medium"
 
 
 def _parse_actions(raw_actions: list[Any], path_prefix: str) -> list[ActionEntry]:
@@ -213,7 +215,24 @@ def _parse_actions_config(raw: dict, source: str = "config") -> ActionsConfig:
 
     wake_confidence = float(raw.get("wake_confidence", 0.75))
     wake_tone = str(raw.get("wake_tone", "wake"))
-    tts_preroll_ms = int(raw.get("tts_preroll_ms", 1200))
+
+    # A `tts:` block, when present, overrides top-level keys. Both shapes are
+    # supported so existing configs keep working:
+    #     tts_preroll_ms: 400
+    # or
+    #     tts:
+    #       backend: piper
+    #       voice: it_IT-paola-medium
+    #       preroll_ms: 400
+    tts_section = raw.get("tts") or {}
+    if not isinstance(tts_section, dict):
+        raise ConfigError(f"{source}: 'tts' must be a mapping if present")
+
+    tts_preroll_ms = int(tts_section.get("preroll_ms", raw.get("tts_preroll_ms", 400)))
+    tts_backend = str(tts_section.get("backend", raw.get("tts_backend", "piper")))
+    tts_voice = str(
+        tts_section.get("voice", raw.get("tts_voice", "it_IT-paola-medium"))
+    )
 
     on_startup: list[ActionEntry] = []
     raw_startup = raw.get("on_startup")
@@ -240,6 +259,8 @@ def _parse_actions_config(raw: dict, source: str = "config") -> ActionsConfig:
         wake_confidence=wake_confidence,
         wake_tone=wake_tone,
         tts_preroll_ms=tts_preroll_ms,
+        tts_backend=tts_backend,
+        tts_voice=tts_voice,
     )
 
 

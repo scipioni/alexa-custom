@@ -32,6 +32,23 @@ env:
   # Path to the Vosk model directory. Run 'alexa-setup' to download it.
   #VOSK_MODEL_PATH: models/it
 
+  # --- Piper TTS voices ---
+  # Directory where Piper .onnx voice files are stored. Default: models/piper
+  # Voices are downloaded by 'alexa-setup --piper-voice <name>'.
+  #PIPER_VOICES_DIR: models/piper
+
+  # --- Audio interaction tuning (all optional, sensible defaults applied) ---
+  # Time the STT gate stays held after a playback subprocess exits, to let
+  # PipeWire/ALSA buffers drain and the acoustic echo decay.
+  #AUDIO_POST_PLAYBACK_MS: 100
+  # Silence prepended to short tones/beeps so the PortAudio stream finishes
+  # cold-start before the audible part begins.
+  #AUDIO_TONE_PREROLL_MS: 300
+  # Idle time after which the STT capture considers the user has stopped
+  # speaking (VAD endpoint). Lower = snappier replies; higher = better for
+  # users who pause mid-sentence.
+  #STT_VAD_SILENCE_MS: 700
+
   # --- Empty room timeout ---
   # Disconnect from LiveKit if the room has no other participants for this
   # many seconds. Set to 0 or omit to stay connected indefinitely.
@@ -83,7 +100,7 @@ wake_words:
                     text: "Sto chiamando Stefano"
                   - type: livekit_join
                   - type: telegram
-                    text: "Collegati con casa"
+                    text: "Collegati con casa <room>"
                     # chat_id: "123456789"  # overrides TELEGRAM_CHAT_ID env var
               - phrase: "no"
                 actions:
@@ -115,9 +132,32 @@ wake_confidence: 0.65
 # Available names: wake, startup, success, error, info, warning (or 'none' to disable)
 wake_tone: wake
 
-# Duration of silence to prepend to TTS speech (milliseconds).
-# Helps slow-to-wake hardware (like Bluetooth) avoid truncating the first word.
-tts_preroll_ms: 1200
+# ---------------------------------------------------------------------------
+# TTS — text-to-speech backend
+# ---------------------------------------------------------------------------
+# Two backends are available:
+#   piper — neural TTS, natural voice. Default. ~60 MB model per voice.
+#           Run 'alexa-setup --piper-voice <name>' to download a voice.
+#           Available voices:
+#             - it_IT-paola-medium    (female, default)
+#             - it_IT-riccardo-x_low  (male, faster)
+#   pico  — classic concatenative TTS (libttspico). Robotic but very low
+#           latency and no model to download.
+#
+# If 'piper' is selected but unavailable (package or voice missing), the
+# system automatically falls back to Pico with a warning in the log.
+
+tts:
+  backend: piper
+  voice: it_IT-paola-medium
+  # Silence prepended to TTS audio (ms). Covers PipeWire/PortAudio cold-start.
+  # Lower = snappier responses; raise if you hear the first syllable clipped.
+  preroll_ms: 400
+
+# Legacy single-key form (still honoured, overridden by the tts: block above):
+#tts_preroll_ms: 400
+#tts_backend: piper
+#tts_voice: it_IT-paola-medium
 
 # ---------------------------------------------------------------------------
 # Startup actions
