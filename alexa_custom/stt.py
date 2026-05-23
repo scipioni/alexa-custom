@@ -23,59 +23,65 @@ _MODEL_PATH = os.environ.get("VOSK_MODEL_PATH", "models/it")
 _STT_COOLDOWN = 1.0
 
 
-def resolve_parec_source(input_spec: str | None) -> tuple[str | None, int]:
+def resolve_capture_source(input_spec: str | None) -> tuple[str | None, int]:
     """Map INPUT_DEVICE value to a PipeWire source name and channel count via pactl."""
     channels = 1
     if not input_spec:
         return None, channels
     try:
         out = subprocess.check_output(
-            ["pactl", "list", "sources", "short"], text=True, timeout=5
+            ["pactl", "list", "sources"], text=True, timeout=5
         )
         needle = input_spec.lower()
         source_name = None
+        found = False
         for line in out.splitlines():
-            parts = line.split("\t")
-            if len(parts) >= 2:
-                name = parts[1]
+            if "Name: " in line:
+                name = line.split(": ")[1].strip()
                 if needle in name.lower() and "monitor" not in name.lower():
                     source_name = name
-                    break
-
-        if source_name:
-            # Get full info for channel count
-            out_full = subprocess.check_output(
-                ["pactl", "list", "sources"], text=True, timeout=5
-            )
-            # Find the block for our source
-            found = False
-            for line in out_full.splitlines():
-                if source_name in line:
                     found = True
-                if found and "Channels:" in line:
-                    try:
-                        channels = int(line.split(":")[1].strip())
-                    except Exception:
-                        channels = 1
-                    break
-            return source_name, channels
+            if found and "Channels: " in line:
+                try:
+                    channels = int(line.split(":")[1].strip())
+                except Exception:
+                    channels = 1
+                return source_name, channels
 
         logger.warning(f"No PipeWire source matching {input_spec!r} — using default")
     except Exception as e:
-        logger.warning(f"resolve_parec_source failed: {e} — using default")
+        logger.warning(f"resolve_capture_source failed: {e} — using default")
     return None, channels
 
 
-def start_parec(source: str | None, channels: int = 1) -> subprocess.Popen:
+def start_capture(source: str | None, channels: int = 1) -> subprocess.Popen:
+    """Start a low-latency recording process (parec)."""
+    import shutil
+
+    tool = shutil.which("parec")
+    if not tool:
+        tool = shutil.which("pw-record")
+        if not tool:
+            raise RuntimeError("Neither parec nor pw-record found on system")
+
+    is_pw = "pw-record" in tool
     cmd = [
-        "parec",
+        tool,
         "--rate=16000",
         f"--channels={channels}",
-        "--format=s16le",
-        "--latency-msec=100",
+        "--format=s16le" if not is_pw else "--format=s16",
     ]
-    if source:
-        cmd.append(f"--device={source}")
+
+    if is_pw:
+        cmd.extend(["--media-type=audio", "--media-role=communication"])
+        if source:
+            cmd.append(f"--target={source}")
+    else:
+        # Crucial: very low latency helps 'parec' start flowing on PipeWire
+        cmd.append("--latency-msec=1")
+        if source:
+            cmd.append(f"--device={source}")
+
     return subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 
 
@@ -100,12 +106,13 @@ def _rms_level(data: bytes) -> float:
 
 
 def _downmix_to_mono(data: bytes, channels: int) -> bytes:
-    """Downmix interleaved multi-channel s16le data to mono s16le."""
+    """Take the loudest signal across all channels to ensure mono-downmix is high-gain."""
     if channels <= 1:
         return data
     samples = np.frombuffer(data, dtype=np.int16).reshape(-1, channels)
-    # Average across channels and convert back to s16
-    mono = np.mean(samples, axis=1).astype(np.int16)
+    # Use max absolute value across channels to avoid diluting the signal with empty jacks.
+    idx = np.argmax(np.abs(samples), axis=1)
+    mono = samples[np.arange(len(samples)), idx]
     return mono.tobytes()
 
 
@@ -125,7 +132,7 @@ def run_stt_worker(
         return
 
     input_spec = os.environ.get("INPUT_DEVICE", "").strip() or None
-    source, channels = resolve_parec_source(input_spec)
+    source, channels = resolve_capture_source(input_spec)
 
     logger.info(
         f"STT: wake words={config.wake_words}, timeout={config.command_timeout}s, "
@@ -141,7 +148,7 @@ def run_stt_worker(
     while not stop_event.is_set():
         proc: subprocess.Popen | None = None
         try:
-            proc = start_parec(source, channels)
+            proc = start_capture(source, channels)
             loop_fn(
                 proc=proc,
                 channels=channels,
