@@ -513,11 +513,6 @@ def play_tone(name: str):
         logger.error(f"play_tone({name}) failed: {e}")
 
 
-def play_startup_chime():
-    """Play a short ascending chime (C5-E5-G5) through the PipeWire default sink."""
-    play_tone("startup")
-
-
 def list_env_devices():
     """Print microphone and speaker tables for use in .env."""
     devices = list(sd.query_devices())

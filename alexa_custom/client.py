@@ -25,7 +25,6 @@ from alexa_custom.audio import (
     find_pipewire_device,
     play_call_end,
     play_call_start,
-    play_startup_chime,
     set_pipewire_defaults,
 )
 
@@ -309,11 +308,6 @@ async def _async_main(
                 )
             except Exception as e:
                 logger.error(f"Startup action {action.type} failed: {e}")
-    else:
-        try:
-            await asyncio.to_thread(play_startup_chime)
-        except Exception as e:
-            logger.warning(f"Startup chime skipped: {e}")
 
     # Use 16kHz for Bluetooth (if we can detect it) or 48kHz for USB/Internal.
     # High sample rates on weak hardware (like Arduino Uno Q) cause mixer timeouts.
