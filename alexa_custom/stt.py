@@ -532,7 +532,9 @@ def _recognition_loop(
                     model, 16000, _grammar_json(config.wake_words)
                 )
                 stage1.SetWords(True)
-                display_rec = vosk.KaldiRecognizer(model, 16000) if on_stt_event else None
+                display_rec = (
+                    vosk.KaldiRecognizer(model, 16000) if on_stt_event else None
+                )
                 if on_stt_event:
                     on_stt_event(
                         "listening", {"wake_words": [g.word for g in config.wake_words]}

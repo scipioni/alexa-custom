@@ -45,7 +45,8 @@ def calculate_peak(frame) -> float:
     samples = np.frombuffer(frame.data, dtype=np.int16)
     if len(samples) == 0:
         return 0.0
-    return float(np.max(np.abs(samples.astype(np.float32)))) / 32768.0
+    # Use int32 for absolute to avoid int16 overflow at -32768
+    return float(np.max(np.abs(samples.astype(np.int32)))) / 32768.0
 
 
 def get_token() -> str:
@@ -87,6 +88,198 @@ def browser_join_url(identity: str = "browser-user") -> str:
     return f"https://meet.livekit.io/custom/?{params}"
 
 
+class LiveKitSessionManager:
+    """Manages a single LiveKit room session, track publishing, and player state."""
+
+    def __init__(
+        self,
+        mic,
+        devices: MediaDevices,
+        pw_device: int,
+        on_event: Callable[[str, dict], None] | None = None,
+    ):
+        self.mic = mic
+        self.devices = devices
+        self.pw_device = pw_device
+        self.on_event = on_event
+        self.room = Room()
+        self.disconnected = asyncio.Event()
+        self.call_connected = False
+        self.subscribed_tracks: dict[str, AudioStream] = {}
+        self.player_tracks: set[str] = set()
+        self.volumes = {"mic": 0.0, "spk": 0.0}
+        self.tap_tasks: list[asyncio.Task] = []
+        self.player = None
+
+        @self.room.on("disconnected")
+        def on_disconnected(reason):
+            logger.info(f"Room disconnected: {reason}")
+            self.emit("disconnected", {"reason": reason})
+            self.disconnected.set()
+
+        @self.room.on("track_subscribed")
+        def on_track_subscribed(track, publication, participant):
+            if track.kind == TrackKind.KIND_AUDIO:
+                logger.info(f"Audio track subscribed from {participant.identity}")
+                self.emit(
+                    "track_subscribed",
+                    {"identity": participant.identity, "track_sid": track.sid},
+                )
+                self.tap_tasks.append(
+                    asyncio.create_task(self._tap_remote(participant.identity, track))
+                )
+
+                async def _add():
+                    try:
+                        await self.player.add_track(track)
+                        self.player_tracks.add(track.sid)
+                        logger.debug(f"Track {track.sid} added to player")
+                    except Exception as e:
+                        logger.error(f"add_track failed: {e}")
+
+                asyncio.create_task(_add())
+
+        @self.room.on("track_unsubscribed")
+        def on_track_unsubscribed(track, publication, participant):
+            if track.kind == TrackKind.KIND_AUDIO:
+                logger.info(f"Audio track unsubscribed from {participant.identity}")
+                self.emit("track_unsubscribed", {"identity": participant.identity})
+                self.subscribed_tracks.pop(participant.identity, None)
+                if track.sid in self.player_tracks:
+                    asyncio.create_task(self.player.remove_track(track))
+                    self.player_tracks.discard(track.sid)
+
+        @self.room.on("participant_connected")
+        def on_participant_connected(participant):
+            logger.info(f"Participant joined: {participant.identity}")
+            self.emit("participant_joined", {"identity": participant.identity})
+
+        @self.room.on("participant_disconnected")
+        def on_participant_disconnected(participant):
+            logger.info(f"Participant left: {participant.identity}")
+            self.emit("participant_left", {"identity": participant.identity})
+
+    def emit(self, event: str, data: dict | None = None) -> None:
+        if self.on_event:
+            self.on_event(event, data or {})
+
+    async def _tap_mic(self, track: LocalAudioTrack, stop_event: asyncio.Event):
+        stream = AudioStream(track)
+        async for event in stream:
+            self.volumes["mic"] = max(self.volumes["mic"], calculate_peak(event.frame))
+            if self.disconnected.is_set() or stop_event.is_set():
+                break
+
+    async def _tap_remote(self, identity: str, track):
+        stream = AudioStream(track)
+        self.subscribed_tracks[identity] = stream
+        async for event in stream:
+            self.volumes["spk"] = max(self.volumes["spk"], calculate_peak(event.frame))
+            if identity not in self.subscribed_tracks or self.disconnected.is_set():
+                break
+
+    async def _volume_emitter(self, stop_event: asyncio.Event):
+        while not self.disconnected.is_set() and not stop_event.is_set():
+            await asyncio.sleep(0.1)
+            self.emit(
+                "volume_update",
+                {"mic": self.volumes["mic"], "spk": self.volumes["spk"]},
+            )
+            self.volumes["mic"] *= 0.6
+            self.volumes["spk"] *= 0.6
+
+    async def _empty_room_watchdog(
+        self, timeout: float, stop_event: asyncio.Event
+    ) -> None:
+        import time as _time
+
+        empty_since: float | None = (
+            None if self.room.remote_participants else _time.monotonic()
+        )
+        while not self.disconnected.is_set() and not stop_event.is_set():
+            await asyncio.sleep(1.0)
+            if self.room.remote_participants:
+                empty_since = None
+            else:
+                now = _time.monotonic()
+                if empty_since is None:
+                    empty_since = now
+                    logger.info(f"Room empty — disconnecting in {timeout:.0f}s")
+                elif now - empty_since >= timeout:
+                    logger.info("Empty room timeout — disconnecting session")
+                    self.emit("empty_room_timeout", {})
+                    self.disconnected.set()
+                    return
+
+    async def run(self, stop_event: asyncio.Event):
+        """Connect to one LiveKit session; return when disconnected or stop_event fires."""
+        empty_room_timeout = float(os.environ.get("EMPTY_ROOM_TIMEOUT", "0") or "0")
+
+        # Create a fresh player for this session to ensure clean state and avoid mixer timeouts
+        self.player = self.devices.open_output(output_device=self.pw_device)
+        await self.player.start()
+        logger.debug("Session player started")
+
+        try:
+            room_url = require_env("LIVEKIT_URL")
+            await self.room.connect(room_url, get_token())
+            room_name = require_env("LIVEKIT_ROOM")
+            logger.info(
+                f"Connected to {room_url}/{room_name} as {self.room.local_participant.identity}"
+            )
+            self.emit(
+                "connected",
+                {"room": room_name, "identity": self.room.local_participant.identity},
+            )
+            self.call_connected = True
+            asyncio.create_task(asyncio.to_thread(play_call_start))
+
+            for p in self.room.remote_participants.values():
+                self.emit("participant_joined", {"identity": p.identity})
+
+            track = LocalAudioTrack.create_audio_track("microphone", self.mic.source)
+            opts = TrackPublishOptions()
+            opts.source = TrackSource.SOURCE_MICROPHONE
+            await self.room.local_participant.publish_track(track, opts)
+            logger.info("Microphone track published — full duplex active")
+
+            self.tap_tasks.append(asyncio.create_task(self._tap_mic(track, stop_event)))
+            self.tap_tasks.append(asyncio.create_task(self._volume_emitter(stop_event)))
+
+            if empty_room_timeout > 0:
+                self.tap_tasks.append(
+                    asyncio.create_task(
+                        self._empty_room_watchdog(empty_room_timeout, stop_event)
+                    )
+                )
+
+            await asyncio.wait(
+                [
+                    asyncio.create_task(self.disconnected.wait()),
+                    asyncio.create_task(stop_event.wait()),
+                ],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            await self.cleanup()
+
+    async def cleanup(self):
+        logger.debug("Cleaning up session tasks and player...")
+        for t in self.tap_tasks:
+            t.cancel()
+        self.tap_tasks.clear()
+        self.subscribed_tracks.clear()
+        if self.call_connected:
+            try:
+                await asyncio.to_thread(play_call_end)
+            except Exception:
+                pass
+        await self.room.disconnect()
+        if self.player:
+            await self.player.aclose()
+        logger.debug("Session cleanup complete")
+
+
 async def run_session(
     mic,
     devices: MediaDevices,
@@ -95,174 +288,8 @@ async def run_session(
     on_event: Callable[[str, dict], None] | None = None,
 ):
     """Connect to one LiveKit session; return when disconnected or stop_event fires."""
-
-    def emit(event: str, data: dict | None = None) -> None:
-        if on_event:
-            on_event(event, data or {})
-
-    empty_room_timeout = float(os.environ.get("EMPTY_ROOM_TIMEOUT", "0") or "0")
-
-    room = Room()
-    disconnected = asyncio.Event()
-    call_connected = False
-    subscribed_tracks: dict[str, AudioStream] = {}
-    player_tracks: set[str] = set()
-    volumes = {"mic": 0.0, "spk": 0.0}
-    tap_tasks: list[asyncio.Task] = []
-
-    # Create a fresh player for this session to ensure clean state and avoid mixer timeouts
-    player = devices.open_output(output_device=pw_device)
-    await player.start()
-    logger.debug("Session player started")
-
-    async def _tap_mic(track: LocalAudioTrack):
-        stream = AudioStream(track)
-        async for event in stream:
-            volumes["mic"] = max(volumes["mic"], calculate_peak(event.frame))
-            if disconnected.is_set() or stop_event.is_set():
-                break
-
-    async def _tap_remote(identity: str, track):
-        stream = AudioStream(track)
-        subscribed_tracks[identity] = stream
-        async for event in stream:
-            volumes["spk"] = max(volumes["spk"], calculate_peak(event.frame))
-            if (
-                identity not in subscribed_tracks
-                or disconnected.is_set()
-                or stop_event.is_set()
-            ):
-                break
-
-    async def _volume_emitter():
-        while not disconnected.is_set() and not stop_event.is_set():
-            await asyncio.sleep(0.1)
-            emit("volume_update", {"mic": volumes["mic"], "spk": volumes["spk"]})
-            volumes["mic"] *= 0.6
-            volumes["spk"] *= 0.6
-
-    @room.on("disconnected")
-    def on_disconnected(reason):
-        logger.info(f"Room disconnected: {reason}")
-        emit("disconnected", {"reason": reason})
-        disconnected.set()
-
-    @room.on("track_subscribed")
-    def on_track_subscribed(track, publication, participant):
-        if track.kind == TrackKind.KIND_AUDIO:
-            logger.info(f"Audio track subscribed from {participant.identity}")
-            emit(
-                "track_subscribed",
-                {"identity": participant.identity, "track_sid": track.sid},
-            )
-
-            tap_tasks.append(
-                asyncio.create_task(_tap_remote(participant.identity, track))
-            )
-
-            async def _add():
-                try:
-                    await player.add_track(track)
-                    player_tracks.add(track.sid)
-                    logger.debug(f"Track {track.sid} added to player")
-                except Exception as e:
-                    logger.error(f"add_track failed: {e}")
-
-            asyncio.create_task(_add())
-
-    @room.on("track_unsubscribed")
-    def on_track_unsubscribed(track, publication, participant):
-        if track.kind == TrackKind.KIND_AUDIO:
-            logger.info(f"Audio track unsubscribed from {participant.identity}")
-            emit("track_unsubscribed", {"identity": participant.identity})
-            subscribed_tracks.pop(participant.identity, None)
-            if track.sid in player_tracks:
-                asyncio.create_task(player.remove_track(track))
-                player_tracks.discard(track.sid)
-
-    @room.on("participant_connected")
-    def on_participant_connected(participant):
-        logger.info(f"Participant joined: {participant.identity}")
-        emit("participant_joined", {"identity": participant.identity})
-
-    @room.on("participant_disconnected")
-    def on_participant_disconnected(participant):
-        logger.info(f"Participant left: {participant.identity}")
-        emit("participant_left", {"identity": participant.identity})
-
-    try:
-        room_url = require_env("LIVEKIT_URL")
-        await room.connect(room_url, get_token())
-        room_name = require_env("LIVEKIT_ROOM")
-        logger.info(
-            f"Connected to {room_url}/{room_name} as {room.local_participant.identity}"
-        )
-        emit(
-            "connected",
-            {"room": room_name, "identity": room.local_participant.identity},
-        )
-        call_connected = True
-        asyncio.create_task(asyncio.to_thread(play_call_start))
-
-        for p in room.remote_participants.values():
-            emit("participant_joined", {"identity": p.identity})
-
-        track = LocalAudioTrack.create_audio_track("microphone", mic.source)
-        opts = TrackPublishOptions()
-        opts.source = TrackSource.SOURCE_MICROPHONE
-        await room.local_participant.publish_track(track, opts)
-        logger.info("Microphone track published — full duplex active")
-
-        tap_tasks.append(asyncio.create_task(_tap_mic(track)))
-        tap_tasks.append(asyncio.create_task(_volume_emitter()))
-
-        async def _empty_room_watchdog() -> None:
-            import time as _time
-
-            empty_since: float | None = (
-                None if room.remote_participants else _time.monotonic()
-            )
-            while not disconnected.is_set() and not stop_event.is_set():
-                await asyncio.sleep(1.0)
-                if room.remote_participants:
-                    empty_since = None
-                else:
-                    now = _time.monotonic()
-                    if empty_since is None:
-                        empty_since = now
-                        logger.info(
-                            f"Room empty — disconnecting in {empty_room_timeout:.0f}s"
-                        )
-                    elif now - empty_since >= empty_room_timeout:
-                        logger.info("Empty room timeout — disconnecting session")
-                        emit("empty_room_timeout", {})
-                        disconnected.set()
-                        return
-
-        if empty_room_timeout > 0:
-            tap_tasks.append(asyncio.create_task(_empty_room_watchdog()))
-
-        await asyncio.wait(
-            [
-                asyncio.create_task(disconnected.wait()),
-                asyncio.create_task(stop_event.wait()),
-            ],
-            return_when=asyncio.FIRST_COMPLETED,
-        )
-    finally:
-        logger.debug("Cleaning up session tasks and player...")
-        for t in tap_tasks:
-            t.cancel()
-        tap_tasks.clear()
-        subscribed_tracks.clear()
-        if call_connected:
-            try:
-                await asyncio.to_thread(play_call_end)
-            except Exception:
-                pass
-        await room.disconnect()
-        await player.aclose()
-        logger.debug("Session cleanup complete")
+    manager = LiveKitSessionManager(mic, devices, pw_device, on_event)
+    await manager.run(stop_event)
 
 
 async def _async_main(
@@ -384,6 +411,7 @@ async def _async_main(
         if on_event:
             on_event(event, data)
 
+    reconnect_delay = RECONNECT_DELAY
     try:
         while not stop_event.is_set():
             # On-demand mode: wait for STT to signal a connect trigger.
@@ -398,9 +426,21 @@ async def _async_main(
                     break
 
             _wrapped_on_event("reconnecting", {})
+            connected_this_session = False
+
+            def _on_event_interceptor(event: str, data: dict):
+                nonlocal connected_this_session
+                if event == "connected":
+                    connected_this_session = True
+                _wrapped_on_event(event, data)
+
             try:
                 await run_session(
-                    mic, devices, pw_device, stop_event, on_event=_wrapped_on_event
+                    mic,
+                    devices,
+                    pw_device,
+                    stop_event,
+                    on_event=_on_event_interceptor,
                 )
             except Exception as e:
                 logger.error(f"Session error: {e}")
@@ -413,12 +453,18 @@ async def _async_main(
 
             # In on-demand mode don't auto-reconnect; wait for another trigger.
             if connect_trigger is not None:
+                reconnect_delay = RECONNECT_DELAY
                 logger.info("LiveKit session ended — waiting for next voice trigger")
                 continue
 
-            logger.info(f"Reconnecting in {RECONNECT_DELAY}s...")
+            if connected_this_session:
+                reconnect_delay = RECONNECT_DELAY
+            else:
+                reconnect_delay = min(reconnect_delay * 2, 30)
+
+            logger.info(f"Reconnecting in {reconnect_delay}s...")
             try:
-                await asyncio.wait_for(stop_event.wait(), timeout=RECONNECT_DELAY)
+                await asyncio.wait_for(stop_event.wait(), timeout=reconnect_delay)
             except asyncio.TimeoutError:
                 pass
     finally:
