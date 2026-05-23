@@ -15,7 +15,6 @@ from alexa_custom.client import (
 
 class TestClientAsync:
     @pytest.mark.asyncio
-    @patch("alexa_custom.client.ROOM_URL", "http://test.url")
     @patch("alexa_custom.client.Room")
     @patch("alexa_custom.client.get_token")
     @patch("alexa_custom.client.LocalAudioTrack")
@@ -34,7 +33,12 @@ class TestClientAsync:
         mock_get_token.return_value = "test-token"
 
         mic = MagicMock()
+        devices = MagicMock()
         player = MagicMock()
+        player.start = AsyncMock()
+        player.aclose = AsyncMock()
+        devices.open_output.return_value = player
+        pw_device = 0
         stop_event = asyncio.Event()
 
         # We need to trigger the stop event so it doesn't run forever
@@ -47,7 +51,7 @@ class TestClientAsync:
         with patch.dict(
             os.environ, {"LIVEKIT_URL": "http://test.url", "LIVEKIT_ROOM": "test-room"}
         ):
-            await run_session(mic, player, stop_event)
+            await run_session(mic, devices, pw_device, stop_event)
 
         mock_room.connect.assert_called_once_with("http://test.url", "test-token")
         mock_room.local_participant.publish_track.assert_called_once()
@@ -97,7 +101,6 @@ class TestClientUtils(unittest.TestCase):
         assert isinstance(token2, str)
         assert len(token2) > 0
 
-    @patch("alexa_custom.client.ROOM_URL", "http://test.url")
     @patch.dict(
         os.environ,
         {
