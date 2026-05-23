@@ -332,14 +332,22 @@ async def _async_main(
     from alexa_custom.audio import check_newpie_ready
 
     logger.info("Waiting for audio hardware to initialize...")
-    for _ in range(10):  # Wait up to 5 seconds
+    for _ in range(15):  # Wait up to 7.5 seconds
         ok, _ = await asyncio.to_thread(check_newpie_ready)
         if ok:
+            # Extra settle time for PipeWire/WirePlumber to finalize routing
+            await asyncio.sleep(2.0)
             break
         await asyncio.sleep(0.5)
 
     # Execute startup actions
     if actions_config and actions_config.on_startup:
+        # Prime the audio hardware with a short chime before the first speech
+        from alexa_custom.audio import play_tone
+
+        await asyncio.to_thread(play_tone, "startup")
+        await asyncio.sleep(0.5)
+
         logger.info(f"Executing {len(actions_config.on_startup)} startup action(s)")
         from alexa_custom.actions import TelegramClient, _run_action
 
@@ -578,7 +586,10 @@ def main() -> None:
             connect_trigger = threading.Event()
             livekit_connected_flag = threading.Event()
 
-            init_engine(stt_gated_flag=livekit_connected_flag)
+            init_engine(
+                stt_gated_flag=livekit_connected_flag,
+                preroll_ms=actions_config.tts_preroll_ms,
+            )
 
             async def _livekit_connect_fn_web() -> None:
                 assert connect_trigger is not None
@@ -656,7 +667,10 @@ def main() -> None:
                 mqtt_holder[0] = mqtt_client
 
             # Initialize TTS with gating
-            init_engine(stt_gated_flag=livekit_connected_flag)
+            init_engine(
+                stt_gated_flag=livekit_connected_flag,
+                preroll_ms=actions_config.tts_preroll_ms,
+            )
 
             async def _livekit_connect_fn() -> None:
                 connect_trigger.set()
