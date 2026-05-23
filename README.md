@@ -15,6 +15,9 @@ Headless Python client for joining LiveKit audio conferences using the NewLine N
 # System dependencies (Debian/Ubuntu/Armbian)
 sudo apt-get install libportaudio2 portaudio19-dev python3-venv
 
+# tts
+sudo apt install -y libttspico-utils
+
 # Python virtual environment and dependencies
 python3 -m venv .venv
 .venv/bin/pip install -e .
@@ -235,7 +238,40 @@ After a reboot or Bluetooth reconnect, WirePlumber restores the `headset-head-un
 
 ---
 
-## NewPie: Daily Use
+## Proactive Audio Management
+
+The client includes an **AudioWatcher** daemon that proactively manages your PipeWire environment. You no longer need to manually fix profiles or routing after a reboot or device reconnect.
+
+- **Automatic Profile Switching**: 
+    - **Bluetooth**: Automatically forces `headset-head-unit` (mSBC) when your device connects, ensuring the microphone is ready.
+    - **USB**: Automatically forces `pro-audio` if available.
+- **Adaptive Sample Rates**: Automatically switches the LiveKit session to **16 kHz** when Bluetooth is detected to significantly reduce CPU load on weak hardware (like the Arduino Uno Q).
+- **Persistent Routing**: Proactively snatches back the "Default" PipeWire sink/source status for your configured device, even if other devices (like HDMI) try to take over.
+- **Connection Chimes**: Plays a short ascending two-tone chime the moment your target audio device is successfully detected and configured.
+
+### Configuration via `.env`
+
+You can target specific hardware using the `INPUT_DEVICE` and `OUTPUT_DEVICE` variables. They accept:
+- **Numeric Index**: (e.g., `51`)
+- **Name Substring**: (e.g., `Fast Track` or `NewPie`)
+- **Virtual Device**: Set to `pipewire` or `default` to use the system-managed virtual device without hardware-snatching.
+
+---
+
+## Daily Use
+
+### Terminal UI (TUI)
+
+Launch the client with the `--tui` flag to see real-time status:
+
+```bash
+.venv/bin/alexa-client --tui
+```
+
+- **Audio Status**: Shows exactly what hardware the app is searching for or connected to.
+- **VU Meters**: Live MIC/SPK peak level monitoring (shows `OFFLINE` if the device is missing).
+- **STT Status**: Real-time display of wake word detection and transcription.
+- **Participant List**: Track who is currently in the LiveKit room.
 
 ### Test audio (mic → speaker loopback)
 
@@ -381,15 +417,31 @@ TELEGRAM_CHAT_ID=123456789
 | `TELEGRAM_BOT_TOKEN` | For telegram actions | Bot API token from @BotFather |
 | `TELEGRAM_CHAT_ID` | For telegram actions | Default target chat ID |
 | `VOSK_MODEL_PATH` | No | Override model path (default: `models/it`) |
-
 ### Action types
 
 | Type | Description |
 |------|-------------|
 | `livekit_join` | Connect to the configured LiveKit room |
 | `telegram` | Send a message via Telegram Bot API |
+| `say` | Speak text via TTS (parameters: `text`, `lang`) |
 
-### Behavior without actions.yaml
+### Text-to-Speech (TTS)
+
+The client includes an interchangeable TTS module. Currently, it supports **Pico TTS** (`pico2wave`).
+
+- **Automatic Gating**: The microphone is **automatically paused** while the assistant is speaking to prevent self-triggering.
+- **Usage Example**:
+  ```yaml
+  - phrase: "ciao"
+    actions:
+      - type: say
+        params:
+          text: "Ciao! Come posso aiutarti oggi?"
+  ```
+
+---
+
+## Behavior without actions.yaml
 
 If `actions.yaml` is absent the client behaves exactly as before — it auto-connects to LiveKit at startup with no wake word detection.
 
@@ -529,7 +581,12 @@ sudo usermod -aG audio $USER
 | `sounddevice` | Audio I/O via PortAudio |
 | `numpy` | Audio buffer handling |
 | `pulsectl` | PipeWire/PulseAudio introspection |
+| `textual` | Terminal UI framework |
+| `vosk` | Speech-to-Text (STT) and Wake Word detection |
+| `httpx` | HTTP client for Telegram API |
+| `pyyaml` | Action configuration parsing |
 | `libportaudio2` | System audio library (apt) |
+| `libttspico-utils` | Pico TTS system engine (apt) |
 
 ## License
 
