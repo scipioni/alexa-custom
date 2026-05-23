@@ -588,7 +588,7 @@ def main() -> None:
 
             init_engine(
                 stt_gated_flag=livekit_connected_flag,
-                preroll_ms=actions_config.tts_preroll_ms,
+                preroll_ms=config.tts_preroll_ms,
             )
 
             async def _livekit_connect_fn_web() -> None:
@@ -669,7 +669,7 @@ def main() -> None:
             # Initialize TTS with gating
             init_engine(
                 stt_gated_flag=livekit_connected_flag,
-                preroll_ms=actions_config.tts_preroll_ms,
+                preroll_ms=config.tts_preroll_ms,
             )
 
             async def _livekit_connect_fn() -> None:
