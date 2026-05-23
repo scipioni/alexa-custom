@@ -22,15 +22,57 @@ tasks:
     cmds:
       - ruff format .
 
+  fix:
+    desc: Auto-fix lint issues, format, and run tests
+    cmds:
+      - ruff check --fix .
+      - ruff format .
+      - PYTHONPATH={{.PYTHONPATH}} {{.PYTEST}} tests/
+
   run:
     desc: Run the alexa-client
     cmds:
       - PYTHONPATH={{.PYTHONPATH}} python3 alexa_custom/client.py {{.CLI_ARGS}}
 
-  run-tui:
-    desc: Run the alexa-client with TUI
+  release:patch:
+    desc: Bump patch version (x.y.Z+1), commit and tag
     cmds:
-      - PYTHONPATH={{.PYTHONPATH}} python3 alexa_custom/client.py --tui
+      - task: _release
+        vars: { BUMP: patch }
+
+  release:minor:
+    desc: Bump minor version (x.Y+1.0), commit and tag
+    cmds:
+      - task: _release
+        vars: { BUMP: minor }
+
+  release:major:
+    desc: Bump major version (X+1.0.0), commit and tag
+    cmds:
+      - task: _release
+        vars: { BUMP: major }
+
+  _release:
+    internal: true
+    cmds:
+      - |
+        CURRENT=$(grep '^version' pyproject.toml | sed 's/version = "\(.*\)"/\1/')
+        MAJOR=$(echo $CURRENT | cut -d. -f1)
+        MINOR=$(echo $CURRENT | cut -d. -f2)
+        PATCH=$(echo $CURRENT | cut -d. -f3)
+        case "{{.BUMP}}" in
+          major) NEW="$((MAJOR+1)).0.0" ;;
+          minor) NEW="${MAJOR}.$((MINOR+1)).0" ;;
+          patch) NEW="${MAJOR}.${MINOR}.$((PATCH+1))" ;;
+          *) echo "Unknown bump type: {{.BUMP}}"; exit 1 ;;
+        esac
+        sed -i "s/^version = \".*\"/version = \"${NEW}\"/" pyproject.toml
+        git add pyproject.toml
+        git commit -m "chore: release v${NEW}"
+        git tag -a "v${NEW}" -m "Release v${NEW}"
+        echo ""
+        echo "Released v${NEW}"
+        echo "Push with: git push && git push --tags"
 
   clean:
     desc: Clean up temporary files

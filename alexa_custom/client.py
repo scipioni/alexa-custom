@@ -472,11 +472,10 @@ def make_mqtt_reload_callback(
 
 
 def ensure_setup() -> None:
-    """Check if Vosk model and audio hardware setup are present; download/warn as needed."""
+    """Download Vosk model if missing."""
     from alexa_custom.setup import download_model
     from alexa_custom.stt import _MODEL_PATH
 
-    # 1. Vosk model - download automatically if missing
     if not os.path.isdir(_MODEL_PATH):
         logger.info(
             f"Vosk model not found at {_MODEL_PATH}. Downloading automatically..."
@@ -485,17 +484,6 @@ def ensure_setup() -> None:
             download_model()
         except Exception as e:
             logger.error(f"Failed to download Vosk model: {e}")
-
-    # 2. Audio hardware setup - warn if udev rule is missing and OUTPUT_DEVICE is set
-    udev_path = "/etc/udev/rules.d/89-alsa-usb-volume.rules"
-    if not os.path.exists(udev_path):
-        output_spec = os.environ.get("OUTPUT_DEVICE", "").strip()
-        if output_spec:
-            print("\n" + "!" * 60)
-            print("WARNING: Audio hardware volume setup seems incomplete.")
-            print(f"Udev rule {udev_path} is missing.")
-            print("Please run 'alexa-audio-setup' manually to fix this.")
-            print("!" * 60 + "\n")
 
 
 def main() -> None:
@@ -509,7 +497,12 @@ def main() -> None:
 
     ensure_setup()
 
+    from alexa_custom import __version__
+
     parser = argparse.ArgumentParser(description="alexa-custom LiveKit client")
+    parser.add_argument(
+        "--version", action="version", version=f"alexa-custom {__version__}"
+    )
     parser.add_argument("--web", action="store_true", help="Launch web dashboard")
     parser.add_argument(
         "--web-port", type=int, default=None, help="Web dashboard port (default: 8080)"

@@ -179,7 +179,10 @@ async def _run_action(
             if reply_trigger:
                 logger.info(f"Matched reply trigger: '{reply_trigger.phrase}'")
                 if on_stt_event:
-                    on_stt_event("matched", {"transcript": transcript, "trigger": reply_trigger.phrase})
+                    on_stt_event(
+                        "matched",
+                        {"transcript": transcript, "trigger": reply_trigger.phrase},
+                    )
                 await dispatch(
                     reply_trigger,
                     telegram_client,
