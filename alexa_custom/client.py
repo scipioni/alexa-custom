@@ -18,7 +18,7 @@ from livekit.rtc import (
     TrackSource,
 )
 
-from alexa_custom._env import load_env, require_env
+from alexa_custom._env import require_env
 import sounddevice as sd
 from alexa_custom.config import ActionsConfig
 from alexa_custom.config_manager import ConfigManager
@@ -31,7 +31,6 @@ from alexa_custom.audio import (
     set_pipewire_defaults,
 )
 
-ROOM_URL = os.environ.get("LIVEKIT_URL", "")
 RECONNECT_DELAY = 5  # seconds between reconnect attempts
 
 logging.basicConfig(
@@ -82,8 +81,9 @@ def browser_join_url(identity: str = "browser-user") -> str:
     import urllib.parse
 
     token = make_browser_token(identity)
+    room_url = require_env("LIVEKIT_URL")
     require_env("LIVEKIT_ROOM")
-    params = urllib.parse.urlencode({"liveKitUrl": ROOM_URL, "token": token})
+    params = urllib.parse.urlencode({"liveKitUrl": room_url, "token": token})
     return f"https://meet.livekit.io/custom/?{params}"
 
 
@@ -191,10 +191,11 @@ async def run_session(
         emit("participant_left", {"identity": participant.identity})
 
     try:
-        await room.connect(ROOM_URL, get_token())
+        room_url = require_env("LIVEKIT_URL")
+        await room.connect(room_url, get_token())
         room_name = require_env("LIVEKIT_ROOM")
         logger.info(
-            f"Connected to {ROOM_URL}/{room_name} as {room.local_participant.identity}"
+            f"Connected to {room_url}/{room_name} as {room.local_participant.identity}"
         )
         emit(
             "connected",
@@ -501,26 +502,31 @@ def main() -> None:
     import argparse
     import threading
 
-    from alexa_custom.config import load_actions_config_auto
-    from alexa_custom._env import load_env
+    from alexa_custom.config import load_config
 
-    # Load .env first (lowest priority), then config.yaml env: section overwrites
-    load_env()
-    config = load_actions_config_auto()
+    config = load_config("config.yaml")
     config_manager = ConfigManager(config)
 
     ensure_setup()
 
     parser = argparse.ArgumentParser(description="alexa-custom LiveKit client")
-    parser.add_argument("--tui", action="store_true", help="Launch terminal UI")
+    parser.add_argument("--web", action="store_true", help="Launch web dashboard")
+    parser.add_argument(
+        "--web-port", type=int, default=None, help="Web dashboard port (default: 8080)"
+    )
     args = parser.parse_args()
 
-    if args.tui:
-        from alexa_custom.tui import run_tui
+    if args.web:
+        from alexa_custom.web import run_web
+        from alexa_custom.config import load_web_config
 
         input_spec = os.environ.get("INPUT_DEVICE", "").strip() or None
         output_spec = os.environ.get("OUTPUT_DEVICE", "").strip() or None
         room = os.environ.get("LIVEKIT_ROOM", "")
+
+        # Port: CLI flag > config.yaml web.port > default 8080
+        web_cfg = load_web_config()
+        web_port = args.web_port or int(web_cfg.get("port", 8080))
 
         connect_trigger: threading.Event | None = None
         livekit_connected_flag: threading.Event | None = None
@@ -533,10 +539,9 @@ def main() -> None:
             connect_trigger = threading.Event()
             livekit_connected_flag = threading.Event()
 
-            # Initialize TTS with gating
             init_engine(stt_gated_flag=livekit_connected_flag)
 
-            async def _livekit_connect_fn() -> None:
+            async def _livekit_connect_fn_web() -> None:
                 assert connect_trigger is not None
                 connect_trigger.set()
 
@@ -544,11 +549,11 @@ def main() -> None:
                 "config": config,
                 "stop_event": threading.Event(),
                 "telegram_client": TelegramClient(),
-                "connect_fn": _livekit_connect_fn,
+                "connect_fn": _livekit_connect_fn_web,
                 "connected_flag": livekit_connected_flag,
             }
 
-        async def _run_for_tui(
+        async def _run_for_web(
             stop_threading: threading.Event,
             on_event: Callable,
             stop_asyncio: asyncio.Event,
@@ -561,17 +566,15 @@ def main() -> None:
                 actions_config=config,
             )
 
-        run_tui(
-            run_fn=_run_for_tui,
+        run_web(
+            run_fn=_run_for_web,
             input_spec=input_spec,
             output_spec=output_spec,
             room=room,
             stt_params=stt_params,
+            port=web_port,
         )
 
-        # LiveKit's Rust FFI leaves non-cooperative threads that block Python
-        # 3.13's finalizer.  The terminal is already restored by this point
-        # (Textual's cleanup ran inside app.run()), so a hard exit is safe.
         import time as _time
         import os as _os
 

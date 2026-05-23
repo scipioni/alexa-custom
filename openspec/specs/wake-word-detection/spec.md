@@ -36,19 +36,27 @@ The system SHALL load wake words from the `wake_words` list in `actions.yaml`. A
 - **THEN** the system logs an error and exits with a non-zero status
 
 ### Requirement: Command recognition window
-After wake word detection, the system SHALL open a full-transcription recognition window of configurable duration (default 3 seconds). If a command is recognized within the window, it is dispatched to the action system and published to MQTT. If the window expires without a match, the system plays a timeout beep and returns to Stage 1.
+After wake word detection, the system SHALL open a full-transcription recognition window of configurable duration (default 3 seconds). The system SHALL use the trigger list of the matched wake word group for command matching. If the matched group defines no triggers, the system SHALL fall back to the global top-level `triggers` list. If a command is recognized within the window it is dispatched to the action system and published to MQTT. If the window expires without a match, the system plays a timeout beep and returns to Stage 1.
 
-#### Scenario: Command recognized within window
-- **WHEN** the user speaks a configured trigger phrase within 3 seconds of the wake beep
-- **THEN** the system dispatches the corresponding actions, publishes the transcript to MQTT, and returns to Stage 1
+#### Scenario: Command matched using group triggers
+- **WHEN** wake word group "galileo" has its own triggers and the user speaks a phrase matching one of them
+- **THEN** the corresponding actions are dispatched using the group's trigger list
+
+#### Scenario: Command matched using global fallback triggers
+- **WHEN** wake word group "assistente" has no triggers defined and the user speaks a phrase matching a global trigger
+- **THEN** the corresponding actions are dispatched using the global fallback trigger list
 
 #### Scenario: Command window timeout
 - **WHEN** no speech or no matching phrase is detected within `command_timeout` seconds
-- **THEN** the system plays a timeout beep, publishes an empty or "timeout" status to MQTT, and resumes wake word listening
+- **THEN** the system plays a timeout beep and resumes wake word listening
 
 #### Scenario: Custom timeout configured
-- **WHEN** `command_timeout: 5.0` is set in `actions.yaml`
+- **WHEN** `command_timeout: 5.0` is set in `config.yaml`
 - **THEN** the command window stays open for 5 seconds
+
+#### Scenario: No triggers anywhere
+- **WHEN** a wake word group has no triggers and the global triggers list is also empty
+- **THEN** the command window opens, nothing matches, the timeout beep plays, and the system returns to Stage 1
 
 ### Requirement: Audio feedback
 The system SHALL play distinct audio cues: a high beep on wake word detection (Stage 2 open), a confirmation tone on successful command match, and a low beep on timeout or no match.
@@ -67,6 +75,11 @@ The system SHALL capture microphone audio for STT using a `parec` subprocess at 
 #### Scenario: parec uses configured input device
 - **WHEN** `INPUT_DEVICE` env var is set
 - **THEN** `parec` is started with the corresponding PipeWire source name
+
+#### Scenario: parec terminated on shutdown
+- **WHEN** the process receives SIGTERM or SIGINT
+- **THEN** the `parec` subprocess is terminated before the process exits
+PipeWire source name
 
 #### Scenario: parec terminated on shutdown
 - **WHEN** the process receives SIGTERM or SIGINT

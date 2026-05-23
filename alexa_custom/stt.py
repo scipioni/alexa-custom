@@ -18,7 +18,7 @@ if TYPE_CHECKING:
 
 from alexa_custom.actions import TelegramClient, dispatch, match_trigger
 from alexa_custom.audio import play_timeout_beep, play_wake_beep
-from alexa_custom.config import ActionsConfig
+from alexa_custom.config import ActionsConfig, Trigger, WakeWordGroup
 
 logger = logging.getLogger(__name__)
 
@@ -110,8 +110,21 @@ def _load_model() -> vosk.Model:
     return vosk.Model(_MODEL_PATH)
 
 
-def _grammar_json(wake_words: list[str]) -> str:
-    return json.dumps(wake_words + ["[unk]"])
+def _grammar_json(groups: list[WakeWordGroup]) -> str:
+    phrases = [p for g in groups for p in [g.word] + g.aliases]
+    return json.dumps(phrases + ["[unk]"])
+
+
+def _build_alias_map(groups: list[WakeWordGroup]) -> dict[str, WakeWordGroup]:
+    return {
+        normalize_text(phrase): group
+        for group in groups
+        for phrase in [group.word] + group.aliases
+    }
+
+
+def _resolve_triggers(group: WakeWordGroup, fallback: list[Trigger]) -> list[Trigger]:
+    return group.triggers if group.triggers else fallback
 
 
 def _rms_level(data: bytes) -> float:
@@ -153,7 +166,9 @@ def run_stt_worker(
     if callable(config) and not isinstance(config, ActionsConfig):
         _get_config = config  # type: ignore[assignment]
     else:
-        _get_config = lambda: config  # type: ignore[return-value]
+
+        def _get_config():
+            return config  # type: ignore[return-value]
 
     try:
         model = _load_model()
@@ -166,7 +181,8 @@ def run_stt_worker(
 
     current_config = _get_config()
     logger.info(
-        f"STT: wake words={current_config.wake_words}, timeout={current_config.command_timeout}s, "
+        f"STT: wake words={[g.word for g in current_config.wake_words]}, "
+        f"timeout={current_config.command_timeout}s, "
         f"source={source or 'default'} ({channels} ch)"
     )
 
@@ -212,19 +228,16 @@ def run_stt_worker(
                     pass
 
 
-def _extract_wake_command(text: str, wake_words: list[str]) -> tuple[str, str]:
-    """Return (wake_word, command) if text begins with a wake word, else ('', '')."""
+def _extract_wake_command(
+    text: str, alias_map: dict[str, WakeWordGroup]
+) -> tuple[WakeWordGroup | None, str]:
+    """Return (group, command) if text begins with a known wake phrase, else (None, '')."""
     norm_text = normalize_text(text)
-    for word in wake_words:
-        norm_word = normalize_text(word)
-        if norm_text.startswith(norm_word):
-            # We return the original word from config for logging, but extract command from original text
-            # This is tricky because lengths might change during normalization.
-            # But for wake words like 'alexa' or 'sì', it's usually safe to use indices if we are careful.
-            # Alternatively, we just return the normalized command.
-            command = text.lower().replace(word.lower(), "", 1).strip()
-            return word, command
-    return "", ""
+    for norm_phrase, group in alias_map.items():
+        if norm_text.startswith(norm_phrase):
+            command = text.lower().replace(norm_phrase, "", 1).strip()
+            return group, command
+    return None, ""
 
 
 def capture_transcript(
@@ -294,9 +307,10 @@ def _single_stage_loop(
     """Single-stage: full transcription always; wake word + command in one phrase."""
     rec = vosk.KaldiRecognizer(model, 16000)
     cooldown_until = 0.0
+    alias_map = _build_alias_map(config.wake_words)
 
     if on_stt_event:
-        on_stt_event("listening", {"wake_words": config.wake_words})
+        on_stt_event("listening", {"wake_words": [g.word for g in config.wake_words]})
 
     async def _listen_fn(timeout: float) -> str:
         # Emit event for UI to show we are listening for a reply
@@ -346,13 +360,13 @@ def _single_stage_loop(
         if not text:
             continue
 
-        wake_word, command = _extract_wake_command(text, config.wake_words)
-        if not wake_word:
+        wake_group, command = _extract_wake_command(text, alias_map)
+        if wake_group is None:
             continue
 
-        logger.info(f"Single-stage: wake='{wake_word}' command='{command}'")
+        logger.info(f"Single-stage: wake='{wake_group.word}' command='{command}'")
         if on_stt_event:
-            on_stt_event("wake", {"word": wake_word, "timeout": 0})
+            on_stt_event("wake", {"word": wake_group.word, "timeout": 0})
 
         try:
             play_wake_beep()
@@ -365,7 +379,8 @@ def _single_stage_loop(
             _play_timeout()
             continue
 
-        trigger = match_trigger(command, config.triggers)
+        triggers = _resolve_triggers(wake_group, config.triggers)
+        trigger = match_trigger(command, triggers)
         if trigger is None:
             if on_stt_event:
                 on_stt_event("nomatch", {"transcript": command})
@@ -385,12 +400,15 @@ def _single_stage_loop(
                     livekit_connect_fn,
                     livekit_connected=connected,
                     listen_fn=_listen_fn,
+                    on_stt_event=on_stt_event,
                 )
             )
             loop.close()
             # Restore UI state after dispatch/dialogue
             if on_stt_event:
-                on_stt_event("listening", {"wake_words": config.wake_words})
+                on_stt_event(
+                    "listening", {"wake_words": [g.word for g in config.wake_words]}
+                )
         except Exception as e:
             logger.error(f"Action dispatch failed: {e}")
 
@@ -408,6 +426,7 @@ def _recognition_loop(
     mqtt_client: MQTTClient | None = None,
     loop: asyncio.AbstractEventLoop | None = None,
 ) -> None:
+    alias_map = _build_alias_map(config.wake_words)
     stage1 = vosk.KaldiRecognizer(model, 16000, _grammar_json(config.wake_words))
     stage1.SetWords(True)
     display_rec = vosk.KaldiRecognizer(model, 16000) if on_stt_event else None
@@ -415,7 +434,7 @@ def _recognition_loop(
     was_gated = False
 
     if on_stt_event:
-        on_stt_event("listening", {"wake_words": config.wake_words})
+        on_stt_event("listening", {"wake_words": [g.word for g in config.wake_words]})
 
     if mqtt_client:
         mqtt_client.publish_threadsafe(
@@ -452,7 +471,9 @@ def _recognition_loop(
             logger.info("STT resumed (call ended)")
             was_gated = False
             if on_stt_event:
-                on_stt_event("listening", {"wake_words": config.wake_words})
+                on_stt_event(
+                    "listening", {"wake_words": [g.word for g in config.wake_words]}
+                )
             if mqtt_client:
                 mqtt_client.publish_threadsafe(
                     f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
@@ -482,12 +503,10 @@ def _recognition_loop(
             # Grammar mode may not constrain output on all model/version combos.
             # Explicitly check the result is exactly one of the wake words.
             norm_text = normalize_text(text)
-            wake_match = next(
-                (w for w in config.wake_words if normalize_text(w) == norm_text), ""
-            )
-            if wake_match and conf >= config.wake_confidence:
+            wake_match = alias_map.get(norm_text)
+            if wake_match is not None and conf >= config.wake_confidence:
                 _wake_detected(
-                    wake_text=wake_match,
+                    wake_group=wake_match,
                     proc=proc,
                     channels=channels,
                     model=model,
@@ -509,7 +528,9 @@ def _recognition_loop(
                     vosk.KaldiRecognizer(model, 16000) if on_stt_event else None
                 )
                 if on_stt_event:
-                    on_stt_event("listening", {"wake_words": config.wake_words})
+                    on_stt_event(
+                        "listening", {"wake_words": [g.word for g in config.wake_words]}
+                    )
                 if mqtt_client:
                     mqtt_client.publish_threadsafe(
                         f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
@@ -519,7 +540,7 @@ def _recognition_loop(
 
 
 def _wake_detected(
-    wake_text: str,
+    wake_group: WakeWordGroup,
     proc: subprocess.Popen,
     channels: int,
     model: vosk.Model,
@@ -532,9 +553,11 @@ def _wake_detected(
     mqtt_client: MQTTClient | None = None,
     loop: asyncio.AbstractEventLoop | None = None,
 ) -> None:
-    logger.info(f"Wake word detected: '{wake_text}'")
+    logger.info(f"Wake word detected: '{wake_group.word}'")
     if on_stt_event:
-        on_stt_event("wake", {"word": wake_text, "timeout": config.command_timeout})
+        on_stt_event(
+            "wake", {"word": wake_group.word, "timeout": config.command_timeout}
+        )
     if mqtt_client:
         mqtt_client.publish_threadsafe(
             f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
@@ -559,7 +582,7 @@ def _wake_detected(
 
     if mqtt_client:
         payload = json.dumps(
-            {"text": transcript, "wake_word": wake_text, "timestamp": time.time()}
+            {"text": transcript, "wake_word": wake_group.word, "timestamp": time.time()}
         )
         mqtt_client.publish_threadsafe(
             f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/command",
@@ -567,7 +590,8 @@ def _wake_detected(
             loop=loop,
         )
 
-    trigger = match_trigger(transcript, config.triggers)
+    triggers = _resolve_triggers(wake_group, config.triggers)
+    trigger = match_trigger(transcript, triggers)
     if trigger is None:
         if on_stt_event:
             on_stt_event("nomatch", {"transcript": transcript})
@@ -602,6 +626,7 @@ def _wake_detected(
                 livekit_connect_fn,
                 livekit_connected=connected,
                 listen_fn=_listen_fn,
+                on_stt_event=on_stt_event,
             )
         )
         loop.close()

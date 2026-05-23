@@ -6,7 +6,7 @@ Load, merge, and hot-reload configuration from `config.yaml`, providing environm
 ## Requirements
 
 ### Requirement: Unified config.yaml with env section
-The system SHALL load configuration from `config.yaml` when present. The file SHALL support an optional top-level `env:` key containing a flat string-to-string mapping of environment variables. Values in `env:` SHALL be written into `os.environ`, overwriting any existing values (including those previously set by `.env`). All remaining top-level keys in `config.yaml` are parsed using the existing actions config schema.
+The system SHALL load configuration from `config.yaml` when present. The file SHALL support an optional top-level `env:` key containing a flat string-to-string mapping of environment variables. Values in `env:` SHALL be written into `os.environ`, overwriting any existing values (including those previously set by `.env`). The `wake_words` key SHALL be a list of wake word group objects; each object SHALL have a required string `word` field, an optional `aliases` list of strings, and an optional `triggers` list following the existing trigger schema. A top-level `triggers` key SHALL be accepted as a global fallback and MAY be an empty list or absent. All other top-level keys are parsed using the existing actions config schema.
 
 #### Scenario: env section populates os.environ
 - **WHEN** `config.yaml` contains `env: { LIVEKIT_URL: wss://example.com }`
@@ -16,9 +16,25 @@ The system SHALL load configuration from `config.yaml` when present. The file SH
 - **WHEN** `.env` sets `TELEGRAM_BOT_TOKEN=old` and `config.yaml env:` sets `TELEGRAM_BOT_TOKEN: new`
 - **THEN** `os.environ["TELEGRAM_BOT_TOKEN"]` equals `"new"` (config.yaml takes precedence)
 
+#### Scenario: Wake word group with aliases parsed correctly
+- **WHEN** `config.yaml` contains a wake word group with `word: galileo` and `aliases: [hey galileo]`
+- **THEN** `config.wake_words[0].word` equals `"galileo"` and `config.wake_words[0].aliases` equals `["hey galileo"]`
+
+#### Scenario: Wake word group with per-group triggers
+- **WHEN** a wake word group defines its own `triggers` list
+- **THEN** `config.wake_words[0].triggers` is a non-empty list of `Trigger` objects
+
+#### Scenario: Wake word group without triggers uses global fallback
+- **WHEN** a wake word group has no `triggers` key and the top-level `triggers` list is non-empty
+- **THEN** `config.wake_words[0].triggers` is an empty list and `config.triggers` is non-empty
+
+#### Scenario: Old flat wake_words list rejected
+- **WHEN** `config.yaml` contains `wake_words: [galileo, assistente]` (flat strings)
+- **THEN** a `ConfigError` is raised with a message indicating the new format is required
+
 #### Scenario: config.yaml without env section
 - **WHEN** `config.yaml` exists but has no `env:` key
-- **THEN** the file is parsed as actions config; `.env` values remain unchanged in `os.environ`
+- **THEN** the file is parsed using the actions config schema; `os.environ` is unchanged
 
 ### Requirement: Backward-compatible fallback to actions.yaml
 The system SHALL fall back to loading `actions.yaml` when `config.yaml` does not exist. A deprecation warning SHALL be logged when the fallback is used. `.env` is always loaded as the lowest-priority source regardless of which primary config file is used.
@@ -64,3 +80,14 @@ The system SHALL provide a `ConfigManager` class that holds the current `Actions
 #### Scenario: Credential values not logged
 - **WHEN** a reload applies new values from the `env:` section
 - **THEN** log lines reference only the key names, not the values
+
+### Requirement: Optional web section in config.yaml
+The system SHALL support an optional top-level `web:` key in `config.yaml`. When present, it SHALL accept the following fields: `port` (integer, default `8080`) and `enabled` (boolean, default `false`). These values SHALL be accessible to the web interface module but SHALL NOT affect startup unless the `--web` CLI flag is explicitly passed.
+
+#### Scenario: web.port read from config
+- **WHEN** `config.yaml` contains `web: { port: 9090 }` and `--web` is passed
+- **THEN** the HTTP server binds to port 9090 (CLI flag `--web-port` takes precedence if also provided)
+
+#### Scenario: Missing web section uses defaults
+- **WHEN** `config.yaml` has no `web:` key
+- **THEN** the web interface uses port 8080 when started with `--web`

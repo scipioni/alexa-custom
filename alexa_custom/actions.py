@@ -73,6 +73,7 @@ async def dispatch(
     livekit_connected: bool = False,
     listen_fn: Callable[[float], Awaitable[str]] | None = None,
     mqtt_client: MQTTClient | None = None,
+    on_stt_event: Callable[[str, dict], None] | None = None,
 ) -> None:
     for action in trigger.actions:
         await _run_action(
@@ -82,6 +83,7 @@ async def dispatch(
             livekit_connected,
             listen_fn,
             mqtt_client,
+            on_stt_event,
         )
 
 
@@ -92,6 +94,7 @@ async def _run_action(
     livekit_connected: bool,
     listen_fn: Callable[[float], Awaitable[str]] | None = None,
     mqtt_client: MQTTClient | None = None,
+    on_stt_event: Callable[[str, dict], None] | None = None,
 ) -> None:
     if action.type == "log":
         message = action.params.get("message", "(no message)")
@@ -175,6 +178,8 @@ async def _run_action(
             reply_trigger = match_trigger(transcript, action.on_reply)
             if reply_trigger:
                 logger.info(f"Matched reply trigger: '{reply_trigger.phrase}'")
+                if on_stt_event:
+                    on_stt_event("matched", {"transcript": transcript, "trigger": reply_trigger.phrase})
                 await dispatch(
                     reply_trigger,
                     telegram_client,
@@ -182,9 +187,12 @@ async def _run_action(
                     livekit_connected,
                     listen_fn,
                     mqtt_client,
+                    on_stt_event,
                 )
             elif action.on_else:
                 logger.info(f"No reply trigger matched '{transcript}', running on_else")
+                if on_stt_event:
+                    on_stt_event("nomatch", {"transcript": transcript})
                 for else_action in action.on_else:
                     await _run_action(
                         else_action,
@@ -193,9 +201,12 @@ async def _run_action(
                         livekit_connected,
                         listen_fn,
                         mqtt_client,
+                        on_stt_event,
                     )
             else:
                 logger.info(f"No reply trigger matched '{transcript}' and no on_else")
+                if on_stt_event:
+                    on_stt_event("nomatch", {"transcript": transcript})
                 from alexa_custom.audio import play_timeout_beep
 
                 await asyncio.to_thread(play_timeout_beep)
@@ -209,6 +220,7 @@ async def _run_action(
                     livekit_connected,
                     listen_fn,
                     mqtt_client,
+                    on_stt_event,
                 )
 
         if mqtt_client:

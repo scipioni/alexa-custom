@@ -29,14 +29,21 @@ class Trigger:
     actions: list[ActionEntry]
 
 
+@dataclass
+class WakeWordGroup:
+    word: str
+    aliases: list[str] = field(default_factory=list)
+    triggers: list[Trigger] = field(default_factory=list)
+
+
 _VALID_MODES = {"two-stage", "single-stage"}
 
 
 @dataclass
 class ActionsConfig:
-    wake_words: list[str]
+    wake_words: list[WakeWordGroup]
     command_timeout: float
-    triggers: list[Trigger]
+    triggers: list[Trigger]  # global fallback; may be empty
     on_startup: list[ActionEntry] = field(default_factory=list)
     recognition_mode: str = "two-stage"
     wake_confidence: float = 0.75
@@ -46,13 +53,11 @@ def _parse_actions(raw_actions: list[Any], path_prefix: str) -> list[ActionEntry
     actions: list[ActionEntry] = []
     for i, a in enumerate(raw_actions):
         if not isinstance(a, dict):
-            raise ConfigError(
-                f"actions.yaml: {path_prefix}.actions[{i}] must be a mapping"
-            )
+            raise ConfigError(f"config:{path_prefix}.actions[{i}] must be a mapping")
         action_type = a.get("type")
         if not action_type or not isinstance(action_type, str):
             raise ConfigError(
-                f"actions.yaml: {path_prefix}.actions[{i}] missing 'type' string"
+                f"config:{path_prefix}.actions[{i}] missing 'type' string"
             )
 
         on_reply: list[Trigger] = []
@@ -60,7 +65,7 @@ def _parse_actions(raw_actions: list[Any], path_prefix: str) -> list[ActionEntry
         if raw_reply is not None:
             if not isinstance(raw_reply, list):
                 raise ConfigError(
-                    f"actions.yaml: {path_prefix}.actions[{i}].on_reply must be a list"
+                    f"config:{path_prefix}.actions[{i}].on_reply must be a list"
                 )
             on_reply = _parse_triggers(
                 raw_reply, f"{path_prefix}.actions[{i}].on_reply"
@@ -71,7 +76,7 @@ def _parse_actions(raw_actions: list[Any], path_prefix: str) -> list[ActionEntry
         if raw_else is not None:
             if not isinstance(raw_else, list):
                 raise ConfigError(
-                    f"actions.yaml: {path_prefix}.actions[{i}].on_else must be a list"
+                    f"config:{path_prefix}.actions[{i}].on_else must be a list"
                 )
             on_else = _parse_actions(raw_else, f"{path_prefix}.actions[{i}].on_else")
 
@@ -90,21 +95,68 @@ def _parse_triggers(raw_triggers: list[Any], path_prefix: str) -> list[Trigger]:
     triggers: list[Trigger] = []
     for i, t in enumerate(raw_triggers):
         if not isinstance(t, dict):
-            raise ConfigError(f"actions.yaml: {path_prefix}[{i}] must be a mapping")
+            raise ConfigError(f"config:{path_prefix}[{i}] must be a mapping")
         phrase = t.get("phrase")
         if not phrase or not isinstance(phrase, str):
-            raise ConfigError(
-                f"actions.yaml: {path_prefix}[{i}] missing 'phrase' string"
-            )
+            raise ConfigError(f"config:{path_prefix}[{i}] missing 'phrase' string")
         raw_actions = t.get("actions")
         if not isinstance(raw_actions, list):
-            raise ConfigError(
-                f"actions.yaml: {path_prefix}[{i}] 'actions' must be a list"
-            )
+            raise ConfigError(f"config:{path_prefix}[{i}] 'actions' must be a list")
 
         actions = _parse_actions(raw_actions, f"{path_prefix}[{i}]")
         triggers.append(Trigger(phrase=phrase, actions=actions))
     return triggers
+
+
+def _parse_wake_word_groups(raw_groups: list[Any], source: str) -> list[WakeWordGroup]:
+    groups: list[WakeWordGroup] = []
+    seen: dict[str, int] = {}  # normalized phrase → group index for duplicate detection
+
+    for i, entry in enumerate(raw_groups):
+        if not isinstance(entry, dict):
+            raise ConfigError(
+                f"{source}: wake_words[{i}] must be a mapping with a 'word' key — "
+                f"got {type(entry).__name__!r}. Use: '- word: {entry}'"
+            )
+        word = entry.get("word")
+        if not word or not isinstance(word, str):
+            raise ConfigError(
+                f"{source}: wake_words[{i}] missing required 'word' string"
+            )
+
+        raw_aliases = entry.get("aliases", [])
+        if not isinstance(raw_aliases, list):
+            raise ConfigError(f"{source}: wake_words[{i}].aliases must be a list")
+        aliases = [str(a) for a in raw_aliases]
+
+        raw_group_triggers = entry.get("triggers")
+        if raw_group_triggers is not None:
+            if not isinstance(raw_group_triggers, list):
+                raise ConfigError(f"{source}: wake_words[{i}].triggers must be a list")
+            group_triggers = _parse_triggers(
+                raw_group_triggers, f"wake_words[{i}].triggers"
+            )
+        else:
+            group_triggers = []
+
+        for phrase in [word] + aliases:
+            norm = phrase.lower().strip()
+            if norm in seen:
+                logger.warning(
+                    "%s: wake phrase %r also defined in group %d — group %d will shadow it",
+                    source,
+                    phrase,
+                    seen[norm],
+                    i,
+                )
+            else:
+                seen[norm] = i
+
+        groups.append(
+            WakeWordGroup(word=word, aliases=aliases, triggers=group_triggers)
+        )
+
+    return groups
 
 
 def load_config(path: str | Path) -> ActionsConfig | None:
@@ -137,30 +189,17 @@ def load_config(path: str | Path) -> ActionsConfig | None:
     return _parse_actions_config(raw, source=str(p))
 
 
-def load_actions_config_auto(base_dir: str | Path = ".") -> ActionsConfig | None:
-    """Load config.yaml if present, else fall back to actions.yaml (with deprecation warning)."""
-    base = Path(base_dir)
-    config_yaml = base / "config.yaml"
-    actions_yaml = base / "actions.yaml"
-
-    if config_yaml.exists():
-        return load_config(config_yaml)
-
-    if actions_yaml.exists():
-        logger.warning(
-            "actions.yaml is deprecated — migrate to config.yaml. "
-            "See config.yaml.example for the new format."
-        )
-        return load_actions_config(actions_yaml)
-
-    return None
-
-
 def _parse_actions_config(raw: dict, source: str = "config") -> ActionsConfig:
     """Parse a raw YAML dict (env: already stripped) into ActionsConfig."""
-    wake_words = raw.get("wake_words")
-    if not wake_words or not isinstance(wake_words, list) or len(wake_words) == 0:
+    raw_wake_words = raw.get("wake_words")
+    if (
+        not raw_wake_words
+        or not isinstance(raw_wake_words, list)
+        or len(raw_wake_words) == 0
+    ):
         raise ConfigError(f"{source}: 'wake_words' must be a non-empty list")
+
+    wake_words = _parse_wake_word_groups(raw_wake_words, source)
 
     command_timeout = float(raw.get("command_timeout", 3.0))
 
@@ -179,14 +218,17 @@ def _parse_actions_config(raw: dict, source: str = "config") -> ActionsConfig:
             raise ConfigError(f"{source}: 'on_startup' must be a list")
         on_startup = _parse_actions(raw_startup, "on_startup")
 
+    # top-level triggers are the global fallback; absent means no fallback
     raw_triggers = raw.get("triggers")
-    if not isinstance(raw_triggers, list):
-        raise ConfigError(f"{source}: 'triggers' must be a list")
-
-    triggers = _parse_triggers(raw_triggers, "triggers")
+    if raw_triggers is None:
+        triggers: list[Trigger] = []
+    elif not isinstance(raw_triggers, list):
+        raise ConfigError(f"{source}: 'triggers' must be a list if present")
+    else:
+        triggers = _parse_triggers(raw_triggers, "triggers")
 
     return ActionsConfig(
-        wake_words=[str(w) for w in wake_words],
+        wake_words=wake_words,
         command_timeout=command_timeout,
         triggers=triggers,
         on_startup=on_startup,
@@ -195,18 +237,14 @@ def _parse_actions_config(raw: dict, source: str = "config") -> ActionsConfig:
     )
 
 
-def load_actions_config(path: str | Path = "actions.yaml") -> ActionsConfig | None:
-    p = Path(path)
+def load_web_config(base_dir: str | Path = ".") -> dict:
+    """Return the optional web: section from config.yaml as a dict (keys: port, enabled)."""
+    p = Path(base_dir) / "config.yaml"
     if not p.exists():
-        return None
-
+        return {}
     try:
         with p.open() as f:
-            raw = yaml.safe_load(f)
-    except yaml.YAMLError as e:
-        raise ConfigError(f"actions.yaml parse error: {e}") from e
-
-    if not isinstance(raw, dict):
-        raise ConfigError("actions.yaml must be a YAML mapping at the top level")
-
-    return _parse_actions_config(raw, source="actions.yaml")
+            raw = yaml.safe_load(f) or {}
+        return raw.get("web", {}) if isinstance(raw, dict) else {}
+    except Exception:
+        return {}

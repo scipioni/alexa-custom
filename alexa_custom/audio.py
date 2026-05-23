@@ -624,13 +624,9 @@ def _usb_ids_for_alsa_card(card_index: int) -> tuple[str, str] | None:
 
 def setup_audio() -> None:
     """Set output device PCM hardware volume to 100% and persist it across reboots."""
-    from alexa_custom._env import load_env
-
-    load_env()
-
     output_spec = os.environ.get("OUTPUT_DEVICE", "").strip()
     if not output_spec:
-        print("ERROR: OUTPUT_DEVICE is not set in .env")
+        print("ERROR: OUTPUT_DEVICE is not set — add it to config.yaml under env:")
         sys.exit(1)
 
     card = _find_alsa_card(output_spec)

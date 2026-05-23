@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from pathlib import Path
 from typing import Callable
 
@@ -28,7 +27,9 @@ class ConfigManager:
             return
 
         if new_config is None:
-            logger.error("Config reload returned None (file gone?), keeping previous config")
+            logger.error(
+                "Config reload returned None (file gone?), keeping previous config"
+            )
             return
 
         self.config = new_config

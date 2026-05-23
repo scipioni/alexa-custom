@@ -2,7 +2,7 @@
 
 A high-performance, headless Python client that transforms your conference speakerphone into a proactive, voice-activated smart assistant.
 
-Designed for the **NewLine NewPie**, optimized for **PipeWire**, and fully integrated with **Home Assistant**.
+Optimized for **PipeWire** and fully integrated with **Home Assistant**.
 
 ---
 
@@ -24,7 +24,7 @@ cp config.yaml.example config.yaml
 # Edit config.yaml — fill in credentials under env: and customize triggers
 
 # 5. Run it!
-alexa-client --tui
+alexa-client --web          # browser dashboard at http://<host>:8080
 ```
 
 ### Configuration
@@ -55,9 +55,9 @@ triggers:                   # phrase → action mappings
 - **Proactive Audio Management**: Automatically handles Bluetooth profiles (mSBC) and PipeWire routing.
 - **Voice-Activated**: Built-in Wake Word detection (Vosk) with customizable `config.yaml` (hot-reloaded — no restart needed).
 - **Bidirectional MQTT**: Home Assistant Discovery support. Forward voice commands to HA and trigger local actions via MQTT.
-- **Terminal UI**: Real-time VU meters, STT status, and participant monitoring.
+- **Web Dashboard**: Real-time browser UI (VU meters, STT status, participants, live logs, restart button) — accessible from any device on the LAN.
 - **Multi-Turn Dialogue**: Interactive "Ask" actions for complex voice interactions.
-- **Headless Optimized**: Low CPU usage, works on Arduino Uno Q and other embedded Linux boards.
+- **Headless Optimized**: Low CPU usage, suitable for embedded Linux boards and single-board computers.
 
 ---
 
@@ -77,8 +77,9 @@ Dive deeper into specific topics:
 
 | Command | Description |
 |---------|-------------|
-| `alexa-client` | Start the assistant daemon |
-| `alexa-client --tui` | Start with the terminal interface |
+| `alexa-client` | Start the assistant daemon (headless) |
+| `alexa-client --web` | Start with the web dashboard (LAN-accessible, default port 8080) |
+| `alexa-client --web --web-port 9090` | Web dashboard on a custom port |
 | `alexa-audio` | Run a microphone → speaker loopback test |
 | `alexa-devices` | List all detected audio devices |
 | `alexa-setup` | Download/Update STT models |
