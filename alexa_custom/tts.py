@@ -30,9 +30,6 @@ class PicoTTS(TTSBackend):
         if not text:
             return
 
-        # pico2wave uses underscore for locale like it-IT
-        pico_lang = lang.replace("-", "_")
-
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
             temp_path = f.name
 
@@ -40,8 +37,9 @@ class PicoTTS(TTSBackend):
             logger.info(f"TTS (Pico): '{text}' [{lang}]")
 
             # 1. Generate speech
+            # NOTE: Order and format (it-IT) are crucial for some pico2wave wrappers
             subprocess.run(
-                ["pico2wave", "-l", pico_lang, "-w", temp_path, text],
+                ["pico2wave", "-l", lang, "-w", temp_path, text],
                 check=True,
                 stderr=subprocess.DEVNULL,
             )

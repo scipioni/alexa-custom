@@ -217,10 +217,6 @@ class AudioWatcher(threading.Thread):
         if ok != self.connected or conn != self.conn_type:
             if ok and not self.connected:
                 logger.info(f"Audio device {conn} connected and configured")
-                threading.Thread(
-                    target=lambda: [play_beep(660, 100), play_beep(880, 150)],
-                    daemon=True,
-                ).start()
 
             self.connected = ok
             self.conn_type = conn

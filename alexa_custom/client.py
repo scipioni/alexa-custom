@@ -298,6 +298,17 @@ async def _async_main(
         f"Output device: {output_spec or out_info['name']} ({out_info['max_output_channels']} ch)"
     )
 
+    # Wait for AudioWatcher to configure hardware before executing startup actions
+    # (otherwise sounds play through the old default, like HDMI)
+    from alexa_custom.audio import check_newpie_ready
+
+    logger.info("Waiting for audio hardware to initialize...")
+    for _ in range(10):  # Wait up to 5 seconds
+        ok, _ = await asyncio.to_thread(check_newpie_ready)
+        if ok:
+            break
+        await asyncio.sleep(0.5)
+
     # Execute startup actions
     if actions_config and actions_config.on_startup:
         logger.info(f"Executing {len(actions_config.on_startup)} startup action(s)")

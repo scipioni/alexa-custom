@@ -11,7 +11,7 @@ wake_words:
 recognition_mode: "two-stage"
 
 # Confidence threshold for wake word detection (0.0 to 1.0)
-wake_confidence: 0.75
+wake_confidence: 0.65
 
 # How long to wait for a command after the wake word (seconds)
 command_timeout: 4.0
