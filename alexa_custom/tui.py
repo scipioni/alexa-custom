@@ -336,9 +336,7 @@ class AlexaTUI(App[None]):
         self._livekit_loop = loop
         self._livekit_stop = asyncio.Event()
 
-        def _exc_handler(
-            loop: asyncio.AbstractEventLoop, context: dict
-        ) -> None:
+        def _exc_handler(loop: asyncio.AbstractEventLoop, context: dict) -> None:
             # QueueFull is expected: livekit's media_devices.py checks q.full()
             # before scheduling put_nowait, but the check and the put run on
             # different threads (TOCTOU).  Dropped audio frames are harmless.

@@ -20,6 +20,7 @@ from livekit.rtc import (
 
 from alexa_custom._env import load_env, require_env
 import sounddevice as sd
+from alexa_custom.config import ActionsConfig
 
 from alexa_custom.audio import (
     find_pipewire_device,
@@ -287,8 +288,15 @@ async def _async_main(
     if pw_device is None:
         raise RuntimeError("PipeWire ALSA device not found. Is PipeWire running?")
 
-    logger.info(f"Input device:  {input_spec or sd.query_devices(pw_device)['name']}")
-    logger.info(f"Output device: {output_spec or sd.query_devices(pw_device)['name']}")
+    in_info = sd.query_devices(pw_device)
+    out_info = sd.query_devices(pw_device)
+
+    logger.info(
+        f"Input device:  {input_spec or in_info['name']} ({in_info['max_input_channels']} ch)"
+    )
+    logger.info(
+        f"Output device: {output_spec or out_info['name']} ({out_info['max_output_channels']} ch)"
+    )
 
     # Execute startup actions
     if actions_config and actions_config.on_startup:

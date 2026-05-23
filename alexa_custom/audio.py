@@ -5,6 +5,7 @@ import sys
 import threading
 import time
 import logging
+from typing import Callable
 import sounddevice as sd
 import numpy as np
 import pulsectl
@@ -274,7 +275,6 @@ def check_newpie_ready() -> tuple[bool, str]:
     return ok, conn
 
 
-
 def list_devices():
     print("=" * 60)
     print("AUDIO DEVICES")
@@ -340,16 +340,19 @@ def speakerphone():
         if output_device is None:
             output_device = pw_device
 
+    input_info = sd.query_devices(input_device)
+    max_in_channels = input_info["max_input_channels"]
+
     samplerate = _SAMPLERATE[conn]
     print(f"\nConnection:        {conn}")
     print(
-        f"Input device:      {input_device} ({sd.query_devices(input_device)['name']})"
+        f"Input device:      {input_device} ({input_info['name']}) [{max_in_channels} ch]"
     )
     print(
         f"Output device:     {output_device} ({sd.query_devices(output_device)['name']})"
     )
     print(f"Sample rate:       {samplerate} Hz")
-    print("Starting loopback (mic → speaker). Press Ctrl+C to stop.\n")
+    print("Starting loopback (mic ch 1..N → mono speaker). Press Ctrl+C to stop.\n")
 
     frame_count = 0
 
@@ -357,7 +360,14 @@ def speakerphone():
         nonlocal frame_count
         if status:
             print(f"Audio status: {status}", file=sys.stderr)
-        outdata[:] = indata
+        
+        # indata has shape (frames, max_in_channels)
+        # outdata has shape (frames, 1)
+        if max_in_channels > 1:
+            outdata[:, 0] = np.mean(indata, axis=1)
+        else:
+            outdata[:] = indata
+            
         frame_count += frames
         if frame_count % samplerate == 0:
             print(f"  {frame_count // samplerate}s", flush=True)
@@ -367,7 +377,7 @@ def speakerphone():
             device=(input_device, output_device),
             samplerate=samplerate,
             blocksize=1024,
-            channels=1,
+            channels=(max_in_channels, 1),
             dtype=np.float32,
             callback=audio_callback,
         ):

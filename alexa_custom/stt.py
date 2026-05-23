@@ -23,32 +23,54 @@ _MODEL_PATH = os.environ.get("VOSK_MODEL_PATH", "models/it")
 _STT_COOLDOWN = 1.0
 
 
-def resolve_parec_source(input_spec: str | None) -> str | None:
-    """Map INPUT_DEVICE value to a PipeWire source name via pactl."""
+def resolve_parec_source(input_spec: str | None) -> tuple[str | None, int]:
+    """Map INPUT_DEVICE value to a PipeWire source name and channel count via pactl."""
+    channels = 1
     if not input_spec:
-        return None
+        return None, channels
     try:
         out = subprocess.check_output(
             ["pactl", "list", "sources", "short"], text=True, timeout=5
         )
         needle = input_spec.lower()
+        source_name = None
         for line in out.splitlines():
             parts = line.split("\t")
             if len(parts) >= 2:
                 name = parts[1]
                 if needle in name.lower() and "monitor" not in name.lower():
-                    return name
+                    source_name = name
+                    break
+
+        if source_name:
+            # Get full info for channel count
+            out_full = subprocess.check_output(
+                ["pactl", "list", "sources"], text=True, timeout=5
+            )
+            # Find the block for our source
+            found = False
+            for line in out_full.splitlines():
+                if source_name in line:
+                    found = True
+                if found and "Channels:" in line:
+                    try:
+                        channels = int(line.split(":")[1].strip())
+                    except Exception:
+                        channels = 1
+                    break
+            return source_name, channels
+
         logger.warning(f"No PipeWire source matching {input_spec!r} — using default")
     except Exception as e:
         logger.warning(f"resolve_parec_source failed: {e} — using default")
-    return None
+    return None, channels
 
 
-def start_parec(source: str | None) -> subprocess.Popen:
+def start_parec(source: str | None, channels: int = 1) -> subprocess.Popen:
     cmd = [
         "parec",
         "--rate=16000",
-        "--channels=1",
+        f"--channels={channels}",
         "--format=s16le",
         "--latency-msec=100",
     ]
@@ -77,6 +99,16 @@ def _rms_level(data: bytes) -> float:
     return float(np.sqrt(np.mean(samples**2))) / 32768.0
 
 
+def _downmix_to_mono(data: bytes, channels: int) -> bytes:
+    """Downmix interleaved multi-channel s16le data to mono s16le."""
+    if channels <= 1:
+        return data
+    samples = np.frombuffer(data, dtype=np.int16).reshape(-1, channels)
+    # Average across channels and convert back to s16
+    mono = np.mean(samples, axis=1).astype(np.int16)
+    return mono.tobytes()
+
+
 def run_stt_worker(
     config: ActionsConfig,
     stop_event: threading.Event,
@@ -93,11 +125,11 @@ def run_stt_worker(
         return
 
     input_spec = os.environ.get("INPUT_DEVICE", "").strip() or None
-    source = resolve_parec_source(input_spec)
+    source, channels = resolve_parec_source(input_spec)
 
     logger.info(
         f"STT: wake words={config.wake_words}, timeout={config.command_timeout}s, "
-        f"source={source or 'default'}"
+        f"source={source or 'default'} ({channels} ch)"
     )
 
     loop_fn = (
@@ -109,9 +141,10 @@ def run_stt_worker(
     while not stop_event.is_set():
         proc: subprocess.Popen | None = None
         try:
-            proc = start_parec(source)
+            proc = start_parec(source, channels)
             loop_fn(
                 proc=proc,
+                channels=channels,
                 model=model,
                 config=config,
                 stop_event=stop_event,
@@ -144,6 +177,7 @@ def _extract_wake_command(text: str, wake_words: list[str]) -> tuple[str, str]:
 
 def _single_stage_loop(
     proc: subprocess.Popen,
+    channels: int,
     model: vosk.Model,
     config: ActionsConfig,
     stop_event: threading.Event,
@@ -161,9 +195,12 @@ def _single_stage_loop(
 
     assert proc.stdout is not None
     while not stop_event.is_set():
-        data = proc.stdout.read(_CHUNK)
-        if not data:
+        # Adjust chunk size for multi-channel
+        raw_data = proc.stdout.read(_CHUNK * channels)
+        if not raw_data:
             break
+
+        data = _downmix_to_mono(raw_data, channels)
 
         if on_stt_event:
             on_stt_event("level", {"mic": _rms_level(data)})
@@ -237,6 +274,7 @@ def _single_stage_loop(
 
 def _recognition_loop(
     proc: subprocess.Popen,
+    channels: int,
     model: vosk.Model,
     config: ActionsConfig,
     stop_event: threading.Event,
@@ -256,9 +294,11 @@ def _recognition_loop(
 
     assert proc.stdout is not None
     while not stop_event.is_set():
-        data = proc.stdout.read(_CHUNK)
-        if not data:
+        raw_data = proc.stdout.read(_CHUNK * channels)
+        if not raw_data:
             break
+
+        data = _downmix_to_mono(raw_data, channels)
 
         if on_stt_event:
             on_stt_event("level", {"mic": _rms_level(data)})
@@ -306,6 +346,7 @@ def _recognition_loop(
                 _wake_detected(
                     wake_text=wake_match,
                     proc=proc,
+                    channels=channels,
                     model=model,
                     config=config,
                     stop_event=stop_event,
@@ -329,6 +370,7 @@ def _recognition_loop(
 def _wake_detected(
     wake_text: str,
     proc: subprocess.Popen,
+    channels: int,
     model: vosk.Model,
     config: ActionsConfig,
     stop_event: threading.Event,
@@ -356,9 +398,11 @@ def _wake_detected(
             break
 
         proc.stdout._rbufsize = 0  # type: ignore[attr-defined]
-        data = proc.stdout.read(_CHUNK)
-        if not data:
+        raw_data = proc.stdout.read(_CHUNK * channels)
+        if not raw_data:
             break
+
+        data = _downmix_to_mono(raw_data, channels)
 
         if stage2.AcceptWaveform(data):
             result = json.loads(stage2.Result())
