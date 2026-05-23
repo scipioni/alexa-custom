@@ -379,6 +379,7 @@ class WebServer:
         self._livekit_loop: asyncio.AbstractEventLoop | None = None
         self._livekit_stop_event: asyncio.Event | None = None
         self._handler: _WebLogHandler | None = None
+        self._shutting_down = False
         # snapshot for hello message on new WS connects
         self._state: dict[str, Any] = {
             "status": "Starting…",
@@ -393,15 +394,12 @@ class WebServer:
     # ── thread-safe enqueue ───────────────────────────────────────────────────
 
     def _enqueue(self, event_type: str, data: dict) -> None:
+        if self._shutting_down:
+            return
         loop = self._loop
         if loop is None or loop.is_closed():
             return
-        try:
-            loop.call_soon_threadsafe(
-                self._queue.put_nowait, {"type": event_type, **data}
-            )
-        except Exception:
-            pass
+        loop.call_soon_threadsafe(self._queue.put_nowait, {"type": event_type, **data})
 
     def _update_pending_vu(self, mic: float, spk: float) -> None:
         """Must run on the event loop (via call_soon_threadsafe)."""
@@ -661,6 +659,9 @@ class WebServer:
         except asyncio.CancelledError:
             pass
         finally:
+            self._shutting_down = True
+            self._uninstall_log_handler()
+
             lk_loop = self._livekit_loop
             lk_stop = self._livekit_stop_event
             if lk_loop and lk_stop and not lk_loop.is_closed():
@@ -677,7 +678,6 @@ class WebServer:
             broadcast_task.cancel()
             vu_task.cancel()
             await runner.cleanup()
-            self._uninstall_log_handler()
 
 
 # ── public entry point ─────────────────────────────────────────────────────────
