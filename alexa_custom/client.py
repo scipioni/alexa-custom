@@ -269,6 +269,7 @@ async def _async_main(
     on_event: Callable[[str, dict], None] | None = None,
     connect_trigger: threading.Event | None = None,
     livekit_connected_flag: threading.Event | None = None,
+    actions_config: ActionsConfig | None = None,
 ) -> None:
     logger.info(f"Browser join URL:\n  {browser_join_url()}")
 
@@ -290,10 +291,29 @@ async def _async_main(
     logger.info(f"Input device:  {input_spec or sd.query_devices(pw_device)['name']}")
     logger.info(f"Output device: {output_spec or sd.query_devices(pw_device)['name']}")
 
-    try:
-        await asyncio.to_thread(play_startup_chime)
-    except Exception as e:
-        logger.warning(f"Startup chime skipped: {e}")
+    # Execute startup actions
+    if actions_config and actions_config.on_startup:
+        logger.info(f"Executing {len(actions_config.on_startup)} startup action(s)")
+        from alexa_custom.actions import TelegramClient, _run_action
+
+        # We don't have a connect_fn or connected_flag here in a way that _run_action
+        # can use for livekit_join safely during early startup, but we can pass None.
+        telegram_client = TelegramClient()
+        for action in actions_config.on_startup:
+            try:
+                await _run_action(
+                    action,
+                    telegram_client=telegram_client,
+                    livekit_connect_fn=None,
+                    livekit_connected=False,
+                )
+            except Exception as e:
+                logger.error(f"Startup action {action.type} failed: {e}")
+    else:
+        try:
+            await asyncio.to_thread(play_startup_chime)
+        except Exception as e:
+            logger.warning(f"Startup chime skipped: {e}")
 
     # Use 16kHz for Bluetooth (if we can detect it) or 48kHz for USB/Internal.
     # High sample rates on weak hardware (like Arduino Uno Q) cause mixer timeouts.
@@ -475,6 +495,7 @@ def main() -> None:
                 on_event=on_event,
                 connect_trigger=connect_trigger,
                 livekit_connected_flag=livekit_connected_flag,
+                actions_config=config,
             )
 
         run_tui(
@@ -536,6 +557,7 @@ def main() -> None:
                     _async_main(
                         connect_trigger=connect_trigger,
                         livekit_connected_flag=livekit_connected_flag,
+                        actions_config=config,
                     )
                 )
             finally:
@@ -543,7 +565,7 @@ def main() -> None:
                 audio_watcher.stop()
         else:
             try:
-                asyncio.run(_async_main())
+                asyncio.run(_async_main(actions_config=config))
             finally:
                 audio_watcher.stop()
 

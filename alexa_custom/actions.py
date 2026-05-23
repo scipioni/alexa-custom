@@ -107,5 +107,13 @@ async def _run_action(
 
             await asyncio.to_thread(get_engine().say, text, lang)
 
+    elif action.type == "tone":
+        from alexa_custom.audio import play_tone
+
+        name = action.params.get("name", "info")
+        import asyncio
+
+        await asyncio.to_thread(play_tone, name)
+
     else:
         logger.warning(f"Unknown action type '{action.type}' — skipping")

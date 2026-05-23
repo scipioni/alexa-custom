@@ -441,42 +441,81 @@ def play_wav_file(file_path: str) -> None:
         pass
 
 
-def play_startup_chime():
-    """Play a short ascending chime (C5-E5-G5) through the PipeWire default sink.
-
-    Uses pw-play (native PipeWire) or aplay instead of PortAudio because
-    PortAudio's ALSA backend hangs on the pipewire virtual device after
-    a routing change.
-    """
+def play_tone(name: str):
+    """Play a predefined tone by name (startup, success, error, info, warning)."""
     samplerate = 48000
     channels = 2
-    note_duration = 0.14
-    gap_duration = 0.03
-    fade_samples = int(samplerate * 0.04)
 
-    def _note(freq: float) -> np.ndarray:
-        n = int(samplerate * note_duration)
-        t = np.linspace(0, note_duration, n, endpoint=False)
+    def _generate_note(
+        freq: float, duration: float, volume: float = 0.45
+    ) -> np.ndarray:
+        n = int(samplerate * duration)
+        t = np.linspace(0, duration, n, endpoint=False)
+        # Add a bit of harmonics for a "cooler" sound
         wave = np.sin(2 * np.pi * freq * t).astype(np.float32)
         wave += 0.3 * np.sin(2 * np.pi * freq * 2 * t).astype(np.float32)
+        wave += 0.1 * np.sin(2 * np.pi * freq * 3 * t).astype(np.float32)
         wave /= np.max(np.abs(wave))
+        # Fade in/out to avoid clicks
+        fade_samples = int(samplerate * 0.02)
         envelope = np.ones(n, dtype=np.float32)
-        envelope[:fade_samples] = np.linspace(0, 1, fade_samples)
-        envelope[-fade_samples:] = np.linspace(1, 0, fade_samples)
-        mono = wave * envelope * 0.45
+        if n > 2 * fade_samples:
+            envelope[:fade_samples] = np.linspace(0, 1, fade_samples)
+            envelope[-fade_samples:] = np.linspace(1, 0, fade_samples)
+        mono = wave * envelope * volume
         return np.column_stack([mono, mono])
 
-    gap = np.zeros((int(samplerate * gap_duration), channels), dtype=np.float32)
-    chime = np.concatenate(
-        [
-            _note(523.25),  # C5
-            gap,
-            _note(659.25),  # E5
-            gap,
-            _note(783.99),  # G5
-        ]
-    )
-    _play_raw(chime.tobytes(), samplerate, channels)
+    def _gap(duration: float) -> np.ndarray:
+        return np.zeros((int(samplerate * duration), channels), dtype=np.float32)
+
+    tones = {
+        "startup": lambda: np.concatenate(
+            [
+                _generate_note(523.25, 0.14),  # C5
+                _gap(0.03),
+                _generate_note(659.25, 0.14),  # E5
+                _gap(0.03),
+                _generate_note(783.99, 0.14),  # G5
+            ]
+        ),
+        "success": lambda: np.concatenate(
+            [
+                _generate_note(783.99, 0.10),  # G5
+                _gap(0.05),
+                _generate_note(1046.50, 0.20),  # C6
+            ]
+        ),
+        "error": lambda: np.concatenate(
+            [
+                _generate_note(261.63, 0.15, volume=0.6),  # C4
+                _gap(0.05),
+                _generate_note(233.08, 0.30, volume=0.6),  # Bb3 (dissonant)
+            ]
+        ),
+        "info": lambda: _generate_note(880.00, 0.15),  # A5
+        "warning": lambda: np.concatenate(
+            [
+                _generate_note(1318.51, 0.10),  # E6
+                _gap(0.05),
+                _generate_note(1046.50, 0.10),  # C6
+            ]
+        ),
+    }
+
+    if name not in tones:
+        logger.warning(f"Unknown tone name: {name}")
+        return
+
+    try:
+        data = tones[name]().tobytes()
+        _play_raw(data, samplerate, channels)
+    except Exception as e:
+        logger.error(f"play_tone({name}) failed: {e}")
+
+
+def play_startup_chime():
+    """Play a short ascending chime (C5-E5-G5) through the PipeWire default sink."""
+    play_tone("startup")
 
 
 def list_env_devices():

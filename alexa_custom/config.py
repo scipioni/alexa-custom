@@ -31,6 +31,7 @@ class ActionsConfig:
     wake_words: list[str]
     command_timeout: float
     triggers: list[Trigger]
+    on_startup: list[ActionEntry] = field(default_factory=list)
     recognition_mode: str = "two-stage"
     wake_confidence: float = 0.75
 
@@ -62,6 +63,23 @@ def load_actions_config(path: str | Path = "actions.yaml") -> ActionsConfig | No
         )
 
     wake_confidence = float(raw.get("wake_confidence", 0.75))
+
+    # Parse on_startup actions
+    on_startup: list[ActionEntry] = []
+    raw_startup = raw.get("on_startup")
+    if raw_startup is not None:
+        if not isinstance(raw_startup, list):
+            raise ConfigError("actions.yaml: 'on_startup' must be a list")
+        for i, a in enumerate(raw_startup):
+            if not isinstance(a, dict):
+                raise ConfigError(f"actions.yaml: on_startup[{i}] must be a mapping")
+            action_type = a.get("type")
+            if not action_type or not isinstance(action_type, str):
+                raise ConfigError(
+                    f"actions.yaml: on_startup[{i}] missing 'type' string"
+                )
+            params = {k: v for k, v in a.items() if k != "type"}
+            on_startup.append(ActionEntry(type=action_type, params=params))
 
     raw_triggers = raw.get("triggers")
     if not isinstance(raw_triggers, list):
@@ -98,6 +116,7 @@ def load_actions_config(path: str | Path = "actions.yaml") -> ActionsConfig | No
         wake_words=[str(w) for w in wake_words],
         command_timeout=command_timeout,
         triggers=triggers,
+        on_startup=on_startup,
         recognition_mode=recognition_mode,
         wake_confidence=wake_confidence,
     )

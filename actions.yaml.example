@@ -1,63 +1,70 @@
-# Wake words (Italian phonetically-distinct words work best).
-# Any word in this list triggers the command listening window.
+# Example actions.yaml configuration for alexa-custom
+
+# Wake words that trigger the command window (single words recommended)
 wake_words:
-  - "galileo"
-  - "aiuto"
+  - "alexa"
+  - "computer"
 
-# How long to listen for a command after the wake word is detected (seconds).
-# Only used in two-stage mode.
-command_timeout: 3.0
+# Recognition mode: 
+# "two-stage" (default): wake word -> beep -> command
+# "single-stage": "alexa do something" (wake word + command in one phrase)
+recognition_mode: "two-stage"
 
-# Recognition mode:
-#   two-stage    — wake word detected first (low CPU), then a timed command window opens.
-#                  Requires a short pause between wake word and command (the beep is the prompt).
-#   single-stage — full transcription always; say wake word + command in one phrase
-#                  ("galileo chiama"). Higher CPU, no pause needed.
-recognition_mode: two-stage
-
-# Minimum Vosk confidence (0.0–1.0) required to accept a wake word in two-stage mode.
-# Higher values reduce false positives but may miss quieter/faster pronunciations.
-# Lower values increase sensitivity but risk triggering on unrelated speech.
-# Default 0.75 works well for the full model; try 0.60–0.70 with the small model.
+# Confidence threshold for wake word detection (0.0 to 1.0)
 wake_confidence: 0.75
 
-# Triggers: map spoken phrases to action sequences.
-# The phrase is matched against the Vosk transcription using fuzzy matching
-# (difflib, threshold 0.70) — so minor variations in Italian inflection are OK.
+# How long to wait for a command after the wake word (seconds)
+command_timeout: 4.0
+
+# Actions to run when the application starts
+on_startup:
+  - type: tone
+    name: startup  # The ascending C-E-G chime
+  - type: say
+    text: "Sistema pronto"
+    lang: "it-IT"
+
+# Triggers map voice transcripts (fuzzy matched) to a list of actions.
+# Fuzzy matching threshold is 0.70.
 triggers:
-  # Test trigger: say the wake word then "test" — check logs for confirmation
-  - phrase: "test"
+  - phrase: "notifica"
     actions:
       - type: log
-        message: "wake word and command recognition working"
-
-  - phrase: "chiama"
-    actions:
-      - type: say
-        params:
-          text: "Chiamo subito."
-      - type: livekit_join
-
-  - phrase: "manda messaggio"
-    actions:
-      - type: say
-        params:
-          text: "Messaggio inviato."
+        message: "Sending telegram notification..."
       - type: telegram
-        # Optional: target chat. Defaults to TELEGRAM_CHAT_ID env var.
-        # chat_id: "123456789"
-        # Use <room> to embed the LiveKit browser join URL in the message.
-        text: "Qualcuno ti chiama dal salotto — unisciti: <room>"
+        text: "User requested attention from NewPie!"
+      - type: tone
+        name: success
 
-  - phrase: "ciao"
+  - phrase: "connettiti"
     actions:
-      - type: say
-        params:
-          text: "Ciao! Come posso aiutarti oggi?"
+      - type: livekit_join
+      - type: tone
+        name: info
 
-  # Example: trigger both actions in sequence
-  - phrase: "emergenza"
+  - phrase: "prova i suoni"
+    actions:
+      - type: tone
+        name: success
+      - type: tone
+        name: error
+      - type: tone
+        name: info
+      - type: tone
+        name: warning
+
+  - phrase: "chiama scipio"
     actions:
       - type: telegram
-        text: "ATTENZIONE: richiesta di aiuto dal salotto"
+        text: "Richiesta chiamata LiveKit: <room>"
       - type: livekit_join
+      - type: say
+        text: "Sto chiamando Scipio su Telegram e mi connetto alla stanza."
+
+  - phrase: "chiudi"
+    actions:
+      - type: log
+        message: "Exit requested via voice"
+      - type: say
+        text: "Spegnimento in corso"
+      # Future: add a shutdown action type if needed
