@@ -1,624 +1,100 @@
-# LiveKit Headless Audio Client
+# 🎙️ LiveKit Headless Audio Client
 
-Headless Python client for joining LiveKit audio conferences using the NewLine NewPie conference speakerphone. Supports both **USB** and **Bluetooth** connections. USB is recommended — it's plug-and-play with no profile configuration required.
+A high-performance, headless Python client that transforms your conference speakerphone into a proactive, voice-activated smart assistant.
 
-## Requirements
+Designed for the **NewLine NewPie**, optimized for **PipeWire**, and fully integrated with **Home Assistant**.
 
-- Python 3.13+
-- PipeWire 1.x + WirePlumber 0.5.x
-- PortAudio (`libportaudio2` on Debian/Ubuntu, `portaudio` on Arch/Fedora)
-- BlueZ Bluetooth stack *(Bluetooth only)*
+---
 
-## Installation
+## ⚡ Quick Start
 
 ```bash
-# System dependencies (Debian/Ubuntu/Armbian)
-sudo apt-get install libportaudio2 portaudio19-dev python3-venv
+# 1. Install system dependencies
+sudo apt install libportaudio2 libttspico-utils
 
-# tts
-sudo apt install -y libttspico-utils
-
-# Python virtual environment and dependencies
-python3 -m venv .venv
+# 2. Setup virtual environment
+python -m venv .venv
 .venv/bin/pip install -e .
-```
 
----
-
-## Arduino Uno Q — First-Time Setup (Factory Board)
-
-On a fresh Arduino Uno Q board two things are missing from the factory image and must be fixed before `alexa-client` will run.
-
-### 1. Install the PipeWire ALSA plugin
-
-The factory image ships PipeWire but not the ALSA plugin that exposes it as a virtual sounddevice. Without it, `sounddevice` only sees raw `hw:` devices and the client fails with *"PipeWire ALSA device not found"*.
-
-```bash
-sudo apt-get install pipewire-alsa portaudio19-dev
-```
-
-Verify it worked — you should now see a `pipewire` entry:
-
-```bash
-python3 -c "import sounddevice as sd; [print(i, d['name']) for i, d in enumerate(sd.query_devices())]"
-# ...
-# 2 pipewire
-```
-
-### 2. Switch the NewPie card to `pro-audio` profile
-
-PipeWire defaults the NewPie USB device to `input:analog-stereo`, which exposes only a microphone source — no speaker sink. The client fails with *"PipeWire sink not found for OUTPUT_DEVICE='NewPie'"*. Switch to `pro-audio` to get both:
-
-```bash
-pactl set-card-profile alsa_card.usb-0a12_NewPie_SABINESMICDFU-00 pro-audio
-```
-
-Confirm both sink and source are now visible:
-
-```bash
-pactl list sinks short   # should include ...NewPie...pro-output-0
-pactl list sources short # should include ...NewPie...pro-input-0
-```
-
-**Make it persistent across reboots** with a WirePlumber rule:
-
-```bash
-mkdir -p ~/.config/wireplumber/wireplumber.conf.d
-cat > ~/.config/wireplumber/wireplumber.conf.d/40-newpie-pro-audio.conf << 'EOF'
-monitor.alsa.rules = [
-  {
-    matches = [ { device.name = "alsa_card.usb-0a12_NewPie_SABINESMICDFU-00" } ]
-    actions = {
-      update-props = { device.profile = "pro-audio" }
-    }
-  }
-]
-EOF
-systemctl --user restart wireplumber
-```
-
-### 3. Download the Vosk speech recognition model
-
-```bash
+# 3. Setup STT models
 alexa-setup
+
+# 4. Create config
+cp config.yaml.example config.yaml
+# Edit config.yaml — fill in credentials under env: and customize triggers
+
+# 5. Run it!
+alexa-client --tui
 ```
 
-This downloads, unpacks, and places the Italian model at `models/it/` in the current directory. It is a no-op if the model is already present.
+### Configuration
 
-### 4. Continue with normal setup
-
-With those fixes in place, follow the [USB Setup](#usb-setup-recommended) and [LiveKit Configuration](#livekit-configuration) sections below to finish installation.
-
----
-
-## USB Setup (Recommended)
-
-Plug in the NewPie USB cable. Linux enumerates it as a standard USB Audio Class device — no drivers or profile configuration needed. Verify it appears:
-
-```bash
-pactl list cards short   # should show an alsa_card.usb-... entry for NewPie
-wpctl status             # confirm NewPie sink and source are listed
-```
-
-Set it as the default audio device:
-
-```bash
-wpctl set-default <newpie-sink-id>
-wpctl set-default <newpie-source-id>
-```
-
-Run the loopback test to confirm full-duplex at 48 kHz:
-
-```bash
-.venv/bin/alexa-audio
-```
-
----
-
-## Bluetooth Setup
-
-Steps to set up a fresh headless Linux system for full-duplex Bluetooth conference audio.
-
-### 1. Verify PipeWire is running
-
-```bash
-pactl info | grep "Server Name"
-# Expected: PulseAudio (on PipeWire 1.x.x)
-```
-
-If not running:
-
-```bash
-sudo apt-get install pipewire pipewire-pulse wireplumber
-systemctl --user enable --now pipewire pipewire-pulse wireplumber
-```
-
-### 2. Disable logind seat monitoring (headless systems only)
-
-WirePlumber won't manage Bluetooth audio on a headless system without this override:
-
-```bash
-mkdir -p ~/.config/wireplumber/wireplumber.conf.d
-cat > ~/.config/wireplumber/wireplumber.conf.d/10-headless-bluetooth.conf << 'EOF'
-monitor.bluez.properties = {
-  monitor.bluez.seat-monitoring = disabled
-}
-EOF
-```
-
-### 3. Lock the Bluetooth profile to headset mode
-
-By default WirePlumber auto-switches from HSP/HFP (mic + speaker) back to A2DP (speaker only, no mic) when a microphone stream closes. For a conference speakerphone this breaks full-duplex. The two config files below fix it permanently:
-
-```bash
-# Force headset-head-unit (mSBC) profile on every Bluetooth connect
-cat > ~/.config/wireplumber/wireplumber.conf.d/20-default-profile.conf << 'EOF'
-monitor.bluez.rules = [
-  {
-    matches = [ { device.name = "~bluez_card.*" } ]
-    actions = {
-      update-props = { device.profile = "headset-head-unit" }
-    }
-  }
-]
-EOF
-
-# Disable the auto-restore to A2DP when the mic stream closes
-cat > ~/.config/wireplumber/wireplumber.conf.d/30-speakerphone-policy.conf << 'EOF'
-wireplumber.settings = {
-  bluetooth.autoswitch-to-headset-profile = false
-}
-EOF
-```
-
-**Available Bluetooth profiles:**
-
-| Profile | Codec | Sample rate | Microphone | Use for |
-|---------|-------|-------------|------------|---------|
-| `headset-head-unit` | mSBC | 16 kHz | Yes | Conference calls (recommended) |
-| `headset-head-unit-cvsd` | CVSD | 8 kHz | Yes | Fallback if device lacks mSBC |
-| `a2dp-sink` | SBC/SBC-XQ | 44–48 kHz | No | Music playback only |
-
-### 4. Enable Bluetooth auto-power on boot
-
-```bash
-sudo sed -i 's/^#AutoEnable=true/AutoEnable=true/' /etc/bluetooth/main.conf
-```
-
-### 5. Pair and connect the speakerphone
-
-```bash
-bluetoothctl
-  power on
-  agent on
-  scan on
-  pair   XX:XX:XX:XX:XX:XX
-  connect XX:XX:XX:XX:XX:XX
-  trust  XX:XX:XX:XX:XX:XX
-  quit
-```
-
-### 6. Apply configuration and switch profile
-
-```bash
-systemctl --user restart wireplumber
-sleep 2
-
-# Find your card name (format: bluez_card.XX_XX_XX_XX_XX_XX)
-pactl list cards short
-
-# Switch to mSBC headset profile
-pactl set-card-profile bluez_card.XX_XX_XX_XX_XX_XX headset-head-unit
-```
-
-Replace `XX_XX_XX_XX_XX_XX` with your device MAC address using underscores (e.g. `28_36_38_3E_59_D0`).
-
-### 7. Set as default audio device
-
-```bash
-wpctl status
-# Note the numeric IDs shown for the Bluetooth sink and source, then:
-wpctl set-default <sink-id>
-wpctl set-default <source-id>
-```
-
-### 8. Verify
-
-```bash
-pactl list cards | grep "Active Profile"
-pactl info | grep -E "Default Sink|Default Source"
-
-# Expected:
-# Active Profile: headset-head-unit
-# Default Sink: bluez_output.XX_XX_XX_XX_XX_XX.1
-# Default Source: bluez_input.XX_XX_XX_XX_XX_XX.0
-```
-
-After a reboot or Bluetooth reconnect, WirePlumber restores the `headset-head-unit` profile and default sink/source automatically from its state files — no manual steps needed.
-
----
-
-## Proactive Audio Management
-
-The client includes an **AudioWatcher** daemon that proactively manages your PipeWire environment. You no longer need to manually fix profiles or routing after a reboot or device reconnect.
-
-- **Automatic Profile Switching**: 
-    - **Bluetooth**: Automatically forces `headset-head-unit` (mSBC) when your device connects, ensuring the microphone is ready.
-    - **USB**: Automatically forces `pro-audio` if available.
-- **Adaptive Sample Rates**: Automatically switches the LiveKit session to **16 kHz** when Bluetooth is detected to significantly reduce CPU load on weak hardware (like the Arduino Uno Q).
-- **Persistent Routing**: Proactively snatches back the "Default" PipeWire sink/source status for your configured device, even if other devices (like HDMI) try to take over.
-- **Connection Chimes**: Plays a short ascending two-tone chime the moment your target audio device is successfully detected and configured.
-
-### Configuration via `.env`
-
-You can target specific hardware using the `INPUT_DEVICE` and `OUTPUT_DEVICE` variables. They accept:
-- **Numeric Index**: (e.g., `51`)
-- **Name Substring**: (e.g., `Fast Track` or `NewPie`)
-- **Virtual Device**: Set to `pipewire` or `default` to use the system-managed virtual device without hardware-snatching.
-
----
-
-## Daily Use
-
-### Terminal UI (TUI)
-
-Launch the client with the `--tui` flag to see real-time status:
-
-```bash
-.venv/bin/alexa-client --tui
-```
-
-- **Audio Status**: Shows exactly what hardware the app is searching for or connected to.
-- **VU Meters**: Live MIC/SPK peak level monitoring (shows `OFFLINE` if the device is missing).
-- **STT Status**: Real-time display of wake word detection and transcription.
-- **Participant List**: Track who is currently in the LiveKit room.
-
-### Test audio (mic → speaker loopback)
-
-```bash
-.venv/bin/alexa-audio
-```
-
-The script runs a preflight check (verifies the device is connected and the profile is correct), then opens a loopback stream. Speak into the mic and you should hear yourself through the speaker. Press Ctrl+C to stop.
-
-```bash
-# List all detected audio devices and active BT profile
-.venv/bin/alexa-audio --list
-```
-
-### Check status
-
-```bash
-wpctl status
-pactl info | grep -E "Default Sink|Default Source"
-pactl list cards | grep -A 3 "Active Profile"
-```
-
-### Manual profile fix (if device reverts to A2DP)
-
-```bash
-pactl set-card-profile bluez_card.XX_XX_XX_XX_XX_XX headset-head-unit
-```
-
----
-
-## LiveKit Configuration
-
-> `meet.livekit.io` is a browser client app, not a LiveKit server. You need your own
-> LiveKit Cloud project with a server URL, API key, and API secret.
-
-### 1. Create a free LiveKit Cloud project
-
-1. Sign up at [https://cloud.livekit.io](https://cloud.livekit.io)
-2. Create a new project
-3. From the project dashboard copy:
-   - **Server URL** — e.g. `wss://your-project.livekit.cloud`
-   - **API Key**
-   - **API Secret**
-
-### 2. Configure `.env`
-
-```bash
-cp .env.example .env
-nano .env
-```
-
-```ini
-LIVEKIT_URL=wss://your-project.livekit.cloud
-LIVEKIT_ROOM=your-room-name
-LIVEKIT_API_KEY=your-api-key
-LIVEKIT_API_SECRET=your-api-secret
-
-# Optional: override audio devices (index or name substring).
-# Defaults to the PipeWire default sink/source when unset.
-#INPUT_DEVICE=pipewire
-#OUTPUT_DEVICE=pipewire
-```
-
-The `.env` file is git-ignored — never commit credentials.
-
-To find the right values, run `alexa-devices` and use either the numeric index or any unique substring of the device name:
-
-```ini
-# by index
-INPUT_DEVICE=3
-OUTPUT_DEVICE=3
-
-# by name substring (case-insensitive)
-INPUT_DEVICE=NewPie
-OUTPUT_DEVICE=NewPie
-```
-
-### 3. Run
-
-```bash
-.venv/bin/alexa-client
-```
-
-At startup the script validates credentials and prints a **browser join URL**:
-
-```
-Browser join URL:
-  https://meet.livekit.io/custom/?liveKitUrl=wss%3A%2F%2F...&token=...
-```
-
-Open that URL on any browser or device to join the same room as the speakerphone. The client reconnects automatically if the room drops — stop it with Ctrl+C or SIGTERM.
-
-> **Note:** The URL uses the `/custom/` path on meet.livekit.io, which is required for connecting to a custom LiveKit server. The `liveKitUrl` and `token` parameters are URL-encoded.
-
----
-
-## Voice Actions
-
-When `actions.yaml` is present, the client starts a continuous wake word listener using Vosk. Spoken wake words trigger a 3-second command window; the recognized phrase is matched against configured triggers and the corresponding actions execute.
-
-### Setup
-
-```bash
-cp actions.yaml.example actions.yaml
-nano actions.yaml
-```
-
-Configure your wake words and triggers:
+All configuration lives in a single `config.yaml` file:
 
 ```yaml
-wake_words:
-  - "galileo"
-  - "aiuto"
+env:                        # replaces .env — credentials and settings
+  LIVEKIT_URL: wss://...
+  LIVEKIT_API_KEY: ...
 
-command_timeout: 3.0
-
-triggers:
+wake_words: [galileo]       # voice trigger words
+command_timeout: 3.0        # seconds to listen after wake word
+triggers:                   # phrase → action mappings
   - phrase: "chiama"
     actions:
       - type: livekit_join
-
-  - phrase: "manda messaggio"
-    actions:
-      - type: telegram
-        text: "Qualcuno ti chiama dal salotto"
 ```
 
-### Telegram setup
+**Hot-reload**: Edit and save `config.yaml` while the daemon is running — triggers, wake words, and env vars update within ~4 seconds without a restart.
 
-1. Create a bot via [@BotFather](https://t.me/BotFather) and copy the token
-2. Get your chat ID from [@userinfobot](https://t.me/userinfobot)
-3. Add to `.env`:
-
-```ini
-TELEGRAM_BOT_TOKEN=123456789:AABBccDD-your-token
-TELEGRAM_CHAT_ID=123456789
-```
-
-### Environment variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `TELEGRAM_BOT_TOKEN` | For telegram actions | Bot API token from @BotFather |
-| `TELEGRAM_CHAT_ID` | For telegram actions | Default target chat ID |
-| `VOSK_MODEL_PATH` | No | Override model path (default: `models/it`) |
-### Action types
-
-| Type | Description |
-|------|-------------|
-| `livekit_join` | Connect to the configured LiveKit room |
-| `telegram` | Send a message via Telegram Bot API |
-| `say` | Speak text via TTS (parameters: `text`, `lang`) |
-| `ask` | Ask a question and wait for a response (parameters: `text`, `lang`, `timeout`, `on_reply`, `on_else`) |
-| `shell` | Execute an arbitrary shell command (parameters: `command`) |
-
-### Interactive Dialogue
-
-The `ask` action allows for multi-turn conversations. It speaks a prompt, then listens for a specific duration for a response. The response is matched against a nested set of triggers in the `on_reply` field. If no match is found (or if the user is silent), the `on_else` actions are executed.
-
-```yaml
-- phrase: "test dialogue"
-  actions:
-    - type: ask
-      text: "Do you want me to send a telegram?"
-      timeout: 5.0
-      on_reply:
-        - phrase: "yes"
-          actions:
-            - type: telegram
-              text: "User said yes!"
-            - type: say
-              text: "Telegram sent."
-        - phrase: "no"
-          actions:
-            - type: say
-              text: "Action cancelled."
-      on_else:
-        - type: ask
-          text: "Sorry, I didn't catch that. Do you want to send the telegram? Yes or no?"
-          on_reply:
-            # You can nest triggers here or repeat the logic
-```
-
-### Text-to-Speech (TTS)
-
-The client includes an interchangeable TTS module. Currently, it supports **Pico TTS** (`pico2wave`).
-
-- **Automatic Gating**: The microphone is **automatically paused** while the assistant is speaking to prevent self-triggering.
-- **Usage Example**:
-  ```yaml
-  - phrase: "ciao"
-    actions:
-      - type: say
-        params:
-          text: "Ciao! Come posso aiutarti oggi?"
-  ```
+**Migration from `actions.yaml` + `.env`**: `actions.yaml` still works (deprecated warning logged). To migrate, copy `actions.yaml` content into `config.yaml` and add an `env:` section with values from `.env`. See `config.yaml.example` for the full format.
 
 ---
 
-## Behavior without actions.yaml
+## ✨ Key Features
 
-If `actions.yaml` is absent the client behaves exactly as before — it auto-connects to LiveKit at startup with no wake word detection.
-
----
-
-## Project Structure
-
-```
-alexa-custom/
-├── alexa_custom/
-│   ├── __init__.py
-│   ├── _env.py         # .env loader
-│   ├── audio.py        # NewPie preflight check, loopback test, beep helpers
-│   ├── client.py       # LiveKit conference client with on-demand connect
-│   ├── config.py       # actions.yaml loader and validator
-│   ├── actions.py      # TelegramClient and action dispatcher
-│   └── stt.py          # Vosk two-stage STT pipeline (wake word + command)
-├── pyproject.toml      # Package metadata and dependencies
-├── .env                # Credentials — git-ignored, fill this in
-├── .env.example        # Credentials template
-├── actions.yaml        # Voice action config — git-ignored, fill this in
-├── actions.yaml.example # Voice action config template
-├── .gitignore
-└── README.md
-
-~/.config/wireplumber/wireplumber.conf.d/
-├── 10-headless-bluetooth.conf   # Disable logind seat monitoring
-├── 20-default-profile.conf      # Force headset-head-unit on BT connect
-└── 30-speakerphone-policy.conf  # Disable auto-restore to A2DP
-```
+- **Proactive Audio Management**: Automatically handles Bluetooth profiles (mSBC) and PipeWire routing.
+- **Voice-Activated**: Built-in Wake Word detection (Vosk) with customizable `config.yaml` (hot-reloaded — no restart needed).
+- **Bidirectional MQTT**: Home Assistant Discovery support. Forward voice commands to HA and trigger local actions via MQTT.
+- **Terminal UI**: Real-time VU meters, STT status, and participant monitoring.
+- **Multi-Turn Dialogue**: Interactive "Ask" actions for complex voice interactions.
+- **Headless Optimized**: Low CPU usage, works on Arduino Uno Q and other embedded Linux boards.
 
 ---
 
-## Troubleshooting
+## 📚 Documentation
 
-### `OSError: PortAudio library not found` on startup
+Dive deeper into specific topics:
 
-`sounddevice` and `livekit-rtc` both require the PortAudio shared library at runtime. Install it for your distro:
-
-| Distro | Command |
-|--------|---------|
-| Debian / Ubuntu / Armbian | `sudo apt install libportaudio2` |
-| Arch / EndeavourOS | `sudo pacman -S portaudio` |
-| Fedora | `sudo dnf install portaudio` |
-| Alpine | `sudo apk add portaudio` |
+- 🛠 **[Hardware Setup](docs/setup_hardware.md)**: PipeWire, Bluetooth, and device-specific fixes.
+- 🚀 **[Software Installation](docs/setup_software.md)**: Dependencies, venv, and STT models.
+- ⚙️ **[Configuration](docs/configuration.md)**: Environment variables, `config.yaml`, and hot-reload.
+- 🤖 **[MQTT & Home Assistant](docs/mqtt_integration.md)**: Auto-discovery and remote control.
+- 🔍 **[Troubleshooting](docs/troubleshooting.md)**: Common audio, connection, and permission fixes.
 
 ---
 
-### `LIVEKIT_API_KEY is not set` on startup
+## 🛠 Commands
 
-Fill in all four values in `.env`. The script validates credentials before opening audio devices and will exit immediately with the name of the missing variable.
-
-### Microphone not working / only speaker works / profile keeps reverting to A2DP
-
-**Root cause:** WirePlumber's default policy auto-switches from `headset-head-unit` (HSP/HFP — mic + speaker, 16 kHz) back to `a2dp-sink` (A2DP — speaker only, no mic) the moment the microphone stream closes. On a conference speakerphone this happens continuously and breaks full-duplex audio.
-
-**Fix:** `30-speakerphone-policy.conf` disables the auto-switch:
-
-```bash
-cat ~/.config/wireplumber/wireplumber.conf.d/30-speakerphone-policy.conf
-```
-
-Expected content:
-
-```
-wireplumber.settings = {
-  bluetooth.autoswitch-to-headset-profile = false
-}
-```
-
-If the file is missing or wrong, recreate it:
-
-```bash
-cat > ~/.config/wireplumber/wireplumber.conf.d/30-speakerphone-policy.conf << 'EOF'
-wireplumber.settings = {
-  bluetooth.autoswitch-to-headset-profile = false
-}
-EOF
-systemctl --user restart wireplumber
-```
-
-Verify the profile stayed on `headset-head-unit` after restart:
-
-```bash
-pactl list cards | grep "Active Profile"
-# Expected: Active Profile: headset-head-unit
-```
-
-### Bluetooth device not appearing in `wpctl status`
-
-```bash
-bluetoothctl info XX:XX:XX:XX:XX:XX   # check connection state
-journalctl --user -u wireplumber -n 50  # check WirePlumber errors
-```
-
-### Stream opens but no audio from speakerphone speaker
-
-First check the **physical volume** on the NewPie device — press the volume-up button several times and confirm the mute indicator is off. The software audio pipeline (PipeWire → Bluetooth SCO → NewPie) can be fully working while the physical speaker volume is at zero.
-
-Verify the software side:
-
-```bash
-# Confirm profile and volume at PipeWire level
-pactl list cards | grep "Active Profile"
-wpctl status | grep NewPie          # should show * NewPie [vol: 1.00]
-wpctl set-volume <sink-id> 1.0      # force to 100% if needed
-
-# Quick loopback test: speak into mic, hear yourself in speaker
-.venv/bin/alexa-audio
-
-# If profile reverted to A2DP (no mic), force it back
-pactl set-card-profile bluez_card.XX_XX_XX_XX_XX_XX headset-head-unit
-```
-
-> **Note:** `bluez5.profile = "off"` in `pw-dump` output is a misleading PipeWire internal property — it does **not** mean audio is broken. Verify audio is actually flowing by checking `hciconfig hci0` for increasing SCO TX packet counts while audio plays.
-
-```bash
-# Confirm SCO packets are being sent (count should increase while playing)
-hciconfig hci0 | grep "TX bytes"
-```
-
-### Permission errors
-
-```bash
-sudo usermod -aG audio $USER
-# Log out and back in
-```
+| Command | Description |
+|---------|-------------|
+| `alexa-client` | Start the assistant daemon |
+| `alexa-client --tui` | Start with the terminal interface |
+| `alexa-audio` | Run a microphone → speaker loopback test |
+| `alexa-devices` | List all detected audio devices |
+| `alexa-setup` | Download/Update STT models |
 
 ---
 
-## Dependencies
+## 🧩 Project Structure
 
-| Package | Purpose |
-|---------|---------|
-| `livekit` | LiveKit real-time SDK |
-| `livekit-api` | JWT token generation |
-| `sounddevice` | Audio I/O via PortAudio |
-| `numpy` | Audio buffer handling |
-| `pulsectl` | PipeWire/PulseAudio introspection |
-| `textual` | Terminal UI framework |
-| `vosk` | Speech-to-Text (STT) and Wake Word detection |
-| `httpx` | HTTP client for Telegram API |
-| `pyyaml` | Action configuration parsing |
-| `libportaudio2` | System audio library (apt) |
-| `libttspico-utils` | Pico TTS system engine (apt) |
+- `alexa_custom/client.py`: Main LiveKit & loop logic.
+- `alexa_custom/stt.py`: Vosk speech-to-text pipeline.
+- `alexa_custom/mqtt.py`: MQTT & HA Discovery.
+- `alexa_custom/actions.py`: Action dispatcher & Telegram.
+- `alexa_custom/audio.py`: Hardware monitoring & proactive fixes.
+
+---
 
 ## License
 
 Apache-2.0
-# alexa-custom

@@ -1,4 +1,5 @@
 .env
+config.yaml
 actions.yaml
 __pycache__/
 *.pyc

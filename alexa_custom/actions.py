@@ -5,9 +5,12 @@ import difflib
 import logging
 import os
 import unicodedata
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, TYPE_CHECKING
 
 import httpx
+
+if TYPE_CHECKING:
+    from alexa_custom.mqtt import MQTTClient
 
 from alexa_custom.config import ActionEntry, Trigger
 
@@ -69,6 +72,7 @@ async def dispatch(
     livekit_connect_fn: Callable[[], Awaitable[None]] | None,
     livekit_connected: bool = False,
     listen_fn: Callable[[float], Awaitable[str]] | None = None,
+    mqtt_client: MQTTClient | None = None,
 ) -> None:
     for action in trigger.actions:
         await _run_action(
@@ -77,6 +81,7 @@ async def dispatch(
             livekit_connect_fn,
             livekit_connected,
             listen_fn,
+            mqtt_client,
         )
 
 
@@ -86,6 +91,7 @@ async def _run_action(
     livekit_connect_fn: Callable[[], Awaitable[None]] | None,
     livekit_connected: bool,
     listen_fn: Callable[[float], Awaitable[str]] | None = None,
+    mqtt_client: MQTTClient | None = None,
 ) -> None:
     if action.type == "log":
         message = action.params.get("message", "(no message)")
@@ -120,8 +126,21 @@ async def _run_action(
         text = action.params.get("text", "")
         lang = action.params.get("lang", "it-IT")
         if text:
+            # Report speaking state via MQTT
+            if mqtt_client:
+                await mqtt_client.publish(
+                    f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
+                    "speaking",
+                )
+
             # We run in a thread because TTS generation/playback is blocking
             await asyncio.to_thread(get_engine().say, text, lang)
+
+            # Restore idle state via MQTT
+            if mqtt_client:
+                await mqtt_client.publish(
+                    f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "idle"
+                )
 
     elif action.type == "ask":
         from alexa_custom.tts import get_engine
@@ -131,11 +150,25 @@ async def _run_action(
         timeout = float(action.params.get("timeout", 5.0))
 
         if text:
+            if mqtt_client:
+                await mqtt_client.publish(
+                    f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
+                    "speaking",
+                )
             await asyncio.to_thread(get_engine().say, text, lang)
 
         if listen_fn is None:
             logger.warning("ask action: no listen_fn available")
+            if mqtt_client:
+                await mqtt_client.publish(
+                    f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "idle"
+                )
             return
+
+        if mqtt_client:
+            await mqtt_client.publish(
+                f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "listening"
+            )
 
         transcript = await listen_fn(timeout)
         if transcript:
@@ -148,6 +181,7 @@ async def _run_action(
                     livekit_connect_fn,
                     livekit_connected,
                     listen_fn,
+                    mqtt_client,
                 )
             elif action.on_else:
                 logger.info(f"No reply trigger matched '{transcript}', running on_else")
@@ -158,6 +192,7 @@ async def _run_action(
                         livekit_connect_fn,
                         livekit_connected,
                         listen_fn,
+                        mqtt_client,
                     )
             else:
                 logger.info(f"No reply trigger matched '{transcript}' and no on_else")
@@ -173,7 +208,13 @@ async def _run_action(
                     livekit_connect_fn,
                     livekit_connected,
                     listen_fn,
+                    mqtt_client,
                 )
+
+        if mqtt_client:
+            await mqtt_client.publish(
+                f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "idle"
+            )
 
     elif action.type == "tone":
         from alexa_custom.audio import play_tone
@@ -187,22 +228,34 @@ async def _run_action(
         if not command:
             logger.error("shell action: no command provided")
             return
-        
+
         logger.info(f"Executing shell command: {command}")
         try:
             # Run in a thread to avoid blocking the event loop for long commands
             process = await asyncio.create_subprocess_shell(
-                command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
             )
             stdout, stderr = await process.communicate()
             if process.returncode != 0:
-                logger.error(f"Shell command failed (exit {process.returncode}): {stderr.decode().strip()}")
+                logger.error(
+                    f"Shell command failed (exit {process.returncode}): {stderr.decode().strip()}"
+                )
             else:
                 logger.info(f"Shell command output: {stdout.decode().strip()}")
         except Exception as e:
             logger.error(f"Failed to execute shell command: {e}")
+
+    elif action.type == "mqtt_publish":
+        if mqtt_client is None:
+            logger.warning("mqtt_publish action: no mqtt_client available")
+            return
+        topic = action.params.get("topic")
+        payload = action.params.get("payload", "")
+        retain = action.params.get("retain", False)
+        if not topic:
+            logger.error("mqtt_publish action: no topic provided")
+            return
+        await mqtt_client.publish(topic, payload, retain=retain)
 
     else:
         logger.warning(f"Unknown action type '{action.type}' — skipping")

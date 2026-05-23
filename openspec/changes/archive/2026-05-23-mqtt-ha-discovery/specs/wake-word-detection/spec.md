@@ -1,9 +1,4 @@
-# Capability: Wake Word Detection
-
-## Purpose
-Listen for configured wake words in the background and trigger command listening mode.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Continuous wake word listening
 The system SHALL run a background STT pipeline that listens continuously for configured wake words using Vosk grammar-mode recognition. Recognition SHALL be automatically gated (paused) when a LiveKit call is active or when the TTS engine is speaking to prevent false triggers. The system SHALL report its listening status (e.g., `idle`, `listening`, `gated`) via MQTT.
@@ -24,17 +19,6 @@ The system SHALL run a background STT pipeline that listens continuously for con
 - **WHEN** a LiveKit session is active
 - **THEN** the recognizer is gated, STT status shows "STT paused during call", and the system publishes `gated` to MQTT
 
-### Requirement: Configurable wake word list
-The system SHALL load wake words from the `wake_words` list in `actions.yaml`. At least one wake word MUST be defined.
-
-#### Scenario: Multiple wake words configured
-- **WHEN** `wake_words: ["galileo", "aiuto"]` is set in `actions.yaml`
-- **THEN** either spoken word triggers command listening mode
-
-#### Scenario: Missing wake word list
-- **WHEN** `actions.yaml` is present but `wake_words` is empty or absent
-- **THEN** the system logs an error and exits with a non-zero status
-
 ### Requirement: Command recognition window
 After wake word detection, the system SHALL open a full-transcription recognition window of configurable duration (default 3 seconds). If a command is recognized within the window, it is dispatched to the action system and published to MQTT. If the window expires without a match, the system plays a timeout beep and returns to Stage 1.
 
@@ -49,25 +33,3 @@ After wake word detection, the system SHALL open a full-transcription recognitio
 #### Scenario: Custom timeout configured
 - **WHEN** `command_timeout: 5.0` is set in `actions.yaml`
 - **THEN** the command window stays open for 5 seconds
-
-### Requirement: Audio feedback
-The system SHALL play distinct audio cues: a high beep on wake word detection (Stage 2 open), a confirmation tone on successful command match, and a low beep on timeout or no match.
-
-#### Scenario: Wake detected feedback
-- **WHEN** a wake word is detected
-- **THEN** a short high-pitched beep plays within 200 ms
-
-#### Scenario: Timeout feedback
-- **WHEN** the command window closes without a match
-- **THEN** a short low-pitched beep plays
-
-### Requirement: Audio capture via parec
-The system SHALL capture microphone audio for STT using a `parec` subprocess at 16000 Hz, 1 channel, s16le format. The subprocess MUST be terminated cleanly on process stop.
-
-#### Scenario: parec uses configured input device
-- **WHEN** `INPUT_DEVICE` env var is set
-- **THEN** `parec` is started with the corresponding PipeWire source name
-
-#### Scenario: parec terminated on shutdown
-- **WHEN** the process receives SIGTERM or SIGINT
-- **THEN** the `parec` subprocess is terminated before the process exits

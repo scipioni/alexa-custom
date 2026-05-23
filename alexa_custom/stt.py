@@ -8,10 +8,13 @@ import subprocess
 import threading
 import time
 import unicodedata
-from typing import Awaitable, Callable
+from typing import Awaitable, Callable, TYPE_CHECKING
 
 import numpy as np
 import vosk
+
+if TYPE_CHECKING:
+    from alexa_custom.mqtt import MQTTClient
 
 from alexa_custom.actions import TelegramClient, dispatch, match_trigger
 from alexa_custom.audio import play_timeout_beep, play_wake_beep
@@ -130,14 +133,28 @@ def _downmix_to_mono(data: bytes, channels: int) -> bytes:
 
 
 def run_stt_worker(
-    config: ActionsConfig,
+    config: ActionsConfig | Callable[[], ActionsConfig],
     stop_event: threading.Event,
     telegram_client: TelegramClient,
     livekit_connect_fn: Callable[[], Awaitable[None]] | None,
     livekit_connected_flag: threading.Event,
     on_stt_event: Callable[[str, dict], None] | None = None,
+    mqtt_client: MQTTClient | None = None,
+    loop: asyncio.AbstractEventLoop | None = None,
 ) -> None:
-    """Entry point for the STT daemon thread."""
+    """Entry point for the STT daemon thread.
+
+    ``config`` may be a bare ActionsConfig or a zero-argument callable that
+    returns the current ActionsConfig.  The callable form allows the caller to
+    supply a live getter so the STT loop picks up hot-reloaded config on the
+    next capture-process restart.
+    """
+    _get_config: Callable[[], ActionsConfig]
+    if callable(config) and not isinstance(config, ActionsConfig):
+        _get_config = config  # type: ignore[assignment]
+    else:
+        _get_config = lambda: config  # type: ignore[return-value]
+
     try:
         model = _load_model()
     except RuntimeError as e:
@@ -147,18 +164,26 @@ def run_stt_worker(
     input_spec = os.environ.get("INPUT_DEVICE", "").strip() or None
     source, channels = resolve_capture_source(input_spec)
 
+    current_config = _get_config()
     logger.info(
-        f"STT: wake words={config.wake_words}, timeout={config.command_timeout}s, "
+        f"STT: wake words={current_config.wake_words}, timeout={current_config.command_timeout}s, "
         f"source={source or 'default'} ({channels} ch)"
     )
 
-    loop_fn = (
-        _single_stage_loop
-        if config.recognition_mode == "single-stage"
-        else _recognition_loop
-    )
+    if mqtt_client:
+        mqtt_client.publish_threadsafe(
+            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "idle", loop=loop
+        )
 
     while not stop_event.is_set():
+        # Re-read config on every outer iteration so hot-reload propagates when
+        # the capture process restarts (e.g., after an error or device reset).
+        current_config = _get_config()
+        loop_fn = (
+            _single_stage_loop
+            if current_config.recognition_mode == "single-stage"
+            else _recognition_loop
+        )
         proc: subprocess.Popen | None = None
         try:
             proc = start_capture(source, channels)
@@ -166,12 +191,14 @@ def run_stt_worker(
                 proc=proc,
                 channels=channels,
                 model=model,
-                config=config,
+                config=current_config,
                 stop_event=stop_event,
                 telegram_client=telegram_client,
                 livekit_connect_fn=livekit_connect_fn,
                 livekit_connected_flag=livekit_connected_flag,
                 on_stt_event=on_stt_event,
+                mqtt_client=mqtt_client,
+                loop=loop,
             )
         except Exception as e:
             logger.error(f"STT error: {e}")
@@ -378,6 +405,8 @@ def _recognition_loop(
     livekit_connect_fn: Callable[[], Awaitable[None]] | None,
     livekit_connected_flag: threading.Event,
     on_stt_event: Callable[[str, dict], None] | None = None,
+    mqtt_client: MQTTClient | None = None,
+    loop: asyncio.AbstractEventLoop | None = None,
 ) -> None:
     stage1 = vosk.KaldiRecognizer(model, 16000, _grammar_json(config.wake_words))
     stage1.SetWords(True)
@@ -387,6 +416,11 @@ def _recognition_loop(
 
     if on_stt_event:
         on_stt_event("listening", {"wake_words": config.wake_words})
+
+    if mqtt_client:
+        mqtt_client.publish_threadsafe(
+            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "idle", loop=loop
+        )
 
     assert proc.stdout is not None
     while not stop_event.is_set():
@@ -405,6 +439,12 @@ def _recognition_loop(
                 logger.info("STT gated (call active)")
                 if on_stt_event:
                     on_stt_event("gated", {})
+                if mqtt_client:
+                    mqtt_client.publish_threadsafe(
+                        f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
+                        "gated",
+                        loop=loop,
+                    )
                 was_gated = True
             continue
 
@@ -413,6 +453,12 @@ def _recognition_loop(
             was_gated = False
             if on_stt_event:
                 on_stt_event("listening", {"wake_words": config.wake_words})
+            if mqtt_client:
+                mqtt_client.publish_threadsafe(
+                    f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
+                    "idle",
+                    loop=loop,
+                )
 
         if time.monotonic() < cooldown_until:
             stage1.Reset()
@@ -451,6 +497,8 @@ def _recognition_loop(
                     livekit_connect_fn=livekit_connect_fn,
                     livekit_connected_flag=livekit_connected_flag,
                     on_stt_event=on_stt_event,
+                    mqtt_client=mqtt_client,
+                    loop=loop,
                 )
                 # Re-create both recognizers after command window
                 stage1 = vosk.KaldiRecognizer(
@@ -462,6 +510,12 @@ def _recognition_loop(
                 )
                 if on_stt_event:
                     on_stt_event("listening", {"wake_words": config.wake_words})
+                if mqtt_client:
+                    mqtt_client.publish_threadsafe(
+                        f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
+                        "idle",
+                        loop=loop,
+                    )
 
 
 def _wake_detected(
@@ -475,10 +529,18 @@ def _wake_detected(
     livekit_connect_fn: Callable[[], Awaitable[None]] | None,
     livekit_connected_flag: threading.Event,
     on_stt_event: Callable[[str, dict], None] | None = None,
+    mqtt_client: MQTTClient | None = None,
+    loop: asyncio.AbstractEventLoop | None = None,
 ) -> None:
     logger.info(f"Wake word detected: '{wake_text}'")
     if on_stt_event:
         on_stt_event("wake", {"word": wake_text, "timeout": config.command_timeout})
+    if mqtt_client:
+        mqtt_client.publish_threadsafe(
+            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
+            "listening",
+            loop=loop,
+        )
     try:
         play_wake_beep()
     except Exception as e:
@@ -494,6 +556,16 @@ def _wake_detected(
             on_stt_event("nomatch", {"transcript": ""})
         _play_timeout()
         return
+
+    if mqtt_client:
+        payload = json.dumps(
+            {"text": transcript, "wake_word": wake_text, "timestamp": time.time()}
+        )
+        mqtt_client.publish_threadsafe(
+            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/command",
+            payload,
+            loop=loop,
+        )
 
     trigger = match_trigger(transcript, config.triggers)
     if trigger is None:
@@ -546,12 +618,14 @@ def _play_timeout() -> None:
 
 
 def start_stt_thread(
-    config: ActionsConfig,
+    config: ActionsConfig | Callable[[], ActionsConfig],
     stop_event: threading.Event,
     telegram_client: TelegramClient,
     livekit_connect_fn: Callable[[], Awaitable[None]] | None,
     livekit_connected_flag: threading.Event,
     on_stt_event: Callable[[str, dict], None] | None = None,
+    mqtt_client: MQTTClient | None = None,
+    loop: asyncio.AbstractEventLoop | None = None,
 ) -> threading.Thread:
     t = threading.Thread(
         target=run_stt_worker,
@@ -562,6 +636,8 @@ def start_stt_thread(
             livekit_connect_fn,
             livekit_connected_flag,
             on_stt_event,
+            mqtt_client,
+            loop,
         ),
         daemon=True,
         name="stt",

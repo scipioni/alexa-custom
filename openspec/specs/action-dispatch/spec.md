@@ -6,7 +6,7 @@ Map recognized trigger phrases to a sequence of actions.
 ## Requirements
 
 ### Requirement: Config-driven trigger-to-action mapping
-The system SHALL load trigger phrases and action sequences from `actions.yaml`. Each trigger entry defines a `phrase` (matched against STT output) and a list of `actions` to execute sequentially.
+The system SHALL load trigger phrases and action sequences from `config.yaml` (falling back to `actions.yaml` with a deprecation warning when `config.yaml` is absent). Each trigger entry defines a `phrase` (matched against STT output) and a list of `actions` to execute sequentially. In addition to local triggers, all recognized phrases SHALL be published to MQTT for external processing. The active trigger list SHALL be updated without process restart when the config file changes on disk.
 
 #### Scenario: Single action on phrase match
 - **WHEN** the recognized command matches a configured trigger phrase
@@ -16,9 +16,20 @@ The system SHALL load trigger phrases and action sequences from `actions.yaml`. 
 - **WHEN** a trigger defines two actions (e.g., telegram + livekit_join)
 - **THEN** both actions execute sequentially in the listed order
 
-#### Scenario: No actions.yaml present
-- **WHEN** `actions.yaml` does not exist at startup
+#### Scenario: No config file present
+- **WHEN** neither `config.yaml` nor `actions.yaml` exists at startup
 - **THEN** the process behaves as before (auto-connect to LiveKit, no wake word detection)
+
+#### Scenario: Trigger list updated after hot reload
+- **WHEN** a new trigger phrase is added to `config.yaml` and the file is saved
+- **THEN** the next recognized command is matched against the updated trigger list (including the new phrase)
+
+### Requirement: mqtt_publish action type
+The system SHALL support an `mqtt_publish` action type that allows publishing a specific `payload` to a specific `topic` on the configured MQTT broker.
+
+#### Scenario: Trigger HA script via MQTT
+- **WHEN** an `mqtt_publish` action is executed with `topic: "home/script/lights"` and `payload: "toggle"`
+- **THEN** the message is sent to the MQTT broker
 
 ### Requirement: Fuzzy phrase matching
 The system SHALL match the STT transcription against configured trigger phrases using `difflib.SequenceMatcher` with a configurable similarity threshold (default 0.70). The trigger with the highest score above the threshold is selected.
@@ -57,5 +68,5 @@ The system SHALL support a `say` action type in the trigger sequence. This actio
 The system SHALL log a warning and skip any action entry with an unrecognized `type` field, without crashing or halting other actions in the sequence.
 
 #### Scenario: Unknown action type in config
-- **WHEN** `actions.yaml` contains `type: sms` (not implemented)
+- **WHEN** the config file contains `type: sms` (not implemented)
 - **THEN** a warning is logged and the next action in the sequence continues

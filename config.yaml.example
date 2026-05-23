@@ -1,0 +1,95 @@
+# config.yaml — unified configuration for alexa-custom
+#
+# This file replaces both actions.yaml and .env.
+# The optional env: section sets environment variables (credentials, device settings).
+# All other keys follow the existing actions.yaml schema.
+#
+# Copy this file to config.yaml and fill in your values.
+# config.yaml is hot-reloaded: save the file and changes apply within ~4 seconds.
+
+# ---------------------------------------------------------------------------
+# env: — credentials and runtime settings (replaces .env)
+# ---------------------------------------------------------------------------
+# Values here are written into the process environment on startup and on every
+# hot-reload. They overwrite any matching values from a .env file.
+# Keys and values must be strings. Leave this section out to keep using .env.
+
+env:
+  LIVEKIT_URL: wss://your-project.livekit.cloud
+  LIVEKIT_ROOM: your-room-name
+  LIVEKIT_API_KEY: your-api-key
+  LIVEKIT_API_SECRET: your-api-secret
+
+  # Optional: override audio devices (sounddevice index or substring of device name)
+  #INPUT_DEVICE: pipewire
+  #OUTPUT_DEVICE: pipewire
+
+  # Optional: WebRTC mic processing (all default to 1/enabled)
+  #MIC_AGC: 1
+  #MIC_AEC: 1
+  #MIC_NOISE_SUPPRESSION: 1
+  #MIC_HIGH_PASS_FILTER: 1
+
+  # Telegram integration (required for telegram action type)
+  #TELEGRAM_BOT_TOKEN: "123456789:AABBccDDeeFFggHH-your-token-here"
+  #TELEGRAM_CHAT_ID: "123456789"
+
+  # MQTT / Home Assistant integration
+  #MQTT_HOST: 127.0.0.1
+  #MQTT_PORT: 1883
+  #MQTT_TOPIC_PREFIX: alexa
+  #MQTT_NODE_ID: living_room
+
+# ---------------------------------------------------------------------------
+# Actions configuration (same schema as actions.yaml)
+# ---------------------------------------------------------------------------
+
+# Wake words — any word in this list triggers the command listening window.
+wake_words:
+  - "galileo"
+  - "aiuto aiuto"
+
+# How long to listen for a command after the wake word (seconds, two-stage only).
+command_timeout: 3.0
+
+# Recognition mode:
+#   two-stage    — low CPU; wake word detected first, then a timed command window opens
+#   single-stage — always-on transcription; say wake word + command in one phrase
+recognition_mode: two-stage
+
+# Vosk confidence threshold (0.0–1.0) required to accept a wake word in two-stage mode.
+wake_confidence: 0.65
+
+# Actions executed once at startup
+on_startup:
+  - type: say
+    text: "Sistema pronto"
+    lang: "it-IT"
+
+# Triggers: map spoken phrases to action sequences.
+triggers:
+  - phrase: "test"
+    actions:
+      - type: log
+        message: "wake word and command recognition working"
+
+  - phrase: "chiama stefano"
+    actions:
+      - type: ask
+        text: "Vuoi chiamare Stefano?"
+        timeout: 5.0
+        on_reply:
+          - phrase: "si"
+            actions:
+              - type: say
+                text: "Sto chiamando Stefano"
+              - type: livekit_join
+              - type: telegram
+                text: "Collegati con casa"
+          - phrase: "no"
+            actions:
+              - type: say
+                text: "Chiamata annullata"
+        on_else:
+          - type: say
+            text: "Non ho capito"

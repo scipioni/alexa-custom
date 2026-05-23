@@ -356,14 +356,14 @@ def speakerphone():
         nonlocal frame_count
         if status:
             print(f"Audio status: {status}", file=sys.stderr)
-        
+
         # indata has shape (frames, max_in_channels)
         # outdata has shape (frames, 1)
         if max_in_channels > 1:
             outdata[:, 0] = np.mean(indata, axis=1)
         else:
             outdata[:] = indata
-            
+
         frame_count += frames
         if frame_count % samplerate == 0:
             print(f"  {frame_count // samplerate}s", flush=True)

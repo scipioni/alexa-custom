@@ -21,6 +21,8 @@ from livekit.rtc import (
 from alexa_custom._env import load_env, require_env
 import sounddevice as sd
 from alexa_custom.config import ActionsConfig
+from alexa_custom.config_manager import ConfigManager
+from alexa_custom.mqtt import MQTTClient
 
 from alexa_custom.audio import (
     find_pipewire_device,
@@ -28,8 +30,6 @@ from alexa_custom.audio import (
     play_call_start,
     set_pipewire_defaults,
 )
-
-load_env()
 
 ROOM_URL = os.environ.get("LIVEKIT_URL", "")
 RECONNECT_DELAY = 5  # seconds between reconnect attempts
@@ -270,6 +270,7 @@ async def _async_main(
     connect_trigger: threading.Event | None = None,
     livekit_connected_flag: threading.Event | None = None,
     actions_config: ActionsConfig | None = None,
+    mqtt_client: MQTTClient | None = None,
 ) -> None:
     logger.info(f"Browser join URL:\n  {browser_join_url()}")
 
@@ -324,6 +325,7 @@ async def _async_main(
                     telegram_client=telegram_client,
                     livekit_connect_fn=None,
                     livekit_connected=False,
+                    mqtt_client=mqtt_client,
                 )
             except Exception as e:
                 logger.error(f"Startup action {action.type} failed: {e}")
@@ -424,6 +426,50 @@ async def _async_main(
         logger.info("Done.")
 
 
+def _mqtt_settings() -> dict:
+    return {
+        "host": os.environ.get("MQTT_HOST"),
+        "port": os.environ.get("MQTT_PORT", "1883"),
+        "prefix": os.environ.get("MQTT_TOPIC_PREFIX", "alexa"),
+        "node_id": os.environ.get("MQTT_NODE_ID"),
+    }
+
+
+def make_mqtt_reload_callback(
+    client_holder: list,  # list[MQTTClient | None] — mutable single-element container
+    loop: asyncio.AbstractEventLoop,
+):
+    """Return a reload callback that reconnects MQTT when broker settings change."""
+    prev_settings = _mqtt_settings()
+
+    def _callback(new_config: ActionsConfig) -> None:
+        nonlocal prev_settings
+        current = _mqtt_settings()
+        if current == prev_settings:
+            return
+        prev_settings = current
+        logger.info("MQTT settings changed on reload — reconnecting MQTT client")
+
+        old_client: MQTTClient | None = client_holder[0]
+        if old_client is not None:
+            asyncio.run_coroutine_threadsafe(old_client.stop(), loop)
+
+        host = current["host"]
+        if host:
+            new_client = MQTTClient(
+                host=host,
+                port=int(current["port"]),
+                topic_prefix=current["prefix"],
+                node_id=current["node_id"],
+            )
+            asyncio.run_coroutine_threadsafe(new_client.run(), loop)
+            client_holder[0] = new_client
+        else:
+            client_holder[0] = None
+
+    return _callback
+
+
 def ensure_setup() -> None:
     """Check if Vosk model and audio hardware setup are present; download/warn as needed."""
     from alexa_custom.setup import download_model
@@ -455,15 +501,19 @@ def main() -> None:
     import argparse
     import threading
 
-    from alexa_custom.config import load_actions_config
+    from alexa_custom.config import load_actions_config_auto
+    from alexa_custom._env import load_env
+
+    # Load .env first (lowest priority), then config.yaml env: section overwrites
+    load_env()
+    config = load_actions_config_auto()
+    config_manager = ConfigManager(config)
 
     ensure_setup()
 
     parser = argparse.ArgumentParser(description="alexa-custom LiveKit client")
     parser.add_argument("--tui", action="store_true", help="Launch terminal UI")
     args = parser.parse_args()
-
-    config = load_actions_config()
 
     if args.tui:
         from alexa_custom.tui import run_tui
@@ -538,7 +588,7 @@ def main() -> None:
         audio_watcher.start()
 
         if config is not None:
-            from alexa_custom.actions import TelegramClient
+            from alexa_custom.actions import TelegramClient, _run_action
             from alexa_custom.stt import start_stt_thread
             from alexa_custom.tts import init_engine
 
@@ -547,32 +597,94 @@ def main() -> None:
             telegram_client = TelegramClient()
             stt_stop = threading.Event()
 
+            # Initialize MQTT if configured
+            mqtt_client: MQTTClient | None = None
+            mqtt_holder: list = [None]
+            mqtt_host = os.environ.get("MQTT_HOST")
+            if mqtt_host:
+                mqtt_port = int(os.environ.get("MQTT_PORT", "1883"))
+                mqtt_prefix = os.environ.get("MQTT_TOPIC_PREFIX", "alexa")
+                mqtt_node = os.environ.get("MQTT_NODE_ID")
+                mqtt_client = MQTTClient(
+                    host=mqtt_host,
+                    port=mqtt_port,
+                    topic_prefix=mqtt_prefix,
+                    node_id=mqtt_node,
+                )
+                mqtt_holder[0] = mqtt_client
+
             # Initialize TTS with gating
             init_engine(stt_gated_flag=livekit_connected_flag)
 
             async def _livekit_connect_fn() -> None:
                 connect_trigger.set()
 
-            start_stt_thread(
-                config=config,
-                stop_event=stt_stop,
-                telegram_client=telegram_client,
-                livekit_connect_fn=_livekit_connect_fn,
-                livekit_connected_flag=livekit_connected_flag,
-            )
-            logger.info(
-                f"STT started — wake words: {config.wake_words}, "
-                f"{len(config.triggers)} trigger(s) configured"
-            )
+            async def _run_main_loop():
+                main_tasks = []
+                loop = asyncio.get_running_loop()
 
-            try:
-                asyncio.run(
-                    _async_main(
-                        connect_trigger=connect_trigger,
-                        livekit_connected_flag=livekit_connected_flag,
-                        actions_config=config,
+                # Register MQTT reload callback (reconnects if broker settings change)
+                mqtt_reload_cb = make_mqtt_reload_callback(mqtt_holder, loop)
+                config_manager.register_reload_callback(mqtt_reload_cb)
+
+                # Start config file watcher
+                config_manager.start_watcher("config.yaml")
+
+                if mqtt_client:
+                    # Setup callback for incoming MQTT actions
+                    async def _on_mqtt_action(action_data: dict):
+                        from alexa_custom.config import ActionEntry
+
+                        action = ActionEntry(
+                            type=action_data["type"],
+                            params=action_data.get("params", {}),
+                        )
+                        logger.info(f"Executing remote action from MQTT: {action.type}")
+                        active_mqtt = mqtt_holder[0]
+                        await _run_action(
+                            action,
+                            telegram_client=telegram_client,
+                            livekit_connect_fn=_livekit_connect_fn,
+                            livekit_connected=livekit_connected_flag.is_set(),
+                            mqtt_client=active_mqtt,
+                        )
+
+                    mqtt_client.set_on_command(_on_mqtt_action)
+                    main_tasks.append(asyncio.create_task(mqtt_client.run()))
+
+                start_stt_thread(
+                    config=lambda: config_manager.config,
+                    stop_event=stt_stop,
+                    telegram_client=telegram_client,
+                    livekit_connect_fn=_livekit_connect_fn,
+                    livekit_connected_flag=livekit_connected_flag,
+                    mqtt_client=mqtt_client,
+                    loop=loop,
+                )
+                current = config_manager.config
+                logger.info(
+                    f"STT started — wake words: {current.wake_words}, "
+                    f"{len(current.triggers)} trigger(s) configured"
+                )
+
+                main_tasks.append(
+                    asyncio.create_task(
+                        _async_main(
+                            connect_trigger=connect_trigger,
+                            livekit_connected_flag=livekit_connected_flag,
+                            actions_config=config_manager.config,
+                            mqtt_client=mqtt_client,
+                        )
                     )
                 )
+
+                try:
+                    await asyncio.gather(*main_tasks)
+                finally:
+                    config_manager.stop_watcher()
+
+            try:
+                asyncio.run(_run_main_loop())
             finally:
                 stt_stop.set()
                 audio_watcher.stop()
