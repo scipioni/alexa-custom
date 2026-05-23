@@ -424,6 +424,36 @@ TELEGRAM_CHAT_ID=123456789
 | `livekit_join` | Connect to the configured LiveKit room |
 | `telegram` | Send a message via Telegram Bot API |
 | `say` | Speak text via TTS (parameters: `text`, `lang`) |
+| `ask` | Ask a question and wait for a response (parameters: `text`, `lang`, `timeout`, `on_reply`, `on_else`) |
+| `shell` | Execute an arbitrary shell command (parameters: `command`) |
+
+### Interactive Dialogue
+
+The `ask` action allows for multi-turn conversations. It speaks a prompt, then listens for a specific duration for a response. The response is matched against a nested set of triggers in the `on_reply` field. If no match is found (or if the user is silent), the `on_else` actions are executed.
+
+```yaml
+- phrase: "test dialogue"
+  actions:
+    - type: ask
+      text: "Do you want me to send a telegram?"
+      timeout: 5.0
+      on_reply:
+        - phrase: "yes"
+          actions:
+            - type: telegram
+              text: "User said yes!"
+            - type: say
+              text: "Telegram sent."
+        - phrase: "no"
+          actions:
+            - type: say
+              text: "Action cancelled."
+      on_else:
+        - type: ask
+          text: "Sorry, I didn't catch that. Do you want to send the telegram? Yes or no?"
+          on_reply:
+            # You can nest triggers here or repeat the logic
+```
 
 ### Text-to-Speech (TTS)
 

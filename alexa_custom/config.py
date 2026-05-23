@@ -15,6 +15,8 @@ class ConfigError(ValueError):
 class ActionEntry:
     type: str
     params: dict[str, Any] = field(default_factory=dict)
+    on_reply: list[Trigger] = field(default_factory=list)
+    on_else: list[ActionEntry] = field(default_factory=list)
 
 
 @dataclass
@@ -34,6 +36,53 @@ class ActionsConfig:
     on_startup: list[ActionEntry] = field(default_factory=list)
     recognition_mode: str = "two-stage"
     wake_confidence: float = 0.75
+
+
+def _parse_actions(raw_actions: list[Any], path_prefix: str) -> list[ActionEntry]:
+    actions: list[ActionEntry] = []
+    for i, a in enumerate(raw_actions):
+        if not isinstance(a, dict):
+            raise ConfigError(f"actions.yaml: {path_prefix}.actions[{i}] must be a mapping")
+        action_type = a.get("type")
+        if not action_type or not isinstance(action_type, str):
+            raise ConfigError(
+                f"actions.yaml: {path_prefix}.actions[{i}] missing 'type' string"
+            )
+        
+        on_reply: list[Trigger] = []
+        raw_reply = a.get("on_reply")
+        if raw_reply is not None:
+            if not isinstance(raw_reply, list):
+                raise ConfigError(f"actions.yaml: {path_prefix}.actions[{i}].on_reply must be a list")
+            on_reply = _parse_triggers(raw_reply, f"{path_prefix}.actions[{i}].on_reply")
+
+        on_else: list[ActionEntry] = []
+        raw_else = a.get("on_else")
+        if raw_else is not None:
+            if not isinstance(raw_else, list):
+                raise ConfigError(f"actions.yaml: {path_prefix}.actions[{i}].on_else must be a list")
+            on_else = _parse_actions(raw_else, f"{path_prefix}.actions[{i}].on_else")
+
+        params = {k: v for k, v in a.items() if k not in ("type", "on_reply", "on_else")}
+        actions.append(ActionEntry(type=action_type, params=params, on_reply=on_reply, on_else=on_else))
+    return actions
+
+
+def _parse_triggers(raw_triggers: list[Any], path_prefix: str) -> list[Trigger]:
+    triggers: list[Trigger] = []
+    for i, t in enumerate(raw_triggers):
+        if not isinstance(t, dict):
+            raise ConfigError(f"actions.yaml: {path_prefix}[{i}] must be a mapping")
+        phrase = t.get("phrase")
+        if not phrase or not isinstance(phrase, str):
+            raise ConfigError(f"actions.yaml: {path_prefix}[{i}] missing 'phrase' string")
+        raw_actions = t.get("actions")
+        if not isinstance(raw_actions, list):
+            raise ConfigError(f"actions.yaml: {path_prefix}[{i}] 'actions' must be a list")
+
+        actions = _parse_actions(raw_actions, f"{path_prefix}[{i}]")
+        triggers.append(Trigger(phrase=phrase, actions=actions))
+    return triggers
 
 
 def load_actions_config(path: str | Path = "actions.yaml") -> ActionsConfig | None:
@@ -70,47 +119,13 @@ def load_actions_config(path: str | Path = "actions.yaml") -> ActionsConfig | No
     if raw_startup is not None:
         if not isinstance(raw_startup, list):
             raise ConfigError("actions.yaml: 'on_startup' must be a list")
-        for i, a in enumerate(raw_startup):
-            if not isinstance(a, dict):
-                raise ConfigError(f"actions.yaml: on_startup[{i}] must be a mapping")
-            action_type = a.get("type")
-            if not action_type or not isinstance(action_type, str):
-                raise ConfigError(
-                    f"actions.yaml: on_startup[{i}] missing 'type' string"
-                )
-            params = {k: v for k, v in a.items() if k != "type"}
-            on_startup.append(ActionEntry(type=action_type, params=params))
+        on_startup = _parse_actions(raw_startup, "on_startup")
 
     raw_triggers = raw.get("triggers")
     if not isinstance(raw_triggers, list):
         raise ConfigError("actions.yaml: 'triggers' must be a list")
 
-    triggers: list[Trigger] = []
-    for i, t in enumerate(raw_triggers):
-        if not isinstance(t, dict):
-            raise ConfigError(f"actions.yaml: triggers[{i}] must be a mapping")
-        phrase = t.get("phrase")
-        if not phrase or not isinstance(phrase, str):
-            raise ConfigError(f"actions.yaml: triggers[{i}] missing 'phrase' string")
-        raw_actions = t.get("actions")
-        if not isinstance(raw_actions, list):
-            raise ConfigError(f"actions.yaml: triggers[{i}] 'actions' must be a list")
-
-        actions: list[ActionEntry] = []
-        for j, a in enumerate(raw_actions):
-            if not isinstance(a, dict):
-                raise ConfigError(
-                    f"actions.yaml: triggers[{i}].actions[{j}] must be a mapping"
-                )
-            action_type = a.get("type")
-            if not action_type or not isinstance(action_type, str):
-                raise ConfigError(
-                    f"actions.yaml: triggers[{i}].actions[{j}] missing 'type' string"
-                )
-            params = {k: v for k, v in a.items() if k != "type"}
-            actions.append(ActionEntry(type=action_type, params=params))
-
-        triggers.append(Trigger(phrase=phrase, actions=actions))
+    triggers = _parse_triggers(raw_triggers, "triggers")
 
     return ActionsConfig(
         wake_words=[str(w) for w in wake_words],

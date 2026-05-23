@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 import difflib
 import logging
 import os
+import unicodedata
 from typing import Awaitable, Callable
 
 import httpx
@@ -10,6 +12,15 @@ import httpx
 from alexa_custom.config import ActionEntry, Trigger
 
 logger = logging.getLogger(__name__)
+
+
+def normalize_text(text: str) -> str:
+    """Lowercase and remove diacritics (e.g., 'sì' -> 'si')."""
+    if not text:
+        return ""
+    nfd = unicodedata.normalize("NFD", text.lower())
+    stripped = "".join(c for c in nfd if not unicodedata.combining(c))
+    return unicodedata.normalize("NFC", stripped).strip()
 
 
 class TelegramClient:
@@ -38,9 +49,10 @@ def match_trigger(
 ) -> Trigger | None:
     best: Trigger | None = None
     best_score = 0.0
-    t_lower = transcript.lower().strip()
+    t_norm = normalize_text(transcript)
     for trigger in triggers:
-        score = difflib.SequenceMatcher(None, t_lower, trigger.phrase.lower()).ratio()
+        p_norm = normalize_text(trigger.phrase)
+        score = difflib.SequenceMatcher(None, t_norm, p_norm).ratio()
         if score > best_score:
             best_score = score
             best = trigger
@@ -56,10 +68,15 @@ async def dispatch(
     telegram_client: TelegramClient,
     livekit_connect_fn: Callable[[], Awaitable[None]] | None,
     livekit_connected: bool = False,
+    listen_fn: Callable[[float], Awaitable[str]] | None = None,
 ) -> None:
     for action in trigger.actions:
         await _run_action(
-            action, telegram_client, livekit_connect_fn, livekit_connected
+            action,
+            telegram_client,
+            livekit_connect_fn,
+            livekit_connected,
+            listen_fn,
         )
 
 
@@ -68,6 +85,7 @@ async def _run_action(
     telegram_client: TelegramClient,
     livekit_connect_fn: Callable[[], Awaitable[None]] | None,
     livekit_connected: bool,
+    listen_fn: Callable[[float], Awaitable[str]] | None = None,
 ) -> None:
     if action.type == "log":
         message = action.params.get("message", "(no message)")
@@ -103,17 +121,88 @@ async def _run_action(
         lang = action.params.get("lang", "it-IT")
         if text:
             # We run in a thread because TTS generation/playback is blocking
-            import asyncio
-
             await asyncio.to_thread(get_engine().say, text, lang)
+
+    elif action.type == "ask":
+        from alexa_custom.tts import get_engine
+
+        text = action.params.get("text", "")
+        lang = action.params.get("lang", "it-IT")
+        timeout = float(action.params.get("timeout", 5.0))
+
+        if text:
+            await asyncio.to_thread(get_engine().say, text, lang)
+
+        if listen_fn is None:
+            logger.warning("ask action: no listen_fn available")
+            return
+
+        transcript = await listen_fn(timeout)
+        if transcript:
+            reply_trigger = match_trigger(transcript, action.on_reply)
+            if reply_trigger:
+                logger.info(f"Matched reply trigger: '{reply_trigger.phrase}'")
+                await dispatch(
+                    reply_trigger,
+                    telegram_client,
+                    livekit_connect_fn,
+                    livekit_connected,
+                    listen_fn,
+                )
+            elif action.on_else:
+                logger.info(f"No reply trigger matched '{transcript}', running on_else")
+                for else_action in action.on_else:
+                    await _run_action(
+                        else_action,
+                        telegram_client,
+                        livekit_connect_fn,
+                        livekit_connected,
+                        listen_fn,
+                    )
+            else:
+                logger.info(f"No reply trigger matched '{transcript}' and no on_else")
+                from alexa_custom.audio import play_timeout_beep
+
+                await asyncio.to_thread(play_timeout_beep)
+        elif action.on_else:
+            logger.info("No transcript received (timeout), running on_else")
+            for else_action in action.on_else:
+                await _run_action(
+                    else_action,
+                    telegram_client,
+                    livekit_connect_fn,
+                    livekit_connected,
+                    listen_fn,
+                )
 
     elif action.type == "tone":
         from alexa_custom.audio import play_tone
 
         name = action.params.get("name", "info")
-        import asyncio
 
         await asyncio.to_thread(play_tone, name)
+
+    elif action.type == "shell":
+        command = action.params.get("command", "")
+        if not command:
+            logger.error("shell action: no command provided")
+            return
+        
+        logger.info(f"Executing shell command: {command}")
+        try:
+            # Run in a thread to avoid blocking the event loop for long commands
+            process = await asyncio.create_subprocess_shell(
+                command,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            stdout, stderr = await process.communicate()
+            if process.returncode != 0:
+                logger.error(f"Shell command failed (exit {process.returncode}): {stderr.decode().strip()}")
+            else:
+                logger.info(f"Shell command output: {stdout.decode().strip()}")
+        except Exception as e:
+            logger.error(f"Failed to execute shell command: {e}")
 
     else:
         logger.warning(f"Unknown action type '{action.type}' — skipping")

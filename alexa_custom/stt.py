@@ -7,6 +7,7 @@ import os
 import subprocess
 import threading
 import time
+import unicodedata
 from typing import Awaitable, Callable
 
 import numpy as np
@@ -21,6 +22,18 @@ logger = logging.getLogger(__name__)
 _CHUNK = 4096
 _MODEL_PATH = os.environ.get("VOSK_MODEL_PATH", "models/it")
 _STT_COOLDOWN = 1.0
+
+
+def normalize_text(text: str) -> str:
+    """Lowercase and remove diacritics (e.g., 'sì' -> 'si')."""
+    if not text:
+        return ""
+    # Normalize to NFD (decomposed) to separate diacritics from base characters
+    nfd = unicodedata.normalize("NFD", text.lower())
+    # Filter out non-spacing marks (Mn category)
+    stripped = "".join(c for c in nfd if not unicodedata.combining(c))
+    # Back to NFC (composed)
+    return unicodedata.normalize("NFC", stripped).strip()
 
 
 def resolve_capture_source(input_spec: str | None) -> tuple[str | None, int]:
@@ -174,12 +187,70 @@ def run_stt_worker(
 
 def _extract_wake_command(text: str, wake_words: list[str]) -> tuple[str, str]:
     """Return (wake_word, command) if text begins with a wake word, else ('', '')."""
-    lower = text.lower()
+    norm_text = normalize_text(text)
     for word in wake_words:
-        if lower.startswith(word.lower()):
-            command = text[len(word) :].strip()
+        norm_word = normalize_text(word)
+        if norm_text.startswith(norm_word):
+            # We return the original word from config for logging, but extract command from original text
+            # This is tricky because lengths might change during normalization.
+            # But for wake words like 'alexa' or 'sì', it's usually safe to use indices if we are careful.
+            # Alternatively, we just return the normalized command.
+            command = text.lower().replace(word.lower(), "", 1).strip()
             return word, command
     return "", ""
+
+
+def capture_transcript(
+    proc: subprocess.Popen,
+    channels: int,
+    model: vosk.Model,
+    timeout: float,
+    stop_event: threading.Event,
+    on_stt_event: Callable[[str, dict], None] | None = None,
+) -> str:
+    """Capture audio for a set duration and return the transcribed text."""
+    stage2 = vosk.KaldiRecognizer(model, 16000)
+    deadline = time.monotonic() + timeout
+    transcript_parts: list[str] = []
+
+    assert proc.stdout is not None
+    while not stop_event.is_set() and time.monotonic() < deadline:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+
+        proc.stdout._rbufsize = 0  # type: ignore[attr-defined]
+        raw_data = proc.stdout.read(_CHUNK * channels)
+        if not raw_data:
+            break
+
+        data = _downmix_to_mono(raw_data, channels)
+
+        if on_stt_event:
+            on_stt_event("level", {"mic": _rms_level(data)})
+
+        if stage2.AcceptWaveform(data):
+            result = json.loads(stage2.Result())
+            text = result.get("text", "").strip()
+            if text:
+                transcript_parts.append(text)
+                logger.info(f"Capture partial: '{text}'")
+                if on_stt_event:
+                    on_stt_event("partial", {"text": " ".join(transcript_parts)})
+        else:
+            if on_stt_event:
+                partial = json.loads(stage2.PartialResult()).get("partial", "").strip()
+                if partial:
+                    full = " ".join(transcript_parts + [partial])
+                    on_stt_event("partial", {"text": full})
+
+    # Collect final partial
+    final = json.loads(stage2.FinalResult())
+    final_text = final.get("text", "").strip()
+    if final_text:
+        transcript_parts.append(final_text)
+
+    return " ".join(transcript_parts).strip()
 
 
 def _single_stage_loop(
@@ -199,6 +270,20 @@ def _single_stage_loop(
 
     if on_stt_event:
         on_stt_event("listening", {"wake_words": config.wake_words})
+
+    async def _listen_fn(timeout: float) -> str:
+        # Emit event for UI to show we are listening for a reply
+        if on_stt_event:
+            on_stt_event("wake", {"word": "(reply)", "timeout": timeout})
+        return await asyncio.to_thread(
+            capture_transcript,
+            proc,
+            channels,
+            model,
+            timeout,
+            stop_event,
+            on_stt_event,
+        )
 
     assert proc.stdout is not None
     while not stop_event.is_set():
@@ -272,9 +357,13 @@ def _single_stage_loop(
                     telegram_client,
                     livekit_connect_fn,
                     livekit_connected=connected,
+                    listen_fn=_listen_fn,
                 )
             )
             loop.close()
+            # Restore UI state after dispatch/dialogue
+            if on_stt_event:
+                on_stt_event("listening", {"wake_words": config.wake_words})
         except Exception as e:
             logger.error(f"Action dispatch failed: {e}")
 
@@ -346,8 +435,9 @@ def _recognition_loop(
             logger.debug(f"Stage1 result: {text!r} conf={conf:.2f}")
             # Grammar mode may not constrain output on all model/version combos.
             # Explicitly check the result is exactly one of the wake words.
+            norm_text = normalize_text(text)
             wake_match = next(
-                (w for w in config.wake_words if w.lower() == text.lower()), ""
+                (w for w in config.wake_words if normalize_text(w) == norm_text), ""
             )
             if wake_match and conf >= config.wake_confidence:
                 _wake_detected(
@@ -394,45 +484,9 @@ def _wake_detected(
     except Exception as e:
         logger.debug(f"Wake beep failed: {e}")
 
-    stage2 = vosk.KaldiRecognizer(model, 16000)
-    deadline = time.monotonic() + config.command_timeout
-    transcript_parts: list[str] = []
-
-    assert proc.stdout is not None
-    while not stop_event.is_set() and time.monotonic() < deadline:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            break
-
-        proc.stdout._rbufsize = 0  # type: ignore[attr-defined]
-        raw_data = proc.stdout.read(_CHUNK * channels)
-        if not raw_data:
-            break
-
-        data = _downmix_to_mono(raw_data, channels)
-
-        if stage2.AcceptWaveform(data):
-            result = json.loads(stage2.Result())
-            text = result.get("text", "").strip()
-            if text:
-                transcript_parts.append(text)
-                logger.info(f"Command partial: '{text}'")
-                if on_stt_event:
-                    on_stt_event("partial", {"text": " ".join(transcript_parts)})
-        else:
-            if on_stt_event:
-                partial = json.loads(stage2.PartialResult()).get("partial", "").strip()
-                if partial:
-                    full = " ".join(transcript_parts + [partial])
-                    on_stt_event("partial", {"text": full})
-
-    # Collect final partial
-    final = json.loads(stage2.FinalResult())
-    final_text = final.get("text", "").strip()
-    if final_text:
-        transcript_parts.append(final_text)
-
-    transcript = " ".join(transcript_parts).strip()
+    transcript = capture_transcript(
+        proc, channels, model, config.command_timeout, stop_event, on_stt_event
+    )
     logger.info(f"Command transcript: '{transcript}'")
 
     if not transcript:
@@ -451,6 +505,20 @@ def _wake_detected(
     if on_stt_event:
         on_stt_event("matched", {"transcript": transcript, "trigger": trigger.phrase})
 
+    async def _listen_fn(timeout: float) -> str:
+        # Emit event for UI to show we are listening for a reply
+        if on_stt_event:
+            on_stt_event("wake", {"word": "(reply)", "timeout": timeout})
+        return await asyncio.to_thread(
+            capture_transcript,
+            proc,
+            channels,
+            model,
+            timeout,
+            stop_event,
+            on_stt_event,
+        )
+
     # Dispatch in a fresh event loop (we're in a daemon thread, not async context)
     connected = livekit_connected_flag.is_set()
     try:
@@ -461,6 +529,7 @@ def _wake_detected(
                 telegram_client,
                 livekit_connect_fn,
                 livekit_connected=connected,
+                listen_fn=_listen_fn,
             )
         )
         loop.close()

@@ -68,3 +68,37 @@ triggers:
       - type: say
         text: "Spegnimento in corso"
       # Future: add a shutdown action type if needed
+
+  # Interactive dialogue example
+  - phrase: "sicurezza"
+    actions:
+      - type: ask
+        text: "Vuoi attivare la modalità sicura?"
+        timeout: 5.0
+        on_reply:
+          - phrase: "si"
+            actions:
+              - type: say
+                text: "Modalità sicura attivata"
+              - type: telegram
+                text: "Sicurezza attivata dal NewPie"
+              - type: shell
+                command: "touch /tmp/secure_mode_active"
+          - phrase: "no"
+            actions:
+              - type: say
+                text: "Annullato"
+        on_else:
+          - type: say
+            text: "Non ho capito, puoi ripetere?"
+          - type: ask
+            text: "Vuoi attivare la modalità sicura?"
+            on_reply:
+              - phrase: "si"
+                actions:
+                  - type: say
+                    text: "Ottimo, attivo la sicurezza"
+              - phrase: "no"
+                actions:
+                  - type: say
+                    text: "Va bene, annullo tutto"
