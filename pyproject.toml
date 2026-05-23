@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "alexa-custom"
-version = "0.1.0"
+version = "0.2.0"
 description = "LiveKit headless audio client for Bluetooth conference speakerphones"
 readme = "README.md"
 license = { text = "Apache-2.0" }
