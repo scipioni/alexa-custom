@@ -47,6 +47,8 @@ class ActionsConfig:
     on_startup: list[ActionEntry] = field(default_factory=list)
     recognition_mode: str = "two-stage"
     wake_confidence: float = 0.75
+    wake_tone: str = "wake"
+    tts_preroll_ms: int = 1200
 
 
 def _parse_actions(raw_actions: list[Any], path_prefix: str) -> list[ActionEntry]:
@@ -210,6 +212,8 @@ def _parse_actions_config(raw: dict, source: str = "config") -> ActionsConfig:
         )
 
     wake_confidence = float(raw.get("wake_confidence", 0.75))
+    wake_tone = str(raw.get("wake_tone", "wake"))
+    tts_preroll_ms = int(raw.get("tts_preroll_ms", 1200))
 
     on_startup: list[ActionEntry] = []
     raw_startup = raw.get("on_startup")
@@ -234,6 +238,8 @@ def _parse_actions_config(raw: dict, source: str = "config") -> ActionsConfig:
         on_startup=on_startup,
         recognition_mode=recognition_mode,
         wake_confidence=wake_confidence,
+        wake_tone=wake_tone,
+        tts_preroll_ms=tts_preroll_ms,
     )
 
 

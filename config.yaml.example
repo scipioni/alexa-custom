@@ -111,6 +111,14 @@ recognition_mode: two-stage
 # Vosk confidence threshold (0.0–1.0) to accept a wake word in two-stage mode.
 wake_confidence: 0.65
 
+# Tone name to play when a wake word is matched.
+# Available names: wake, startup, success, error, info, warning (or 'none' to disable)
+wake_tone: wake
+
+# Duration of silence to prepend to TTS speech (milliseconds).
+# Helps slow-to-wake hardware (like Bluetooth) avoid truncating the first word.
+tts_preroll_ms: 1200
+
 # ---------------------------------------------------------------------------
 # Startup actions
 # ---------------------------------------------------------------------------
