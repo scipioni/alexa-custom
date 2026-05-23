@@ -96,6 +96,9 @@ _HTML = """\
                    font-size: 12px; border-radius: 2px; }
     #btn-restart:hover    { border-color: #ef5350; color: #ef5350; }
     #btn-restart:disabled { opacity: 0.45; cursor: not-allowed; border-color: #333; color: #555; }
+    #hclr { background: none; border: 1px solid #444; color: #777; padding: 2px 7px;
+            cursor: pointer; font-family: inherit; font-size: 11px; float: right; }
+    #hclr:hover { border-color: #7986cb; color: #ccc; }
   </style>
 </head>
 <body>
@@ -122,7 +125,7 @@ _HTML = """\
   <div id="main">
     <div id="left">
       <div id="hist-section">
-        <div id="hh">HISTORY</div>
+        <div id="hh">HISTORY<button id="hclr" onclick="clearHistory()">clear</button></div>
         <div id="hl"></div>
       </div>
       <div id="part-section">
@@ -141,7 +144,8 @@ _HTML = """\
     const parts = {};
 
     function connect() {
-      if (ws) { try { ws.close(); } catch(e) {} }
+      clearTimeout(reconnTimer);
+      if (ws) { ws.onclose = ws.onerror = null; try { ws.close(); } catch(e) {} }
       ws = new WebSocket('ws://' + location.host + '/ws');
       ws.onopen = () => {
         _reconnDelay = 1000;
@@ -155,7 +159,7 @@ _HTML = """\
         _reconnDelay = Math.min(_reconnDelay * 2, 8000);
       };
       ws.onerror = () => {
-        ws = null; clearTimeout(reconnTimer);
+        clearTimeout(reconnTimer);
         reconnTimer = setTimeout(connect, _reconnDelay);
         _reconnDelay = Math.min(_reconnDelay * 2, 8000);
       };
@@ -199,9 +203,15 @@ _HTML = """\
         case 'stt':
           if (m.state === 'wake' && m.word && m.word !== '(reply)') {
             _lastWakeWord = m.word;
-            addHistoryWake(m.word);
           }
-          if (m.state === 'matched') addHistory(_lastWakeWord, m.transcript||'', m.trigger||'');
+          if (m.state === 'matched') {
+            addHistory(_lastWakeWord, m.transcript||'', m.trigger||'');
+            _lastWakeWord = '';
+          }
+          if (m.state === 'nomatch' && _lastWakeWord) {
+            addHistoryWake(_lastWakeWord);
+            _lastWakeWord = '';
+          }
           setStt(m.state, m.text||m.word||m.transcript||'', m);
           break;
         case 'log':           addLog(m); break;
@@ -302,6 +312,7 @@ _HTML = """\
     }
 
     function clearLogs() { document.getElementById('le').innerHTML = ''; }
+    function clearHistory() { document.getElementById('hl').innerHTML = ''; }
 
     const MAX_HIST = 60;
     function addHistoryWake(word) {

@@ -92,6 +92,22 @@ tasks:
         echo "Released v${NEW}"
         echo "Push with: git push && git push --tags"
 
+  setup:
+    desc: Install the alexa-custom systemd user service and enable it
+    cmds:
+      - mkdir -p ~/.config/systemd/user
+      - cp setup/alexa-custom.service ~/.config/systemd/user/alexa-custom.service
+      - systemctl --user daemon-reload
+      - systemctl --user enable alexa-custom
+      - |
+        echo ""
+        echo "Service installed. Useful commands:"
+        echo "  systemctl --user start   alexa-custom   # start now"
+        echo "  systemctl --user stop    alexa-custom   # stop"
+        echo "  systemctl --user restart alexa-custom   # restart"
+        echo "  systemctl --user status  alexa-custom   # check status"
+        echo "  journalctl --user -fu    alexa-custom   # follow logs"
+
   clean:
     desc: Clean up temporary files
     cmds:

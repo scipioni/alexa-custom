@@ -437,6 +437,7 @@ def _recognition_loop(
     alias_map = _build_alias_map(config.wake_words)
     stage1 = vosk.KaldiRecognizer(model, 16000, _grammar_json(config.wake_words))
     stage1.SetWords(True)
+    display_rec = vosk.KaldiRecognizer(model, 16000) if on_stt_event else None
     cooldown_until = 0.0
     was_gated = False
 
@@ -490,7 +491,15 @@ def _recognition_loop(
 
         if time.monotonic() < cooldown_until:
             stage1.Reset()
+            if display_rec:
+                display_rec.Reset()
             continue
+
+        if display_rec is not None:
+            display_rec.AcceptWaveform(data)
+            partial = json.loads(display_rec.PartialResult()).get("partial", "").strip()
+            if partial:
+                on_stt_event("transcribing", {"text": partial})  # type: ignore[misc]
 
         if stage1.AcceptWaveform(data):
             result = json.loads(stage1.Result())
@@ -518,11 +527,12 @@ def _recognition_loop(
                     loop=loop,
                     dispatch_loop=dispatch_loop,
                 )
-                # Re-create stage1 recognizer after command window
+                # Re-create both recognizers after command window
                 stage1 = vosk.KaldiRecognizer(
                     model, 16000, _grammar_json(config.wake_words)
                 )
                 stage1.SetWords(True)
+                display_rec = vosk.KaldiRecognizer(model, 16000) if on_stt_event else None
                 if on_stt_event:
                     on_stt_event(
                         "listening", {"wake_words": [g.word for g in config.wake_words]}
@@ -533,11 +543,6 @@ def _recognition_loop(
                         "idle",
                         loop=loop,
                     )
-        else:
-            if on_stt_event:
-                partial = json.loads(stage1.PartialResult()).get("partial", "").strip()
-                if partial:
-                    on_stt_event("transcribing", {"text": partial})
 
 
 def _wake_detected(

@@ -1,0 +1,16 @@
+[Unit]
+Description=alexa-custom LiveKit voice client
+Documentation=https://github.com/your-org/alexa-custom
+After=pipewire.service pipewire-pulse.service
+Wants=pipewire.service pipewire-pulse.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/alexa-custom
+ExecStart=%h/.venv/bin/alexa-client --web
+Restart=on-failure
+RestartSec=5s
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target
