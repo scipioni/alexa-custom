@@ -128,10 +128,11 @@ def _resolve_triggers(group: WakeWordGroup, fallback: list[Trigger]) -> list[Tri
 
 
 def _rms_level(data: bytes) -> float:
-    samples = np.frombuffer(data, dtype=np.int16).astype(np.float32)
-    if len(samples) == 0:
+    samples = np.frombuffer(data, dtype=np.int16)
+    n = len(samples)
+    if n == 0:
         return 0.0
-    return float(np.sqrt(np.mean(samples**2))) / 32768.0
+    return float(np.linalg.norm(samples)) / (32768.0 * n**0.5)
 
 
 def _downmix_to_mono(data: bytes, channels: int) -> bytes:
@@ -191,41 +192,46 @@ def run_stt_worker(
             f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "idle", loop=loop
         )
 
-    while not stop_event.is_set():
-        # Re-read config on every outer iteration so hot-reload propagates when
-        # the capture process restarts (e.g., after an error or device reset).
-        current_config = _get_config()
-        loop_fn = (
-            _single_stage_loop
-            if current_config.recognition_mode == "single-stage"
-            else _recognition_loop
-        )
-        proc: subprocess.Popen | None = None
-        try:
-            proc = start_capture(source, channels)
-            loop_fn(
-                proc=proc,
-                channels=channels,
-                model=model,
-                config=current_config,
-                stop_event=stop_event,
-                telegram_client=telegram_client,
-                livekit_connect_fn=livekit_connect_fn,
-                livekit_connected_flag=livekit_connected_flag,
-                on_stt_event=on_stt_event,
-                mqtt_client=mqtt_client,
-                loop=loop,
+    _dispatch_loop = asyncio.new_event_loop()
+    try:
+        while not stop_event.is_set():
+            # Re-read config on every outer iteration so hot-reload propagates when
+            # the capture process restarts (e.g., after an error or device reset).
+            current_config = _get_config()
+            loop_fn = (
+                _single_stage_loop
+                if current_config.recognition_mode == "single-stage"
+                else _recognition_loop
             )
-        except Exception as e:
-            logger.error(f"STT error: {e}")
-            time.sleep(2)
-        finally:
-            if proc is not None:
-                try:
-                    proc.terminate()
-                    proc.wait(timeout=3)
-                except Exception:
-                    pass
+            proc: subprocess.Popen | None = None
+            try:
+                proc = start_capture(source, channels)
+                loop_fn(
+                    proc=proc,
+                    channels=channels,
+                    model=model,
+                    config=current_config,
+                    stop_event=stop_event,
+                    telegram_client=telegram_client,
+                    livekit_connect_fn=livekit_connect_fn,
+                    livekit_connected_flag=livekit_connected_flag,
+                    on_stt_event=on_stt_event,
+                    mqtt_client=mqtt_client,
+                    loop=loop,
+                    dispatch_loop=_dispatch_loop,
+                )
+            except Exception as e:
+                logger.error(f"STT error: {e}")
+                time.sleep(2)
+            finally:
+                if proc is not None:
+                    try:
+                        proc.terminate()
+                        proc.wait(timeout=3)
+                    except Exception:
+                        pass
+    finally:
+        _dispatch_loop.close()
 
 
 def _extract_wake_command(
@@ -259,7 +265,6 @@ def capture_transcript(
         if remaining <= 0:
             break
 
-        proc.stdout._rbufsize = 0  # type: ignore[attr-defined]
         raw_data = proc.stdout.read(_CHUNK * channels)
         if not raw_data:
             break
@@ -303,6 +308,9 @@ def _single_stage_loop(
     livekit_connect_fn: Callable[[], Awaitable[None]] | None,
     livekit_connected_flag: threading.Event,
     on_stt_event: Callable[[str, dict], None] | None = None,
+    mqtt_client: "MQTTClient | None" = None,
+    loop: asyncio.AbstractEventLoop | None = None,
+    dispatch_loop: asyncio.AbstractEventLoop | None = None,
 ) -> None:
     """Single-stage: full transcription always; wake word + command in one phrase."""
     rec = vosk.KaldiRecognizer(model, 16000)
@@ -335,14 +343,14 @@ def _single_stage_loop(
 
         data = _downmix_to_mono(raw_data, channels)
 
-        if on_stt_event:
-            on_stt_event("level", {"mic": _rms_level(data)})
-
         if livekit_connected_flag.is_set():
             cooldown_until = time.monotonic() + _STT_COOLDOWN
             if on_stt_event:
                 on_stt_event("gated", {})
             continue
+
+        if on_stt_event:
+            on_stt_event("level", {"mic": _rms_level(data)})
 
         if time.monotonic() < cooldown_until:
             rec.Reset()
@@ -392,8 +400,8 @@ def _single_stage_loop(
 
         connected = livekit_connected_flag.is_set()
         try:
-            loop = asyncio.new_event_loop()
-            loop.run_until_complete(
+            _dloop = dispatch_loop or asyncio.new_event_loop()
+            _dloop.run_until_complete(
                 dispatch(
                     trigger,
                     telegram_client,
@@ -403,7 +411,6 @@ def _single_stage_loop(
                     on_stt_event=on_stt_event,
                 )
             )
-            loop.close()
             # Restore UI state after dispatch/dialogue
             if on_stt_event:
                 on_stt_event(
@@ -425,11 +432,11 @@ def _recognition_loop(
     on_stt_event: Callable[[str, dict], None] | None = None,
     mqtt_client: MQTTClient | None = None,
     loop: asyncio.AbstractEventLoop | None = None,
+    dispatch_loop: asyncio.AbstractEventLoop | None = None,
 ) -> None:
     alias_map = _build_alias_map(config.wake_words)
     stage1 = vosk.KaldiRecognizer(model, 16000, _grammar_json(config.wake_words))
     stage1.SetWords(True)
-    display_rec = vosk.KaldiRecognizer(model, 16000) if on_stt_event else None
     cooldown_until = 0.0
     was_gated = False
 
@@ -449,9 +456,6 @@ def _recognition_loop(
 
         data = _downmix_to_mono(raw_data, channels)
 
-        if on_stt_event:
-            on_stt_event("level", {"mic": _rms_level(data)})
-
         if livekit_connected_flag.is_set():
             cooldown_until = time.monotonic() + _STT_COOLDOWN
             if not was_gated:
@@ -466,6 +470,9 @@ def _recognition_loop(
                     )
                 was_gated = True
             continue
+
+        if on_stt_event:
+            on_stt_event("level", {"mic": _rms_level(data)})
 
         if was_gated:
             logger.info("STT resumed (call ended)")
@@ -483,16 +490,7 @@ def _recognition_loop(
 
         if time.monotonic() < cooldown_until:
             stage1.Reset()
-            if display_rec:
-                display_rec.Reset()
             continue
-
-        # Feed display recognizer and emit live partial text.
-        if display_rec is not None:
-            display_rec.AcceptWaveform(data)
-            partial = json.loads(display_rec.PartialResult()).get("partial", "").strip()
-            if partial:
-                on_stt_event("transcribing", {"text": partial})  # type: ignore[misc]
 
         if stage1.AcceptWaveform(data):
             result = json.loads(stage1.Result())
@@ -518,15 +516,13 @@ def _recognition_loop(
                     on_stt_event=on_stt_event,
                     mqtt_client=mqtt_client,
                     loop=loop,
+                    dispatch_loop=dispatch_loop,
                 )
-                # Re-create both recognizers after command window
+                # Re-create stage1 recognizer after command window
                 stage1 = vosk.KaldiRecognizer(
                     model, 16000, _grammar_json(config.wake_words)
                 )
                 stage1.SetWords(True)
-                display_rec = (
-                    vosk.KaldiRecognizer(model, 16000) if on_stt_event else None
-                )
                 if on_stt_event:
                     on_stt_event(
                         "listening", {"wake_words": [g.word for g in config.wake_words]}
@@ -537,6 +533,11 @@ def _recognition_loop(
                         "idle",
                         loop=loop,
                     )
+        else:
+            if on_stt_event:
+                partial = json.loads(stage1.PartialResult()).get("partial", "").strip()
+                if partial:
+                    on_stt_event("transcribing", {"text": partial})
 
 
 def _wake_detected(
@@ -552,6 +553,7 @@ def _wake_detected(
     on_stt_event: Callable[[str, dict], None] | None = None,
     mqtt_client: MQTTClient | None = None,
     loop: asyncio.AbstractEventLoop | None = None,
+    dispatch_loop: asyncio.AbstractEventLoop | None = None,
 ) -> None:
     logger.info(f"Wake word detected: '{wake_group.word}'")
     if on_stt_event:
@@ -615,11 +617,11 @@ def _wake_detected(
             on_stt_event,
         )
 
-    # Dispatch in a fresh event loop (we're in a daemon thread, not async context)
+    # Dispatch using the persistent loop (we're in a daemon thread, not async context)
     connected = livekit_connected_flag.is_set()
     try:
-        loop = asyncio.new_event_loop()
-        loop.run_until_complete(
+        _dloop = dispatch_loop or asyncio.new_event_loop()
+        _dloop.run_until_complete(
             dispatch(
                 trigger,
                 telegram_client,
@@ -629,7 +631,6 @@ def _wake_detected(
                 on_stt_event=on_stt_event,
             )
         )
-        loop.close()
     except Exception as e:
         logger.error(f"Action dispatch failed: {e}")
 

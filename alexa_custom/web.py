@@ -563,6 +563,11 @@ class WebServer:
                 await self._broadcast({"type": "volume_update", **self._pending_vu})
                 self._pending_vu.clear()
 
+    async def _prune_clients_loop(self) -> None:
+        while True:
+            await asyncio.sleep(30)
+            self._clients = {ws for ws in self._clients if not ws.closed}
+
     # ── logging ───────────────────────────────────────────────────────────────
 
     def _install_log_handler(self) -> None:
@@ -625,6 +630,7 @@ class WebServer:
 
         broadcast_task = asyncio.create_task(self._broadcast_loop())
         vu_task = asyncio.create_task(self._vu_flush_loop())
+        prune_task = asyncio.create_task(self._prune_clients_loop())
 
         stop_threading = threading.Event()
         livekit_thread = threading.Thread(
@@ -676,6 +682,7 @@ class WebServer:
                     pass
             broadcast_task.cancel()
             vu_task.cancel()
+            prune_task.cancel()
             await runner.cleanup()
             self._uninstall_log_handler()
 

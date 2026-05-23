@@ -204,9 +204,13 @@ class AudioWatcher(threading.Thread):
                     pulse.event_mask_set("card", "sink", "source")
                     pulse.event_callback_set(lambda _: None)
 
+                    last_enforce = 0.0
                     while not self._stop.is_set():
                         pulse.event_listen(timeout=2.0)
-                        self._check_and_enforce(pulse)
+                        now = time.monotonic()
+                        if now - last_enforce >= 1.0:
+                            self._check_and_enforce(pulse)
+                            last_enforce = now
             except Exception as e:
                 if not self._stop.is_set():
                     logger.error(f"Audio watcher error: {e}")

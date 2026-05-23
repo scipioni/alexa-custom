@@ -45,7 +45,7 @@ class ConfigManager:
 
     def start_watcher(self, path: str | Path, interval: float = 2.0) -> None:
         p = Path(path)
-        self._watcher_task = asyncio.get_event_loop().create_task(
+        self._watcher_task = asyncio.get_running_loop().create_task(
             self._poll_loop(p, interval)
         )
 
