@@ -65,6 +65,9 @@ def download_model(large: bool = False, force: bool = False) -> None:
         zip_path.unlink(missing_ok=True)
 
     dest.parent.mkdir(parents=True, exist_ok=True)
+    if dest.exists():
+        import shutil
+        shutil.rmtree(dest)
     Path(unpacked).rename(dest)
     print(f"Model ready at {dest.resolve()}")
 

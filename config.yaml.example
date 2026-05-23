@@ -1,81 +1,81 @@
 # config.yaml — unified configuration for alexa-custom
 #
-# This file replaces both actions.yaml and .env.
-# The optional env: section sets environment variables (credentials, device settings).
-# All other keys follow the existing actions.yaml schema.
-#
 # Copy this file to config.yaml and fill in your values.
 # config.yaml is hot-reloaded: save the file and changes apply within ~4 seconds.
 
 # ---------------------------------------------------------------------------
-# env: — credentials and runtime settings (replaces .env)
+# env: — environment variables (credentials and runtime settings)
 # ---------------------------------------------------------------------------
-# Values here are written into the process environment on startup and on every
-# hot-reload. They overwrite any matching values from a .env file.
-# Keys and values must be strings. Leave this section out to keep using .env.
+# Values are written into the process environment on startup and on every
+# hot-reload. Keys and values must be strings.
 
 env:
+  # --- LiveKit (required) ---
   LIVEKIT_URL: wss://your-project.livekit.cloud
   LIVEKIT_ROOM: your-room-name
   LIVEKIT_API_KEY: your-api-key
   LIVEKIT_API_SECRET: your-api-secret
 
-  # Optional: override audio devices (sounddevice index or substring of device name)
+  # --- Audio devices ---
+  # Substring of the PipeWire/ALSA device name, or a sounddevice index.
+  # Omit to use system defaults.
   #INPUT_DEVICE: pipewire
   #OUTPUT_DEVICE: pipewire
 
-  # Optional: WebRTC mic processing (all default to 1/enabled)
-  #MIC_AGC: 1
-  #MIC_AEC: 1
-  #MIC_NOISE_SUPPRESSION: 1
-  #MIC_HIGH_PASS_FILTER: 1
+  # --- WebRTC microphone processing (all default to 1 = enabled) ---
+  #MIC_AGC: 1                 # Automatic Gain Control
+  #MIC_AEC: 1                 # Acoustic Echo Cancellation
+  #MIC_NOISE_SUPPRESSION: 1   # Noise suppression
+  #MIC_HIGH_PASS_FILTER: 1    # High-pass filter (removes low-frequency rumble)
 
-  # Telegram integration (required for telegram action type)
+  # --- Vosk STT model ---
+  # Path to the Vosk model directory. Run 'alexa-setup' to download it.
+  #VOSK_MODEL_PATH: models/it
+
+  # --- Empty room timeout ---
+  # Disconnect from LiveKit if the room has no other participants for this
+  # many seconds. Set to 0 or omit to stay connected indefinitely.
+  #EMPTY_ROOM_TIMEOUT: 30
+
+  # --- Telegram (required for 'telegram' action type) ---
   #TELEGRAM_BOT_TOKEN: "123456789:AABBccDDeeFFggHH-your-token-here"
   #TELEGRAM_CHAT_ID: "123456789"
 
-  # Disconnect from LiveKit if the room has no other participants for this many seconds.
-  # Set to 0 or omit to stay connected indefinitely.
-  #EMPTY_ROOM_TIMEOUT: 30
-
-  # MQTT / Home Assistant integration
+  # --- MQTT / Home Assistant ---
+  # MQTT_HOST is required to enable MQTT. All other values have defaults.
   #MQTT_HOST: 127.0.0.1
   #MQTT_PORT: 1883
   #MQTT_TOPIC_PREFIX: alexa
-  #MQTT_NODE_ID: living_room
+  #MQTT_NODE_ID: living_room   # defaults to system hostname
 
 # ---------------------------------------------------------------------------
 # web: — browser dashboard (optional)
 # ---------------------------------------------------------------------------
 # Start with: alexa-client --web [--web-port PORT]
-# The dashboard is served at http://<host>:PORT/ and provides real-time status,
-# VU meters, STT state, live logs, and a restart button.
-# No authentication — bind to LAN interfaces only.
+# The dashboard is served at http://<host>:PORT/ — no authentication,
+# bind to LAN interfaces only.
 
 #web:
 #  port: 8080    # HTTP / WebSocket port (default: 8080)
 
 # ---------------------------------------------------------------------------
-# Actions configuration (same schema as actions.yaml)
+# Wake words
 # ---------------------------------------------------------------------------
+# Each group has a primary word, optional aliases (alternative phrases that
+# map to the same group), and an optional per-group trigger list.
+# If a group defines no triggers, the global top-level triggers list is used.
 
-# Wake words — a list of groups, each with a primary word, optional aliases,
-# and an optional per-group trigger list.
-# If a group has no triggers, the global top-level triggers list is used as fallback.
 wake_words:
   - word: "galileo"
     aliases:
-      - "ehi galileo"
-    triggers:
-      - phrase: "test"
-        actions:
-          - type: log
-            message: "galileo wake word and command recognition working"
+      - "ehi galileo"       # alternative recognition phrase for the same group
+    triggers:               # commands active only after this wake word
       - phrase: "chiama stefano"
         actions:
           - type: ask
             text: "Vuoi chiamare Stefano?"
-            timeout: 5.0
+            lang: "it-IT"   # BCP-47 language tag for TTS (default: it-IT)
+            timeout: 5.0    # seconds to wait for a reply
             on_reply:
               - phrase: "si"
                 actions:
@@ -84,37 +84,110 @@ wake_words:
                   - type: livekit_join
                   - type: telegram
                     text: "Collegati con casa"
+                    # chat_id: "123456789"  # overrides TELEGRAM_CHAT_ID env var
               - phrase: "no"
                 actions:
                   - type: say
                     text: "Chiamata annullata"
-            on_else:
+            on_else:        # actions when no reply phrase matches (or timeout)
               - type: say
                 text: "Non ho capito"
 
-  # This group has no per-group triggers — it falls back to the global triggers list below.
+  # This group has no per-group triggers — falls back to the global list below.
   - word: "assistente"
+
+# ---------------------------------------------------------------------------
+# Recognition settings
+# ---------------------------------------------------------------------------
 
 # How long to listen for a command after the wake word (seconds, two-stage only).
 command_timeout: 3.0
 
 # Recognition mode:
-#   two-stage    — low CPU; wake word detected first, then a timed command window opens
+#   two-stage    — low CPU; wake word detected first, then a timed window opens
 #   single-stage — always-on transcription; say wake word + command in one phrase
 recognition_mode: two-stage
 
-# Vosk confidence threshold (0.0–1.0) required to accept a wake word in two-stage mode.
+# Vosk confidence threshold (0.0–1.0) to accept a wake word in two-stage mode.
 wake_confidence: 0.65
 
-# Actions executed once at startup
+# ---------------------------------------------------------------------------
+# Startup actions
+# ---------------------------------------------------------------------------
+# Executed once when the daemon finishes initializing.
+
 on_startup:
   - type: say
     text: "Sistema pronto"
     lang: "it-IT"
 
-# Global fallback triggers — used by any wake word group that defines no per-group triggers.
+# ---------------------------------------------------------------------------
+# Global fallback triggers
+# ---------------------------------------------------------------------------
+# Used by any wake word group that defines no per-group triggers.
+# All action types are shown below for reference.
+
 triggers:
+  # --- log: write a message to the application log ---
   - phrase: "test"
     actions:
       - type: log
-        message: "global fallback: wake word and command recognition working"
+        message: "command recognition working"
+
+  # --- say: speak text via TTS ---
+  - phrase: "di qualcosa"
+    actions:
+      - type: say
+        text: "Ciao dal sistema vocale"
+        lang: "it-IT"
+
+  # --- tone: play a predefined sound ---
+  # Available names: startup, success, error, info, warning
+  - phrase: "suona"
+    actions:
+      - type: tone
+        name: info
+
+  # --- shell: run a shell command ---
+  - phrase: "aggiorna"
+    actions:
+      - type: shell
+        command: "systemctl restart my-service"
+
+  # --- livekit_join: connect to the LiveKit room ---
+  - phrase: "connettiti"
+    actions:
+      - type: livekit_join
+
+  # --- telegram: send a Telegram message ---
+  - phrase: "manda messaggio"
+    actions:
+      - type: telegram
+        text: "Messaggio vocale ricevuto"
+        # chat_id: "123456789"  # overrides TELEGRAM_CHAT_ID env var
+        # Use <room> placeholder to include a LiveKit browser join URL:
+        # text: "Entra nella stanza: <room>"
+
+  # --- mqtt_publish: publish an MQTT message ---
+  - phrase: "accendi la luce"
+    actions:
+      - type: mqtt_publish
+        topic: "home/light/set"
+        payload: "ON"
+        retain: false       # optional, default false
+
+  # --- ask: speak a question and wait for a reply ---
+  - phrase: "chiedi conferma"
+    actions:
+      - type: ask
+        text: "Sei sicuro?"
+        lang: "it-IT"
+        timeout: 5.0
+        on_reply:
+          - phrase: "si"
+            actions:
+              - type: tone
+                name: success
+        on_else:
+          - type: tone
+            name: error
