@@ -779,9 +779,12 @@ def _recognition_loop(
         if was_playing:
             logger.debug("two-stage: playback ended — draining pipe and resetting")
             _drain_pipe(proc)
-            stage1.Reset()
-            if display_rec is not None:
-                display_rec.Reset()
+            if is_vosk:
+                stage1.Reset()
+                if display_rec is not None:
+                    display_rec.Reset()
+            else:
+                backend.reset()
             was_playing = False
             continue
 
@@ -820,51 +823,52 @@ def _recognition_loop(
                 )
 
         if time.monotonic() < cooldown_until:
-            stage1.Reset()
-            if display_rec:
-                display_rec.Reset()
+            if is_vosk:
+                stage1.Reset()
+                if display_rec:
+                    display_rec.Reset()
+            else:
+                backend.reset()
             continue
 
-        if display_rec is not None:
-            display_rec.AcceptWaveform(data)
-            partial = json.loads(display_rec.PartialResult()).get("partial", "").strip()
-            if partial:
-                on_stt_event("transcribing", {"text": partial})  # type: ignore[misc]
+        if is_vosk:
+            if display_rec is not None:
+                display_rec.AcceptWaveform(data)
+                partial = (
+                    json.loads(display_rec.PartialResult()).get("partial", "").strip()
+                )
+                if partial:
+                    on_stt_event("transcribing", {"text": partial})  # type: ignore[misc]
 
-        if stage1.AcceptWaveform(data):
-            result = json.loads(stage1.Result())
-            text = result.get("text", "").strip()
-            words = result.get("result", [])
-            conf = words[0].get("conf", 0.0) if words else 0.0
-            logger.debug(f"Stage1 result: {text!r} conf={conf:.2f}")
-            # Grammar mode may not constrain output on all model/version combos.
-            # Explicitly check the result is exactly one of the wake words.
-            norm_text = normalize_text(text)
-            wake_match = alias_map.get(norm_text)
-            if wake_match is not None and conf >= config.wake_confidence:
-                _wake_detected(
-                    wake_group=wake_match,
-                    proc=proc,
-                    channels=channels,
-                    backend=backend,
-                    config=config,
-                    stop_event=stop_event,
-                    telegram_client=telegram_client,
-                    livekit_connect_fn=livekit_connect_fn,
-                    livekit_connected_flag=livekit_connected_flag,
-                    on_stt_event=on_stt_event,
-                    mqtt_client=mqtt_client,
-                    loop=loop,
-                    dispatch_loop=dispatch_loop,
-                )
-                # Drop any audio buffered while dispatch (TTS/ask) was running,
-                # and re-create both recognizers after the command window.
-                logger.debug(
-                    f"two-stage: dispatch returned — livekit_flag={livekit_connected_flag.is_set()} "
-                    f"was_gated={was_gated} was_playing={was_playing}"
-                )
-                _drain_pipe(proc)
-                if is_vosk:
+            if stage1.AcceptWaveform(data):
+                result = json.loads(stage1.Result())
+                text = result.get("text", "").strip()
+                words = result.get("result", [])
+                conf = words[0].get("conf", 0.0) if words else 0.0
+                logger.debug(f"Stage1 result: {text!r} conf={conf:.2f}")
+                norm_text = normalize_text(text)
+                wake_match = alias_map.get(norm_text)
+                if wake_match is not None and conf >= config.wake_confidence:
+                    _wake_detected(
+                        wake_group=wake_match,
+                        proc=proc,
+                        channels=channels,
+                        backend=backend,
+                        config=config,
+                        stop_event=stop_event,
+                        telegram_client=telegram_client,
+                        livekit_connect_fn=livekit_connect_fn,
+                        livekit_connected_flag=livekit_connected_flag,
+                        on_stt_event=on_stt_event,
+                        mqtt_client=mqtt_client,
+                        loop=loop,
+                        dispatch_loop=dispatch_loop,
+                    )
+                    logger.debug(
+                        f"two-stage: dispatch returned — livekit_flag={livekit_connected_flag.is_set()} "
+                        f"was_gated={was_gated} was_playing={was_playing}"
+                    )
+                    _drain_pipe(proc)
                     vosk_model = backend.model
                     stage1 = vosk.KaldiRecognizer(
                         vosk_model, 16000, _grammar_json(config.wake_words)
@@ -875,29 +879,69 @@ def _recognition_loop(
                         if on_stt_event
                         else None
                     )
-                if on_stt_event:
-                    on_stt_event(
-                        "listening", {"wake_words": [g.word for g in config.wake_words]}
-                    )
-                if mqtt_client:
-                    mqtt_client.publish_threadsafe(
-                        f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
-                        "idle",
-                        loop=loop,
-                    )
+                    if on_stt_event:
+                        on_stt_event(
+                            "listening",
+                            {"wake_words": [g.word for g in config.wake_words]},
+                        )
+                    if mqtt_client:
+                        mqtt_client.publish_threadsafe(
+                            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
+                            "idle",
+                            loop=loop,
+                        )
+                else:
+                    backlog = _drain_pipe(proc)
+                    if backlog:
+                        logger.debug(
+                            f"two-stage: drained {backlog} backlog bytes after segment"
+                        )
+                    stage1.Reset()
+                    if display_rec is not None:
+                        display_rec.Reset()
+        else:
+            # sherpa-onnx: open-vocabulary stage1
+            if backend.accept_waveform(data):
+                backend.text()  # decode to finalize
+                text = backend.partial_text().strip()
+                if text:
+                    logger.debug(f"Stage1 result (sherpa): {text!r}")
+                    norm_text = normalize_text(text)
+                    wake_match = alias_map.get(norm_text)
+                    if wake_match:
+                        _wake_detected(
+                            wake_group=wake_match,
+                            proc=proc,
+                            channels=channels,
+                            backend=backend,
+                            config=config,
+                            stop_event=stop_event,
+                            telegram_client=telegram_client,
+                            livekit_connect_fn=livekit_connect_fn,
+                            livekit_connected_flag=livekit_connected_flag,
+                            on_stt_event=on_stt_event,
+                            mqtt_client=mqtt_client,
+                            loop=loop,
+                            dispatch_loop=dispatch_loop,
+                        )
+                        _drain_pipe(proc)
+                        if on_stt_event:
+                            on_stt_event(
+                                "listening",
+                                {"wake_words": [g.word for g in config.wake_words]},
+                            )
+                        if mqtt_client:
+                            mqtt_client.publish_threadsafe(
+                                f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
+                                "idle",
+                                loop=loop,
+                            )
+                    else:
+                        backend.reset()
             else:
-                # No wake word in this segment. Drain any pipe backlog accumulated
-                # while Vosk was processing (on slow hardware AcceptWaveform takes
-                # longer than the chunk it consumes, so the pipe fills over time).
-                # Resync to real-time audio at each segment boundary.
-                backlog = _drain_pipe(proc)
-                if backlog:
-                    logger.debug(
-                        f"two-stage: drained {backlog} backlog bytes after segment"
-                    )
-                stage1.Reset()
-                if display_rec is not None:
-                    display_rec.Reset()
+                partial = backend.partial_text().strip()
+                if partial and on_stt_event:
+                    on_stt_event("transcribing", {"text": partial})
 
 
 def _wake_detected(
