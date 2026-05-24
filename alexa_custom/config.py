@@ -51,6 +51,8 @@ class ActionsConfig:
     tts_preroll_ms: int = 400
     tts_backend: str = "piper"
     tts_voice: str = "it_IT-paola-medium"
+    stt_backend: str = "vosk"
+    stt_model_path: str | None = None
 
 
 def _parse_actions(raw_actions: list[Any], path_prefix: str) -> list[ActionEntry]:
@@ -234,6 +236,23 @@ def _parse_actions_config(raw: dict, source: str = "config") -> ActionsConfig:
         tts_section.get("voice", raw.get("tts_voice", "it_IT-paola-medium"))
     )
 
+    stt_section = raw.get("stt") or {}
+    if not isinstance(stt_section, dict):
+        raise ConfigError(f"{source}: 'stt' must be a mapping if present")
+
+    stt_backend = str(stt_section.get("backend", raw.get("stt_backend", "vosk")))
+    if stt_backend not in ("vosk", "sherpa-onnx"):
+        raise ConfigError(
+            f"{source}: 'stt.backend' must be 'vosk' or 'sherpa-onnx', got {stt_backend!r}"
+        )
+
+    stt_model_path_raw = stt_section.get("model_path") or raw.get("stt_model_path")
+    stt_model_path: str | None = None
+    if stt_model_path_raw is not None:
+        if not isinstance(stt_model_path_raw, str):
+            raise ConfigError(f"{source}: 'stt.model_path' must be a string if present")
+        stt_model_path = stt_model_path_raw
+
     on_startup: list[ActionEntry] = []
     raw_startup = raw.get("on_startup")
     if raw_startup is not None:
@@ -261,6 +280,8 @@ def _parse_actions_config(raw: dict, source: str = "config") -> ActionsConfig:
         tts_preroll_ms=tts_preroll_ms,
         tts_backend=tts_backend,
         tts_voice=tts_voice,
+        stt_backend=stt_backend,
+        stt_model_path=stt_model_path,
     )
 
 

@@ -160,6 +160,22 @@ tts:
 #tts_voice: it_IT-paola-medium
 
 # ---------------------------------------------------------------------------
+# STT — speech-to-text backend
+# ---------------------------------------------------------------------------
+# Two backends are available:
+#   vosk        — default, grammar-constrained recognition (low CPU)
+#   sherpa-onnx — streaming open-vocabulary model (higher CPU, better accuracy)
+#
+# sherpa-onnx model download:
+#   python -m alexa_custom.setup --sherpa-onnx
+#   (or: hf download hudaiapa88/sherpa-stt-onnx --local-dir ./models --include "it/kroko_128l/*")
+
+stt:
+  backend: vosk
+  # model_path: models/it/kroko_128l  # Optional: override default model path for sherpa-onnx
+  # model_path: models/it             # For vosk
+
+# ---------------------------------------------------------------------------
 # Startup actions
 # ---------------------------------------------------------------------------
 # Executed once when the daemon finishes initializing.

@@ -10,6 +10,7 @@ import subprocess
 import threading
 import time
 import unicodedata
+from abc import ABC, abstractmethod
 from typing import Awaitable, Callable, TYPE_CHECKING
 
 import numpy as np
@@ -27,6 +28,122 @@ logger = logging.getLogger(__name__)
 _CHUNK = 4096
 _MODEL_PATH = os.environ.get("VOSK_MODEL_PATH", "models/it")
 _STT_COOLDOWN = 1.0
+_SHERPA_MODEL_PATH = os.environ.get("SHERPA_ONNX_PATH", "models/sherpa-onnx")
+
+
+class STTBackend(ABC):
+    @abstractmethod
+    def accept_waveform(self, data: bytes) -> bool:
+        pass
+
+    @abstractmethod
+    def text(self) -> str:
+        pass
+
+    @abstractmethod
+    def partial_text(self) -> str:
+        pass
+
+    @abstractmethod
+    def reset(self) -> None:
+        pass
+
+
+class VoskSTT(STTBackend):
+    def __init__(
+        self, model: vosk.Model, sample_rate: int = 16000, grammar: str | None = None
+    ):
+        self._model = model
+        self._sample_rate = sample_rate
+        self._grammar = grammar
+        self._rec = (
+            vosk.KaldiRecognizer(model, sample_rate, grammar)
+            if grammar
+            else vosk.KaldiRecognizer(model, sample_rate)
+        )
+
+    @property
+    def model(self) -> vosk.Model:
+        return self._model
+
+    def accept_waveform(self, data: bytes) -> bool:
+        return self._rec.AcceptWaveform(data)
+
+    def text(self) -> str:
+        return json.loads(self._rec.Result()).get("text", "").strip()
+
+    def partial_text(self) -> str:
+        return json.loads(self._rec.PartialResult()).get("partial", "").strip()
+
+    def reset(self) -> None:
+        self._rec.Reset()
+
+    def recreate(self, grammar: str | None = None) -> None:
+        if grammar != self._grammar:
+            self._grammar = grammar
+            self._rec = (
+                vosk.KaldiRecognizer(self._model, self._sample_rate, grammar)
+                if grammar
+                else vosk.KaldiRecognizer(self._model, self._sample_rate)
+            )
+
+
+class SherpaOnnxSTT(STTBackend):
+    def __init__(self, model_dir: str = _SHERPA_MODEL_PATH):
+        import sherpa_onnx
+
+        if not os.path.isdir(model_dir):
+            raise RuntimeError(
+                f"sherpa-onnx model not found at {model_dir!r}. Run 'alexa-setup --sherpa-onnx' to download it."
+            )
+        tokens = os.path.join(model_dir, "tokens.txt")
+        encoder = os.path.join(model_dir, "encoder.onnx")
+        decoder = os.path.join(model_dir, "decoder.onnx")
+        joiner = os.path.join(model_dir, "joiner.onnx")
+        encoder_int8 = os.path.join(model_dir, "encoder.int8.onnx")
+        decoder_int8 = os.path.join(model_dir, "decoder.int8.onnx")
+        joiner_int8 = os.path.join(model_dir, "joiner.int8.onnx")
+
+        if os.path.exists(joiner) or os.path.exists(joiner_int8):
+            self._delegate = sherpa_onnx.OnlineRecognizer.from_transducer(
+                tokens=tokens,
+                encoder=encoder_int8 if os.path.exists(encoder_int8) else encoder,
+                decoder=decoder_int8 if os.path.exists(decoder_int8) else decoder,
+                joiner=joiner_int8 if os.path.exists(joiner_int8) else joiner,
+            )
+        else:
+            self._delegate = sherpa_onnx.OnlineRecognizer.from_paraformer(
+                tokens=tokens,
+                encoder=encoder,
+                decoder=decoder,
+            )
+        self._stream = self._delegate.create_stream()
+
+    def accept_waveform(self, data: bytes) -> bool:
+        samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+        self._stream.accept_waveform(sample_rate=16000, waveform=samples)
+        return self._delegate.is_ready(self._stream)
+
+    def text(self) -> str:
+        self._delegate.decode_stream(self._stream)
+        result = self._delegate.get_result(self._stream)
+        return result.strip() if isinstance(result, str) else result.text.strip()
+
+    def partial_text(self) -> str:
+        result = self._delegate.get_result(self._stream)
+        return result.strip() if isinstance(result, str) else result.text.strip()
+
+    def reset(self) -> None:
+        self._delegate.reset(self._stream)
+
+
+def get_stt_backend(backend: str, model_path: str | None = None) -> STTBackend:
+    if backend == "sherpa-onnx":
+        return SherpaOnnxSTT(model_path or _SHERPA_MODEL_PATH)
+    vosk_path = model_path or _MODEL_PATH
+    return VoskSTT(_load_model(vosk_path))
+
+
 # Once we have detected any speech, return as soon as the recognizer has been
 # idle (no new partial / no new final) for this many ms. Trims 1-4s off every
 # reply window vs. waiting for the full `timeout`. Override via env.
@@ -118,13 +235,13 @@ def start_capture(source: str | None, channels: int = 1) -> subprocess.Popen:
     )
 
 
-def _load_model() -> vosk.Model:
-    if not os.path.isdir(_MODEL_PATH):
+def _load_model(model_path: str = _MODEL_PATH) -> vosk.Model:
+    if not os.path.isdir(model_path):
         raise RuntimeError(
-            f"Vosk model not found at {_MODEL_PATH!r}. Run 'alexa-setup' to download it."
+            f"Vosk model not found at {model_path!r}. Run 'alexa-setup' to download it."
         )
     vosk.SetLogLevel(-1)
-    return vosk.Model(_MODEL_PATH)
+    return vosk.Model(model_path)
 
 
 def _phrases_to_grammar(phrases: list[str]) -> str:
@@ -241,12 +358,6 @@ def run_stt_worker(
         def _get_config():
             return config  # type: ignore[return-value]
 
-    try:
-        model = _load_model()
-    except RuntimeError as e:
-        logger.error(f"STT startup failed: {e}")
-        return
-
     input_spec = os.environ.get("INPUT_DEVICE", "").strip() or None
     source, channels = resolve_capture_source(input_spec)
 
@@ -254,7 +365,8 @@ def run_stt_worker(
     logger.info(
         f"STT: wake words={[g.word for g in current_config.wake_words]}, "
         f"timeout={current_config.command_timeout}s, "
-        f"source={source or 'default'} ({channels} ch)"
+        f"source={source or 'default'} ({channels} ch), "
+        f"stt_backend={current_config.stt_backend}"
     )
 
     if mqtt_client:
@@ -265,8 +377,6 @@ def run_stt_worker(
     _dispatch_loop = asyncio.new_event_loop()
     try:
         while not stop_event.is_set():
-            # Re-read config on every outer iteration so hot-reload propagates when
-            # the capture process restarts (e.g., after an error or device reset).
             current_config = _get_config()
             loop_fn = (
                 _single_stage_loop
@@ -275,11 +385,18 @@ def run_stt_worker(
             )
             proc: subprocess.Popen | None = None
             try:
+                backend = get_stt_backend(
+                    current_config.stt_backend, current_config.stt_model_path
+                )
+            except RuntimeError as e:
+                logger.error(f"STT backend creation failed: {e}")
+                return
+            try:
                 proc = start_capture(source, channels)
                 loop_fn(
                     proc=proc,
                     channels=channels,
-                    model=model,
+                    backend=backend,
                     config=current_config,
                     stop_event=stop_event,
                     telegram_client=telegram_client,
@@ -319,7 +436,7 @@ def _extract_wake_command(
 def capture_transcript(
     proc: subprocess.Popen,
     channels: int,
-    model: vosk.Model,
+    backend: STTBackend,
     timeout: float,
     stop_event: threading.Event,
     on_stt_event: Callable[[str, dict], None] | None = None,
@@ -350,10 +467,11 @@ def capture_transcript(
         bytes_to_flush = int(16000 * channels * 2 * (flush_ms / 1000))
         proc.stdout.read(bytes_to_flush)
 
-    if phrases:
-        stage2 = vosk.KaldiRecognizer(model, 16000, _phrases_to_grammar(phrases))
+    grammar = _phrases_to_grammar(phrases) if phrases else None
+    if isinstance(backend, VoskSTT):
+        backend.recreate(grammar)
     else:
-        stage2 = vosk.KaldiRecognizer(model, 16000)
+        backend.reset()
     deadline = time.monotonic() + timeout
     transcript_parts: list[str] = []
     was_playing = False
@@ -381,7 +499,7 @@ def capture_transcript(
             # Just emerged from playback: discard pipe backlog and reset the
             # recognizer so partial state from before the echo doesn't surface.
             _drain_pipe(proc)
-            stage2.Reset()
+            backend.reset()
             was_playing = False
             if start_after_playback:
                 # Restart the listen window now that the TTS is actually over.
@@ -396,9 +514,8 @@ def capture_transcript(
         if on_stt_event:
             on_stt_event("level", {"mic": _rms_level(data)})
 
-        if stage2.AcceptWaveform(data):
-            result = json.loads(stage2.Result())
-            text = result.get("text", "").strip()
+        if backend.accept_waveform(data):
+            text = backend.text()
             if text:
                 logger.info(f"Capture match: '{text}'")
                 if on_stt_event:
@@ -413,7 +530,7 @@ def capture_transcript(
                 last_activity = time.monotonic()
                 last_partial = ""
         else:
-            partial = json.loads(stage2.PartialResult()).get("partial", "").strip()
+            partial = backend.partial_text()
             if partial != last_partial:
                 last_partial = partial
                 if partial:
@@ -427,9 +544,8 @@ def capture_transcript(
         if got_speech and (time.monotonic() - last_activity) * 1000 >= _VAD_SILENCE_MS:
             break
 
-    # Flush whatever vosk hadn't finalised yet (deadline path or VAD path).
-    final = json.loads(stage2.FinalResult())
-    final_text = final.get("text", "").strip()
+    # Flush whatever recognizer hadn't finalised yet (deadline path or VAD path).
+    final_text = backend.text()
     if final_text:
         transcript_parts.append(final_text)
 
@@ -439,7 +555,7 @@ def capture_transcript(
 def _single_stage_loop(
     proc: subprocess.Popen,
     channels: int,
-    model: vosk.Model,
+    backend: STTBackend,
     config: ActionsConfig,
     stop_event: threading.Event,
     telegram_client: TelegramClient,
@@ -451,7 +567,6 @@ def _single_stage_loop(
     dispatch_loop: asyncio.AbstractEventLoop | None = None,
 ) -> None:
     """Single-stage: full transcription always; wake word + command in one phrase."""
-    rec = vosk.KaldiRecognizer(model, 16000)
     cooldown_until = 0.0
     was_playing = False
     alias_map = _build_alias_map(config.wake_words)
@@ -472,7 +587,7 @@ def _single_stage_loop(
             capture_transcript,
             proc,
             channels,
-            model,
+            backend,
             timeout,
             stop_event,
             on_stt_event,
@@ -488,7 +603,9 @@ def _single_stage_loop(
         raw_data = _read_with_timeout(proc.stdout, _CHUNK * channels, 2.0)
         if not raw_data:
             if proc.poll() is not None:  # parec exited
-                logger.warning("single-stage: parec process exited — restarting capture")
+                logger.warning(
+                    "single-stage: parec process exited — restarting capture"
+                )
                 break
             if not _stall_logged:
                 logger.debug("single-stage: read timeout (parec stall?) — waiting")
@@ -503,7 +620,7 @@ def _single_stage_loop(
         if was_playing:
             logger.debug("single-stage: playback ended — draining pipe and resetting")
             _drain_pipe(proc)
-            rec.Reset()
+            backend.reset()
             was_playing = False
             continue
 
@@ -519,24 +636,25 @@ def _single_stage_loop(
             on_stt_event("level", {"mic": _rms_level(data)})
 
         if time.monotonic() < cooldown_until:
-            rec.Reset()
+            backend.reset()
             continue
 
-        if not rec.AcceptWaveform(data):
+        if not backend.accept_waveform(data):
             if on_stt_event:
-                partial = json.loads(rec.PartialResult()).get("partial", "").strip()
+                partial = backend.partial_text()
                 if partial:
                     on_stt_event("transcribing", {"text": partial})
             continue
 
-        result = json.loads(rec.Result())
-        text = result.get("text", "").strip()
+        text = backend.text()
         if not text:
             # Empty segment — resync to real-time audio.
             backlog = _drain_pipe(proc)
             if backlog:
-                logger.debug(f"single-stage: drained {backlog} backlog bytes after empty segment")
-            rec.Reset()
+                logger.debug(
+                    f"single-stage: drained {backlog} backlog bytes after empty segment"
+                )
+            backend.reset()
             continue
 
         wake_group, command = _extract_wake_command(text, alias_map)
@@ -544,8 +662,10 @@ def _single_stage_loop(
             # Non-wake speech — resync to real-time audio.
             backlog = _drain_pipe(proc)
             if backlog:
-                logger.debug(f"single-stage: drained {backlog} backlog bytes after non-wake segment")
-            rec.Reset()
+                logger.debug(
+                    f"single-stage: drained {backlog} backlog bytes after non-wake segment"
+                )
+            backend.reset()
             continue
 
         logger.info(f"Single-stage: wake='{wake_group.word}' command='{command}'")
@@ -590,7 +710,7 @@ def _single_stage_loop(
             # Drop pipe backlog accumulated during dispatch (TTS/ask audio)
             # and reset the recognizer so the next wake-word match starts clean.
             _drain_pipe(proc)
-            rec.Reset()
+            backend.reset()
             # Restore UI state after dispatch/dialogue
             if on_stt_event:
                 on_stt_event(
@@ -603,7 +723,7 @@ def _single_stage_loop(
 def _recognition_loop(
     proc: subprocess.Popen,
     channels: int,
-    model: vosk.Model,
+    backend: STTBackend,
     config: ActionsConfig,
     stop_event: threading.Event,
     telegram_client: TelegramClient,
@@ -615,9 +735,17 @@ def _recognition_loop(
     dispatch_loop: asyncio.AbstractEventLoop | None = None,
 ) -> None:
     alias_map = _build_alias_map(config.wake_words)
-    stage1 = vosk.KaldiRecognizer(model, 16000, _grammar_json(config.wake_words))
-    stage1.SetWords(True)
-    display_rec = vosk.KaldiRecognizer(model, 16000) if on_stt_event else None
+    is_vosk = isinstance(backend, VoskSTT)
+    if is_vosk:
+        vosk_model = backend.model
+        stage1 = vosk.KaldiRecognizer(
+            vosk_model, 16000, _grammar_json(config.wake_words)
+        )
+        stage1.SetWords(True)
+        display_rec = vosk.KaldiRecognizer(vosk_model, 16000) if on_stt_event else None
+    else:
+        stage1 = None
+        display_rec = None
     cooldown_until = 0.0
     was_gated = False
     was_playing = False
@@ -651,9 +779,12 @@ def _recognition_loop(
         if was_playing:
             logger.debug("two-stage: playback ended — draining pipe and resetting")
             _drain_pipe(proc)
-            stage1.Reset()
-            if display_rec is not None:
-                display_rec.Reset()
+            if is_vosk:
+                stage1.Reset()
+                if display_rec is not None:
+                    display_rec.Reset()
+            else:
+                backend.reset()
             was_playing = False
             continue
 
@@ -692,85 +823,132 @@ def _recognition_loop(
                 )
 
         if time.monotonic() < cooldown_until:
-            stage1.Reset()
-            if display_rec:
-                display_rec.Reset()
+            if is_vosk:
+                stage1.Reset()
+                if display_rec:
+                    display_rec.Reset()
+            else:
+                backend.reset()
             continue
 
-        if display_rec is not None:
-            display_rec.AcceptWaveform(data)
-            partial = json.loads(display_rec.PartialResult()).get("partial", "").strip()
-            if partial:
-                on_stt_event("transcribing", {"text": partial})  # type: ignore[misc]
+        if is_vosk:
+            if display_rec is not None:
+                display_rec.AcceptWaveform(data)
+                partial = (
+                    json.loads(display_rec.PartialResult()).get("partial", "").strip()
+                )
+                if partial:
+                    on_stt_event("transcribing", {"text": partial})  # type: ignore[misc]
 
-        if stage1.AcceptWaveform(data):
-            result = json.loads(stage1.Result())
-            text = result.get("text", "").strip()
-            words = result.get("result", [])
-            conf = words[0].get("conf", 0.0) if words else 0.0
-            logger.debug(f"Stage1 result: {text!r} conf={conf:.2f}")
-            # Grammar mode may not constrain output on all model/version combos.
-            # Explicitly check the result is exactly one of the wake words.
-            norm_text = normalize_text(text)
-            wake_match = alias_map.get(norm_text)
-            if wake_match is not None and conf >= config.wake_confidence:
-                _wake_detected(
-                    wake_group=wake_match,
-                    proc=proc,
-                    channels=channels,
-                    model=model,
-                    config=config,
-                    stop_event=stop_event,
-                    telegram_client=telegram_client,
-                    livekit_connect_fn=livekit_connect_fn,
-                    livekit_connected_flag=livekit_connected_flag,
-                    on_stt_event=on_stt_event,
-                    mqtt_client=mqtt_client,
-                    loop=loop,
-                    dispatch_loop=dispatch_loop,
-                )
-                # Drop any audio buffered while dispatch (TTS/ask) was running,
-                # and re-create both recognizers after the command window.
-                logger.debug(
-                    f"two-stage: dispatch returned — livekit_flag={livekit_connected_flag.is_set()} "
-                    f"was_gated={was_gated} was_playing={was_playing}"
-                )
-                _drain_pipe(proc)
-                stage1 = vosk.KaldiRecognizer(
-                    model, 16000, _grammar_json(config.wake_words)
-                )
-                stage1.SetWords(True)
-                display_rec = (
-                    vosk.KaldiRecognizer(model, 16000) if on_stt_event else None
-                )
-                if on_stt_event:
-                    on_stt_event(
-                        "listening", {"wake_words": [g.word for g in config.wake_words]}
-                    )
-                if mqtt_client:
-                    mqtt_client.publish_threadsafe(
-                        f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
-                        "idle",
+            if stage1.AcceptWaveform(data):
+                result = json.loads(stage1.Result())
+                text = result.get("text", "").strip()
+                words = result.get("result", [])
+                conf = words[0].get("conf", 0.0) if words else 0.0
+                logger.debug(f"Stage1 result: {text!r} conf={conf:.2f}")
+                norm_text = normalize_text(text)
+                wake_match = alias_map.get(norm_text)
+                if wake_match is not None and conf >= config.wake_confidence:
+                    _wake_detected(
+                        wake_group=wake_match,
+                        proc=proc,
+                        channels=channels,
+                        backend=backend,
+                        config=config,
+                        stop_event=stop_event,
+                        telegram_client=telegram_client,
+                        livekit_connect_fn=livekit_connect_fn,
+                        livekit_connected_flag=livekit_connected_flag,
+                        on_stt_event=on_stt_event,
+                        mqtt_client=mqtt_client,
                         loop=loop,
+                        dispatch_loop=dispatch_loop,
                     )
+                    logger.debug(
+                        f"two-stage: dispatch returned — livekit_flag={livekit_connected_flag.is_set()} "
+                        f"was_gated={was_gated} was_playing={was_playing}"
+                    )
+                    _drain_pipe(proc)
+                    vosk_model = backend.model
+                    stage1 = vosk.KaldiRecognizer(
+                        vosk_model, 16000, _grammar_json(config.wake_words)
+                    )
+                    stage1.SetWords(True)
+                    display_rec = (
+                        vosk.KaldiRecognizer(vosk_model, 16000)
+                        if on_stt_event
+                        else None
+                    )
+                    if on_stt_event:
+                        on_stt_event(
+                            "listening",
+                            {"wake_words": [g.word for g in config.wake_words]},
+                        )
+                    if mqtt_client:
+                        mqtt_client.publish_threadsafe(
+                            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
+                            "idle",
+                            loop=loop,
+                        )
+                else:
+                    backlog = _drain_pipe(proc)
+                    if backlog:
+                        logger.debug(
+                            f"two-stage: drained {backlog} backlog bytes after segment"
+                        )
+                    stage1.Reset()
+                    if display_rec is not None:
+                        display_rec.Reset()
+        else:
+            # sherpa-onnx: open-vocabulary stage1
+            if backend.accept_waveform(data):
+                backend.text()  # decode to finalize
+                text = backend.partial_text().strip()
+                if text:
+                    logger.debug(f"Stage1 result (sherpa): {text!r}")
+                    norm_text = normalize_text(text)
+                    wake_match = alias_map.get(norm_text)
+                    if wake_match:
+                        _wake_detected(
+                            wake_group=wake_match,
+                            proc=proc,
+                            channels=channels,
+                            backend=backend,
+                            config=config,
+                            stop_event=stop_event,
+                            telegram_client=telegram_client,
+                            livekit_connect_fn=livekit_connect_fn,
+                            livekit_connected_flag=livekit_connected_flag,
+                            on_stt_event=on_stt_event,
+                            mqtt_client=mqtt_client,
+                            loop=loop,
+                            dispatch_loop=dispatch_loop,
+                        )
+                        _drain_pipe(proc)
+                        if on_stt_event:
+                            on_stt_event(
+                                "listening",
+                                {"wake_words": [g.word for g in config.wake_words]},
+                            )
+                        if mqtt_client:
+                            mqtt_client.publish_threadsafe(
+                                f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
+                                "idle",
+                                loop=loop,
+                            )
+                    else:
+                        backend.reset()
             else:
-                # No wake word in this segment. Drain any pipe backlog accumulated
-                # while Vosk was processing (on slow hardware AcceptWaveform takes
-                # longer than the chunk it consumes, so the pipe fills over time).
-                # Resync to real-time audio at each segment boundary.
-                backlog = _drain_pipe(proc)
-                if backlog:
-                    logger.debug(f"two-stage: drained {backlog} backlog bytes after segment")
-                stage1.Reset()
-                if display_rec is not None:
-                    display_rec.Reset()
+                partial = backend.partial_text().strip()
+                if partial and on_stt_event:
+                    on_stt_event("transcribing", {"text": partial})
 
 
 def _wake_detected(
     wake_group: WakeWordGroup,
     proc: subprocess.Popen,
     channels: int,
-    model: vosk.Model,
+    backend: STTBackend,
     config: ActionsConfig,
     stop_event: threading.Event,
     telegram_client: TelegramClient,
@@ -800,7 +978,7 @@ def _wake_detected(
     transcript = capture_transcript(
         proc,
         channels,
-        model,
+        backend,
         config.command_timeout,
         stop_event,
         on_stt_event,
@@ -848,7 +1026,7 @@ def _wake_detected(
             capture_transcript,
             proc,
             channels,
-            model,
+            backend,
             timeout,
             stop_event,
             on_stt_event,

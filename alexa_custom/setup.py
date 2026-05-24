@@ -1,12 +1,70 @@
-"""One-time setup: download Vosk STT model and Piper TTS voice."""
-
 from __future__ import annotations
 
 import shutil
+import subprocess
 import sys
 import urllib.request
 import zipfile
 from pathlib import Path
+
+_SHERPA_MODELS = {
+    "ita": (
+        "https://huggingface.co/hudaiapa88/sherpa-stt-onnx/resolve/main/it/kroko_128l",
+        "models/it/kroko_128l",
+    ),
+}
+_SHERPA_DEST = Path("models/it/kroko_128l")
+
+
+def download_sherpa_onnx(lang: str = "ita", force: bool = False) -> None:
+    if lang not in _SHERPA_MODELS:
+        print(
+            f"Unknown sherpa-onnx language {lang!r}. Available: {', '.join(_SHERPA_MODELS)}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    repo, dest_path = _SHERPA_MODELS[lang]
+    dest = Path(dest_path)
+
+    if dest.exists() and not force:
+        print(
+            f"sherpa-onnx model already present at {dest.resolve()} — skipping (use --force to replace)."
+        )
+        return
+
+    if dest.exists() and force:
+        print(f"Removing existing sherpa-onnx model at {dest.resolve()} …")
+        shutil.rmtree(dest)
+
+    print(f"Downloading sherpa-onnx model ({lang}) via huggingface-cli …")
+    hf_cmd = shutil.which("hf")
+    if not hf_cmd:
+        print(
+            "huggingface-cli not found. Install with: pip install huggingface_hub",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    model_path = dest.name
+    parent = dest.parent
+    cmd = [
+        hf_cmd,
+        "download",
+        repo,
+        "--local-dir",
+        str(parent),
+        "--include",
+        f"{model_path}/*",
+    ]
+    print(f"Running: {' '.join(cmd)}")
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"Download failed: {result.stderr}", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"sherpa-onnx model ready at {dest.resolve()}")
+
 
 _VOSK_MODELS = {
     "small": (
@@ -146,12 +204,19 @@ def main() -> None:
         action="store_true",
         help="Re-download even if assets are already present",
     )
+    parser.add_argument(
+        "--sherpa-onnx",
+        action="store_true",
+        help="Also download the sherpa-onnx Paraformer-ita model (alternative STT backend)",
+    )
     args = parser.parse_args()
 
     if not args.no_vosk:
         download_vosk(large=args.large, force=args.force)
     if not args.no_piper:
         download_piper_voice(args.piper_voice, force=args.force)
+    if args.sherpa_onnx:
+        download_sherpa_onnx(force=args.force)
 
 
 if __name__ == "__main__":
