@@ -1,6 +1,6 @@
 # sherpa-onnx STT Backend
 
-alexa-custom supports **sherpa-onnx** as an alternative speech-to-text backend to Vosk. sherpa-onnx uses the Paraformer model which is open-vocabulary (no grammar constraints), potentially offering better accuracy for command recognition at the cost of higher CPU usage.
+alexa-custom supports **sherpa-onnx** as an alternative speech-to-text backend to Vosk. sherpa-onnx uses streaming models which are open-vocabulary (no grammar constraints), potentially offering better accuracy for command recognition at the cost of higher CPU usage.
 
 ---
 
@@ -8,13 +8,40 @@ alexa-custom supports **sherpa-onnx** as an alternative speech-to-text backend t
 
 | Feature | Vosk | sherpa-onnx |
 |---------|------|-------------|
-| Model | Kaldi-based | Streaming Paraformer |
+| Model | Kaldi-based | Streaming transducer/Paraformer |
 | Vocabulary | Grammar-constrained | Open-vocabulary |
 | CPU usage | Lower | Higher |
 | Accuracy | Good | Potentially better |
 | Wake word detection | Grammar-mode | Open transcription |
 
 For the constrained target hardware (Arduino Uno Q as USB audio gadget), **Vosk remains the default** for wake word detection due to its lower CPU footprint.
+
+---
+
+## Supported Models
+
+The sherpa-onnx backend supports both **transducer** models (encoder/decoder/joiner) and **Paraformer** models (encoder/decoder).
+
+A working Italian model is **kroko_128l** — a streaming Zipformer transducer model converted to ONNX.
+
+### Model Files Required
+
+**For transducer models** (encoder/decoder/joiner):
+```
+models/sherpa-onnx/
+├── tokens.txt          # Vocabulary
+├── encoder.int8.onnx  # Encoder (int8 optimized)
+├── decoder.int8.onnx  # Decoder (int8 optimized)
+└── joiner.int8.onnx   # Joiner (int8 optimized)
+```
+
+**For Paraformer models** (encoder/decoder):
+```
+models/sherpa-onnx/
+├── tokens.txt      # Vocabulary
+├── encoder.onnx    # Encoder model
+└── decoder.onnx    # Decoder model
+```
 
 ---
 
@@ -26,25 +53,19 @@ For the constrained target hardware (Arduino Uno Q as USB audio gadget), **Vosk 
 python -m alexa_custom.setup --sherpa-onnx
 ```
 
-This downloads the Italian Paraformer model to `models/sherpa-onnx/`.
+This downloads the kroko_128l Italian model to `models/it/kroko_128l/` via HuggingFace.
 
 ### Manual Download
 
-Download from the [k2-fsa sherpa-onnx releases](https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models) and extract to `models/sherpa-onnx/`:
+Download from HuggingFace using the `hf` CLI:
 
 ```bash
-mkdir -p models/sherpa-onnx
-tar xf sherpa-onnx-paraformer-ita.tar.bz2 -C models/sherpa-onnx --strip-components=1
+hf download hudaiapa88/sherpa-stt-onnx \
+  --local-dir ./models \
+  --include "it/kroko_128l/*"
 ```
 
-### Model Files Required
-
-```
-models/sherpa-onnx/
-├── tokens.txt      # Vocabulary
-├── encoder.onnx    # Encoder model
-└── decoder.onnx    # Decoder model
-```
+Or place the model files directly in `models/it/kroko_128l/`.
 
 ---
 
@@ -69,6 +90,12 @@ stt_backend: sherpa-onnx
 |----------|---------|-------------|
 | `SHERPA_ONNX_PATH` | `models/sherpa-onnx` | Path to the sherpa-onnx model directory |
 
+Point to your model location:
+
+```bash
+SHERPA_ONNX_PATH=models/it/kroko_128l alexa-client
+```
+
 ---
 
 ## Switching Backends
@@ -84,7 +111,7 @@ Edit `config.yaml` and set `stt.backend: vosk` or `stt.backend: sherpa-onnx`. Th
 alexa-client
 
 # Use sherpa-onnx
-STT_BACKEND=sherpa-onnx alexa-client
+SHERPA_ONNX_PATH=models/it/kroko_128l alexa-client
 ```
 
 ---
@@ -97,9 +124,11 @@ STT_BACKEND=sherpa-onnx alexa-client
 RuntimeError: sherpa-onnx model not found at 'models/sherpa-onnx'. Run 'alexa-setup --sherpa-onnx' to download it.
 ```
 
-Run the setup script:
+Ensure your model is in the path specified by `SHERPA_ONNX_PATH`:
+
 ```bash
-python -m alexa_custom.setup --sherpa-onnx
+ls models/it/kroko_128l/
+# Should show: tokens.txt, encoder.int8.onnx, decoder.int8.onnx, joiner.int8.onnx
 ```
 
 ### High CPU Usage

@@ -96,26 +96,45 @@ class SherpaOnnxSTT(STTBackend):
             raise RuntimeError(
                 f"sherpa-onnx model not found at {model_dir!r}. Run 'alexa-setup --sherpa-onnx' to download it."
             )
-        self._delegate = sherpa_onnx.OnlineRecognizer.from_paraformer(
-            tokens=os.path.join(model_dir, "tokens.txt"),
-            encoder=os.path.join(model_dir, "encoder.onnx"),
-            decoder=os.path.join(model_dir, "decoder.onnx"),
-        )
+        tokens = os.path.join(model_dir, "tokens.txt")
+        encoder = os.path.join(model_dir, "encoder.onnx")
+        decoder = os.path.join(model_dir, "decoder.onnx")
+        joiner = os.path.join(model_dir, "joiner.onnx")
+        encoder_int8 = os.path.join(model_dir, "encoder.int8.onnx")
+        decoder_int8 = os.path.join(model_dir, "decoder.int8.onnx")
+        joiner_int8 = os.path.join(model_dir, "joiner.int8.onnx")
+
+        if os.path.exists(joiner) or os.path.exists(joiner_int8):
+            self._delegate = sherpa_onnx.OnlineRecognizer.from_transducer(
+                tokens=tokens,
+                encoder=encoder_int8 if os.path.exists(encoder_int8) else encoder,
+                decoder=decoder_int8 if os.path.exists(decoder_int8) else decoder,
+                joiner=joiner_int8 if os.path.exists(joiner_int8) else joiner,
+            )
+        else:
+            self._delegate = sherpa_onnx.OnlineRecognizer.from_paraformer(
+                tokens=tokens,
+                encoder=encoder,
+                decoder=decoder,
+            )
+        self._stream = self._delegate.create_stream()
 
     def accept_waveform(self, data: bytes) -> bool:
         samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
-        self._delegate.accept_waveform(16000, samples)
-        return self._delegate.is_ready()
+        self._stream.accept_waveform(sample_rate=16000, waveform=samples)
+        return self._delegate.is_ready(self._stream)
 
     def text(self) -> str:
-        self._delegate.decode()
-        return self._delegate.text.strip()
+        self._delegate.decode_stream(self._stream)
+        result = self._delegate.get_result(self._stream)
+        return result.strip() if isinstance(result, str) else result.text.strip()
 
     def partial_text(self) -> str:
-        return self._delegate.partial_text.strip()
+        result = self._delegate.get_result(self._stream)
+        return result.strip() if isinstance(result, str) else result.text.strip()
 
     def reset(self) -> None:
-        self._delegate.reset()
+        self._delegate.reset(self._stream)
 
 
 def get_stt_backend(backend: str, model_path: str | None = None) -> STTBackend:
