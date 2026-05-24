@@ -581,7 +581,9 @@ def _single_stage_loop(
         raw_data = _read_with_timeout(proc.stdout, _CHUNK * channels, 2.0)
         if not raw_data:
             if proc.poll() is not None:  # parec exited
-                logger.warning("single-stage: parec process exited — restarting capture")
+                logger.warning(
+                    "single-stage: parec process exited — restarting capture"
+                )
                 break
             if not _stall_logged:
                 logger.debug("single-stage: read timeout (parec stall?) — waiting")
@@ -627,8 +629,10 @@ def _single_stage_loop(
             # Empty segment — resync to real-time audio.
             backlog = _drain_pipe(proc)
             if backlog:
-                logger.debug(f"single-stage: drained {backlog} backlog bytes after empty segment")
-            rec.Reset()
+                logger.debug(
+                    f"single-stage: drained {backlog} backlog bytes after empty segment"
+                )
+            backend.reset()
             continue
 
         wake_group, command = _extract_wake_command(text, alias_map)
@@ -636,8 +640,10 @@ def _single_stage_loop(
             # Non-wake speech — resync to real-time audio.
             backlog = _drain_pipe(proc)
             if backlog:
-                logger.debug(f"single-stage: drained {backlog} backlog bytes after non-wake segment")
-            rec.Reset()
+                logger.debug(
+                    f"single-stage: drained {backlog} backlog bytes after non-wake segment"
+                )
+            backend.reset()
             continue
 
         logger.info(f"Single-stage: wake='{wake_group.word}' command='{command}'")
@@ -818,7 +824,7 @@ def _recognition_loop(
                     wake_group=wake_match,
                     proc=proc,
                     channels=channels,
-                    model=backend,
+                    backend=backend,
                     config=config,
                     stop_event=stop_event,
                     telegram_client=telegram_client,
@@ -864,7 +870,9 @@ def _recognition_loop(
                 # Resync to real-time audio at each segment boundary.
                 backlog = _drain_pipe(proc)
                 if backlog:
-                    logger.debug(f"two-stage: drained {backlog} backlog bytes after segment")
+                    logger.debug(
+                        f"two-stage: drained {backlog} backlog bytes after segment"
+                    )
                 stage1.Reset()
                 if display_rec is not None:
                     display_rec.Reset()
