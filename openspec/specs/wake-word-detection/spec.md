@@ -6,7 +6,7 @@ Listen for configured wake words in the background and trigger command listening
 ## Requirements
 
 ### Requirement: Continuous wake word listening
-The system SHALL run a background STT pipeline that listens continuously for configured wake words using Vosk grammar-mode recognition. Recognition SHALL be automatically gated (paused) when a LiveKit call is active or when the TTS engine is speaking to prevent false triggers. The system SHALL report its listening status (e.g., `idle`, `listening`, `gated`) via MQTT.
+The system SHALL run a background STT pipeline that listens continuously for configured wake words. When using the Vosk backend, recognition SHALL use grammar-mode recognition for efficiency. Recognition SHALL be automatically gated (paused) when a LiveKit call is active or when the TTS engine is speaking to prevent false triggers. The system SHALL report its listening status (e.g., `idle`, `listening`, `gated`) via MQTT. The STT backend is configurable: Vosk (default) or sherpa-onnx.
 
 #### Scenario: Wake word detected
 - **WHEN** a configured wake word is spoken clearly into the microphone

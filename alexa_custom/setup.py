@@ -1,5 +1,3 @@
-"""One-time setup: download Vosk STT model and Piper TTS voice."""
-
 from __future__ import annotations
 
 import shutil
@@ -7,6 +5,57 @@ import sys
 import urllib.request
 import zipfile
 from pathlib import Path
+
+_SHERPA_MODELS = {
+    "ita": (
+        "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-paraformer-ita.tar.bz2",
+        "sherpa-onnx-paraformer-ita.tar.bz2",
+        "sherpa-onnx-paraformer-ita",
+    ),
+}
+_SHERPA_DEST = Path("models/sherpa-onnx")
+
+
+def download_sherpa_onnx(lang: str = "ita", force: bool = False) -> None:
+    if lang not in _SHERPA_MODELS:
+        print(
+            f"Unknown sherpa-onnx language {lang!r}. Available: {', '.join(_SHERPA_MODELS)}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    url, zip_name, unpacked = _SHERPA_MODELS[lang]
+    dest = _SHERPA_DEST
+
+    if dest.exists() and not force:
+        print(
+            f"sherpa-onnx model already present at {dest.resolve()} — skipping (use --force to replace)."
+        )
+        return
+
+    if dest.exists() and force:
+        print(f"Removing existing sherpa-onnx model at {dest.resolve()} …")
+        shutil.rmtree(dest)
+
+    zip_path = Path(zip_name)
+    print(f"Downloading sherpa-onnx model ({lang}) …")
+    _download(url, zip_path)
+
+    print(f"Unpacking {zip_path} …")
+    try:
+        with zipfile.ZipFile(zip_path) as zf:
+            zf.extractall(".")
+    except Exception as exc:
+        print(f"Unzip failed: {exc}", file=sys.stderr)
+        sys.exit(1)
+    finally:
+        zip_path.unlink(missing_ok=True)
+
+    if dest.exists():
+        shutil.rmtree(dest)
+    Path(unpacked).rename(dest)
+    print(f"sherpa-onnx model ready at {dest.resolve()}")
+
 
 _VOSK_MODELS = {
     "small": (
@@ -146,12 +195,19 @@ def main() -> None:
         action="store_true",
         help="Re-download even if assets are already present",
     )
+    parser.add_argument(
+        "--sherpa-onnx",
+        action="store_true",
+        help="Also download the sherpa-onnx Paraformer-ita model (alternative STT backend)",
+    )
     args = parser.parse_args()
 
     if not args.no_vosk:
         download_vosk(large=args.large, force=args.force)
     if not args.no_piper:
         download_piper_voice(args.piper_voice, force=args.force)
+    if args.sherpa_onnx:
+        download_sherpa_onnx(force=args.force)
 
 
 if __name__ == "__main__":

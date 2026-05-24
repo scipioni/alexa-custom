@@ -22,6 +22,7 @@ dependencies = [
     "aiomqtt>=2.5.1",
     "aiohttp>=3.9",
     "piper-tts>=1.2.0",
+    "sherpa-onnx>=1.0.0",
 ]
 
 [project.scripts]

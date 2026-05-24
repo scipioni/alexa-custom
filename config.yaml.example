@@ -160,6 +160,18 @@ tts:
 #tts_voice: it_IT-paola-medium
 
 # ---------------------------------------------------------------------------
+# STT — speech-to-text backend
+# ---------------------------------------------------------------------------
+# Two backends are available:
+#   vosk       — default, grammar-constrained recognition optimized for wake words
+#   sherpa-onnx — open-vocabulary Paraformer model; better accuracy but higher CPU
+#
+# sherpa-onnx model is downloaded with: alexa-setup --sherpa-onnx
+
+stt:
+  backend: vosk
+
+# ---------------------------------------------------------------------------
 # Startup actions
 # ---------------------------------------------------------------------------
 # Executed once when the daemon finishes initializing.
