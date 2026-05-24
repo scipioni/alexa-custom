@@ -532,10 +532,20 @@ def _single_stage_loop(
         result = json.loads(rec.Result())
         text = result.get("text", "").strip()
         if not text:
+            # Empty segment — resync to real-time audio.
+            backlog = _drain_pipe(proc)
+            if backlog:
+                logger.debug(f"single-stage: drained {backlog} backlog bytes after empty segment")
+            rec.Reset()
             continue
 
         wake_group, command = _extract_wake_command(text, alias_map)
         if wake_group is None:
+            # Non-wake speech — resync to real-time audio.
+            backlog = _drain_pipe(proc)
+            if backlog:
+                logger.debug(f"single-stage: drained {backlog} backlog bytes after non-wake segment")
+            rec.Reset()
             continue
 
         logger.info(f"Single-stage: wake='{wake_group.word}' command='{command}'")
@@ -743,6 +753,17 @@ def _recognition_loop(
                         "idle",
                         loop=loop,
                     )
+            else:
+                # No wake word in this segment. Drain any pipe backlog accumulated
+                # while Vosk was processing (on slow hardware AcceptWaveform takes
+                # longer than the chunk it consumes, so the pipe fills over time).
+                # Resync to real-time audio at each segment boundary.
+                backlog = _drain_pipe(proc)
+                if backlog:
+                    logger.debug(f"two-stage: drained {backlog} backlog bytes after segment")
+                stage1.Reset()
+                if display_rec is not None:
+                    display_rec.Reset()
 
 
 def _wake_detected(
