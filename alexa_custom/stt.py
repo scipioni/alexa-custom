@@ -156,15 +156,21 @@ def resolve_capture_source(input_spec: str | None) -> tuple[str | None, int]:
         found = False
         for line in out.splitlines():
             if "Name: " in line:
-                name = line.split(": ")[1].strip()
+                name = line.split(": ", 1)[1].strip()
                 if needle in name.lower() and "monitor" not in name.lower():
                     source_name = name
                     found = True
-            if found and "Channels: " in line:
-                try:
-                    channels = int(line.split(":")[1].strip())
-                except Exception:
-                    channels = 1
+                elif found:
+                    # Moved past the matched source block without finding spec — return now.
+                    return source_name, channels
+            if found and "Sample Specification:" in line:
+                # e.g. "s16le 2ch 48000Hz"
+                for part in line.split():
+                    if part.endswith("ch"):
+                        try:
+                            channels = int(part[:-2])
+                        except ValueError:
+                            pass
                 return source_name, channels
 
         logger.warning(f"No PipeWire source matching {input_spec!r} — using default")
@@ -296,6 +302,10 @@ def _downmix_to_mono(data: bytes, channels: int) -> bytes:
     """Take the loudest signal across all channels to ensure mono-downmix is high-gain."""
     if channels <= 1:
         return data
+    frame_bytes = channels * 2  # s16le: 2 bytes per sample
+    data = data[: len(data) // frame_bytes * frame_bytes]  # align to frame boundary
+    if not data:
+        return b""
     samples = np.frombuffer(data, dtype=np.int16).reshape(-1, channels)
     # Use max absolute value across channels to avoid diluting the signal with empty jacks.
     idx = np.argmax(np.abs(samples), axis=1)
@@ -565,17 +575,26 @@ def _single_stage_loop(
         )
 
     assert proc.stdout is not None
+    _stall_logged = False
     while not stop_event.is_set():
         # Adjust chunk size for multi-channel
-        raw_data = proc.stdout.read(_CHUNK * channels)
+        raw_data = _read_with_timeout(proc.stdout, _CHUNK * channels, 2.0)
         if not raw_data:
-            break
+            if proc.poll() is not None:  # parec exited
+                logger.warning("single-stage: parec process exited — restarting capture")
+                break
+            if not _stall_logged:
+                logger.debug("single-stage: read timeout (parec stall?) — waiting")
+                _stall_logged = True
+            continue  # read timeout — re-check stop_event
+        _stall_logged = False
 
         if is_playback_active():
             was_playing = True
             continue
 
         if was_playing:
+            logger.debug("single-stage: playback ended — draining pipe and resetting")
             _drain_pipe(proc)
             backend.reset()
             was_playing = False
@@ -605,10 +624,20 @@ def _single_stage_loop(
 
         text = backend.text()
         if not text:
+            # Empty segment — resync to real-time audio.
+            backlog = _drain_pipe(proc)
+            if backlog:
+                logger.debug(f"single-stage: drained {backlog} backlog bytes after empty segment")
+            rec.Reset()
             continue
 
         wake_group, command = _extract_wake_command(text, alias_map)
         if wake_group is None:
+            # Non-wake speech — resync to real-time audio.
+            backlog = _drain_pipe(proc)
+            if backlog:
+                logger.debug(f"single-stage: drained {backlog} backlog bytes after non-wake segment")
+            rec.Reset()
             continue
 
         logger.info(f"Single-stage: wake='{wake_group.word}' command='{command}'")
@@ -702,16 +731,25 @@ def _recognition_loop(
         )
 
     assert proc.stdout is not None
+    _stall_logged = False
     while not stop_event.is_set():
-        raw_data = proc.stdout.read(_CHUNK * channels)
+        raw_data = _read_with_timeout(proc.stdout, _CHUNK * channels, 2.0)
         if not raw_data:
-            break
+            if proc.poll() is not None:  # parec exited
+                logger.warning("two-stage: parec process exited — restarting capture")
+                break
+            if not _stall_logged:
+                logger.debug("two-stage: read timeout (parec stall?) — waiting")
+                _stall_logged = True
+            continue  # read timeout — re-check stop_event
+        _stall_logged = False
 
         if is_playback_active():
             was_playing = True
             continue
 
         if was_playing:
+            logger.debug("two-stage: playback ended — draining pipe and resetting")
             _drain_pipe(proc)
             stage1.Reset()
             if display_rec is not None:
@@ -793,6 +831,10 @@ def _recognition_loop(
                 )
                 # Drop any audio buffered while dispatch (TTS/ask) was running,
                 # and re-create both recognizers after the command window.
+                logger.debug(
+                    f"two-stage: dispatch returned — livekit_flag={livekit_connected_flag.is_set()} "
+                    f"was_gated={was_gated} was_playing={was_playing}"
+                )
                 _drain_pipe(proc)
                 if is_vosk:
                     vosk_model = backend.model
@@ -815,6 +857,17 @@ def _recognition_loop(
                         "idle",
                         loop=loop,
                     )
+            else:
+                # No wake word in this segment. Drain any pipe backlog accumulated
+                # while Vosk was processing (on slow hardware AcceptWaveform takes
+                # longer than the chunk it consumes, so the pipe fills over time).
+                # Resync to real-time audio at each segment boundary.
+                backlog = _drain_pipe(proc)
+                if backlog:
+                    logger.debug(f"two-stage: drained {backlog} backlog bytes after segment")
+                stage1.Reset()
+                if display_rec is not None:
+                    display_rec.Reset()
 
 
 def _wake_detected(

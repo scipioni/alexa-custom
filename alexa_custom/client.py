@@ -34,7 +34,7 @@ from alexa_custom.audio import (
 RECONNECT_DELAY = 5  # seconds between reconnect attempts
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO),
     format="%(asctime)s %(levelname)s %(message)s",
 )
 logger = logging.getLogger(__name__)
@@ -269,6 +269,10 @@ class LiveKitSessionManager:
             t.cancel()
         self.tap_tasks.clear()
         self.subscribed_tracks.clear()
+        # Signal disconnection early so STT ungates while we finish cleanup.
+        # The room "disconnected" event may not fire until room.disconnect() below.
+        logger.debug("cleanup: emitting early 'disconnected' to ungate STT")
+        self.emit("disconnected", {})
         if self.call_connected:
             try:
                 await asyncio.to_thread(play_call_end)
@@ -413,8 +417,10 @@ async def _async_main(
     def _wrapped_on_event(event: str, data: dict) -> None:
         if livekit_connected_flag is not None:
             if event == "connected":
+                logger.debug("livekit: connected — setting livekit_connected_flag")
                 livekit_connected_flag.set()
             elif event == "disconnected":
+                logger.debug("livekit: disconnected — clearing livekit_connected_flag")
                 livekit_connected_flag.clear()
         if on_event:
             on_event(event, data)
