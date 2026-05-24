@@ -163,14 +163,17 @@ tts:
 # STT — speech-to-text backend
 # ---------------------------------------------------------------------------
 # Two backends are available:
-#   vosk       — default, grammar-constrained recognition optimized for wake words
-#   sherpa-onnx — open-vocabulary Paraformer model; better accuracy but higher CPU
+#   vosk        — default, grammar-constrained recognition (low CPU)
+#   sherpa-onnx — streaming open-vocabulary model (higher CPU, better accuracy)
 #
-# sherpa-onnx model is downloaded with: alexa-setup --sherpa-onnx
+# sherpa-onnx model download:
+#   python -m alexa_custom.setup --sherpa-onnx
+#   (or: hf download hudaiapa88/sherpa-stt-onnx --local-dir ./models --include "it/kroko_128l/*")
 
 stt:
   backend: vosk
-  # model_path: models/it/kroko_128l  # Optional: override default model path
+  # model_path: models/it/kroko_128l  # Optional: override default model path for sherpa-onnx
+  # model_path: models/it             # For vosk
 
 # ---------------------------------------------------------------------------
 # Startup actions
