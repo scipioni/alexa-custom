@@ -448,22 +448,53 @@ def speakerphone():
 
 
 def _play_array(audio: np.ndarray, samplerate: int) -> None:
-    """Play a float32 numpy audio array in-process via PortAudio/PipeWire.
+    """Play a float32 numpy audio array via pw-play (PipeWire) or aplay (ALSA fallback)."""
+    import shutil
 
-    Routes through the "pipewire" ALSA virtual device so beeps share the same
-    sink as TTS (the configured OUTPUT_DEVICE). Falling back to PortAudio's
-    default would otherwise send tones to a different card (e.g., built-in HDA)
-    and produce the "silent beep" symptom even though playback succeeded.
-    """
+    channels = audio.shape[1] if audio.ndim > 1 else 1
+    frames = audio.shape[0]
+    duration_s = frames / samplerate
+    # Give pw-play 3× the audio duration plus 5 s startup, capped at 30 s.
+    play_timeout = min(max(duration_s * 3 + 5, 8), 30)
+    data = np.ascontiguousarray(audio).tobytes()
+
+    pw_play = shutil.which("pw-play")
+    if pw_play:
+        cmd = [
+            pw_play,
+            "-a",
+            "--rate",
+            str(samplerate),
+            "--channels",
+            str(channels),
+            "--format",
+            "f32",
+            "-",
+        ]
+    else:
+        cmd = [
+            "aplay",
+            "-D",
+            "pipewire",
+            "-r",
+            str(samplerate),
+            "-f",
+            "FLOAT_LE",
+            "-c",
+            str(channels),
+            "-q",
+        ]
+
     with _audio_lock:
         _playback_active.set()
         try:
-            device = get_pipewire_device()
-            if device is not None:
-                sd.play(audio, samplerate, device=device)
-            else:
-                sd.play(audio, samplerate)
-            sd.wait()
+            subprocess.run(
+                cmd,
+                input=data,
+                timeout=play_timeout,
+                check=False,
+                stderr=subprocess.DEVNULL,
+            )
             if _POST_PLAYBACK_MS > 0:
                 time.sleep(_POST_PLAYBACK_MS / 1000.0)
         except Exception as e:
