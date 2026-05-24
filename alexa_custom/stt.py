@@ -140,7 +140,8 @@ class SherpaOnnxSTT(STTBackend):
 def get_stt_backend(backend: str, model_path: str | None = None) -> STTBackend:
     if backend == "sherpa-onnx":
         return SherpaOnnxSTT(model_path or _SHERPA_MODEL_PATH)
-    return VoskSTT(_load_model(model_path or _MODEL_PATH))
+    vosk_path = model_path or _MODEL_PATH
+    return VoskSTT(_load_model(vosk_path))
 
 
 # Once we have detected any speech, return as soon as the recognizer has been
@@ -384,7 +385,9 @@ def run_stt_worker(
             )
             proc: subprocess.Popen | None = None
             try:
-                backend = get_stt_backend(current_config.stt_backend)
+                backend = get_stt_backend(
+                    current_config.stt_backend, current_config.stt_model_path
+                )
             except RuntimeError as e:
                 logger.error(f"STT backend creation failed: {e}")
                 return

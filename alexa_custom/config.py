@@ -52,6 +52,7 @@ class ActionsConfig:
     tts_backend: str = "piper"
     tts_voice: str = "it_IT-paola-medium"
     stt_backend: str = "vosk"
+    stt_model_path: str | None = None
 
 
 def _parse_actions(raw_actions: list[Any], path_prefix: str) -> list[ActionEntry]:
@@ -245,6 +246,13 @@ def _parse_actions_config(raw: dict, source: str = "config") -> ActionsConfig:
             f"{source}: 'stt.backend' must be 'vosk' or 'sherpa-onnx', got {stt_backend!r}"
         )
 
+    stt_model_path_raw = stt_section.get("model_path") or raw.get("stt_model_path")
+    stt_model_path: str | None = None
+    if stt_model_path_raw is not None:
+        if not isinstance(stt_model_path_raw, str):
+            raise ConfigError(f"{source}: 'stt.model_path' must be a string if present")
+        stt_model_path = stt_model_path_raw
+
     on_startup: list[ActionEntry] = []
     raw_startup = raw.get("on_startup")
     if raw_startup is not None:
@@ -273,6 +281,7 @@ def _parse_actions_config(raw: dict, source: str = "config") -> ActionsConfig:
         tts_backend=tts_backend,
         tts_voice=tts_voice,
         stt_backend=stt_backend,
+        stt_model_path=stt_model_path,
     )
 
 

@@ -170,6 +170,7 @@ tts:
 
 stt:
   backend: vosk
+  # model_path: models/it/kroko_128l  # Optional: override default model path
 
 # ---------------------------------------------------------------------------
 # Startup actions
