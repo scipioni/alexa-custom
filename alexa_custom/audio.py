@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 import os
+import shutil
 import subprocess
 import sys
 import threading
 import time
 import logging
 from typing import Callable
-import sounddevice as sd
 import numpy as np
 import pulsectl
+
+# Resolved once at import time; None if the tool is absent (aplay fallback used).
+_PW_PLAY: str | None = shutil.which("pw-play")
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +50,7 @@ _SAMPLERATE = {"usb": 48000, "bluetooth": 16000}
 
 def find_pipewire_device():
     """Return the sounddevice index for the PipeWire ALSA device."""
+    import sounddevice as sd
     return next(
         (i for i, d in enumerate(sd.query_devices()) if d["name"] == "pipewire"),
         None,
@@ -80,6 +84,7 @@ def invalidate_pipewire_device_cache() -> None:
 
 def resolve_device(name_or_index: str) -> int:
     """Resolve a device name substring or numeric index string to a sounddevice index."""
+    import sounddevice as sd
     if name_or_index.strip().lstrip("-").isdigit():
         return int(name_or_index)
     needle = name_or_index.lower()
@@ -366,6 +371,7 @@ def list_devices():
     print("\n" + "=" * 60)
     print("Sounddevice / ALSA Devices")
     print("=" * 60)
+    import sounddevice as sd
     for i, device in enumerate(sd.query_devices()):
         print(f"  {i}: {device['name']}")
         print(
@@ -374,6 +380,8 @@ def list_devices():
 
 
 def speakerphone():
+    import sounddevice as sd
+
     print("=" * 60)
     print("NewPie Conference Speakerphone")
     print("=" * 60)
@@ -449,8 +457,6 @@ def speakerphone():
 
 def _play_array(audio: np.ndarray, samplerate: int) -> None:
     """Play a float32 numpy audio array via pw-play (PipeWire) or aplay (ALSA fallback)."""
-    import shutil
-
     channels = audio.shape[1] if audio.ndim > 1 else 1
     frames = audio.shape[0]
     duration_s = frames / samplerate
@@ -458,10 +464,9 @@ def _play_array(audio: np.ndarray, samplerate: int) -> None:
     play_timeout = min(max(duration_s * 3 + 5, 8), 30)
     data = np.ascontiguousarray(audio).tobytes()
 
-    pw_play = shutil.which("pw-play")
-    if pw_play:
+    if _PW_PLAY:
         cmd = [
-            pw_play,
+            _PW_PLAY,
             "-a",
             "--rate",
             str(samplerate),
@@ -505,12 +510,14 @@ def _play_array(audio: np.ndarray, samplerate: int) -> None:
 
 def _play_raw(data: bytes, samplerate: int, channels: int) -> None:
     """Play raw float32 audio via pw-play (native PipeWire) or aplay (ALSA fallback)."""
-    import shutil
+    # f32 = 4 bytes per sample; compute timeout the same way as _play_array.
+    frames = len(data) // (channels * 4)
+    duration_s = frames / samplerate
+    play_timeout = min(max(duration_s * 3 + 5, 8), 30)
 
-    pw_play = shutil.which("pw-play")
-    if pw_play:
+    if _PW_PLAY:
         cmd = [
-            pw_play,
+            _PW_PLAY,
             "-a",  # raw mode: honour --format/--rate/--channels instead of auto-detect
             "--rate",
             str(samplerate),
@@ -540,7 +547,7 @@ def _play_raw(data: bytes, samplerate: int, channels: int) -> None:
             subprocess.run(
                 cmd,
                 input=data,
-                timeout=10,
+                timeout=play_timeout,
                 check=False,
                 stderr=subprocess.DEVNULL,
             )
@@ -554,11 +561,8 @@ def _play_raw(data: bytes, samplerate: int, channels: int) -> None:
 
 def play_wav_file(file_path: str) -> None:
     """Play a WAV file via pw-play (native PipeWire) or aplay (ALSA fallback)."""
-    import shutil
-
-    pw_play = shutil.which("pw-play")
-    if pw_play:
-        cmd = [pw_play, file_path]
+    if _PW_PLAY:
+        cmd = [_PW_PLAY, file_path]
     else:
         cmd = ["aplay", "-D", "pipewire", "-q", file_path]
 
@@ -661,6 +665,7 @@ def play_tone(name: str):
 
 def list_env_devices():
     """Print microphone and speaker tables for use in .env."""
+    import sounddevice as sd
     devices = list(sd.query_devices())
     pw_idx = find_pipewire_device()
 

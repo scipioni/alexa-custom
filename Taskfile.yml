@@ -11,6 +11,11 @@ tasks:
     cmds:
       - PYTHONPATH={{.PYTHONPATH}} {{.PYTEST}} tests/
 
+  test-stt-e2e:
+    desc: Run E2E STT tests (synthesises speech with piper, feeds through STT backend)
+    cmds:
+      - PYTHONPATH={{.PYTHONPATH}} {{.PYTEST}} tests/test_stt_e2e.py -v -s
+
   lint:
     desc: Run ruff for linting and formatting
     cmds:

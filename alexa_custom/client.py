@@ -303,6 +303,7 @@ async def _async_main(
     livekit_connected_flag: threading.Event | None = None,
     actions_config: ActionsConfig | None = None,
     mqtt_client: MQTTClient | None = None,
+    stt_ready_event: threading.Event | None = None,
 ) -> None:
     logger.info(f"Browser join URL:\n  {browser_join_url()}")
 
@@ -343,6 +344,12 @@ async def _async_main(
             await asyncio.sleep(2.0)
             break
         await asyncio.sleep(0.5)
+
+    # Wait for STT backend to finish loading so "Sistema pronto" plays only
+    # when the system is actually ready to hear the first wake word.
+    if stt_ready_event is not None and not stt_ready_event.is_set():
+        logger.info("Waiting for STT backend to initialize...")
+        await asyncio.to_thread(stt_ready_event.wait, 60.0)
 
     # Execute startup actions
     if actions_config and actions_config.on_startup:
@@ -730,6 +737,7 @@ def main() -> None:
                     mqtt_client.set_on_command(_on_mqtt_action)
                     main_tasks.append(asyncio.create_task(mqtt_client.run()))
 
+                stt_ready = threading.Event()
                 start_stt_thread(
                     config=lambda: config_manager.config,
                     stop_event=stt_stop,
@@ -738,6 +746,7 @@ def main() -> None:
                     livekit_connected_flag=livekit_connected_flag,
                     mqtt_client=mqtt_client,
                     loop=loop,
+                    stt_ready_event=stt_ready,
                 )
                 current = config_manager.config
                 logger.info(
@@ -752,6 +761,7 @@ def main() -> None:
                             livekit_connected_flag=livekit_connected_flag,
                             actions_config=config_manager.config,
                             mqtt_client=mqtt_client,
+                            stt_ready_event=stt_ready,
                         )
                     )
                 )

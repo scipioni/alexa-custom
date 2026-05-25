@@ -30,6 +30,18 @@ _MODEL_PATH = os.environ.get("VOSK_MODEL_PATH", "models/it")
 _STT_COOLDOWN = 1.0
 _SHERPA_MODEL_PATH = os.environ.get("SHERPA_ONNX_PATH", "models/sherpa-onnx")
 
+# Energy VAD for sherpa-onnx stage-1 wake-word detection.
+# After speech is heard, if RMS stays below this threshold for
+# _STAGE1_VAD_SILENCE_MS, finalize() is called immediately without waiting
+# for sherpa's own endpoint (which requires 1.2 s of silence by default).
+# Override via environment variables to tune for your microphone / room.
+_STAGE1_VAD_SILENCE_MS = int(os.environ.get("STT_STAGE1_VAD_SILENCE_MS", "500"))
+_STAGE1_RMS_THRESHOLD = float(os.environ.get("STT_STAGE1_RMS_THRESHOLD", "0.02"))
+# Minimum sustained speech (ms above threshold) required before the silence
+# timer can fire.  Prevents brief background noise bursts from prematurely
+# finalizing sherpa's stream and discarding a partial wake word.
+_STAGE1_MIN_SPEECH_MS = int(os.environ.get("STT_STAGE1_MIN_SPEECH_MS", "300"))
+
 
 class STTBackend(ABC):
     @abstractmethod
@@ -47,6 +59,16 @@ class STTBackend(ABC):
     @abstractmethod
     def reset(self) -> None:
         pass
+
+    def finalize(self) -> str:
+        """Force-complete the current utterance and return recognized text.
+
+        Called after the command window closes (deadline or VAD exit) to flush
+        any audio that was still being decoded.  The default delegates to
+        ``text()``; backends that need extra work (e.g. sherpa-onnx
+        ``input_finished()``) override this.
+        """
+        return self.text()
 
 
 class VoskSTT(STTBackend):
@@ -110,6 +132,15 @@ class SherpaOnnxSTT(STTBackend):
                 encoder=encoder_int8 if os.path.exists(encoder_int8) else encoder,
                 decoder=decoder_int8 if os.path.exists(decoder_int8) else decoder,
                 joiner=joiner_int8 if os.path.exists(joiner_int8) else joiner,
+                num_threads=4,
+                decoding_method="greedy_search",
+                sample_rate=16000,
+                feature_dim=80,
+                provider="cpu",
+                enable_endpoint_detection=True,
+                rule1_min_trailing_silence=2.4,
+                rule2_min_trailing_silence=1.2,
+                rule3_min_utterance_length=20,
             )
         else:
             self._delegate = sherpa_onnx.OnlineRecognizer.from_paraformer(
@@ -122,16 +153,30 @@ class SherpaOnnxSTT(STTBackend):
     def accept_waveform(self, data: bytes) -> bool:
         samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
         self._stream.accept_waveform(sample_rate=16000, waveform=samples)
-        return self._delegate.is_ready(self._stream)
+        while self._delegate.is_ready(self._stream):
+            self._delegate.decode_stream(self._stream)
+        return self._delegate.is_endpoint(self._stream)
 
     def text(self) -> str:
-        self._delegate.decode_stream(self._stream)
         result = self._delegate.get_result(self._stream)
         return result.strip() if isinstance(result, str) else result.text.strip()
 
     def partial_text(self) -> str:
         result = self._delegate.get_result(self._stream)
         return result.strip() if isinstance(result, str) else result.text.strip()
+
+    def finalize(self) -> str:
+        """Force the transducer to emit its buffered output, then reset the stream."""
+        try:
+            self._stream.input_finished()
+        except Exception:
+            pass
+        while self._delegate.is_ready(self._stream):
+            self._delegate.decode_stream(self._stream)
+        result = self._delegate.get_result(self._stream)
+        text = result.strip() if isinstance(result, str) else result.text.strip()
+        self._stream = self._delegate.create_stream()
+        return text
 
     def reset(self) -> None:
         self._delegate.reset(self._stream)
@@ -262,6 +307,45 @@ def _build_alias_map(groups: list[WakeWordGroup]) -> dict[str, WakeWordGroup]:
     }
 
 
+def _approx_wake_match(
+    text: str,
+    alias_map: dict[str, WakeWordGroup],
+    threshold: float = 0.5,
+) -> WakeWordGroup | None:
+    """Fuzzy wake-word match for open-vocabulary backends (sherpa-onnx).
+
+    Exact alias-map lookup first; if that misses, scores each phrase by the
+    fraction of its significant words (len >= 3) that appear anywhere in the
+    transcript.  Returns the best-scoring group if score >= threshold, else None.
+
+    Example: phrase "ehi galileo", transcript "e il galileo"
+      key words: ["ehi", "galileo"]  →  "galileo" in transcript → 0.5 → match
+    """
+    norm_text = normalize_text(text)
+
+    if norm_text in alias_map:
+        return alias_map[norm_text]
+
+    text_words = set(norm_text.split())
+    best_group: WakeWordGroup | None = None
+    best_score = 0.0
+
+    for norm_phrase, group in alias_map.items():
+        phrase_words = [w for w in norm_phrase.split() if len(w) >= 3]
+        if not phrase_words:
+            phrase_words = norm_phrase.split()
+        matched = sum(
+            1 for pw in phrase_words
+            if any(pw in tw or (len(tw) >= 3 and tw in pw) for tw in text_words)
+        )
+        score = matched / len(phrase_words)
+        if score > best_score:
+            best_score = score
+            best_group = group
+
+    return best_group if best_score >= threshold else None
+
+
 def _resolve_triggers(group: WakeWordGroup, fallback: list[Trigger]) -> list[Trigger]:
     return group.triggers if group.triggers else fallback
 
@@ -342,6 +426,7 @@ def run_stt_worker(
     on_stt_event: Callable[[str, dict], None] | None = None,
     mqtt_client: MQTTClient | None = None,
     loop: asyncio.AbstractEventLoop | None = None,
+    stt_ready_event: threading.Event | None = None,
 ) -> None:
     """Entry point for the STT daemon thread.
 
@@ -374,6 +459,18 @@ def run_stt_worker(
             f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "idle", loop=loop
         )
 
+    current_config = _get_config()
+    try:
+        t0 = time.monotonic()
+        backend = get_stt_backend(
+            current_config.stt_backend, current_config.stt_model_path
+        )
+        logger.info(f"STT backend loaded in {time.monotonic() - t0:.1f}s")
+    except RuntimeError as e:
+        logger.error(f"STT backend creation failed: {e}")
+        return
+    backend_key = (current_config.stt_backend, current_config.stt_model_path)
+
     _dispatch_loop = asyncio.new_event_loop()
     try:
         while not stop_event.is_set():
@@ -383,16 +480,25 @@ def run_stt_worker(
                 if current_config.recognition_mode == "single-stage"
                 else _recognition_loop
             )
+            # Reload backend only when the config changes it
+            new_backend_key = (current_config.stt_backend, current_config.stt_model_path)
+            if new_backend_key != backend_key:
+                try:
+                    backend = get_stt_backend(
+                        current_config.stt_backend, current_config.stt_model_path
+                    )
+                    backend_key = new_backend_key
+                    logger.info("STT backend reloaded after config change")
+                except RuntimeError as e:
+                    logger.error(f"STT backend reload failed: {e}")
+                    time.sleep(2)
+                    continue
             proc: subprocess.Popen | None = None
             try:
-                backend = get_stt_backend(
-                    current_config.stt_backend, current_config.stt_model_path
-                )
-            except RuntimeError as e:
-                logger.error(f"STT backend creation failed: {e}")
-                return
-            try:
                 proc = start_capture(source, channels)
+                if stt_ready_event is not None and not stt_ready_event.is_set():
+                    stt_ready_event.set()
+                    logger.info("STT ready — listening for wake words")
                 loop_fn(
                     proc=proc,
                     channels=channels,
@@ -422,13 +528,26 @@ def run_stt_worker(
 
 
 def _extract_wake_command(
-    text: str, alias_map: dict[str, WakeWordGroup]
+    text: str, alias_map: dict[str, WakeWordGroup], fuzzy: bool = False
 ) -> tuple[WakeWordGroup | None, str]:
-    """Return (group, command) if text begins with a known wake phrase, else (None, '')."""
+    """Return (group, command) if text begins with a known wake phrase, else (None, '').
+
+    With fuzzy=True (sherpa-onnx single-stage path) uses _approx_wake_match to
+    handle open-vocabulary transcription noise around wake words.
+    """
     norm_text = normalize_text(text)
     for norm_phrase, group in alias_map.items():
         if norm_text.startswith(norm_phrase):
             command = text.lower().replace(norm_phrase, "", 1).strip()
+            return group, command
+    if fuzzy:
+        group = _approx_wake_match(text, alias_map)
+        if group:
+            # Best-effort command extraction: strip matching phrase words from text
+            norm_phrase = normalize_text(group.word)
+            command = norm_text
+            for w in norm_phrase.split():
+                command = command.replace(w, "", 1).strip()
             return group, command
     return None, ""
 
@@ -484,7 +603,7 @@ def capture_transcript(
         if remaining <= 0:
             break
 
-        raw_data = _read_with_timeout(proc.stdout, _CHUNK * channels, 1.0)
+        raw_data = _read_with_timeout(proc.stdout, _CHUNK * channels, min(remaining, 1.0))
         if not raw_data:
             if proc.poll() is not None:
                 logger.warning("Capture pipe closed mid-listen (parec exited)")
@@ -545,7 +664,9 @@ def capture_transcript(
             break
 
     # Flush whatever recognizer hadn't finalised yet (deadline path or VAD path).
-    final_text = backend.text()
+    # finalize() calls input_finished() on sherpa-onnx so the transducer emits
+    # buffered output even when the endpoint hasn't fired within the window.
+    final_text = backend.finalize()
     if final_text:
         transcript_parts.append(final_text)
 
@@ -657,7 +778,9 @@ def _single_stage_loop(
             backend.reset()
             continue
 
-        wake_group, command = _extract_wake_command(text, alias_map)
+        wake_group, command = _extract_wake_command(
+            text, alias_map, fuzzy=not isinstance(backend, VoskSTT)
+        )
         if wake_group is None:
             # Non-wake speech — resync to real-time audio.
             backlog = _drain_pipe(proc)
@@ -749,6 +872,8 @@ def _recognition_loop(
     cooldown_until = 0.0
     was_gated = False
     was_playing = False
+    stage1_last_speech_t = 0.0   # for sherpa energy VAD
+    stage1_speech_ms = 0.0       # accumulated ms above RMS threshold in current utterance
 
     if on_stt_event:
         on_stt_event("listening", {"wake_words": [g.word for g in config.wake_words]})
@@ -785,6 +910,8 @@ def _recognition_loop(
                     display_rec.Reset()
             else:
                 backend.reset()
+                stage1_last_speech_t = 0.0
+                stage1_speech_ms = 0.0
             was_playing = False
             continue
 
@@ -829,6 +956,8 @@ def _recognition_loop(
                     display_rec.Reset()
             else:
                 backend.reset()
+                stage1_last_speech_t = 0.0
+                stage1_speech_ms = 0.0
             continue
 
         if is_vosk:
@@ -900,14 +1029,36 @@ def _recognition_loop(
                     if display_rec is not None:
                         display_rec.Reset()
         else:
-            # sherpa-onnx: open-vocabulary stage1
-            if backend.accept_waveform(data):
-                backend.text()  # decode to finalize
-                text = backend.partial_text().strip()
+            # sherpa-onnx: open-vocabulary stage1 with energy VAD for low latency.
+            # Track RMS per chunk; after _STAGE1_VAD_SILENCE_MS ms of silence
+            # following speech, force-finalize instead of waiting for sherpa's
+            # own endpoint (which requires rule2_min_trailing_silence = 1.2 s).
+            rms = _rms_level(data)
+            chunk_ms = len(data) / (16000 * 2) * 1000
+            if rms > _STAGE1_RMS_THRESHOLD:
+                stage1_last_speech_t = time.monotonic()
+                stage1_speech_ms += chunk_ms
+
+            vad_triggered = (
+                stage1_speech_ms >= _STAGE1_MIN_SPEECH_MS
+                and stage1_last_speech_t > 0
+                and (time.monotonic() - stage1_last_speech_t) * 1000 >= _STAGE1_VAD_SILENCE_MS
+            )
+            endpoint_fired = backend.accept_waveform(data)
+
+            if endpoint_fired or vad_triggered:
+                if vad_triggered and not endpoint_fired:
+                    text = backend.finalize().strip()
+                    trigger_src = "vad"
+                else:
+                    text = backend.text().strip()
+                    backend.reset()
+                    trigger_src = "endpoint"
+                stage1_last_speech_t = 0.0
+                stage1_speech_ms = 0.0
                 if text:
-                    logger.debug(f"Stage1 result (sherpa): {text!r}")
-                    norm_text = normalize_text(text)
-                    wake_match = alias_map.get(norm_text)
+                    logger.debug(f"Stage1 result (sherpa/{trigger_src}): {text!r}")
+                    wake_match = _approx_wake_match(text, alias_map)
                     if wake_match:
                         _wake_detected(
                             wake_group=wake_match,
@@ -925,6 +1076,8 @@ def _recognition_loop(
                             dispatch_loop=dispatch_loop,
                         )
                         _drain_pipe(proc)
+                        stage1_last_speech_t = 0.0
+                        stage1_speech_ms = 0.0
                         if on_stt_event:
                             on_stt_event(
                                 "listening",
@@ -936,8 +1089,6 @@ def _recognition_loop(
                                 "idle",
                                 loop=loop,
                             )
-                    else:
-                        backend.reset()
             else:
                 partial = backend.partial_text().strip()
                 if partial and on_stt_event:
@@ -982,7 +1133,7 @@ def _wake_detected(
         config.command_timeout,
         stop_event,
         on_stt_event,
-        flush_ms=0,
+        flush_ms=300,
     )
     logger.info(f"Command transcript: '{transcript}'")
 
@@ -1070,6 +1221,7 @@ def start_stt_thread(
     on_stt_event: Callable[[str, dict], None] | None = None,
     mqtt_client: MQTTClient | None = None,
     loop: asyncio.AbstractEventLoop | None = None,
+    stt_ready_event: threading.Event | None = None,
 ) -> threading.Thread:
     t = threading.Thread(
         target=run_stt_worker,
@@ -1082,6 +1234,7 @@ def start_stt_thread(
             on_stt_event,
             mqtt_client,
             loop,
+            stt_ready_event,
         ),
         daemon=True,
         name="stt",
