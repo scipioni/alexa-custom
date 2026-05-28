@@ -903,7 +903,12 @@ def setup_audio() -> None:
     """Set output device PCM hardware volume to 100% and persist it across reboots."""
     output_spec = os.environ.get("OUTPUT_DEVICE", "").strip()
     if not output_spec:
-        print("ERROR: OUTPUT_DEVICE is not set — add it to config.yaml under env:")
+        if os.path.exists("config.yaml"):
+            from alexa_custom.config import load_config
+            load_config("config.yaml")
+            output_spec = os.environ.get("OUTPUT_DEVICE", "").strip()
+    if not output_spec:
+        print("ERROR: OUTPUT_DEVICE is not set — set it in config.yaml under env: or export OUTPUT_DEVICE")
         sys.exit(1)
 
     card = _find_alsa_card(output_spec)
