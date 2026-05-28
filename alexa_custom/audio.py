@@ -578,6 +578,44 @@ def play_wav_file(file_path: str) -> None:
             _playback_active.clear()
 
 
+def record_wav_file(file_path: str, duration: float) -> None:
+    """Record a WAV file from the default PipeWire source."""
+    pw_record = shutil.which("pw-record")
+    rate = 16000
+    if pw_record:
+        count = int(duration * rate)
+        cmd = [
+            pw_record,
+            "--rate",
+            str(rate),
+            "--channels",
+            "1",
+            "--format",
+            "s16",
+            "--sample-count",
+            str(count),
+            file_path,
+        ]
+    else:
+        cmd = [
+            "arecord",
+            "-D",
+            "pipewire",
+            "-d",
+            str(int(duration)),
+            "-f",
+            "S16_LE",
+            "-r",
+            str(rate),
+            file_path,
+        ]
+
+    try:
+        subprocess.run(cmd, check=True)
+    except Exception as e:
+        logger.error(f"Recording failed: {e}")
+
+
 def play_tone(name: str):
     """Play a predefined tone by name (startup, success, error, info, warning)."""
     samplerate = 48000
@@ -881,6 +919,62 @@ def main():
 
 def main_devices():
     list_env_devices()
+
+
+def main_test():
+    import tempfile
+    import os
+    from alexa_custom.tts import init_engine, get_engine
+    from alexa_custom.config import load_config
+
+    print("--- Audio System Test ---")
+
+    # Load config to respect INPUT_DEVICE / OUTPUT_DEVICE and env: section
+    config = load_config("config.yaml")
+
+    input_spec = os.environ.get("INPUT_DEVICE", "").strip() or None
+    output_spec = os.environ.get("OUTPUT_DEVICE", "").strip() or None
+
+    try:
+        set_pipewire_defaults(input_spec, output_spec)
+    except Exception as e:
+        print(f"WARNING: Could not set PipeWire defaults: {e}")
+
+    print("1. Playing tone...")
+    play_tone("info")
+
+    print("2. TTS: Asking for name...")
+    # Initialize engine with settings from config if available
+    if config:
+        init_engine(
+            backend_type=config.tts_backend,
+            voice=config.tts_voice,
+            preroll_ms=config.tts_preroll_ms,
+        )
+    else:
+        init_engine(backend_type="piper")
+    
+    get_engine().say("Ciao, come ti chiami?")
+
+    print("3. Recording 5 seconds of audio...")
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+        tmp_wav = f.name
+    
+    try:
+        print("   [RECORDING NOW - SPEAK INTO MICROPHONE]")
+        record_wav_file(tmp_wav, 5.0)
+        print("   [DONE]")
+
+        print("4. TTS: Announcing playback...")
+        get_engine().say("Ecco la registrazione:")
+
+        print("5. Playing back recorded sound...")
+        play_wav_file(tmp_wav)
+    finally:
+        if os.path.exists(tmp_wav):
+            os.remove(tmp_wav)
+
+    print("\nTest completed.")
 
 
 if __name__ == "__main__":
