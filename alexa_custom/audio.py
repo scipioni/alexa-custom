@@ -172,6 +172,27 @@ def detect_connection(card) -> str:
     return "internal"
 
 
+def set_output_volume(pulse: pulsectl.Pulse, output_spec: str | None, volume: float) -> None:
+    """Set PulseAudio volume on the configured output sink."""
+    if volume <= 0:
+        return
+    needle = (output_spec or "NewPie").lower()
+    sink = next(
+        (
+            s
+            for s in pulse.sink_list()
+            if needle in s.description.lower() or needle in s.name.lower()
+        ),
+        None,
+    )
+    if not sink:
+        logger.warning(f"Cannot set volume: sink matching {output_spec!r} not found")
+        return
+    from pulsectl import PulseVolumeInfo
+    pulse.volume_set(sink, PulseVolumeInfo(volume, channels=2))
+    logger.info(f"Set output volume to {volume:.0%} on {sink.description}")
+
+
 def enforce_audio_state(
     pulse: pulsectl.Pulse, input_spec: str | None = None, output_spec: str | None = None
 ) -> tuple[bool, str]:
@@ -242,14 +263,17 @@ class AudioWatcher(threading.Thread):
         input_spec: str | None = None,
         output_spec: str | None = None,
         on_status_change: "Callable[[bool, str], None] | None" = None,
+        output_volume: float = 0.5,
     ):
         super().__init__(daemon=True, name="audio-watcher")
         self.input_spec = input_spec
         self.output_spec = output_spec
         self.on_status_change = on_status_change
+        self.output_volume = output_volume
         self._stop = threading.Event()
         self.connected = False
         self.conn_type = "unknown"
+        self._volume_set = False
 
     def stop(self):
         self._stop.set()
@@ -280,6 +304,9 @@ class AudioWatcher(threading.Thread):
         if ok != self.connected or conn != self.conn_type:
             if ok and not self.connected:
                 logger.info(f"Audio device {conn} connected and configured")
+                if self.output_volume > 0 and not self._volume_set:
+                    set_output_volume(pulse, self.output_spec, self.output_volume)
+                    self._volume_set = True
 
             self.connected = ok
             self.conn_type = conn
@@ -580,25 +607,43 @@ def play_wav_file(file_path: str) -> None:
 
 def record_wav_file(file_path: str, duration: float) -> None:
     """Record a WAV file from the default PipeWire source."""
-    pw_record = shutil.which("pw-record")
     rate = 16000
-    if pw_record:
-        count = int(duration * rate)
+    channels = 1
+    parec = shutil.which("parec")
+    if parec:
+        import threading
+        import wave
         cmd = [
-            pw_record,
+            parec,
             "--rate",
             str(rate),
             "--channels",
-            "1",
+            str(channels),
             "--format",
-            "s16",
-            "--sample-count",
-            str(count),
-            file_path,
+            "s16le",
+            "-",
         ]
-    else:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+
+        def kill_after():
+            time.sleep(duration)
+            proc.terminate()
+
+        threading.Thread(target=kill_after, daemon=True).start()
+        pcm_data = proc.stdout.read()
+        proc.wait()
+
+        with wave.open(file_path, "wb") as wf:
+            wf.setnchannels(channels)
+            wf.setsampwidth(2)
+            wf.setframerate(rate)
+            wf.writeframes(pcm_data)
+        return
+
+    aplay = shutil.which("aplay")
+    if aplay:
         cmd = [
-            "arecord",
+            aplay,
             "-D",
             "pipewire",
             "-d",
@@ -609,9 +654,24 @@ def record_wav_file(file_path: str, duration: float) -> None:
             str(rate),
             file_path,
         ]
+    else:
+        pw_record = shutil.which("pw-record")
+        if not pw_record:
+            logger.error("No recording tool found (parec, aplay, or pw-record)")
+            return
+        cmd = [
+            pw_record,
+            "--rate",
+            str(rate),
+            "--channels",
+            str(channels),
+            "--format",
+            "s16",
+            file_path,
+        ]
 
     try:
-        subprocess.run(cmd, check=True)
+        subprocess.run(cmd, check=True, timeout=duration + 2)
     except Exception as e:
         logger.error(f"Recording failed: {e}")
 
@@ -939,6 +999,10 @@ def main_test():
         set_pipewire_defaults(input_spec, output_spec)
     except Exception as e:
         print(f"WARNING: Could not set PipeWire defaults: {e}")
+
+    if config and config.output_volume > 0:
+        with pulsectl.Pulse("alexa-test") as pulse:
+            set_output_volume(pulse, output_spec, config.output_volume)
 
     print("1. Playing tone...")
     play_tone("info")

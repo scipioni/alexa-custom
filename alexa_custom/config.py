@@ -53,6 +53,7 @@ class ActionsConfig:
     tts_voice: str = "it_IT-paola-medium"
     stt_backend: str = "vosk"
     stt_model_path: str | None = None
+    output_volume: float = 0.5
 
 
 def _parse_actions(raw_actions: list[Any], path_prefix: str) -> list[ActionEntry]:
@@ -253,6 +254,10 @@ def _parse_actions_config(raw: dict, source: str = "config") -> ActionsConfig:
             raise ConfigError(f"{source}: 'stt.model_path' must be a string if present")
         stt_model_path = stt_model_path_raw
 
+    output_volume = float(raw.get("output_volume", 0.5))
+    if not (0.0 <= output_volume <= 1.0):
+        raise ConfigError(f"{source}: 'output_volume' must be between 0.0 and 1.0, got {output_volume}")
+
     on_startup: list[ActionEntry] = []
     raw_startup = raw.get("on_startup")
     if raw_startup is not None:
@@ -282,6 +287,7 @@ def _parse_actions_config(raw: dict, source: str = "config") -> ActionsConfig:
         tts_voice=tts_voice,
         stt_backend=stt_backend,
         stt_model_path=stt_model_path,
+        output_volume=output_volume,
     )
 
 

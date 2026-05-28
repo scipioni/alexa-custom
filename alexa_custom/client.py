@@ -670,8 +670,13 @@ def main() -> None:
 
         input_spec = os.environ.get("INPUT_DEVICE", "").strip() or None
         output_spec = os.environ.get("OUTPUT_DEVICE", "").strip() or None
+        output_volume = config.output_volume if config is not None else 0.5
 
-        audio_watcher = AudioWatcher(input_spec=input_spec, output_spec=output_spec)
+        audio_watcher = AudioWatcher(
+            input_spec=input_spec,
+            output_spec=output_spec,
+            output_volume=output_volume,
+        )
         audio_watcher.start()
 
         if config is not None:

@@ -38,6 +38,9 @@ env:
   #PIPER_VOICES_DIR: models/piper
 
   # --- Audio interaction tuning (all optional, sensible defaults applied) ---
+  # Output volume for the speaker (0.0–1.0, default 0.5 = 50%).
+  # This sets the PulseAudio software volume used by pw-play.
+  #output_volume: 0.5
   # Time the STT gate stays held after a playback subprocess exits, to let
   # PipeWire/ALSA buffers drain and the acoustic echo decay.
   #AUDIO_POST_PLAYBACK_MS: 100
