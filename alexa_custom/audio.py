@@ -193,6 +193,28 @@ def set_output_volume(pulse: pulsectl.Pulse, output_spec: str | None, volume: fl
     logger.info(f"Set output volume to {volume:.0%} on {sink.description}")
 
 
+def set_input_gain(pulse: pulsectl.Pulse, input_spec: str | None, gain: float) -> None:
+    """Set PulseAudio volume on the configured input source (input gain boost)."""
+    if gain <= 0:
+        return
+    needle = (input_spec or "NewPie").lower()
+    source = next(
+        (
+            s
+            for s in pulse.source_list()
+            if "monitor" not in s.name
+            and (needle in s.description.lower() or needle in s.name.lower())
+        ),
+        None,
+    )
+    if not source:
+        logger.warning(f"Cannot set input gain: source matching {input_spec!r} not found")
+        return
+    from pulsectl import PulseVolumeInfo
+    pulse.volume_set(source, PulseVolumeInfo(gain, channels=2))
+    logger.info(f"Set input gain to {gain:.0%} on {source.description}")
+
+
 def enforce_audio_state(
     pulse: pulsectl.Pulse, input_spec: str | None = None, output_spec: str | None = None
 ) -> tuple[bool, str]:
@@ -264,16 +286,19 @@ class AudioWatcher(threading.Thread):
         output_spec: str | None = None,
         on_status_change: "Callable[[bool, str], None] | None" = None,
         output_volume: float = 0.5,
+        input_gain: float = 1.0,
     ):
         super().__init__(daemon=True, name="audio-watcher")
         self.input_spec = input_spec
         self.output_spec = output_spec
         self.on_status_change = on_status_change
         self.output_volume = output_volume
+        self.input_gain = input_gain
         self._stop = threading.Event()
         self.connected = False
         self.conn_type = "unknown"
         self._volume_set = False
+        self._gain_set = False
 
     def stop(self):
         self._stop.set()
@@ -307,10 +332,12 @@ class AudioWatcher(threading.Thread):
                 if self.output_volume > 0 and not self._volume_set:
                     set_output_volume(pulse, self.output_spec, self.output_volume)
                     self._volume_set = True
+                if self.input_gain > 0 and not self._gain_set:
+                    set_input_gain(pulse, self.input_spec, self.input_gain)
+                    self._gain_set = True
 
             self.connected = ok
             self.conn_type = conn
-            # PortAudio's view of devices can shift on hot-plug — drop the cache.
             invalidate_pipewire_device_cache()
             if self.on_status_change:
                 self.on_status_change(ok, conn)
