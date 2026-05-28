@@ -41,6 +41,9 @@ env:
   # Output volume for the speaker (0.0–1.0, default 0.5 = 50%).
   # This sets the PulseAudio software volume used by pw-play.
   #output_volume: 0.5
+  # Input gain for the microphone (0.0–inf, default 1.0 = 100%).
+  # Values > 1.0 boost the microphone (e.g. 2.0 = 200%, 3.0 = 300%).
+  #input_gain: 1.0
   # Time the STT gate stays held after a playback subprocess exits, to let
   # PipeWire/ALSA buffers drain and the acoustic echo decay.
   #AUDIO_POST_PLAYBACK_MS: 100

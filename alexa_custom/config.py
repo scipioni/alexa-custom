@@ -54,6 +54,7 @@ class ActionsConfig:
     stt_backend: str = "vosk"
     stt_model_path: str | None = None
     output_volume: float = 0.5
+    input_gain: float = 1.0
 
 
 def _parse_actions(raw_actions: list[Any], path_prefix: str) -> list[ActionEntry]:
@@ -258,6 +259,10 @@ def _parse_actions_config(raw: dict, source: str = "config") -> ActionsConfig:
     if not (0.0 <= output_volume <= 1.0):
         raise ConfigError(f"{source}: 'output_volume' must be between 0.0 and 1.0, got {output_volume}")
 
+    input_gain = float(raw.get("input_gain", 1.0))
+    if input_gain < 0.0:
+        raise ConfigError(f"{source}: 'input_gain' must be >= 0.0, got {input_gain}")
+
     on_startup: list[ActionEntry] = []
     raw_startup = raw.get("on_startup")
     if raw_startup is not None:
@@ -288,6 +293,7 @@ def _parse_actions_config(raw: dict, source: str = "config") -> ActionsConfig:
         stt_backend=stt_backend,
         stt_model_path=stt_model_path,
         output_volume=output_volume,
+        input_gain=input_gain,
     )
 
 
