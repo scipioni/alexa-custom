@@ -61,6 +61,24 @@ triggers:                   # phrase → action mappings
 
 ---
 
+## 🏗 Architecture
+
+```mermaid
+graph LR
+    User((User)) -- "Voice" --> Mic[Mic]
+    Mic --> Wake[Wake Word]
+    Wake --> STT[STT Engine]
+    STT --> Actions{Actions}
+    
+    Actions --> TTS[TTS Engine]
+    TTS --> Spk[Speaker]
+    Spk -- "Feedback" --> User
+
+    Actions <--> Ext[Home Assistant / LiveKit / Telegram]
+```
+
+---
+
 ## 📚 Documentation
 
 Dive deeper into specific topics:
