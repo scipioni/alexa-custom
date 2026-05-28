@@ -483,8 +483,15 @@ class _WebLogHandler(logging.Handler):
 
 
 class WebServer:
-    def __init__(self, port: int = 8080) -> None:
+    def __init__(
+        self,
+        port: int = 8080,
+        output_volume: float = 0.5,
+        input_gain: float = 1.0,
+    ) -> None:
         self._port = port
+        self._output_volume = output_volume
+        self._input_gain = input_gain
         self._clients: set[web.WebSocketResponse] = set()
         self._queue: asyncio.Queue = asyncio.Queue()
         self._pending_vu: dict[str, float] = {}
@@ -785,6 +792,8 @@ class WebServer:
         room: str,
         stt_params: dict | None = None,
         hot_reload: bool = False,
+        output_volume: float = 0.5,
+        input_gain: float = 1.0,
     ) -> None:
         self._loop = asyncio.get_running_loop()
         self._install_log_handler()
@@ -831,6 +840,8 @@ class WebServer:
             input_spec=input_spec,
             output_spec=output_spec,
             on_status_change=self.on_audio_status,
+            output_volume=output_volume,
+            input_gain=input_gain,
         )
         audio_watcher.start()
 
@@ -884,12 +895,17 @@ def run_web(
     stt_params: dict | None = None,
     port: int = 8080,
     hot_reload: bool = False,
+    output_volume: float = 0.5,
+    input_gain: float = 1.0,
 ) -> None:
-    server = WebServer(port=port)
+    server = WebServer(port=port, output_volume=output_volume, input_gain=input_gain)
     try:
         asyncio.run(
             server.run(
-                run_fn, input_spec, output_spec, room, stt_params, hot_reload=hot_reload
+                run_fn, input_spec, output_spec, room, stt_params,
+                hot_reload=hot_reload,
+                output_volume=output_volume,
+                input_gain=input_gain,
             )
         )
     except KeyboardInterrupt:

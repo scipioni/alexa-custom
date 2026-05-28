@@ -657,6 +657,8 @@ def main() -> None:
             stt_params=stt_params,
             port=web_port,
             hot_reload=args.hot_reload,
+            output_volume=output_volume,
+            input_gain=input_gain,
         )
 
         import time as _time
