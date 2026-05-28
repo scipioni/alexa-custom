@@ -66,9 +66,10 @@ triggers:                   # phrase → action mappings
 ```mermaid
 graph LR
     User((User)) -- "Voice" --> Mic[Mic]
-    Mic --> Wake[Wake Word]
-    Wake --> STT[STT Engine]
-    STT --> Actions{Actions}
+    Mic --> STT[STT Engine]
+    STT --> Wake{Wake Word?}
+    Wake -- "Yes" --> Actions[Actions]
+    Wake -- "No" --> STT
     
     Actions --> TTS[TTS Engine]
     TTS --> Spk[Speaker]
