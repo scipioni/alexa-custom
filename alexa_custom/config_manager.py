@@ -54,6 +54,54 @@ class ConfigManager:
             self._watcher_task.cancel()
             self._watcher_task = None
 
+    def start_source_watcher(
+        self,
+        path: str | Path,
+        interval: float = 1.5,
+        on_restart: Callable[[], Awaitable[None]] | None = None,
+    ) -> None:
+        p = Path(path)
+        asyncio.get_running_loop().create_task(
+            self._source_poll_loop(p, interval, on_restart)
+        )
+
+    async def _source_poll_loop(
+        self, path: Path, interval: float, on_restart: Callable[[], Awaitable[None]] | None
+    ) -> None:
+        import os
+        import sys
+
+        def get_mtimes():
+            mtimes = {}
+            for root, _, files in os.walk(path):
+                for f in files:
+                    if f.endswith(".py"):
+                        fpath = Path(root) / f
+                        try:
+                            mtimes[str(fpath)] = fpath.stat().st_mtime
+                        except OSError:
+                            pass
+            return mtimes
+
+        last_mtimes = await asyncio.to_thread(get_mtimes)
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                mtimes = await asyncio.to_thread(get_mtimes)
+                if mtimes != last_mtimes:
+                    logger.info("Source code changed, restarting...")
+                    if on_restart:
+                        try:
+                            await on_restart()
+                        except Exception as e:
+                            logger.error("Source watcher on_restart callback failed: %s", e)
+                    # Small delay to let multiple files finish saving
+                    await asyncio.sleep(0.3)
+                    os.execv(sys.executable, [sys.executable] + sys.argv)
+                last_mtimes = mtimes
+        except asyncio.CancelledError:
+            pass
+
     async def _poll_loop(self, path: Path, interval: float) -> None:
         try:
             last_mtime = path.stat().st_mtime if path.exists() else None

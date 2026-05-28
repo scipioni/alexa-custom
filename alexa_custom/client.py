@@ -586,7 +586,13 @@ def main() -> None:
     parser.add_argument(
         "--web-port", type=int, default=None, help="Web dashboard port (default: 8080)"
     )
+    parser.add_argument(
+        "--hot-reload", action="store_true", help="Auto-restart on .py file changes"
+    )
     args = parser.parse_args()
+
+    if args.hot_reload:
+        logger.info("Hot-reload enabled (watching alexa_custom/*.py)")
 
     if args.web:
         from alexa_custom.web import run_web
@@ -650,6 +656,7 @@ def main() -> None:
             room=room,
             stt_params=stt_params,
             port=web_port,
+            hot_reload=args.hot_reload,
         )
 
         import time as _time
@@ -714,6 +721,9 @@ def main() -> None:
 
                 # Start config file watcher
                 config_manager.start_watcher("config.yaml")
+
+                if args.hot_reload:
+                    config_manager.start_source_watcher("alexa_custom")
 
                 if mqtt_client:
                     # Setup callback for incoming MQTT actions

@@ -52,12 +52,25 @@ _HTML = """\
     .hwk { color: #7986cb; font-size: 11px; margin-left: 4px; }
     .hcmd { color: #e0e0e0; font-size: 12px; margin-top: 1px; }
     .htrig { color: #4caf50; font-size: 11px; margin-top: 1px; }
-    #part-section { flex-shrink: 0; max-height: 38%; display: flex; flex-direction: column; border-top: 1px solid #333; }
+    #part-section { flex-shrink: 0; max-height: 40%; display: flex; flex-direction: column; border-top: 1px solid #333; }
     #ph { padding: 7px 12px; color: #7986cb; font-weight: bold; border-bottom: 1px solid #333; flex-shrink: 0; font-size: 11px; letter-spacing: .05em; }
     #pl { flex: 1; overflow-y: auto; padding: 8px 12px; }
     .pt { padding: 2px 0; }
     .pdot  { color: #4caf50; }
     .pdot0 { color: #555; }
+
+    #actions-section { width: 280px; flex-shrink: 0; border-left: 1px solid #333; display: flex; flex-direction: column; }
+    #ah { padding: 7px 12px; color: #7986cb; font-weight: bold; border-bottom: 1px solid #333; flex-shrink: 0; font-size: 11px; letter-spacing: .05em; }
+    #al { flex: 1; overflow-y: auto; padding: 6px 12px; }
+    .awk-group { margin-bottom: 9px; }
+    .awk { color: #ffb74d; font-weight: bold; font-size: 12px; }
+    .aalias { color: #666; font-size: 11px; margin-left: 4px; }
+    .atrig { margin-top: 2px; color: #e0e0e0; font-size: 12px; }
+    .aact { color: #888; font-size: 11px; margin-left: 10px; display: block; }
+    .agt-header { color: #555; font-size: 10px; margin-top: 4px; border-bottom: 1px solid #242424; padding-bottom: 2px; margin-bottom: 4px; }
+    .awk-group.active { background: #252525; box-shadow: inset 2px 0 0 #ffb74d; padding-left: 8px; margin-left: -8px; margin-right: -4px; padding-top: 4px; padding-bottom: 4px; }
+    .ainteract { color: #4dd0e1; font-family: monospace; font-size: 12px; margin-top: 4px; padding: 2px 6px; background: #222; border-radius: 2px; min-height: 1.4em; }
+    .ainteract:empty { display: none; }
 
     #log-panel { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
     #lh { padding: 7px 12px; color: #7986cb; font-weight: bold; border-bottom: 1px solid #333;
@@ -137,10 +150,14 @@ _HTML = """\
       <div id="lh"><span>LOGS</span><button id="lclr" onclick="clearLogs()">clear</button></div>
       <div id="le"></div>
     </div>
+    <div id="actions-section">
+      <div id="ah">WAKE WORDS & ACTIONS</div>
+      <div id="al"><span style="color:#555">Loading…</span></div>
+    </div>
   </div>
 
   <script>
-    let ws = null, reconnTimer = null, _restarting = false, _reconnDelay = 1000, _lastWakeWord = '';
+    let ws = null, reconnTimer = null, _restarting = false, _reconnDelay = 1000, _lastWakeWord = '', _cfg = null;
     const parts = {};
 
     function connect() {
@@ -150,7 +167,11 @@ _HTML = """\
       ws.onopen = () => {
         _reconnDelay = 1000;
         wsInd(true);
-        if (_restarting) setSt('Reconnected — waiting…', null);
+        if (_restarting) {
+          setSt('Restarting UI…', null);
+          setTimeout(() => location.reload(), 200);
+          return;
+        }
       };
       ws.onclose = () => {
         wsInd(false); ws = null;
@@ -183,6 +204,10 @@ _HTML = """\
           renderParts();
           setAudio(m.audio_connected, m.audio_conn_type);
           setStt(m.stt_state, m.stt_text, m);
+          if (m.actions_config) {
+            _cfg = m.actions_config;
+            renderActions(_cfg);
+          }
           break;
         }
         case 'connected':          setSt('Connected', m.room); break;
@@ -203,13 +228,19 @@ _HTML = """\
         case 'stt':
           if (m.state === 'wake' && m.word && m.word !== '(reply)') {
             _lastWakeWord = m.word;
+            updateInteraction(m.word, '');
+          }
+          if (m.state === 'partial') {
+            updateInteraction(_lastWakeWord, m.text);
           }
           if (m.state === 'matched') {
             addHistory(_lastWakeWord, m.transcript||'', m.trigger||'');
+            updateInteraction(_lastWakeWord, (m.transcript||'') + ' → ' + (m.trigger||''), true);
             _lastWakeWord = '';
           }
           if (m.state === 'nomatch' && _lastWakeWord) {
             addHistoryWake(_lastWakeWord);
+            updateInteraction(_lastWakeWord, (m.text ? '”'+m.text+'” ' : '') + '✗ no match', true);
             _lastWakeWord = '';
           }
           setStt(m.state, m.text||m.word||m.transcript||'', m);
@@ -224,6 +255,33 @@ _HTML = """\
         }
         case 'error': setSt('Error: ' + (m.msg||'unknown'), null); break;
       }
+    }
+
+    function updateInteraction(word, text, finish) {
+      if (!word) return;
+      const norm = word.toLowerCase().trim();
+      const groups = document.querySelectorAll('.awk-group');
+      groups.forEach(g => {
+        const ww = g.getAttribute('data-word').toLowerCase();
+        const aa = (g.getAttribute('data-aliases')||'').toLowerCase().split(',');
+        if (ww === norm || aa.includes(norm)) {
+          g.classList.add('active');
+          const i = g.querySelector('.ainteract');
+          if (i) {
+            i.textContent = text;
+            if (finish) setTimeout(() => {
+              if (_lastWakeWord === '') {
+                g.classList.remove('active');
+                i.textContent = '';
+              }
+            }, 3000);
+          }
+        } else {
+          g.classList.remove('active');
+          const i = g.querySelector('.ainteract');
+          if (i) i.textContent = '';
+        }
+      });
     }
 
     function setSt(text, room) {
@@ -246,6 +304,50 @@ _HTML = """\
         return '<div class="pt"><span class="' + (t?'pdot':'pdot0') + '">' + (t?'●':'○') + '</span> '
           + esc(id) + (t ? ' <span style="color:#555">'+t+'t</span>' : '') + '</div>';
       }).join('');
+    }
+
+    function renderActions(cfg) {
+      const al = document.getElementById('al');
+      if (!cfg) { al.innerHTML = '<span style="color:#555">No config</span>'; return; }
+      let h = '';
+
+      function renderList(actions, indent = 0) {
+        let res = '';
+        (actions || []).forEach(a => {
+          res += '<div style="margin-left:' + (indent * 12) + 'px" class="aact">' + esc(a.label) + '</div>';
+          if (a.type === 'ask' && a.on_reply) {
+            a.on_reply.forEach(r => {
+              res += '<div style="margin-left:' + ((indent + 1) * 12) + 'px; color:#81c784" class="atrig">⮑ ' + esc(r.phrase) + '</div>';
+              res += renderList(r.actions, indent + 2);
+            });
+            if (a.on_else && a.on_else.length) {
+              res += '<div style="margin-left:' + ((indent + 1) * 12) + 'px; color:#ef5350" class="atrig">⮑ else</div>';
+              res += renderList(a.on_else, indent + 2);
+            }
+          }
+        });
+        return res;
+      }
+
+      (cfg.wake_words || []).forEach(w => {
+        h += '<div class="awk-group" data-word="' + esc(w.word) + '" data-aliases="' + esc((w.aliases||[]).join(',')) + '">'
+          + '<div class="awk">◉ ' + esc(w.word) + '</div>';
+        if (w.aliases && w.aliases.length) h += '<div class="aalias">aka: ' + esc(w.aliases.join(", ")) + '</div>';
+        h += '<div class="ainteract"></div>';
+        (w.triggers || []).forEach(t => {
+          h += '<div class="atrig">› ' + esc(t.phrase) + '</div>';
+          h += renderList(t.actions);
+        });
+        h += '</div>';
+      });
+      if (cfg.global_triggers && cfg.global_triggers.length) {
+        h += '<div class="agt-header">GLOBAL FALLBACKS</div>';
+        cfg.global_triggers.forEach(t => {
+          h += '<div class="atrig">› ' + esc(t.phrase) + '</div>';
+          h += renderList(t.actions);
+        });
+      }
+      al.innerHTML = h || '<span style="color:#555">Empty</span>';
     }
 
     function setVU(ch, lvl) {
@@ -400,6 +502,7 @@ class WebServer:
             "audio_conn_type": "",
             "stt_state": "idle",
             "stt_text": "",
+            "actions_config": {},
         }
 
     # ── thread-safe enqueue ───────────────────────────────────────────────────
@@ -519,6 +622,7 @@ class WebServer:
                     "audio_conn_type": self._state["audio_conn_type"],
                     "stt_state": self._state["stt_state"],
                     "stt_text": self._state["stt_text"],
+                    "actions_config": self._state["actions_config"],
                 }
             )
         )
@@ -544,7 +648,7 @@ class WebServer:
             logger.info("Restart requested via web dashboard")
             await self._broadcast({"type": "restarting"})
             await asyncio.sleep(0.15)
-            os.execv(sys.executable, sys.argv)
+            os.execv(sys.executable, [sys.executable] + sys.argv)
 
     # ── broadcast helpers ─────────────────────────────────────────────────────
 
@@ -589,6 +693,62 @@ class WebServer:
         if self._handler:
             logging.getLogger().removeHandler(self._handler)
 
+    def _serialize_config(self, config: Any) -> dict:
+        from alexa_custom.config import ActionsConfig
+
+        if not isinstance(config, ActionsConfig):
+            return {}
+
+        def summarize(actions):
+            res = []
+            for a in actions:
+                entry = {"type": a.type}
+                txt = a.params.get("text", a.params.get("message", a.params.get("command", "")))
+                if len(txt) > 30:
+                    txt = txt[:27] + "..."
+                
+                if a.type == "say":
+                    entry["label"] = f"say: {txt}"
+                elif a.type == "ask":
+                    entry["label"] = f"ask: {txt}"
+                    entry["on_reply"] = [
+                        {"phrase": r.phrase, "actions": summarize(r.actions)}
+                        for r in a.on_reply
+                    ]
+                    if a.on_else:
+                        entry["on_else"] = summarize(a.on_else)
+                elif a.type == "mqtt_publish":
+                    entry["label"] = f"mqtt: {a.params.get('topic', '')}"
+                elif a.type == "telegram":
+                    entry["label"] = "telegram"
+                elif a.type == "shell":
+                    entry["label"] = f"shell: {txt}"
+                elif a.type == "log":
+                    entry["label"] = f"log: {txt}"
+                else:
+                    entry["label"] = a.type
+                res.append(entry)
+            return res
+
+        ww = []
+        for g in config.wake_words:
+            entry = {
+                "word": g.word,
+                "aliases": g.aliases,
+                "triggers": [
+                    {"phrase": t.phrase, "actions": summarize(t.actions)}
+                    for t in g.triggers
+                ],
+            }
+            ww.append(entry)
+
+        gt = [
+            {"phrase": t.phrase, "actions": summarize(t.actions)}
+            for t in config.triggers
+        ]
+
+        return {"wake_words": ww, "global_triggers": gt}
+
     # ── LiveKit worker thread ─────────────────────────────────────────────────
 
     def _livekit_worker(
@@ -624,9 +784,19 @@ class WebServer:
         output_spec: str | None,
         room: str,
         stt_params: dict | None = None,
+        hot_reload: bool = False,
     ) -> None:
         self._loop = asyncio.get_running_loop()
         self._install_log_handler()
+
+        if hot_reload:
+            from alexa_custom.config_manager import ConfigManager
+
+            async def _on_source_restart():
+                await self._broadcast({"type": "restarting"})
+
+            cm = ConfigManager(None)
+            cm.start_source_watcher("alexa_custom", on_restart=_on_source_restart)
 
         app = web.Application()
         app.router.add_get("/", self._handle_index)
@@ -640,6 +810,11 @@ class WebServer:
         broadcast_task = asyncio.create_task(self._broadcast_loop())
         vu_task = asyncio.create_task(self._vu_flush_loop())
         prune_task = asyncio.create_task(self._prune_clients_loop())
+
+        if stt_params and "config" in stt_params:
+            self._state["actions_config"] = self._serialize_config(
+                stt_params["config"]
+            )
 
         stop_threading = threading.Event()
         livekit_thread = threading.Thread(
@@ -708,9 +883,14 @@ def run_web(
     room: str,
     stt_params: dict | None = None,
     port: int = 8080,
+    hot_reload: bool = False,
 ) -> None:
     server = WebServer(port=port)
     try:
-        asyncio.run(server.run(run_fn, input_spec, output_spec, room, stt_params))
+        asyncio.run(
+            server.run(
+                run_fn, input_spec, output_spec, room, stt_params, hot_reload=hot_reload
+            )
+        )
     except KeyboardInterrupt:
         pass
