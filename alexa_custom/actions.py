@@ -195,11 +195,41 @@ async def handle_livekit_join(
     await livekit_connect_fn()
 
 
+_CMD_RE = re.compile(r"\$\(([^)]+)\)")
+
+
+async def _render_text(text: str) -> str:
+    """Expand $(shell command) placeholders in text."""
+
+    async def _run(cmd: str) -> str:
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+            return stdout.decode().strip()
+        except Exception as e:
+            logger.warning("say template command failed %r: %s", cmd, e)
+            return ""
+
+    matches = _CMD_RE.findall(text)
+    if not matches:
+        return text
+
+    results = await asyncio.gather(*(_run(m) for m in matches))
+    result = text
+    for match, value in zip(matches, results):
+        result = result.replace(f"$({match})", value, 1)
+    return result
+
+
 @registry.register("say")
 async def handle_say(action: ActionEntry, mqtt_client: MQTTClient | None, **_):
     from alexa_custom.tts import get_engine
 
-    text = action.params.get("text", "")
+    text = await _render_text(action.params.get("text", ""))
     lang = action.params.get("lang", "it-IT")
     if text:
         if mqtt_client:
