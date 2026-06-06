@@ -10,6 +10,10 @@ LiveKit headless audio client turning a USB conference speakerphone into a voice
 - **Audio server**: PipeWire 1.4.2 with PulseAudio compatibility socket
 - **Python**: ≥ 3.13 (Taskfile references 3.14 venv path)
 
+## Git
+
+When creating commits, do **not** add a `Co-Authored-By` trailer.
+
 ## Commands
 
 ```bash
