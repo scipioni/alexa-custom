@@ -10,7 +10,7 @@ Optimized for **PipeWire** and fully integrated with **Home Assistant**.
 
 ```bash
 # 1. Install system dependencies
-sudo apt install libportaudio2
+sudo apt install libportaudio2 pulseaudio-utils
 
 # 2. Setup virtual environment
 python -m venv .venv

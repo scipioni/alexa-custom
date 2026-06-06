@@ -263,7 +263,6 @@ def start_capture(source: str | None, channels: int = 1) -> subprocess.Popen:
     ]
 
     if is_pw:
-        cmd.extend(["--media-type=audio", "--media-role=communication"])
         if source:
             cmd.append(f"--target={source}")
     else:
