@@ -652,15 +652,14 @@ async def _async_main(
 
     async def _open_mic_async():
         if pw_device is not None:
-            return await asyncio.to_thread(
-                lambda: devices.open_input(
-                    enable_aec=aec,
-                    noise_suppression=ns,
-                    high_pass_filter=hpf,
-                    auto_gain_control=agc,
-                    input_device=pw_device,
-                    queue_capacity=200,
-                )
+            # open_input() calls asyncio.create_task() internally — must run on the event loop thread
+            return devices.open_input(
+                enable_aec=aec,
+                noise_suppression=ns,
+                high_pass_filter=hpf,
+                auto_gain_control=agc,
+                input_device=pw_device,
+                queue_capacity=200,
             )
         # PortAudio has no input on this board — bypass it with parec
         cap = ParecAudioCapture()
