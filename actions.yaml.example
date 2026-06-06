@@ -104,10 +104,23 @@ wake_triggers:
               text: "Non ho capito"
 
   assistente:
+    # $(command) in text: is replaced with the command's stdout before TTS.
     - phrase: "che ora è"
       aliases:
         - "dimmi l'ora"
         - "che ore sono"
       actions:
-        - type: shell
-          command: "date +'Sono le %H e %M' | piper -m models/piper/it_IT-paola-medium.onnx --output-raw | paplay --raw --rate=22050 --channels=1 --format=s16le"
+        - type: say
+          text: "$(date +'Sono le %H e %M')"
+
+    - phrase: "che temperatura fa"
+      aliases:
+        - "dimmi la temperatura"
+      actions:
+        - type: say
+          text: "La temperatura è $(cat /sys/class/thermal/thermal_zone0/temp | awk '{printf \"%.0f\", $1/1000}') gradi"
+
+    - phrase: "da quanto tempo sei acceso"
+      actions:
+        - type: say
+          text: "$(uptime -p | sed 's/up /Sono acceso da /')"

@@ -359,6 +359,29 @@ triggers:
         payload: "ON"
         retain: false       # optional, default false
 
+  # --- say with shell template ---
+  # $(command) inside text: is replaced with the command's stdout before TTS.
+  # Multiple substitutions in one string are expanded concurrently.
+  - phrase: "che ora è"
+    aliases:
+      - "dimmi l'ora"
+      - "che ore sono"
+    actions:
+      - type: say
+        text: "$(date +'Sono le %H e %M')"
+
+  - phrase: "che temperatura fa"
+    aliases:
+      - "dimmi la temperatura"
+    actions:
+      - type: say
+        text: "La temperatura è $(cat /sys/class/thermal/thermal_zone0/temp | awk '{printf \"%.0f\", $1/1000}') gradi"
+
+  - phrase: "da quanto tempo sei acceso"
+    actions:
+      - type: say
+        text: "$(uptime -p | sed 's/up /Sono acceso da /')"
+
   # --- ask: speak a question and wait for a reply ---
   - phrase: "chiedi conferma"
     actions:
