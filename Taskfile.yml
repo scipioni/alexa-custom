@@ -113,6 +113,96 @@ tasks:
         echo "  systemctl --user status  alexa-custom   # check status"
         echo "  journalctl --user -fu    alexa-custom   # follow logs"
 
+  audio:setup:
+    desc: Set NewPie USB default sink/source persistently, unmute hardware, and install PCM restore service
+    cmds:
+      # Remove any stale switch-on-connect drop-ins (module not available on this board)
+      - rm -f ~/.config/pipewire/pipewire.conf.d/99-switch-on-connect.conf
+      - rm -f ~/.config/pipewire/pipewire-pulse.conf.d/99-switch-on-connect.conf
+      # Set WirePlumber persistent default routing by name (survives reboots)
+      - pw-metadata -n default 0 default.audio.sink '{"name":"alsa_output.usb-0a12_NewPie_SABINESMICDFU-00.analog-stereo"}' 'Spa:String:JSON'
+      - pw-metadata -n default 0 default.audio.source '{"name":"alsa_input.usb-0a12_NewPie_SABINESMICDFU-00.analog-stereo"}' 'Spa:String:JSON'
+      # Unmute hardware PCM volume now
+      - amixer -c 0 sset PCM 100% || amixer -c NewPie sset PCM 100% || true
+      - wpctl set-volume @DEFAULT_SINK@ 1.0 || true
+      # Install user service to re-apply PCM 100% after PipeWire init on every boot
+      - mkdir -p ~/.config/systemd/user
+      - cp setup/alsa-pcm-unmute.service ~/.config/systemd/user/alsa-pcm-unmute.service
+      - systemctl --user daemon-reload
+      - systemctl --user enable alsa-pcm-unmute.service
+      # Restart WirePlumber so it re-evaluates routing with NewPie as the configured default
+      - systemctl --user restart wireplumber && sleep 3
+      - systemctl --user restart alsa-pcm-unmute.service
+      - echo "USB Audio (NewPie) configured."
+
+  audio:restart:
+    desc: Restart WirePlumber and restore NewPie routing and PCM volume
+    cmds:
+      - systemctl --user restart wireplumber && sleep 3
+      - amixer -c 0 sset PCM 100% || true
+      - systemctl --user restart alsa-pcm-unmute.service
+
+  audio:status:
+    desc: Check and display beautifully formatted status about NewPie USB audio device
+    silent: true
+    cmds:
+      - |
+        python3 -c '
+        import subprocess, re, json
+        status = subprocess.getoutput("wpctl status")
+        default_sink = subprocess.getoutput("wpctl inspect @DEFAULT_SINK@")
+        metadata = subprocess.getoutput("pw-metadata -n default")
+        lsusb = subprocess.getoutput("lsusb")
+
+        usb_match = re.search(r"Bus \d+ Device \d+: ID [0-9a-fA-F:]+ Cambridge Silicon Radio, Ltd NewPie", lsusb)
+        usb_info = usb_match.group(0) if usb_match else "NewPie not found on USB bus"
+
+        sinks_part = status.split("Sinks:")[1].split("Sources:")[0] if "Sinks:" in status else ""
+        sources_part = status.split("Sources:")[1].split("Filters:")[0] if "Sources:" in status else ""
+
+        sink_info = re.search(r"(\d+)\.\s+NewPie Analog Stereo\s+\[vol:\s+([0-9.]+)\]", sinks_part)
+        source_info = re.search(r"(\d+)\.\s+NewPie Analog Stereo\s+\[vol:\s+([0-9.]+)\]", sources_part)
+
+        sink_id = sink_info.group(1) if sink_info else "Unknown"
+        sink_vol = sink_info.group(2) if sink_info else "Unknown"
+        source_id = source_info.group(1) if source_info else "Unknown"
+        source_vol = source_info.group(2) if source_info else "Unknown"
+
+        active_sink_match = re.search(r"node\.name\s+=\s+\"([^\"]+)\"", default_sink)
+        active_sink = active_sink_match.group(1) if active_sink_match else "Unknown"
+
+        active_source = "Unknown"
+        for line in metadata.splitlines():
+            if "default.audio.source" in line:
+                try:
+                    val_part = line.split("value:")[1].split("type:")[0].strip().strip("\x27")
+                    val_json = re.sub(r"\x27", "\x22", val_part)
+                    active_source = json.loads(val_json)["name"]
+                except Exception as e:
+                    pass
+
+        is_sink_default = "NewPie" in active_sink
+        is_source_default = "NewPie" in active_source
+
+        print("=========================================================")
+        print(" 🔊 NEWPIE USB AUDIO STATUS")
+        print("=========================================================")
+        print(f"🔌 USB Device:   {usb_info}")
+        print(f"🆔 Sinks & Sources:")
+        print(f"   - Playback (Sink) ID:   {sink_id} (Volume: {sink_vol})")
+        print(f"   - Capture (Source) ID:  {source_id} (Volume: {source_vol})")
+        print(f"🎯 Active Default Routing:")
+        print(f"   - Playback Sink:   \x1b[32m✅ ACTIVE DEFAULT\x1b[0m" if is_sink_default else f"\x1b[31m❌ INACTIVE\x1b[0m (Default: {active_sink})")
+        print(f"   - Capture Source:  \x1b[32m✅ ACTIVE DEFAULT\x1b[0m" if is_source_default else f"\x1b[31m❌ INACTIVE\x1b[0m (Default: {active_source})")
+        print("=========================================================")
+        '
+
+  audio:test:
+    desc: Play a test audio file (/usr/share/sounds/alsa/Front_Center.wav) to verify speaker output
+    cmds:
+      - echo "Playing test sound ('Front_Center.wav')..."
+      - pw-play /usr/share/sounds/alsa/Front_Center.wav || aplay /usr/share/sounds/alsa/Front_Center.wav
+
   clean:
     desc: Clean up temporary files
     cmds:

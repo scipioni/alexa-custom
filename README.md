@@ -10,7 +10,7 @@ Optimized for **PipeWire** and fully integrated with **Home Assistant**.
 
 ```bash
 # 1. Install system dependencies
-sudo apt install libportaudio2 libttspico-utils
+sudo apt install libportaudio2
 
 # 2. Setup virtual environment
 python -m venv .venv
@@ -19,11 +19,15 @@ python -m venv .venv
 # 3. Setup STT models
 alexa-setup
 
-# 4. Create config
+# 4. Configure USB Audio Defaults (run once after first boot)
+task audio:setup            # Sets NewPie as default, installs PCM restore service
+task audio:status           # Verify ALSA/WirePlumber default endpoints
+
+# 5. Create config
 cp config.yaml.example config.yaml
 # Edit config.yaml — fill in credentials under env: and customize triggers
 
-# 5. Run it!
+# 6. Run it!
 alexa-client --web          # browser dashboard at http://<host>:8080
 ```
 
@@ -102,6 +106,22 @@ Dive deeper into specific topics:
 | `alexa-audio` | Run a microphone → speaker loopback test |
 | `alexa-devices` | List all detected audio devices |
 | `alexa-setup` | Download/Update STT models |
+
+---
+
+## ⚡ Task Automation (Taskfile)
+
+If you have `task` installed, you can use these automated helper commands:
+
+| Task Command | Description |
+|--------------|-------------|
+| `task audio:setup` | Sets NewPie as default sink/source, installs PCM restore service for boot |
+| `task audio:restart` | Restart WirePlumber and restore NewPie routing and PCM volume |
+| `task audio:status` | Check host ALSA, WirePlumber, and active default audio endpoints |
+| `task audio:test` | Play a test WAV file to verify speaker output |
+| `task test` | Run regression tests |
+| `task test-stt-e2e` | Run end-to-end speech-to-text validation tests |
+| `task lint` / `task format` | Run code quality checks and auto-formatting |
 
 ---
 

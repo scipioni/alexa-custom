@@ -50,6 +50,36 @@ PortAudio (used by `sounddevice` and `PyAudio`) has **no native PipeWire backend
 - `sd.query_devices()` for device listing (`alexa-audio --list`, speakerphone diagnostic).
 - `sd.Stream` for the `speakerphone` loopback utility (isolated, no STT gate interaction).
 
+## Host Audio Management & Workarounds
+
+This headless host runs a modern **PipeWire** audio graph managed by **WirePlumber**. To keep audio routing and hardware stable, keep these core behaviors in mind:
+
+### 1. NewPie Device Profile
+- **Always use `analog-stereo`** profile for the `NewPie` USB audio device (`alsa_card.usb-0a12_NewPie_SABINESMICDFU-00`). 
+- **Do not use `pro-audio`**, as it disables playback/capture endpoints on this specific hardware card.
+
+### 2. The ALSA Hardware Mixer Reset Bug (Crucial)
+- **Problem**: When PipeWire initializes and takes ownership of the ALSA device (on boot or restart), the kernel driver resets the NewPie's `PCM` mixer to `0%`.
+- **Why `alsa-restore.service` is not enough**: it runs before PipeWire starts, so PipeWire's init overwrites it. `sudo alsactl store` alone does not solve the boot-time reset.
+- **The Permanent Fix**: `task audio:setup` installs `~/.config/systemd/user/alsa-pcm-unmute.service`, which polls until NewPie appears in `wpctl status`, forces NewPie as default routing, then runs `amixer -c 0 sset PCM 100%` every 2 seconds for 20 seconds — catching WirePlumber's late ACP profile reset which happens silently a few seconds after the device appears. Run once:
+  ```bash
+  task audio:setup
+  ```
+- **Workaround (adhoc)**: To manually restore volume in a live session:
+  ```bash
+  amixer -c 0 sset PCM 100%
+  ```
+
+### 3. Late Boot Routing (USB device discovered after PipeWire starts)
+- **Problem**: NewPie is discovered slightly after PipeWire/WirePlumber start; WirePlumber falls back to HDMI and does not reliably switch when NewPie later appears, even with persistent default-device state saved.
+- **Fix**: The `alsa-pcm-unmute.service` (see section 2) handles this too — it polls until NewPie appears, then calls `pw-metadata` to force it as the active sink/source.
+- **`libpipewire-module-switch-on-connect` is NOT available** on this board's PipeWire 1.4.2 build. The `ifexists nofail` conf flag does not work on this build — it still crashes PipeWire and `pipewire-pulse`. `task audio:setup` actively removes any stale `99-switch-on-connect.conf` drop-ins from `~/.config/pipewire/`.
+
+### 4. Automated Audio Tasks
+- Run once after first boot: `task audio:setup` — sets default routing, unmutes PCM, installs `alsa-pcm-unmute.service`.
+- `task audio:status`: displays a status dashboard for the NewPie.
+- `task audio:test`: plays a test WAV to verify speaker output.
+
 ## Project structure
 
 ```
