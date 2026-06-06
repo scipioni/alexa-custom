@@ -378,7 +378,11 @@ def _llm_fallback(
                 return
             if on_stt_event:
                 on_stt_event("llm_thinking", {"transcript": current})
-            reply = await engine.reply(current)
+
+            async def _say(text: str) -> None:
+                await asyncio.to_thread(get_tts().say, text, lang)
+
+            reply = await engine.reply_streaming(current, _say)
             if reply == _UNREACHABLE:
                 if on_stt_event:
                     on_stt_event("llm_unreachable", {})
@@ -388,7 +392,6 @@ def _llm_fallback(
                 return
             if on_stt_event:
                 on_stt_event("llm_reply", {"transcript": current, "reply": reply})
-            await asyncio.to_thread(get_tts().say, reply, lang)
             current = (await listen_fn(10.0)).strip()
 
     try:

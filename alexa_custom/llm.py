@@ -62,21 +62,86 @@ class OllamaUnreachable(Exception):
 
 _CONNECT_TIMEOUT = 5.0  # seconds to establish TCP connection
 
+# Sentence boundary characters used by the streaming sentence splitter.
+_SENTENCE_END = frozenset(".!?")
+
+
+def _split_sentences(buf: str) -> tuple[list[str], str]:
+    """Return (complete_sentences, remainder) from buf."""
+    sentences: list[str] = []
+    start = 0
+    for i, ch in enumerate(buf):
+        if ch in _SENTENCE_END:
+            # Swallow any trailing whitespace after the punctuation.
+            end = i + 1
+            while end < len(buf) and buf[end] in " \t":
+                end += 1
+            sentence = buf[start:end].strip()
+            if sentence:
+                sentences.append(sentence)
+            start = end
+    return sentences, buf[start:]
+
 
 class OllamaClient:
     def __init__(self, host: str, timeout: float = 60.0) -> None:
         self._host = host.rstrip("/")
         self._timeout = timeout
-
-    async def chat(self, messages: list[dict[str, str]], model: str) -> str:
-        url = f"{self._host}/api/chat"
-        payload = {"model": model, "messages": messages, "stream": False}
-        http_timeout = httpx.Timeout(
+        self._http_timeout = httpx.Timeout(
             connect=_CONNECT_TIMEOUT, read=self._timeout, write=10.0, pool=5.0
         )
+
+    async def chat(self, messages: list[dict[str, str]], model: str) -> str:
+        """Collect a full reply (non-streaming). Used by LearnWizard."""
+        tokens: list[str] = []
+        async for token in self.chat_stream(messages, model):
+            tokens.append(token)
+        return "".join(tokens)
+
+    async def warmup(self, model: str) -> None:
+        """Pre-load the model by sending an empty generation request."""
+        url = f"{self._host}/api/generate"
+        payload = {"model": model, "prompt": "", "stream": False, "keep_alive": -1}
         try:
-            async with httpx.AsyncClient(timeout=http_timeout) as client:
-                resp = await client.post(url, json=payload)
+            async with httpx.AsyncClient(timeout=self._http_timeout) as client:
+                await client.post(url, json=payload)
+            logger.debug("Ollama warmup complete for model %s", model)
+        except Exception as e:
+            logger.debug("Ollama warmup skipped: %s", e)
+
+    async def chat_stream(
+        self,
+        messages: list[dict[str, str]],
+        model: str,
+    ):
+        """Yield text token strings as they arrive from the streaming API."""
+        url = f"{self._host}/api/chat"
+        payload = {
+            "model": model,
+            "messages": messages,
+            "stream": True,
+            "keep_alive": -1,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=self._http_timeout) as client:
+                async with client.stream("POST", url, json=payload) as resp:
+                    if resp.status_code >= 400:
+                        body = await resp.aread()
+                        raise OllamaUnreachable(
+                            f"Ollama returned HTTP {resp.status_code}: {body[:200]}"
+                        )
+                    async for line in resp.aiter_lines():
+                        if not line:
+                            continue
+                        try:
+                            chunk = __import__("json").loads(line)
+                        except ValueError:
+                            continue
+                        token = chunk.get("message", {}).get("content", "")
+                        if token:
+                            yield token
+                        if chunk.get("done"):
+                            break
         except (httpx.ConnectError, httpx.ConnectTimeout) as e:
             raise OllamaUnreachable(str(e)) from e
         except httpx.ReadTimeout as e:
@@ -85,12 +150,6 @@ class OllamaClient:
             ) from e
         except httpx.TimeoutException as e:
             raise OllamaUnreachable(str(e)) from e
-        if resp.status_code >= 400:
-            raise OllamaUnreachable(
-                f"Ollama returned HTTP {resp.status_code}: {resp.text[:200]}"
-            )
-        data = resp.json()
-        return data["message"]["content"]
 
 
 class ConversationEngine:
@@ -118,30 +177,55 @@ class ConversationEngine:
             "Le tue risposte saranno lette da un sintetizzatore vocale."
         )
 
-    async def reply(self, user_text: str) -> str:
+    def _prepare_messages(self, user_text: str) -> list[dict[str, str]]:
         now = time.monotonic()
         if self._history and (now - self._last_ts) > self._config.context_window_secs:
             logger.debug("ConversationEngine: context window expired, clearing history")
             self._history.clear()
         self._last_ts = now
-
         self._history.append({"role": "user", "content": user_text})
-        messages = [
-            {"role": "system", "content": self._system_prompt()}
-        ] + self._history
-        try:
-            text = await self._client.chat(messages, self._config.model)
-        except OllamaUnreachable as e:
-            logger.warning("Ollama unreachable: %s", e)
-            self._history.pop()  # remove the user message we just appended
-            return _UNREACHABLE
+        return [{"role": "system", "content": self._system_prompt()}] + self._history
 
-        self._history.append({"role": "assistant", "content": text})
-        # Keep only the last context_turns pairs (each pair = 2 messages)
+    def _commit(self, full_text: str) -> None:
+        self._history.append({"role": "assistant", "content": full_text})
         max_msgs = self._config.context_turns * 2
         if len(self._history) > max_msgs:
             self._history = self._history[-max_msgs:]
-        return text
+
+    async def reply_streaming(
+        self,
+        user_text: str,
+        say_fn: Callable[[str], Awaitable[None]],
+    ) -> str:
+        """Stream tokens from Ollama and speak each sentence as it completes.
+
+        Returns the full reply text, or _UNREACHABLE on connection failure.
+        """
+        messages = self._prepare_messages(user_text)
+        buf = ""
+        full_text = ""
+        try:
+            async for token in self._client.chat_stream(messages, self._config.model):
+                buf += token
+                sentences, buf = _split_sentences(buf)
+                for sentence in sentences:
+                    full_text += sentence + " "
+                    await say_fn(sentence)
+            # Speak any remaining fragment (no trailing punctuation)
+            remainder = buf.strip()
+            if remainder:
+                full_text += remainder
+                await say_fn(remainder)
+        except OllamaUnreachable as e:
+            logger.warning("Ollama unreachable: %s", e)
+            self._history.pop()
+            return _UNREACHABLE
+
+        self._commit(full_text.strip())
+        return full_text.strip()
+
+    async def warmup(self) -> None:
+        await self._client.warmup(self._config.model)
 
     def reset(self) -> None:
         self._history.clear()
@@ -156,7 +240,17 @@ _engines: dict[tuple[str, str, str], ConversationEngine] = {}
 def get_engine(config: LLMConfig, lang: str = "it-IT") -> ConversationEngine:
     key = (config.host, config.model, lang)
     if key not in _engines:
-        _engines[key] = ConversationEngine(config, lang)
+        engine = ConversationEngine(config, lang)
+        _engines[key] = engine
+        # Fire-and-forget warmup: pre-loads the model so the first real
+        # request doesn't pay the cold-start penalty.
+        import asyncio as _aio
+
+        try:
+            loop = _aio.get_running_loop()
+            loop.create_task(engine.warmup())
+        except RuntimeError:
+            pass  # no running loop (e.g. tests); warmup skipped
     return _engines[key]
 
 
