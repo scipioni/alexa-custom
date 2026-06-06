@@ -44,7 +44,7 @@ PortAudio (used by `sounddevice` and `PyAudio`) has **no native PipeWire backend
 - Never use `sounddevice` or `PyAudio` for capture.
 
 ### Routing / device management
-- **Use `pulsectl`** Python library — sets default sink/source, enforces the `pro-audio` profile on the USB card, reacts to PipeWire graph events via `AudioWatcher`.
+- **Use `pulsectl`** Python library — sets default sink/source, reacts to PipeWire graph events via `AudioWatcher`. Do **not** force `pro-audio` on USB devices — it disables endpoints on the NewPie.
 
 ### `sounddevice` — allowed uses only
 - `sd.query_devices()` for device listing (`alexa-audio --list`, speakerphone diagnostic).
@@ -75,8 +75,23 @@ This headless host runs a modern **PipeWire** audio graph managed by **WirePlumb
 - **Fix**: The `alsa-pcm-unmute.service` (see section 2) handles this too — it polls until NewPie appears, then calls `pw-metadata` to force it as the active sink/source.
 - **`libpipewire-module-switch-on-connect` is NOT available** on this board's PipeWire 1.4.2 build. The `ifexists nofail` conf flag does not work on this build — it still crashes PipeWire and `pipewire-pulse`. `task audio:setup` actively removes any stale `99-switch-on-connect.conf` drop-ins from `~/.config/pipewire/`.
 
-### 4. Automated Audio Tasks
-- Run once after first boot: `task audio:setup` — sets default routing, unmutes PCM, installs `alsa-pcm-unmute.service`.
+### 4. Mid-Session Audio Loss (USB Autosuspend)
+- **Problem**: Linux suspends the NewPie USB device after inactivity; PipeWire reinitializes it on wake, resetting PCM to 0% and dropping routing — same symptoms as the boot-time bug but mid-session.
+- **Fix**: `task audio:setup` installs `setup/99-newpie-no-autosuspend.rules` to `/etc/udev/rules.d/`, setting `autosuspend_delay_ms=-1` for the NewPie (USB ID `0a12:1260`).
+- **Ad-hoc recovery**: `task audio:restart`.
+
+### 5. pulsectl Triggers PCM Reset (Critical for Python Code)
+- **Problem**: Opening any `pulsectl.Pulse()` connection causes pipewire-pulse to re-open the ALSA device, resetting PCM to 0%. All subsequent Python audio is silent even though `pw-play file.wav` from the shell works fine.
+- **Fix**: Call `_restore_hw_pcm()` immediately after closing any `pulsectl.Pulse()` context — it runs `amixer -c 0 sset PCM 100%`. Already wired into `AudioWatcher` (on device connect) and `main_test()`.
+- **Rule**: Never open pulsectl without calling `_restore_hw_pcm()` right after.
+
+### 6. pw-play Raw Stdin Unreliable on This Board
+- **Problem**: `pw-play --raw --rate N --format f32 -` exits 0 but produces no audio on PipeWire 1.4.2. `-a` (media-type flag) requires an argument and causes pw-play to exit with error, also silently swallowed.
+- **Fix**: `_play_array()` and `_play_raw()` write a temporary s16le WAV file and call `pw-play <tmp.wav>`. Temp file is deleted after playback. Never pipe raw audio to pw-play stdin.
+
+### 7. Automated Audio Tasks
+- Run once after first boot: `task audio:setup` — sets default routing, unmutes PCM, installs `alsa-pcm-unmute.service`, disables USB autosuspend.
+- `task audio:restart`: restarts WirePlumber and restores NewPie routing/PCM (use when audio drops mid-session).
 - `task audio:status`: displays a status dashboard for the NewPie.
 - `task audio:test`: plays a test WAV to verify speaker output.
 

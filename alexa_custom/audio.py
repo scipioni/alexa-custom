@@ -48,6 +48,20 @@ def is_playback_active() -> bool:
 _SAMPLERATE = {"usb": 48000, "bluetooth": 16000}
 
 
+def _restore_hw_pcm(card: int = 0) -> None:
+    """Restore ALSA hardware PCM to 100% after any pulsectl interaction.
+
+    Opening a pulsectl/PulseAudio connection causes PipeWire to (re-)open the
+    ALSA device, which triggers the kernel driver to reset the NewPie's hardware
+    PCM mixer to 0%.  Call this immediately after closing any pulsectl context.
+    """
+    subprocess.run(
+        ["amixer", "-c", str(card), "sset", "PCM", "100%"],
+        capture_output=True,
+        check=False,
+    )
+
+
 def find_pipewire_device():
     """Return the sounddevice index for the PipeWire ALSA device."""
     import sounddevice as sd
@@ -237,9 +251,8 @@ def enforce_audio_state(
     target_profile = None
     if conn == "bluetooth":
         target_profile = "headset-head-unit"
-    elif conn == "usb":
-        if any(p.name == "pro-audio" for p in card.profile_list):
-            target_profile = "pro-audio"
+    # USB devices (e.g. NewPie): do NOT force pro-audio — it disables endpoints on NewPie.
+    # Leave the profile at the WirePlumber default (analog-stereo).
 
     if target_profile and card.profile_active.name != target_profile:
         if any(p.name == target_profile for p in card.profile_list):
@@ -335,6 +348,7 @@ class AudioWatcher(threading.Thread):
                 if self.input_gain > 0 and not self._gain_set:
                     set_input_gain(pulse, self.input_spec, self.input_gain)
                     self._gain_set = True
+                _restore_hw_pcm()
 
             self.connected = ok
             self.conn_type = conn
@@ -510,107 +524,92 @@ def speakerphone():
 
 
 def _play_array(audio: np.ndarray, samplerate: int) -> None:
-    """Play a float32 numpy audio array via pw-play (PipeWire) or aplay (ALSA fallback)."""
+    """Play a float32 numpy array via pw-play (PipeWire) or aplay (ALSA fallback)."""
+    import tempfile
+    import wave as _wave
+
     channels = audio.shape[1] if audio.ndim > 1 else 1
     frames = audio.shape[0]
     duration_s = frames / samplerate
-    # Give pw-play 3× the audio duration plus 5 s startup, capped at 30 s.
     play_timeout = min(max(duration_s * 3 + 5, 8), 30)
-    data = np.ascontiguousarray(audio).tobytes()
 
-    if _PW_PLAY:
-        cmd = [
-            _PW_PLAY,
-            "-a",
-            "--rate",
-            str(samplerate),
-            "--channels",
-            str(channels),
-            "--format",
-            "f32",
-            "-",
-        ]
-    else:
-        cmd = [
-            "aplay",
-            "-D",
-            "pipewire",
-            "-r",
-            str(samplerate),
-            "-f",
-            "FLOAT_LE",
-            "-c",
-            str(channels),
-            "-q",
-        ]
+    # Write a temp WAV (s16le) — pw-play file.wav is proven to work on this board;
+    # raw stdin piping (--raw) is not reliably supported by all pw-play builds.
+    pcm16 = np.clip(np.ascontiguousarray(audio) * 32767, -32768, 32767).astype(np.int16)
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".wav")
+    try:
+        os.close(tmp_fd)
+        with _wave.open(tmp_path, "wb") as wf:
+            wf.setnchannels(channels)
+            wf.setsampwidth(2)
+            wf.setframerate(samplerate)
+            wf.writeframes(pcm16.tobytes())
 
-    with _audio_lock:
-        _playback_active.set()
+        cmd = (
+            [_PW_PLAY, tmp_path]
+            if _PW_PLAY
+            else ["aplay", "-D", "pipewire", "-q", tmp_path]
+        )
+
+        with _audio_lock:
+            _playback_active.set()
+            try:
+                result = subprocess.run(cmd, timeout=play_timeout, check=False, capture_output=True)
+                if result.returncode != 0:
+                    logger.error(f"_play_array: {cmd[0]} exited {result.returncode}: {result.stderr.decode(errors='replace').strip()}")
+                if _POST_PLAYBACK_MS > 0:
+                    time.sleep(_POST_PLAYBACK_MS / 1000.0)
+            except Exception as e:
+                logger.error(f"_play_array failed: {e}")
+            finally:
+                _playback_active.clear()
+    finally:
         try:
-            subprocess.run(
-                cmd,
-                input=data,
-                timeout=play_timeout,
-                check=False,
-                stderr=subprocess.DEVNULL,
-            )
-            if _POST_PLAYBACK_MS > 0:
-                time.sleep(_POST_PLAYBACK_MS / 1000.0)
-        except Exception as e:
-            logger.error(f"_play_array failed: {e}")
-        finally:
-            _playback_active.clear()
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
 
 def _play_raw(data: bytes, samplerate: int, channels: int) -> None:
     """Play raw float32 audio via pw-play (native PipeWire) or aplay (ALSA fallback)."""
-    # f32 = 4 bytes per sample; compute timeout the same way as _play_array.
+    import tempfile
+    import wave as _wave
+
     frames = len(data) // (channels * 4)
     duration_s = frames / samplerate
     play_timeout = min(max(duration_s * 3 + 5, 8), 30)
 
-    if _PW_PLAY:
-        cmd = [
-            _PW_PLAY,
-            "-a",  # raw mode: honour --format/--rate/--channels instead of auto-detect
-            "--rate",
-            str(samplerate),
-            "--channels",
-            str(channels),
-            "--format",
-            "f32",
-            "-",
-        ]
-    else:
-        cmd = [
-            "aplay",
-            "-D",
-            "pipewire",
-            "-r",
-            str(samplerate),
-            "-f",
-            "FLOAT_LE",
-            "-c",
-            str(channels),
-            "-q",
-        ]
+    pcm16 = np.clip(np.frombuffer(data, dtype=np.float32) * 32767, -32768, 32767).astype(np.int16)
+    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".wav")
+    try:
+        os.close(tmp_fd)
+        with _wave.open(tmp_path, "wb") as wf:
+            wf.setnchannels(channels)
+            wf.setsampwidth(2)
+            wf.setframerate(samplerate)
+            wf.writeframes(pcm16.tobytes())
 
-    with _audio_lock:
-        _playback_active.set()
+        cmd = (
+            [_PW_PLAY, tmp_path]
+            if _PW_PLAY
+            else ["aplay", "-D", "pipewire", "-q", tmp_path]
+        )
+
+        with _audio_lock:
+            _playback_active.set()
+            try:
+                subprocess.run(cmd, timeout=play_timeout, check=False, stderr=subprocess.DEVNULL)
+                if _POST_PLAYBACK_MS > 0:
+                    time.sleep(_POST_PLAYBACK_MS / 1000.0)
+            except Exception as e:
+                logger.error(f"_play_raw failed: {e}")
+            finally:
+                _playback_active.clear()
+    finally:
         try:
-            subprocess.run(
-                cmd,
-                input=data,
-                timeout=play_timeout,
-                check=False,
-                stderr=subprocess.DEVNULL,
-            )
-            if _POST_PLAYBACK_MS > 0:
-                time.sleep(_POST_PLAYBACK_MS / 1000.0)
-        except Exception as e:
-            logger.error(f"Failed to run audio playback command: {e}")
-        finally:
-            _playback_active.clear()
+            os.unlink(tmp_path)
+        except OSError:
+            pass
 
 
 def play_wav_file(file_path: str) -> None:
@@ -667,35 +666,20 @@ def record_wav_file(file_path: str, duration: float) -> None:
             wf.writeframes(pcm_data)
         return
 
-    aplay = shutil.which("aplay")
-    if aplay:
-        cmd = [
-            aplay,
-            "-D",
-            "pipewire",
-            "-d",
-            str(int(duration)),
-            "-f",
-            "S16_LE",
-            "-r",
-            str(rate),
-            file_path,
-        ]
-    else:
-        pw_record = shutil.which("pw-record")
-        if not pw_record:
-            logger.error("No recording tool found (parec, aplay, or pw-record)")
-            return
-        cmd = [
-            pw_record,
-            "--rate",
-            str(rate),
-            "--channels",
-            str(channels),
-            "--format",
-            "s16",
-            file_path,
-        ]
+    pw_record = shutil.which("pw-record")
+    if not pw_record:
+        logger.error("No recording tool found (parec or pw-record)")
+        return
+    cmd = [
+        pw_record,
+        "--rate",
+        str(rate),
+        "--channels",
+        str(channels),
+        "--format",
+        "s16",
+        file_path,
+    ]
 
     try:
         subprocess.run(cmd, check=True, timeout=duration + 2)
@@ -1016,8 +1000,11 @@ def main_devices():
 def main_test():
     import tempfile
     import os
+    import logging as _logging
     from alexa_custom.tts import init_engine, get_engine
     from alexa_custom.config import load_config
+
+    _logging.basicConfig(level=_logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
     print("--- Audio System Test ---")
 
@@ -1035,6 +1022,7 @@ def main_test():
     if config and config.output_volume > 0:
         with pulsectl.Pulse("alexa-test") as pulse:
             set_output_volume(pulse, output_spec, config.output_volume)
+        _restore_hw_pcm()
 
     print("1. Playing tone...")
     play_tone("info")
