@@ -4,6 +4,7 @@ import asyncio
 import difflib
 import logging
 import os
+import re
 import unicodedata
 from typing import Awaitable, Callable, TYPE_CHECKING
 
@@ -26,6 +27,32 @@ def normalize_text(text: str) -> str:
     return unicodedata.normalize("NFC", stripped).strip()
 
 
+def italian_phonetic(text: str) -> str:
+    """Reduce Italian text to a rough phoneme representation for fuzzy matching.
+
+    Applies normalize_text() first, then rewrites common Italian digraphs/trigraphs
+    and geminate consonants so acoustically equivalent forms compare as equal.
+    """
+    t = normalize_text(text)
+    # 1. Geminate consonants → single
+    t = re.sub(r"([bcdfglmnprstvz])\1", r"\1", t)
+    # 2. Trigraph gli → li
+    t = t.replace("gli", "li")
+    # 3. Digraph gn → n
+    t = t.replace("gn", "n")
+    # 4. sch before vowel → sk
+    t = re.sub(r"sch([aeiou])", r"sk\1", t)
+    # 5. sci/sce → si/se
+    t = t.replace("sci", "si").replace("sce", "se")
+    # 6. ch before e/i → k
+    t = re.sub(r"ch([ei])", r"k\1", t)
+    # 7. gh before e/i → g
+    t = re.sub(r"gh([ei])", r"g\1", t)
+    # 8. qu → k
+    t = t.replace("qu", "k")
+    return t
+
+
 class TelegramClient:
     def __init__(self) -> None:
         self._token: str | None = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -45,24 +72,42 @@ class TelegramClient:
     # Future: async def start_polling(self, handler) -> None: ...
 
 
+try:
+    from rapidfuzz import fuzz as _fuzz
+
+    def _trigger_score(a: str, b: str) -> float:
+        return _fuzz.token_set_ratio(a, b)
+
+    _TRIGGER_THRESHOLD = 70.0
+except ImportError:
+    logger.warning(
+        "rapidfuzz not installed; falling back to difflib for trigger matching"
+    )
+
+    def _trigger_score(a: str, b: str) -> float:  # type: ignore[misc]
+        return difflib.SequenceMatcher(None, a, b).ratio() * 100
+
+    _TRIGGER_THRESHOLD = 70.0
+
+
 def match_trigger(
     transcript: str,
     triggers: list[Trigger],
-    threshold: float = 0.70,
+    threshold: float = _TRIGGER_THRESHOLD,
 ) -> Trigger | None:
     best: Trigger | None = None
     best_score = 0.0
-    t_norm = normalize_text(transcript)
+    t_phon = italian_phonetic(transcript)
     for trigger in triggers:
-        p_norm = normalize_text(trigger.phrase)
-        score = difflib.SequenceMatcher(None, t_norm, p_norm).ratio()
+        p_phon = italian_phonetic(trigger.phrase)
+        score = _trigger_score(t_phon, p_phon)
         if score > best_score:
             best_score = score
             best = trigger
     if best is not None and best_score >= threshold:
-        logger.info(f"Matched trigger '{best.phrase}' (score={best_score:.2f})")
+        logger.info(f"Matched trigger '{best.phrase}' (score={best_score:.0f})")
         return best
-    logger.debug(f"No trigger matched '{transcript}' (best score={best_score:.2f})")
+    logger.debug(f"No trigger matched '{transcript}' (best score={best_score:.0f})")
     return None
 
 
