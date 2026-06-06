@@ -59,7 +59,7 @@ class LLMConfig:
     model: str = "ssfdre38/gemma4-nano"
     context_turns: int = 10
     context_window_secs: int = 60
-    fallback_on_no_match: bool = True
+    fallback_on_no_match: bool = False
     learn_commands: bool = True
     system_prompt: str | None = None
     request_timeout: float = 60.0
@@ -292,7 +292,7 @@ def _parse_llm_config(raw_llm: dict, source: str) -> LLMConfig:
         model=model,
         context_turns=int(raw_llm.get("context_turns", 10)),
         context_window_secs=int(raw_llm.get("context_window_secs", 60)),
-        fallback_on_no_match=bool(raw_llm.get("fallback_on_no_match", True)),
+        fallback_on_no_match=bool(raw_llm.get("fallback_on_no_match", False)),
         learn_commands=bool(raw_llm.get("learn_commands", True)),
         system_prompt=raw_llm.get("system_prompt") or None,
         request_timeout=float(raw_llm.get("request_timeout", 60.0)),
