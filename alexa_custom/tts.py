@@ -100,9 +100,21 @@ class PiperTTS(TTSBackend):
         stt_gated_flag: threading.Event | None = None,
         preroll_ms: int = 400,
     ):
-        from piper import (
-            PiperVoice,
-        )  # imported lazily so pico still works without piper
+        # ORT prints GPU device-discovery warnings directly to stderr fd on
+        # boards without standard PCI sysfs layout. Suppress during import+load.
+        import os as _os
+
+        _saved = _os.dup(2)
+        _devnull = _os.open(_os.devnull, _os.O_WRONLY)
+        _os.dup2(_devnull, 2)
+        _os.close(_devnull)
+        try:
+            from piper import (
+                PiperVoice,
+            )  # imported lazily so pico still works without piper
+        finally:
+            _os.dup2(_saved, 2)
+            _os.close(_saved)
 
         self._stt_gated_flag = stt_gated_flag
         self._preroll_ms = preroll_ms

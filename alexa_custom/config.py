@@ -257,7 +257,9 @@ def _parse_actions_config(raw: dict, source: str = "config") -> ActionsConfig:
 
     output_volume = float(raw.get("output_volume", 0.5))
     if not (0.0 <= output_volume <= 1.0):
-        raise ConfigError(f"{source}: 'output_volume' must be between 0.0 and 1.0, got {output_volume}")
+        raise ConfigError(
+            f"{source}: 'output_volume' must be between 0.0 and 1.0, got {output_volume}"
+        )
 
     input_gain = float(raw.get("input_gain", 1.0))
     if input_gain < 0.0:

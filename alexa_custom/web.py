@@ -710,10 +710,12 @@ class WebServer:
             res = []
             for a in actions:
                 entry = {"type": a.type}
-                txt = a.params.get("text", a.params.get("message", a.params.get("command", "")))
+                txt = a.params.get(
+                    "text", a.params.get("message", a.params.get("command", ""))
+                )
                 if len(txt) > 30:
                     txt = txt[:27] + "..."
-                
+
                 if a.type == "say":
                     entry["label"] = f"say: {txt}"
                 elif a.type == "ask":
@@ -821,9 +823,7 @@ class WebServer:
         prune_task = asyncio.create_task(self._prune_clients_loop())
 
         if stt_params and "config" in stt_params:
-            self._state["actions_config"] = self._serialize_config(
-                stt_params["config"]
-            )
+            self._state["actions_config"] = self._serialize_config(stt_params["config"])
 
         stop_threading = threading.Event()
         livekit_thread = threading.Thread(
@@ -902,7 +902,11 @@ def run_web(
     try:
         asyncio.run(
             server.run(
-                run_fn, input_spec, output_spec, room, stt_params,
+                run_fn,
+                input_spec,
+                output_spec,
+                room,
+                stt_params,
                 hot_reload=hot_reload,
                 output_volume=output_volume,
                 input_gain=input_gain,

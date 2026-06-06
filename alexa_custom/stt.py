@@ -335,7 +335,8 @@ def _approx_wake_match(
         if not phrase_words:
             phrase_words = norm_phrase.split()
         matched = sum(
-            1 for pw in phrase_words
+            1
+            for pw in phrase_words
             if any(pw in tw or (len(tw) >= 3 and tw in pw) for tw in text_words)
         )
         score = matched / len(phrase_words)
@@ -481,7 +482,10 @@ def run_stt_worker(
                 else _recognition_loop
             )
             # Reload backend only when the config changes it
-            new_backend_key = (current_config.stt_backend, current_config.stt_model_path)
+            new_backend_key = (
+                current_config.stt_backend,
+                current_config.stt_model_path,
+            )
             if new_backend_key != backend_key:
                 try:
                     backend = get_stt_backend(
@@ -603,7 +607,9 @@ def capture_transcript(
         if remaining <= 0:
             break
 
-        raw_data = _read_with_timeout(proc.stdout, _CHUNK * channels, min(remaining, 1.0))
+        raw_data = _read_with_timeout(
+            proc.stdout, _CHUNK * channels, min(remaining, 1.0)
+        )
         if not raw_data:
             if proc.poll() is not None:
                 logger.warning("Capture pipe closed mid-listen (parec exited)")
@@ -872,8 +878,8 @@ def _recognition_loop(
     cooldown_until = 0.0
     was_gated = False
     was_playing = False
-    stage1_last_speech_t = 0.0   # for sherpa energy VAD
-    stage1_speech_ms = 0.0       # accumulated ms above RMS threshold in current utterance
+    stage1_last_speech_t = 0.0  # for sherpa energy VAD
+    stage1_speech_ms = 0.0  # accumulated ms above RMS threshold in current utterance
 
     if on_stt_event:
         on_stt_event("listening", {"wake_words": [g.word for g in config.wake_words]})
@@ -1042,7 +1048,8 @@ def _recognition_loop(
             vad_triggered = (
                 stage1_speech_ms >= _STAGE1_MIN_SPEECH_MS
                 and stage1_last_speech_t > 0
-                and (time.monotonic() - stage1_last_speech_t) * 1000 >= _STAGE1_VAD_SILENCE_MS
+                and (time.monotonic() - stage1_last_speech_t) * 1000
+                >= _STAGE1_VAD_SILENCE_MS
             )
             endpoint_fired = backend.accept_waveform(data)
 
