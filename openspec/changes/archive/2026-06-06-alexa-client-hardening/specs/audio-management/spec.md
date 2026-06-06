@@ -1,9 +1,4 @@
-# Capability: Audio Management
-
-## Purpose
-Proactively manage PipeWire hardware profiles and routing to ensure reliable audio operation in a headless environment.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Proactive PipeWire state enforcement
 The system SHALL run a background daemon thread that monitors PipeWire events and ensures that the configured audio hardware is correctly initialized and routed. The target audio card name SHALL be sourced from `config.audio_card_name` (default `"NewPie"`) rather than being hardcoded. A `configure(cfg)` function SHALL be provided to update the module-level audio parameters after each config load or hot-reload.
@@ -30,21 +25,3 @@ The system SHALL detect the connection type of the active audio device and adjus
 #### Scenario: Custom USB sample rate
 - **WHEN** `config.yaml` sets `audio_sample_rates: {usb: 44100}`
 - **THEN** the LiveKit session sample rate for a USB device is 44100 Hz
-
-### Requirement: Audio status visualization
-The system SHALL provide real-time visual feedback in the Terminal UI regarding the connection state and hardware configuration of the audio system.
-
-#### Scenario: Device missing feedback
-- **WHEN** the configured audio device is not detected
-- **THEN** the TUI displays a yellow "Searching..." status and VU meters show a red "OFFLINE" label
-
-#### Scenario: Device detected feedback
-- **WHEN** the configured audio device is successfully initialized
-- **THEN** the TUI status turns green and plays a two-tone ascending connection chime
-
-### Requirement: Optimized peak calculation
-The system SHALL calculate audio peak levels directly from raw `int16` sample buffers without casting the entire buffer to floating point numbers, in order to minimize CPU utilization and memory allocation overhead.
-
-#### Scenario: Peak calculation performance
-- **WHEN** an audio frame is processed for volume metrics
-- **THEN** the peak is derived directly from the integer amplitude before normalization.
