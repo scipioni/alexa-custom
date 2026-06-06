@@ -800,7 +800,18 @@ def main() -> None:
     parser.add_argument(
         "--version", action="version", version=f"alexa-custom {__version__}"
     )
-    parser.add_argument("--web", action="store_true", help="Launch web dashboard")
+    parser.add_argument(
+        "--web",
+        action="store_true",
+        default=True,
+        help="Launch web dashboard (default)",
+    )
+    parser.add_argument(
+        "--no-web",
+        action="store_false",
+        dest="web",
+        help="Disable web dashboard",
+    )
     parser.add_argument(
         "--web-port", type=int, default=None, help="Web dashboard port (default: 8080)"
     )

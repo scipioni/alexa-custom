@@ -28,7 +28,7 @@ cp config.yaml.example config.yaml
 # Edit config.yaml — fill in credentials under env: and customize triggers
 
 # 6. Run it!
-alexa-client --web          # browser dashboard at http://<host>:8080
+alexa-client                # browser dashboard at http://<host>:8080 (disable with --no-web)
 ```
 
 ### Configuration
@@ -100,9 +100,9 @@ Dive deeper into specific topics:
 
 | Command | Description |
 |---------|-------------|
-| `alexa-client` | Start the assistant daemon (headless) |
-| `alexa-client --web` | Start with the web dashboard (LAN-accessible, default port 8080) |
-| `alexa-client --web --web-port 9090` | Web dashboard on a custom port |
+| `alexa-client` | Start the assistant daemon (web dashboard enabled by default, default port 8080) |
+| `alexa-client --no-web` | Start the assistant daemon headless (disable web dashboard) |
+| `alexa-client --web-port 9090` | Start with the web dashboard on a custom port |
 | `alexa-audio` | Run a microphone → speaker loopback test |
 | `alexa-devices` | List all detected audio devices |
 | `alexa-setup` | Download/Update STT models |
