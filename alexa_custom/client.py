@@ -569,6 +569,9 @@ async def _async_main(
             f"Output device: {output_spec or out_info['name']} ({out_info['max_output_channels']} ch)"
         )
 
+    if on_event:
+        on_event("starting", {})
+
     # Wait for AudioWatcher to configure hardware before executing startup actions
     # (otherwise sounds play through the old default, like HDMI)
     from alexa_custom.audio import check_newpie_ready
@@ -681,6 +684,7 @@ async def _async_main(
         else RECONNECT_DELAY
     )
     _base_reconnect_delay = reconnect_delay
+    _ever_connected = False
     try:
         while not stop_event.is_set():
             # On-demand mode: wait for STT to signal a connect trigger.
@@ -694,13 +698,14 @@ async def _async_main(
                 if stop_event.is_set():
                     break
 
-            _wrapped_on_event("reconnecting", {})
+            _wrapped_on_event("reconnecting" if _ever_connected else "connecting", {})
             connected_this_session = False
 
             def _on_event_interceptor(event: str, data: dict):
-                nonlocal connected_this_session
+                nonlocal connected_this_session, _ever_connected
                 if event == "connected":
                     connected_this_session = True
+                    _ever_connected = True
                 _wrapped_on_event(event, data)
 
             if pw_device is not None:
