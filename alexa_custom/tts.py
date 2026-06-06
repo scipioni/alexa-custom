@@ -3,14 +3,17 @@ from __future__ import annotations
 import abc
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
+import time
 import wave
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
 
+import alexa_custom.audio as _audio_module
 from alexa_custom.audio import _play_array
 
 if TYPE_CHECKING:
@@ -140,12 +143,76 @@ class PiperTTS(TTSBackend):
         if not text:
             return
 
-        try:
-            logger.info(f"TTS (Piper/{self._voice_name}): '{text}'")
+        logger.info(f"TTS (Piper/{self._voice_name}): '{text}'")
 
-            # piper-tts >=1.2 yields AudioChunk objects with `.audio_int16_array`
-            # or `.audio_int16_bytes`. Older releases (and the binary wrapper)
-            # yielded raw bytes. Handle both shapes.
+        paplay = shutil.which("paplay")
+        if paplay:
+            self._say_streaming(text, paplay)
+        else:
+            self._say_wav_fallback(text)
+
+    def _say_streaming(self, text: str, paplay: str) -> None:
+        """Stream synthesis chunks to paplay stdin sentence-by-sentence."""
+        samplerate: int | None = None
+        proc: subprocess.Popen | None = None
+
+        try:
+            for chunk in self._voice.synthesize(text):
+                # piper-tts >=1.2 yields AudioChunk; older releases yield raw bytes.
+                arr = getattr(chunk, "audio_int16_array", None)
+                if arr is None:
+                    raw = getattr(chunk, "audio_int16_bytes", None) or bytes(chunk)
+                    arr = np.frombuffer(raw, dtype=np.int16)
+
+                if samplerate is None:
+                    samplerate = int(getattr(chunk, "sample_rate", self._samplerate))
+
+                if proc is None:
+                    proc = subprocess.Popen(
+                        [
+                            paplay,
+                            "--raw",
+                            f"--rate={samplerate}",
+                            "--channels=1",
+                            "--format=s16le",
+                        ],
+                        stdin=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL,
+                    )
+                    _audio_module._audio_lock.acquire()
+                    _audio_module._playback_active.set()
+
+                    if self._preroll_ms > 0:
+                        n_preroll = samplerate * self._preroll_ms // 1000
+                        proc.stdin.write(bytes(n_preroll * 2))  # type: ignore[union-attr]
+
+                assert proc.stdin is not None
+                proc.stdin.write(np.asarray(arr, dtype=np.int16).tobytes())
+
+            if proc is None:
+                return
+
+            proc.stdin.close()
+            proc.wait()
+            if _audio_module._POST_PLAYBACK_MS > 0:
+                time.sleep(_audio_module._POST_PLAYBACK_MS / 1000.0)
+
+        except Exception as e:
+            logger.error(f"Piper TTS (streaming) failed: {e}")
+            if proc is not None:
+                try:
+                    proc.kill()
+                    proc.wait()
+                except Exception:
+                    pass
+        finally:
+            if proc is not None:
+                _audio_module._playback_active.clear()
+                _audio_module._audio_lock.release()
+
+    def _say_wav_fallback(self, text: str) -> None:
+        """Collect all chunks, write a WAV, and play via aplay (paplay absent)."""
+        try:
             buffers: list[np.ndarray] = []
             chunk_rate: int | None = None
             for chunk in self._voice.synthesize(text):
@@ -172,7 +239,7 @@ class PiperTTS(TTSBackend):
             _play_array(samples, samplerate)
 
         except Exception as e:
-            logger.error(f"Piper TTS failed: {e}")
+            logger.error(f"Piper TTS (wav fallback) failed: {e}")
 
 
 # Singleton placeholder - will be initialized in main()
