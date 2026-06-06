@@ -27,6 +27,7 @@ class ActionEntry:
 class Trigger:
     phrase: str
     actions: list[ActionEntry]
+    aliases: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -61,7 +62,7 @@ class LLMConfig:
     fallback_on_no_match: bool = True
     learn_commands: bool = True
     system_prompt: str | None = None
-    request_timeout: float = 10.0
+    request_timeout: float = 60.0
     exit_phrases: list[str] = field(default_factory=lambda: list(_DEFAULT_EXIT_PHRASES))
 
 
@@ -169,7 +170,11 @@ def _parse_triggers(raw_triggers: list[Any], path_prefix: str) -> list[Trigger]:
             raise ConfigError(f"config:{path_prefix}[{i}] 'actions' must be a list")
 
         actions = _parse_actions(raw_actions, f"{path_prefix}[{i}]")
-        triggers.append(Trigger(phrase=phrase, actions=actions))
+        raw_aliases = t.get("aliases", [])
+        if not isinstance(raw_aliases, list):
+            raise ConfigError(f"config:{path_prefix}[{i}].aliases must be a list")
+        aliases = [str(a) for a in raw_aliases if a]
+        triggers.append(Trigger(phrase=phrase, actions=actions, aliases=aliases))
     return triggers
 
 
@@ -290,7 +295,7 @@ def _parse_llm_config(raw_llm: dict, source: str) -> LLMConfig:
         fallback_on_no_match=bool(raw_llm.get("fallback_on_no_match", True)),
         learn_commands=bool(raw_llm.get("learn_commands", True)),
         system_prompt=raw_llm.get("system_prompt") or None,
-        request_timeout=float(raw_llm.get("request_timeout", 10.0)),
+        request_timeout=float(raw_llm.get("request_timeout", 60.0)),
         exit_phrases=exit_phrases,
     )
 

@@ -159,7 +159,7 @@ actions_file: actions.yaml
 #  context_window_secs: 60           # seconds of inactivity before history resets
 #  fallback_on_no_match: true        # route unmatched commands to LLM
 #  learn_commands: true              # enable llm_learn action type
-#  request_timeout: 10.0             # HTTP request timeout in seconds
+#  request_timeout: 60.0             # read timeout for LLM inference (connect timeout is always 5 s)
 #  # system_prompt: null             # optional override for the default system prompt
 #  exit_phrases:                     # phrases that immediately end the conversation
 #    - stop                          # (replaces defaults when set)
@@ -310,7 +310,12 @@ triggers:
         message: "command recognition working"
 
   # --- say: speak text via TTS ---
+  # aliases: alternative phrasings matched with the same fuzzy scoring;
+  #          the best score across phrase + aliases wins.
   - phrase: "di qualcosa"
+    aliases:
+      - "dimmi qualcosa"
+      - "parla"
     actions:
       - type: say
         text: "Ciao dal sistema vocale"
@@ -331,6 +336,9 @@ triggers:
 
   # --- livekit_join: connect to the LiveKit room ---
   - phrase: "connettiti"
+    aliases:
+      - "collegati"
+      - "apri stanza"
     actions:
       - type: livekit_join
 

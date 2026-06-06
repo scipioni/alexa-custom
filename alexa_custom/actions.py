@@ -99,8 +99,8 @@ def match_trigger(
     best_score = 0.0
     t_phon = italian_phonetic(transcript)
     for trigger in triggers:
-        p_phon = italian_phonetic(trigger.phrase)
-        score = _trigger_score(t_phon, p_phon)
+        phrases = [trigger.phrase] + trigger.aliases
+        score = max(_trigger_score(t_phon, italian_phonetic(p)) for p in phrases)
         if score > best_score:
             best_score = score
             best = trigger
