@@ -55,6 +55,24 @@ class ActionsConfig:
     stt_model_path: str | None = None
     output_volume: float = 0.5
     input_gain: float = 1.0
+    # Audio hardware
+    audio_card_name: str = "NewPie"
+    audio_sample_rates: dict = field(
+        default_factory=lambda: {"usb": 48000, "bluetooth": 16000, "internal": 48000}
+    )
+    audio_post_playback_ms: int = 100
+    audio_tone_preroll_ms: int = 300
+    audio_mic_gain: int = 300
+    # Connection timing
+    reconnect_delay: int = 5
+    # MQTT
+    mqtt_queue_max: int = 200
+    # STT thresholds
+    stt_vad_silence_ms: int = 700
+    stt_stage1_vad_silence_ms: int = 500
+    stt_stage1_rms_threshold: float = 0.02
+    # Config watcher
+    config_poll_interval: int = 2
 
 
 def _parse_actions(raw_actions: list[Any], path_prefix: str) -> list[ActionEntry]:
@@ -281,6 +299,29 @@ def _parse_actions_config(raw: dict, source: str = "config") -> ActionsConfig:
     else:
         triggers = _parse_triggers(raw_triggers, "triggers")
 
+    audio_card_name = str(raw.get("audio_card_name", "NewPie"))
+
+    audio_sample_rates_raw = raw.get("audio_sample_rates") or {}
+    if not isinstance(audio_sample_rates_raw, dict):
+        raise ConfigError(
+            f"{source}: 'audio_sample_rates' must be a mapping if present"
+        )
+    audio_sample_rates = {
+        "usb": int(audio_sample_rates_raw.get("usb", 48000)),
+        "bluetooth": int(audio_sample_rates_raw.get("bluetooth", 16000)),
+        "internal": int(audio_sample_rates_raw.get("internal", 48000)),
+    }
+
+    audio_post_playback_ms = int(raw.get("audio_post_playback_ms", 100))
+    audio_tone_preroll_ms = int(raw.get("audio_tone_preroll_ms", 300))
+    audio_mic_gain = int(raw.get("audio_mic_gain", 300))
+    reconnect_delay = int(raw.get("reconnect_delay", 5))
+    mqtt_queue_max = int(raw.get("mqtt_queue_max", 200))
+    stt_vad_silence_ms = int(raw.get("stt_vad_silence_ms", 700))
+    stt_stage1_vad_silence_ms = int(raw.get("stt_stage1_vad_silence_ms", 500))
+    stt_stage1_rms_threshold = float(raw.get("stt_stage1_rms_threshold", 0.02))
+    config_poll_interval = int(raw.get("config_poll_interval", 2))
+
     return ActionsConfig(
         wake_words=wake_words,
         command_timeout=command_timeout,
@@ -296,6 +337,17 @@ def _parse_actions_config(raw: dict, source: str = "config") -> ActionsConfig:
         stt_model_path=stt_model_path,
         output_volume=output_volume,
         input_gain=input_gain,
+        audio_card_name=audio_card_name,
+        audio_sample_rates=audio_sample_rates,
+        audio_post_playback_ms=audio_post_playback_ms,
+        audio_tone_preroll_ms=audio_tone_preroll_ms,
+        audio_mic_gain=audio_mic_gain,
+        reconnect_delay=reconnect_delay,
+        mqtt_queue_max=mqtt_queue_max,
+        stt_vad_silence_ms=stt_vad_silence_ms,
+        stt_stage1_vad_silence_ms=stt_stage1_vad_silence_ms,
+        stt_stage1_rms_threshold=stt_stage1_rms_threshold,
+        config_poll_interval=config_poll_interval,
     )
 
 
