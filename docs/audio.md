@@ -214,3 +214,45 @@ To confirm NewPie is the active default after a reboot:
 wpctl status | grep -E '\* .*NewPie'
 ```
 
+---
+
+## 10. Mid-Session Audio Loss (USB Autosuspend)
+
+Linux may suspend the NewPie USB device after a period of inactivity. When PipeWire reinitializes it on wake, the ALSA PCM mixer resets to `0%` and routing may revert to HDMI — identical to the boot-time problem but happening mid-session.
+
+**Symptom**: audio stops working during a live session; `task audio:restart` restores it.
+
+**Diagnosis**:
+```bash
+journalctl --user -u wireplumber -n 50 --no-pager
+```
+Look for WirePlumber re-discovering or re-initializing the NewPie around the time audio dropped.
+
+**The fix**: `task audio:setup` installs `/etc/udev/rules.d/99-newpie-no-autosuspend.rules`, which sets `autosuspend_delay_ms=-1` for the NewPie USB device — disabling autosuspend permanently for that device.
+
+To verify autosuspend is disabled after running `task audio:setup`:
+```bash
+cat /sys/bus/usb/devices/*/power/autosuspend_delay_ms
+```
+The NewPie's entry should show `-1`.
+
+---
+
+## 11. pulsectl Mid-Session PCM Reset
+
+**Any** `pulsectl.Pulse()` connection (volume set, routing query, etc.) causes pipewire-pulse to open a PulseAudio client, which triggers PipeWire to re-open the ALSA device. This resets the NewPie's hardware PCM mixer to `0%` — the same reset that happens at boot — making all subsequent audio silent until PCM is restored.
+
+**Symptom**: audio works from the shell (`pw-play file.wav`) but Python code using pulsectl produces no sound.
+
+**The fix**: `_restore_hw_pcm()` in `audio.py` runs `amixer -c 0 sset PCM 100%` immediately after any `pulsectl.Pulse()` context closes. It is called:
+- In `AudioWatcher._check_and_enforce()` after the device first connects and volume is set
+- In `main_test()` after `set_output_volume`
+
+---
+
+## 12. pw-play Raw Stdin Piping (Unreliable on This Board)
+
+`pw-play --raw --rate N --format f32 -` (reading raw PCM from stdin) is **not reliably supported** on PipeWire 1.4.2 on this board. `pw-play` returns exit code 0 but produces no audio. The only reliable path is `pw-play <wav_file>`.
+
+**The fix**: `_play_array()` and `_play_raw()` in `audio.py` write a temporary s16le WAV file and call `pw-play <tmp.wav>`, mirroring how `task audio:test` works. The temp file is deleted after playback.
+

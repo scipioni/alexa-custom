@@ -114,11 +114,15 @@ tasks:
         echo "  journalctl --user -fu    alexa-custom   # follow logs"
 
   audio:setup:
-    desc: Set NewPie USB default sink/source persistently, unmute hardware, and install PCM restore service
+    desc: Set NewPie USB default sink/source persistently, unmute hardware, install PCM restore service, and disable USB autosuspend
     cmds:
       # Remove any stale switch-on-connect drop-ins (module not available on this board)
       - rm -f ~/.config/pipewire/pipewire.conf.d/99-switch-on-connect.conf
       - rm -f ~/.config/pipewire/pipewire-pulse.conf.d/99-switch-on-connect.conf
+      # Disable USB autosuspend for NewPie (prevents mid-session PCM/routing resets on USB wake)
+      - sudo cp setup/99-newpie-no-autosuspend.rules /etc/udev/rules.d/99-newpie-no-autosuspend.rules
+      - sudo udevadm control --reload-rules
+      - sudo udevadm trigger --subsystem-match=usb --attr-match=idVendor=0a12
       # Set WirePlumber persistent default routing by name (survives reboots)
       - pw-metadata -n default 0 default.audio.sink '{"name":"alsa_output.usb-0a12_NewPie_SABINESMICDFU-00.analog-stereo"}' 'Spa:String:JSON'
       - pw-metadata -n default 0 default.audio.source '{"name":"alsa_input.usb-0a12_NewPie_SABINESMICDFU-00.analog-stereo"}' 'Spa:String:JSON'
