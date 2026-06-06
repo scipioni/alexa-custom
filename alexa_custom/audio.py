@@ -665,7 +665,7 @@ def record_wav_file(file_path: str, duration: float) -> None:
             str(channels),
             "--format",
             "s16le",
-            "-",
+            "--latency-msec=50",
         ]
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
 
