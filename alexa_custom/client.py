@@ -344,6 +344,16 @@ class LiveKitSessionManager:
             logger.info(f"Participant left: {participant.identity}")
             self.emit("participant_left", {"identity": participant.identity})
 
+            # Disconnect if no other remote participants are left in the room
+            other_participants = [
+                p
+                for p in self.room.remote_participants.values()
+                if p.identity != participant.identity
+            ]
+            if not other_participants:
+                logger.info("Last participant left — disconnecting call")
+                self.disconnected.set()
+
     def emit(self, event: str, data: dict | None = None) -> None:
         if self.on_event:
             self.on_event(event, data or {})
