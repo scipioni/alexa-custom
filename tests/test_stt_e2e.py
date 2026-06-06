@@ -1,4 +1,5 @@
 """E2E STT test: synthesise Italian speech with piper, feed through STT backends."""
+
 from __future__ import annotations
 
 import io
@@ -7,24 +8,28 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import wave
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from alexa_custom.stt import SherpaOnnxSTT, VoskSTT, _CHUNK, _load_model, _approx_wake_match
+from alexa_custom.stt import (
+    SherpaOnnxSTT,
+    VoskSTT,
+    _CHUNK,
+    _load_model,
+    _approx_wake_match,
+)
 from alexa_custom.config import WakeWordGroup
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-PIPER_BIN = shutil.which("piper") or str(Path(__file__).parent.parent / ".venv/bin/piper")
-PIPER_VOICE = str(
-    Path(__file__).parent.parent / "models/piper/it_IT-paola-medium.onnx"
+PIPER_BIN = shutil.which("piper") or str(
+    Path(__file__).parent.parent / ".venv/bin/piper"
 )
+PIPER_VOICE = str(Path(__file__).parent.parent / "models/piper/it_IT-paola-medium.onnx")
 SHERPA_MODEL = str(Path(__file__).parent.parent / "models/it/kroko_128l")
 VOSK_MODEL = str(Path(__file__).parent.parent / "models/it")
 
@@ -53,8 +58,16 @@ def _synth_to_pcm(text: str) -> bytes:
         # Resample to 16 kHz mono s16le raw PCM
         result = subprocess.run(
             [
-                _FFMPEG, "-y", "-i", wav_path,
-                "-ar", "16000", "-ac", "1", "-f", "s16le",
+                _FFMPEG,
+                "-y",
+                "-i",
+                wav_path,
+                "-ar",
+                "16000",
+                "-ac",
+                "1",
+                "-f",
+                "s16le",
                 "pipe:1",
             ],
             capture_output=True,
@@ -95,6 +108,7 @@ def _feed_pcm(backend, pcm: bytes) -> str:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.skipif(
     not os.path.isdir(SHERPA_MODEL),
@@ -138,7 +152,7 @@ class TestSherpaOnnxSTT:
 )
 class TestVoskSTT:
     def setup_method(self):
-        import vosk
+
         self.backend = VoskSTT(_load_model(VOSK_MODEL))
 
     def test_wake_word_recognised(self):
@@ -161,8 +175,10 @@ class TestVoskSTT:
 # Unit tests for fuzzy wake-word matching
 # ---------------------------------------------------------------------------
 
+
 def _make_alias_map(phrases: list[str]) -> dict:
-    from alexa_custom.stt import _build_alias_map, normalize_text
+    from alexa_custom.stt import _build_alias_map
+
     groups = [WakeWordGroup(word=phrases[0], aliases=phrases[1:], triggers=[])]
     return _build_alias_map(groups)
 

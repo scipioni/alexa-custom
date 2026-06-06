@@ -600,6 +600,8 @@ def main() -> None:
 
         input_spec = os.environ.get("INPUT_DEVICE", "").strip() or None
         output_spec = os.environ.get("OUTPUT_DEVICE", "").strip() or None
+        output_volume = config.output_volume if config is not None else 0.5
+        input_gain = config.input_gain if config is not None else 1.0
         room = os.environ.get("LIVEKIT_ROOM", "")
 
         # Port: CLI flag > config.yaml web.port > default 8080

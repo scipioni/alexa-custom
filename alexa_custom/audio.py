@@ -65,6 +65,7 @@ def _restore_hw_pcm(card: int = 0) -> None:
 def find_pipewire_device():
     """Return the sounddevice index for the PipeWire ALSA device."""
     import sounddevice as sd
+
     return next(
         (i for i, d in enumerate(sd.query_devices()) if d["name"] == "pipewire"),
         None,
@@ -99,6 +100,7 @@ def invalidate_pipewire_device_cache() -> None:
 def resolve_device(name_or_index: str) -> int:
     """Resolve a device name substring or numeric index string to a sounddevice index."""
     import sounddevice as sd
+
     if name_or_index.strip().lstrip("-").isdigit():
         return int(name_or_index)
     needle = name_or_index.lower()
@@ -186,7 +188,9 @@ def detect_connection(card) -> str:
     return "internal"
 
 
-def set_output_volume(pulse: pulsectl.Pulse, output_spec: str | None, volume: float) -> None:
+def set_output_volume(
+    pulse: pulsectl.Pulse, output_spec: str | None, volume: float
+) -> None:
     """Set PulseAudio volume on the configured output sink."""
     if volume <= 0:
         return
@@ -203,6 +207,7 @@ def set_output_volume(pulse: pulsectl.Pulse, output_spec: str | None, volume: fl
         logger.warning(f"Cannot set volume: sink matching {output_spec!r} not found")
         return
     from pulsectl import PulseVolumeInfo
+
     pulse.volume_set(sink, PulseVolumeInfo(volume, channels=2))
     logger.info(f"Set output volume to {volume:.0%} on {sink.description}")
 
@@ -222,9 +227,12 @@ def set_input_gain(pulse: pulsectl.Pulse, input_spec: str | None, gain: float) -
         None,
     )
     if not source:
-        logger.warning(f"Cannot set input gain: source matching {input_spec!r} not found")
+        logger.warning(
+            f"Cannot set input gain: source matching {input_spec!r} not found"
+        )
         return
     from pulsectl import PulseVolumeInfo
+
     pulse.volume_set(source, PulseVolumeInfo(gain, channels=2))
     logger.info(f"Set input gain to {gain:.0%} on {source.description}")
 
@@ -440,6 +448,7 @@ def list_devices():
     print("Sounddevice / ALSA Devices")
     print("=" * 60)
     import sounddevice as sd
+
     for i, device in enumerate(sd.query_devices()):
         print(f"  {i}: {device['name']}")
         print(
@@ -554,9 +563,13 @@ def _play_array(audio: np.ndarray, samplerate: int) -> None:
         with _audio_lock:
             _playback_active.set()
             try:
-                result = subprocess.run(cmd, timeout=play_timeout, check=False, capture_output=True)
+                result = subprocess.run(
+                    cmd, timeout=play_timeout, check=False, capture_output=True
+                )
                 if result.returncode != 0:
-                    logger.error(f"_play_array: {cmd[0]} exited {result.returncode}: {result.stderr.decode(errors='replace').strip()}")
+                    logger.error(
+                        f"_play_array: {cmd[0]} exited {result.returncode}: {result.stderr.decode(errors='replace').strip()}"
+                    )
                 if _POST_PLAYBACK_MS > 0:
                     time.sleep(_POST_PLAYBACK_MS / 1000.0)
             except Exception as e:
@@ -579,7 +592,9 @@ def _play_raw(data: bytes, samplerate: int, channels: int) -> None:
     duration_s = frames / samplerate
     play_timeout = min(max(duration_s * 3 + 5, 8), 30)
 
-    pcm16 = np.clip(np.frombuffer(data, dtype=np.float32) * 32767, -32768, 32767).astype(np.int16)
+    pcm16 = np.clip(
+        np.frombuffer(data, dtype=np.float32) * 32767, -32768, 32767
+    ).astype(np.int16)
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=".wav")
     try:
         os.close(tmp_fd)
@@ -598,7 +613,9 @@ def _play_raw(data: bytes, samplerate: int, channels: int) -> None:
         with _audio_lock:
             _playback_active.set()
             try:
-                subprocess.run(cmd, timeout=play_timeout, check=False, stderr=subprocess.DEVNULL)
+                subprocess.run(
+                    cmd, timeout=play_timeout, check=False, stderr=subprocess.DEVNULL
+                )
                 if _POST_PLAYBACK_MS > 0:
                     time.sleep(_POST_PLAYBACK_MS / 1000.0)
             except Exception as e:
@@ -639,6 +656,7 @@ def record_wav_file(file_path: str, duration: float) -> None:
     if parec:
         import threading
         import wave
+
         cmd = [
             parec,
             "--rate",
@@ -775,6 +793,7 @@ def play_tone(name: str):
 def list_env_devices():
     """Print microphone and speaker tables for use in .env."""
     import sounddevice as sd
+
     devices = list(sd.query_devices())
     pw_idx = find_pipewire_device()
 
@@ -889,10 +908,13 @@ def setup_audio() -> None:
     if not output_spec:
         if os.path.exists("config.yaml"):
             from alexa_custom.config import load_config
+
             load_config("config.yaml")
             output_spec = os.environ.get("OUTPUT_DEVICE", "").strip()
     if not output_spec:
-        print("ERROR: OUTPUT_DEVICE is not set — set it in config.yaml under env: or export OUTPUT_DEVICE")
+        print(
+            "ERROR: OUTPUT_DEVICE is not set — set it in config.yaml under env: or export OUTPUT_DEVICE"
+        )
         sys.exit(1)
 
     card = _find_alsa_card(output_spec)
@@ -1004,7 +1026,9 @@ def main_test():
     from alexa_custom.tts import init_engine, get_engine
     from alexa_custom.config import load_config
 
-    _logging.basicConfig(level=_logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    _logging.basicConfig(
+        level=_logging.INFO, format="%(levelname)s %(name)s: %(message)s"
+    )
 
     print("--- Audio System Test ---")
 
@@ -1037,13 +1061,13 @@ def main_test():
         )
     else:
         init_engine(backend_type="piper")
-    
+
     get_engine().say("Ciao, come ti chiami?")
 
     print("3. Recording 5 seconds of audio...")
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
         tmp_wav = f.name
-    
+
     try:
         print("   [RECORDING NOW - SPEAK INTO MICROPHONE]")
         record_wav_file(tmp_wav, 5.0)
