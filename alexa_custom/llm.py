@@ -60,18 +60,30 @@ class OllamaUnreachable(Exception):
     pass
 
 
+_CONNECT_TIMEOUT = 5.0  # seconds to establish TCP connection
+
+
 class OllamaClient:
-    def __init__(self, host: str, timeout: float = 10.0) -> None:
+    def __init__(self, host: str, timeout: float = 60.0) -> None:
         self._host = host.rstrip("/")
         self._timeout = timeout
 
     async def chat(self, messages: list[dict[str, str]], model: str) -> str:
         url = f"{self._host}/api/chat"
         payload = {"model": model, "messages": messages, "stream": False}
+        http_timeout = httpx.Timeout(
+            connect=_CONNECT_TIMEOUT, read=self._timeout, write=10.0, pool=5.0
+        )
         try:
-            async with httpx.AsyncClient(timeout=self._timeout) as client:
+            async with httpx.AsyncClient(timeout=http_timeout) as client:
                 resp = await client.post(url, json=payload)
-        except (httpx.ConnectError, httpx.TimeoutException) as e:
+        except (httpx.ConnectError, httpx.ConnectTimeout) as e:
+            raise OllamaUnreachable(str(e)) from e
+        except httpx.ReadTimeout as e:
+            raise OllamaUnreachable(
+                f"Ollama inference timeout after {self._timeout}s: {e}"
+            ) from e
+        except httpx.TimeoutException as e:
             raise OllamaUnreachable(str(e)) from e
         if resp.status_code >= 400:
             raise OllamaUnreachable(

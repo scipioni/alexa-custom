@@ -21,13 +21,20 @@ triggers:
       - type: log
         message: "command recognition working"
 
+  # aliases: alternative phrasings scored the same way as phrase;
+  #          the best score across phrase + aliases wins.
   - phrase: "di qualcosa"
+    aliases:
+      - "dimmi qualcosa"
+      - "parla"
     actions:
       - type: say
         text: "Ciao dal sistema vocale"
         lang: "it-IT"
 
   - phrase: "suona"
+    aliases:
+      - "riproduci suono"
     actions:
       - type: tone
         name: info
@@ -38,10 +45,16 @@ triggers:
         command: "systemctl --user restart alexa-client"
 
   - phrase: "connettiti"
+    aliases:
+      - "collegati"
+      - "apri stanza"
     actions:
       - type: livekit_join
 
   - phrase: "manda messaggio"
+    aliases:
+      - "invia messaggio"
+      - "scrivi"
     actions:
       - type: telegram
         text: "Messaggio vocale ricevuto"
@@ -92,6 +105,9 @@ wake_triggers:
 
   assistente:
     - phrase: "che ora è"
+      aliases:
+        - "dimmi l'ora"
+        - "che ore sono"
       actions:
         - type: shell
-          command: "date +'Sono le %H e %M' | piper --output_raw | pw-play --raw -"
+          command: "date +'Sono le %H e %M' | piper -m models/piper/it_IT-paola-medium.onnx --output-raw | paplay --raw --rate=22050 --channels=1 --format=s16le"
