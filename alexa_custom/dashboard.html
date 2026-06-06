@@ -1,0 +1,719 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>alexa-custom</title>
+  <style>
+    :root {
+      --bg:      #0f0f13;
+      --surface: rgba(255,255,255,0.04);
+      --border:  rgba(255,255,255,0.08);
+      --wake:    #fb923c;
+      --match:   #4ade80;
+      --nomatch: #f87171;
+      --info:    #60a5fa;
+      --text:    #e2e8f0;
+      --muted:   #64748b;
+      --amber:   #facc15;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: system-ui, -apple-system, sans-serif;
+      font-size: 13px;
+      height: 100vh;
+      display: grid;
+      grid-template-rows: auto auto 1fr auto;
+      overflow: hidden;
+    }
+
+    /* ── status bar ─────────────────────────────────────────────────────── */
+    #status-bar {
+      padding: 8px 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: rgba(0,0,0,0.3);
+      backdrop-filter: blur(8px);
+    }
+    .sdot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: var(--muted); flex-shrink: 0;
+      transition: background 0.3s, box-shadow 0.3s;
+    }
+    .sdot.ok   { background: var(--match); box-shadow: 0 0 6px var(--match); }
+    .sdot.warn { background: var(--wake); }
+    #st   { flex: 1; font-size: 12px; }
+    #room { color: var(--muted); font-size: 12px; }
+    #ws-ind { font-size: 11px; color: var(--muted); margin-left: auto; }
+    #ws-ind.ok { color: var(--match); }
+
+    /* ── hero STT card ──────────────────────────────────────────────────── */
+    #hero {
+      margin: 10px 12px 0;
+      padding: 14px 18px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      backdrop-filter: blur(12px);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      min-height: 54px;
+    }
+    .hero-icon { font-size: 20px; flex-shrink: 0; }
+    .hero-text { font-size: 15px; flex: 1; }
+    .hero-wake    { color: var(--wake); font-weight: 600; margin-right: 6px; }
+    .hero-trigger { color: var(--match); font-weight: 600; font-size: 14px; margin-left: 6px; }
+    .hero-muted   { color: var(--muted); }
+    .cursor { display: inline-block; animation: blink 1s step-end infinite; }
+
+    /* ── three-column main grid ─────────────────────────────────────────── */
+    #main {
+      display: grid;
+      grid-template-columns: 240px 1fr 240px;
+      gap: 8px;
+      min-height: 0;
+      margin: 8px 12px 0;
+    }
+
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      backdrop-filter: blur(12px);
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .panel-hdr {
+      padding: 8px 12px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      color: var(--info);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .panel-hdr button {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      padding: 1px 8px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 10px;
+      border-radius: 4px;
+    }
+    .panel-hdr button:hover { border-color: var(--info); color: var(--text); }
+
+    /* ── wake words panel (left) ────────────────────────────────────────── */
+    #al { flex: 1; overflow-y: auto; padding: 8px 12px; }
+    .awk-group {
+      margin-bottom: 10px;
+      border-radius: 8px;
+      padding: 6px 8px;
+      transition: background 0.2s, box-shadow 0.2s;
+    }
+    .awk-group.ww-active {
+      background: rgba(251,146,60,0.08);
+      box-shadow: inset 2px 0 0 var(--wake);
+      animation: glow-pulse 1.2s ease-out;
+    }
+    .awk { color: var(--wake); font-weight: 700; font-size: 12px; }
+    .aalias { color: var(--muted); font-size: 11px; }
+    .atrig { margin-top: 3px; color: var(--text); font-size: 12px; transition: opacity 0.2s; }
+    .atrig.trig-hit {
+      color: var(--match);
+      background: rgba(74,222,128,0.12);
+      border-radius: 4px;
+      padding: 1px 5px;
+      margin-left: -5px;
+      animation: trig-flash 0.35s ease-out;
+    }
+    .atrig.trig-reply-hit {
+      color: var(--match);
+      background: rgba(74,222,128,0.15);
+      border-radius: 4px;
+      padding: 1px 5px;
+      margin-left: -5px;
+      font-weight: 600;
+      animation: trig-reply-flash 0.5s ease-out;
+    }
+    .atrig.trig-dim { opacity: 0.25; }
+    .aact { color: var(--muted); font-size: 11px; margin-left: 10px; display: block; }
+    .agt-header {
+      color: var(--muted); font-size: 10px; margin-top: 6px; letter-spacing: 0.06em;
+      border-bottom: 1px solid var(--border); padding-bottom: 3px; margin-bottom: 4px;
+    }
+    .ainteract {
+      color: var(--info); font-size: 12px; margin-top: 4px;
+      padding: 2px 6px; background: rgba(96,165,250,0.08);
+      border-radius: 4px; min-height: 1.4em;
+    }
+    .ainteract:empty { display: none; }
+
+    /* ── log panel (center) ─────────────────────────────────────────────── */
+    #le { flex: 1; overflow-y: auto; padding: 6px 12px; }
+    .le {
+      padding: 2px 0; white-space: pre-wrap; word-break: break-all;
+      font-size: 12px; font-family: 'SF Mono', 'Cascadia Code', ui-monospace, monospace;
+    }
+    .ts       { color: var(--muted); }
+    .DEBUG    { color: var(--muted); }
+    .INFO     { color: var(--info); }
+    .WARNING  { color: var(--amber); }
+    .ERROR    { color: var(--nomatch); }
+    .CRITICAL { color: var(--nomatch); font-weight: bold; }
+
+    /* ── history + participants panel (right) ───────────────────────────── */
+    #right-panel { }
+    #hist-wrap { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
+    #hl { flex: 1; overflow-y: auto; padding: 6px 10px; }
+    .he {
+      padding: 5px 0;
+      border-bottom: 1px solid var(--border);
+      animation: slide-in 0.2s ease-out;
+    }
+    .he:last-child { border-bottom: none; }
+    .hts  { color: var(--muted); font-size: 11px; }
+    .hwk  { color: var(--wake); font-size: 11px; margin-left: 4px; font-weight: 600; }
+    .hcmd { color: var(--text); font-size: 12px; margin-top: 2px; }
+    .htrig{ color: var(--match); font-size: 11px; margin-top: 2px; }
+
+    #part-section {
+      flex-shrink: 0;
+      border-top: 1px solid var(--border);
+      max-height: 36%;
+      display: flex;
+      flex-direction: column;
+    }
+    #ph {
+      padding: 7px 12px;
+      color: var(--info); font-weight: 700; font-size: 10px;
+      letter-spacing: 0.08em; flex-shrink: 0;
+    }
+    #pl { flex: 1; overflow-y: auto; padding: 4px 12px 8px; }
+    .pt { padding: 2px 0; font-size: 12px; }
+    .pdot  { color: var(--match); }
+    .pdot0 { color: var(--muted); }
+
+    /* ── footer: VU meters + controls ──────────────────────────────────── */
+    #footer {
+      margin: 8px 12px 10px;
+      padding: 10px 16px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      backdrop-filter: blur(12px);
+      display: flex;
+      align-items: center;
+      gap: 20px;
+    }
+    .vu-row { display: flex; align-items: center; gap: 8px; flex: 1; }
+    .vu-lbl { width: 30px; color: var(--muted); font-weight: 700; font-size: 11px; flex-shrink: 0; }
+    .vu-dev { width: 70px; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 0; }
+    .vu-segs { display: flex; gap: 2px; align-items: center; }
+    .seg {
+      width: 6px; height: 12px; border-radius: 2px;
+      opacity: 0.12; transition: opacity 0.06s linear;
+    }
+    .seg.on { opacity: 1; }
+    .seg:nth-child(-n+14)                        { background: var(--match); }
+    .seg:nth-child(n+15):nth-child(-n+17)        { background: var(--amber); }
+    .seg:nth-child(n+18)                         { background: var(--nomatch); }
+    .vu-db { width: 56px; text-align: right; color: var(--muted); font-size: 11px; flex-shrink: 0; }
+    .footer-divider { width: 1px; height: 28px; background: var(--border); flex-shrink: 0; }
+    #btn-restart {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 5px 14px;
+      cursor: pointer;
+      font-family: inherit; font-size: 12px;
+      border-radius: 6px;
+      transition: border-color 0.2s, color 0.2s;
+    }
+    #btn-restart:hover    { border-color: var(--nomatch); color: var(--nomatch); }
+    #btn-restart:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* ── animations ─────────────────────────────────────────────────────── */
+    @keyframes glow-pulse {
+      0%   { box-shadow: inset 2px 0 0 var(--wake), 0 0 0 0   rgba(251,146,60,0.5); }
+      40%  { box-shadow: inset 2px 0 0 var(--wake), 0 0 0 8px rgba(251,146,60,0.15); }
+      100% { box-shadow: inset 2px 0 0 var(--wake), 0 0 0 0   rgba(251,146,60,0); }
+    }
+    @keyframes flash-green {
+      0%   { background: var(--surface); border-color: var(--border); }
+      20%  { background: rgba(74,222,128,0.12); border-color: var(--match); }
+      100% { background: var(--surface); border-color: var(--border); }
+    }
+    @keyframes shake {
+      0%, 100% { transform: translateX(0); }
+      20%      { transform: translateX(-7px); }
+      40%      { transform: translateX(7px); }
+      60%      { transform: translateX(-4px); }
+      80%      { transform: translateX(4px); }
+    }
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50%      { opacity: 0; }
+    }
+    @keyframes slide-in {
+      from { transform: translateY(-10px); opacity: 0; }
+      to   { transform: translateY(0);     opacity: 1; }
+    }
+
+    #hero.anim-match   { animation: flash-green 0.7s ease-out forwards; }
+    #hero.anim-nomatch { animation: shake 0.5s ease-out; }
+
+    @keyframes trig-flash {
+      0%   { background: rgba(74,222,128,0.45); }
+      100% { background: rgba(74,222,128,0.12); }
+    }
+    @keyframes trig-reply-flash {
+      0%   { background: rgba(251,146,60,0.5); color: var(--wake); }
+      40%  { background: rgba(74,222,128,0.3);  color: var(--match); }
+      100% { background: rgba(74,222,128,0.15); color: var(--match); }
+    }
+
+    /* ── scrollbars ─────────────────────────────────────────────────────── */
+    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  </style>
+</head>
+<body>
+
+  <div id="status-bar">
+    <div class="sdot" id="cdot"></div>
+    <span id="st">Connecting…</span>
+    <span id="room"></span>
+    <span id="ws-ind">WS disconnected</span>
+  </div>
+
+  <div id="hero">
+    <span class="hero-icon hero-muted">○</span>
+    <span class="hero-text hero-muted">STT inactive</span>
+  </div>
+
+  <div id="main">
+
+    <div class="panel" id="actions-section">
+      <div class="panel-hdr">WAKE WORDS &amp; ACTIONS</div>
+      <div id="al"><span style="color:var(--muted)">Loading…</span></div>
+    </div>
+
+    <div class="panel" id="log-panel">
+      <div class="panel-hdr">LOGS <button onclick="clearLogs()">clear</button></div>
+      <div id="le"></div>
+    </div>
+
+    <div class="panel" id="right-panel">
+      <div id="hist-wrap">
+        <div class="panel-hdr">HISTORY <button onclick="clearHistory()">clear</button></div>
+        <div id="hl"></div>
+      </div>
+      <div id="part-section">
+        <div id="ph">PARTICIPANTS (0)</div>
+        <div id="pl"><span style="color:var(--muted)">Waiting…</span></div>
+      </div>
+    </div>
+
+  </div>
+
+  <div id="footer">
+    <div class="vu-row">
+      <span class="vu-lbl">MIC</span>
+      <span class="vu-dev" id="mic-dev"></span>
+      <div class="vu-segs" id="mic-segs"></div>
+      <span class="vu-db" id="mic-db">-∞ dB</span>
+    </div>
+    <div class="footer-divider"></div>
+    <div class="vu-row">
+      <span class="vu-lbl">SPK</span>
+      <span class="vu-dev" id="spk-dev"></span>
+      <div class="vu-segs" id="spk-segs"></div>
+      <span class="vu-db" id="spk-db">-∞ dB</span>
+    </div>
+    <div class="footer-divider"></div>
+    <button id="btn-restart" onclick="sendCtrl('restart')">Restart</button>
+  </div>
+
+  <script>
+    // build segmented VU meters
+    ['mic-segs', 'spk-segs'].forEach(id => {
+      const c = document.getElementById(id);
+      for (let i = 0; i < 20; i++) {
+        const s = document.createElement('span');
+        s.className = 'seg';
+        c.appendChild(s);
+      }
+    });
+
+    let ws = null, reconnTimer = null, _restarting = false, _reconnDelay = 1000;
+    let _lastWakeWord = '', _cfg = null;
+    const parts = {};
+    const _heroTimers = {};
+
+    function connect() {
+      clearTimeout(reconnTimer);
+      if (ws) { ws.onclose = ws.onerror = null; try { ws.close(); } catch(e) {} }
+      ws = new WebSocket('ws://' + location.host + '/ws');
+      ws.onopen = () => {
+        _reconnDelay = 1000;
+        wsInd(true);
+        if (_restarting) {
+          setSt('Restarting UI…', null);
+          setTimeout(() => location.reload(), 200);
+        }
+      };
+      ws.onclose = () => {
+        wsInd(false); ws = null;
+        if (_restarting) setSt('Waiting for server…', null);
+        reconnTimer = setTimeout(connect, _reconnDelay);
+        _reconnDelay = Math.min(_reconnDelay * 2, 8000);
+      };
+      ws.onerror = () => {
+        clearTimeout(reconnTimer);
+        reconnTimer = setTimeout(connect, _reconnDelay);
+        _reconnDelay = Math.min(_reconnDelay * 2, 8000);
+      };
+      ws.onmessage = (e) => { try { handle(JSON.parse(e.data)); } catch(_) {} };
+    }
+
+    function wsInd(up) {
+      const el = document.getElementById('ws-ind');
+      el.textContent = up ? 'WS connected' : 'WS reconnecting…';
+      el.className   = up ? 'ok' : '';
+    }
+
+    function handle(m) {
+      switch (m.type) {
+        case 'hello': {
+          _restarting = false;
+          const rb = document.getElementById('btn-restart');
+          rb.disabled = false; rb.textContent = 'Restart';
+          setSt(m.status, m.room);
+          (m.participants || []).forEach(p => parts[p.identity] = p.tracks);
+          renderParts();
+          setAudio(m.audio_connected, m.audio_conn_type);
+          setStt(m.stt_state, m.stt_text, m);
+          if (m.actions_config) { _cfg = m.actions_config; renderActions(_cfg); }
+          break;
+        }
+        case 'starting':           setSt('Starting…', null); break;
+        case 'connecting':         setSt('Connecting…', null); break;
+        case 'connected':          setSt('Connected', m.room); break;
+        case 'disconnected':       setSt('Disconnected — reconnecting…', null); break;
+        case 'reconnecting':       setSt('Reconnecting…', null); break;
+        case 'empty_room_timeout': setSt('Disconnected — empty room', null); break;
+        case 'participant_joined':
+          parts[m.identity] = parts[m.identity] || 0; renderParts(); break;
+        case 'participant_left':
+          delete parts[m.identity]; renderParts(); break;
+        case 'track_subscribed':
+          parts[m.identity] = (parts[m.identity] || 0) + 1; renderParts(); break;
+        case 'track_unsubscribed':
+          if (m.identity in parts) parts[m.identity] = Math.max(0, (parts[m.identity]||1)-1);
+          renderParts(); break;
+        case 'volume_update': setVU('mic', m.mic||0); setVU('spk', m.spk||0); break;
+        case 'audio_status':  setAudio(m.connected, m.conn_type); break;
+        case 'stt':
+          if (m.state === 'wake' && m.word && m.word !== '(reply)') {
+            _lastWakeWord = m.word;
+            updateInteraction(m.word, '');
+          }
+          if (m.state === 'partial') {
+            updateInteraction(_lastWakeWord, m.text);
+            if (!_lastWakeWord) dimNonMatchingReplies(m.text || '');
+          }
+          if (m.state === 'matched') {
+            const isReply = !_lastWakeWord;
+            addHistory(_lastWakeWord, m.transcript||'', m.trigger||'');
+            updateInteraction(_lastWakeWord, (m.transcript||'') + ' → ' + (m.trigger||''), true);
+            highlightTrigger(m.trigger||'', isReply);
+            clearReplyDim();
+            _lastWakeWord = '';
+          }
+          if (m.state === 'nomatch') {
+            clearReplyDim();
+            if (_lastWakeWord) {
+              addHistoryWake(_lastWakeWord);
+              updateInteraction(_lastWakeWord, (m.text ? '"'+m.text+'" ' : '') + '✗ no match', true);
+              _lastWakeWord = '';
+            }
+          }
+          setStt(m.state, m.text||m.word||m.transcript||'', m);
+          break;
+        case 'log':       addLog(m); break;
+        case 'restarting': {
+          _restarting = true;
+          const b = document.getElementById('btn-restart');
+          b.disabled = true; b.textContent = 'Restarting…';
+          setSt('Restarting…', null);
+          break;
+        }
+        case 'error': setSt('Error: ' + (m.msg||'unknown'), null); break;
+      }
+    }
+
+    function heroAnim(cls, duration) {
+      const h = document.getElementById('hero');
+      clearTimeout(_heroTimers[cls]);
+      h.classList.remove(cls);
+      void h.offsetWidth; // force reflow to restart animation
+      h.classList.add(cls);
+      _heroTimers[cls] = setTimeout(() => h.classList.remove(cls), duration);
+    }
+
+    const _trigTimers = {};
+    function highlightTrigger(phrase, isReply) {
+      if (!phrase) return;
+      const norm = phrase.toLowerCase().trim();
+      document.querySelectorAll('.atrig').forEach(el => {
+        const elText = el.textContent.replace(/^[›⮑\s]+/, '').trim().toLowerCase();
+        if (elText === norm) {
+          const cls = isReply ? 'trig-reply-hit' : 'trig-hit';
+          clearTimeout(_trigTimers[norm]);
+          el.classList.remove('trig-hit', 'trig-reply-hit');
+          void el.offsetWidth;
+          el.classList.add(cls);
+          _trigTimers[norm] = setTimeout(() => el.classList.remove(cls), 3000);
+        }
+      });
+    }
+
+    function dimNonMatchingReplies(partial) {
+      const norm = partial.toLowerCase().trim();
+      document.querySelectorAll('.atrig').forEach(el => {
+        if (!el.textContent.startsWith('⮑')) return;
+        const phrase = el.textContent.replace(/^[⮑\s]+/, '').trim().toLowerCase();
+        if (norm && !phrase.includes(norm) && !norm.includes(phrase)) {
+          el.classList.add('trig-dim');
+        } else {
+          el.classList.remove('trig-dim');
+        }
+      });
+    }
+
+    function clearReplyDim() {
+      document.querySelectorAll('.atrig.trig-dim').forEach(el => el.classList.remove('trig-dim'));
+    }
+
+    function updateInteraction(word, text, finish) {
+      if (!word) return;
+      const norm = word.toLowerCase().trim();
+      document.querySelectorAll('.awk-group').forEach(g => {
+        const ww = g.getAttribute('data-word').toLowerCase();
+        const aa = (g.getAttribute('data-aliases')||'').toLowerCase().split(',');
+        if (ww === norm || aa.includes(norm)) {
+          g.classList.add('ww-active');
+          const i = g.querySelector('.ainteract');
+          if (i) {
+            i.textContent = text;
+            if (finish) setTimeout(() => {
+              if (_lastWakeWord === '') { g.classList.remove('ww-active'); i.textContent = ''; }
+            }, 3000);
+          }
+        } else {
+          g.classList.remove('ww-active');
+          const i = g.querySelector('.ainteract');
+          if (i) i.textContent = '';
+        }
+      });
+    }
+
+    function setSt(text, room) {
+      document.getElementById('st').textContent = text;
+      const d = document.getElementById('cdot');
+      d.className = text.includes('Connected') && !text.includes('Dis') ? 'sdot ok'
+                  : (text.includes('Reconnect') || text.includes('Disconnect')) ? 'sdot warn'
+                  : 'sdot';
+      if (room !== null)
+        document.getElementById('room').textContent = room ? '│ ' + room : '';
+    }
+
+    function renderParts() {
+      const keys = Object.keys(parts);
+      document.getElementById('ph').textContent = 'PARTICIPANTS (' + keys.length + ')';
+      const pl = document.getElementById('pl');
+      if (!keys.length) { pl.innerHTML = '<span style="color:var(--muted)">Waiting…</span>'; return; }
+      pl.innerHTML = keys.map(id => {
+        const t = parts[id]||0;
+        return '<div class="pt"><span class="' + (t?'pdot':'pdot0') + '">' + (t?'●':'○') + '</span> '
+          + esc(id) + (t ? ' <span style="color:var(--muted)">'+t+'t</span>' : '') + '</div>';
+      }).join('');
+    }
+
+    function renderActions(cfg) {
+      const al = document.getElementById('al');
+      if (!cfg) { al.innerHTML = '<span style="color:var(--muted)">No config</span>'; return; }
+      let h = '';
+
+      function renderList(actions, indent = 0) {
+        let res = '';
+        (actions || []).forEach(a => {
+          res += '<div style="margin-left:' + (indent * 12) + 'px" class="aact">' + esc(a.label) + '</div>';
+          if (a.type === 'ask' && a.on_reply) {
+            a.on_reply.forEach(r => {
+              res += '<div style="margin-left:' + ((indent+1)*12) + 'px;color:#86efac" class="atrig">⮑ ' + esc(r.phrase) + '</div>';
+              res += renderList(r.actions, indent + 2);
+            });
+            if (a.on_else && a.on_else.length) {
+              res += '<div style="margin-left:' + ((indent+1)*12) + 'px;color:var(--nomatch)" class="atrig">⮑ else</div>';
+              res += renderList(a.on_else, indent + 2);
+            }
+          }
+        });
+        return res;
+      }
+
+      (cfg.wake_words || []).forEach(w => {
+        h += '<div class="awk-group" data-word="' + esc(w.word) + '" data-aliases="' + esc((w.aliases||[]).join(',')) + '">'
+          + '<div class="awk">◉ ' + esc(w.word) + '</div>';
+        if (w.aliases && w.aliases.length) h += '<div class="aalias">aka: ' + esc(w.aliases.join(', ')) + '</div>';
+        h += '<div class="ainteract"></div>';
+        (w.triggers || []).forEach(t => {
+          h += '<div class="atrig">› ' + esc(t.phrase) + '</div>';
+          h += renderList(t.actions);
+        });
+        h += '</div>';
+      });
+      if (cfg.global_triggers && cfg.global_triggers.length) {
+        h += '<div class="agt-header">GLOBAL FALLBACKS</div>';
+        cfg.global_triggers.forEach(t => {
+          h += '<div class="atrig">› ' + esc(t.phrase) + '</div>';
+          h += renderList(t.actions);
+        });
+      }
+      al.innerHTML = h || '<span style="color:var(--muted)">Empty</span>';
+    }
+
+    function setVU(ch, lvl) {
+      const count = Math.round(Math.sqrt(Math.max(0, Math.min(1, lvl))) * 20);
+      const dv    = lvl > 1e-9 ? (20 * Math.log10(Math.max(lvl, 1e-9))).toFixed(1) : null;
+      const segs  = document.getElementById(ch + '-segs').children;
+      for (let i = 0; i < segs.length; i++) segs[i].classList.toggle('on', i < count);
+      document.getElementById(ch + '-db').textContent = dv ? dv + ' dB' : '-∞ dB';
+    }
+
+    function setAudio(connected, connType) {
+      const lbl = connected ? '[' + (connType||'').toUpperCase() + ']' : '[offline]';
+      document.getElementById('mic-dev').textContent = lbl;
+      document.getElementById('spk-dev').textContent = lbl;
+    }
+
+    function setStt(state, text, m) {
+      const h = document.getElementById('hero');
+      switch (state) {
+        case 'listening':
+          h.innerHTML = '<span class="hero-icon hero-muted">○</span>'
+            + '<span class="hero-text hero-muted">wake: <em>' + esc(text) + '</em></span>';
+          break;
+        case 'transcribing':
+          h.innerHTML = '<span class="hero-icon" style="color:var(--muted)">◌</span>'
+            + '<span class="hero-text" style="color:#94a3b8">' + esc(text) + ' …</span>';
+          break;
+        case 'wake':
+          h.innerHTML = '<span class="hero-icon" style="color:var(--wake)">◉</span>'
+            + '<span class="hero-text"><span class="hero-wake">"' + esc(text) + '"</span>'
+            + '<span class="hero-muted">listening…</span></span>';
+          break;
+        case 'partial':
+          h.innerHTML = '<span class="hero-icon" style="color:var(--wake)">◉</span>'
+            + '<span class="hero-text"><span class="hero-wake">' + esc(text) + '</span>'
+            + '<span class="cursor">▋</span></span>';
+          break;
+        case 'matched':
+          h.innerHTML = '<span class="hero-icon" style="color:var(--match)">✓</span>'
+            + '<span class="hero-text"><span style="color:var(--match)">"' + esc(m.transcript||text) + '"</span>'
+            + '<span class="hero-muted"> → </span>'
+            + '<span class="hero-trigger">' + esc(m.trigger||'') + '</span></span>';
+          heroAnim('anim-match', 700);
+          break;
+        case 'nomatch':
+          h.innerHTML = '<span class="hero-icon" style="color:var(--nomatch)">✗</span>'
+            + '<span class="hero-text" style="color:var(--nomatch)">'
+            + (text ? '"' + esc(text) + '" ' : '') + 'no match</span>';
+          heroAnim('anim-nomatch', 500);
+          break;
+        case 'gated':
+          h.innerHTML = '<span class="hero-icon hero-muted">⏸</span>'
+            + '<span class="hero-text hero-muted">STT paused during call</span>';
+          break;
+        default:
+          h.innerHTML = '<span class="hero-icon hero-muted">○</span>'
+            + '<span class="hero-text hero-muted">STT inactive</span>';
+      }
+    }
+
+    const MAX_LOG = 300;
+    function addLog(m) {
+      const el = document.getElementById('le');
+      const d  = document.createElement('div');
+      d.className = 'le';
+      d.innerHTML = '<span class="ts">' + esc(m.ts) + ' </span>'
+                  + '<span class="' + m.level + '">' + m.level.padEnd(8) + '</span> '
+                  + esc(m.msg);
+      el.appendChild(d);
+      while (el.children.length > MAX_LOG) el.removeChild(el.firstChild);
+      el.scrollTop = el.scrollHeight;
+    }
+
+    function clearLogs()    { document.getElementById('le').innerHTML = ''; }
+    function clearHistory() { document.getElementById('hl').innerHTML = ''; }
+
+    const MAX_HIST = 60;
+    function addHistoryWake(word) {
+      const el = document.getElementById('hl');
+      if (!el) return;
+      const ts = new Date().toTimeString().slice(0, 8);
+      const d = document.createElement('div');
+      d.className = 'he';
+      d.innerHTML = '<span class="hts">' + ts + '</span>'
+        + ' <span style="color:var(--wake)">◉ ' + esc(word) + '</span>';
+      el.insertBefore(d, el.firstChild);
+      while (el.children.length > MAX_HIST) el.removeChild(el.lastChild);
+    }
+
+    function addHistory(wake, transcript, trigger) {
+      const el = document.getElementById('hl');
+      if (!el) return;
+      const ts = new Date().toTimeString().slice(0, 8);
+      const d = document.createElement('div');
+      d.className = 'he';
+      d.innerHTML = '<div><span class="hts">' + ts + '</span>'
+        + (wake ? '<span class="hwk">' + esc(wake) + '</span>' : '') + '</div>'
+        + '<div class="hcmd">"' + esc(transcript) + '"</div>'
+        + (trigger && trigger !== transcript
+            ? '<div class="htrig">→ ' + esc(trigger) + '</div>' : '');
+      el.insertBefore(d, el.firstChild);
+      while (el.children.length > MAX_HIST) el.removeChild(el.lastChild);
+    }
+
+    function sendCtrl(action) {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({type: 'control', action}));
+    }
+
+    function esc(s) {
+      return String(s)
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+        .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    connect();
+  </script>
+</body>
+</html>
