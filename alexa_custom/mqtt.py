@@ -16,13 +16,17 @@ class MQTTClient:
         port: int = 1883,
         topic_prefix: str = "alexa",
         node_id: str | None = None,
+        queue_max: int = 200,
     ) -> None:
         self.host = host
         self.port = port
         self.topic_prefix = topic_prefix
         self.node_id = node_id or socket.gethostname()
         self.client: aiomqtt.Client | None = None
-        self._queue: asyncio.Queue[tuple[str, str, bool]] = asyncio.Queue()
+        self._queue: asyncio.Queue[tuple[str, str, bool]] = asyncio.Queue(
+            maxsize=queue_max
+        )
+        self._queue_max = queue_max
         self._on_command_callback: (
             Callable[[dict[str, Any]], Awaitable[None]] | None
         ) = None
@@ -156,8 +160,32 @@ class MQTTClient:
                             logger.error(f"Invalid JSON action payload: {payload}")
 
     async def publish(self, topic: str, payload: str, retain: bool = False) -> None:
-        """Queue a message for publication."""
-        await self._queue.put((topic, payload, retain))
+        """Queue a message for publication, dropping the oldest on overflow."""
+        try:
+            self._queue.put_nowait((topic, payload, retain))
+        except asyncio.QueueFull:
+            try:
+                self._queue.get_nowait()
+            except asyncio.QueueEmpty:
+                pass
+            logger.warning(
+                "MQTT outgoing queue full (%d); dropped oldest message", self._queue_max
+            )
+            self._queue.put_nowait((topic, payload, retain))
+
+    async def publish_offline(self) -> None:
+        """Publish offline state and disconnect cleanly (called on graceful shutdown)."""
+        state_topic = f"{self.topic_prefix}/{self.node_id}/state"
+        if self.client:
+            try:
+                await asyncio.wait_for(
+                    self.client.publish(state_topic, "offline", retain=False),
+                    timeout=0.5,
+                )
+            except Exception as e:
+                logger.debug("publish_offline: %s", e)
+        else:
+            logger.debug("publish_offline: no active client")
 
     def publish_threadsafe(
         self,
@@ -175,5 +203,7 @@ class MQTTClient:
                 return
 
         loop.call_soon_threadsafe(
-            lambda: asyncio.create_task(self.publish(topic, payload, retain))
+            lambda t=topic, p=payload, r=retain: asyncio.create_task(
+                self.publish(t, p, r)
+            )
         )

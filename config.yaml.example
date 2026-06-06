@@ -76,6 +76,66 @@ env:
 #  port: 8080    # HTTP / WebSocket port (default: 8080)
 
 # ---------------------------------------------------------------------------
+# Audio hardware settings (all optional — defaults match Arduino Uno Q / NewPie)
+# ---------------------------------------------------------------------------
+
+# Name substring used to identify the audio card in PipeWire/ALSA.
+# Change this if you are using a different USB speakerphone.
+#audio_card_name: NewPie
+
+# Sample rates by connection type (Hz). Lower rates reduce CPU on weak hardware.
+#audio_sample_rates:
+#  usb: 48000
+#  bluetooth: 16000
+#  internal: 48000
+
+# How long (ms) the STT gate stays held after playback ends, to let
+# PipeWire/ALSA buffers drain and acoustic echo decay.
+# (also settable via AUDIO_POST_PLAYBACK_MS env var; env wins if both set)
+#audio_post_playback_ms: 100
+
+# Silence (ms) prepended to tones/beeps so the PipeWire sink finishes
+# cold-start before the audible part begins.
+# (also settable via AUDIO_TONE_PREROLL_MS env var; env wins if both set)
+#audio_tone_preroll_ms: 300
+
+# Microphone hardware gain applied during 'task audio:setup' (percent).
+# 300 = 3× boost. Has no effect unless you re-run 'task audio:setup'.
+#audio_mic_gain: 300
+
+# ---------------------------------------------------------------------------
+# STT sensitivity tuning (all optional)
+# (corresponding env vars still override when set)
+# ---------------------------------------------------------------------------
+
+# Silence after speech (ms) that ends the command capture window.
+# Lower = faster replies; higher = better for users who pause mid-sentence.
+# (also settable via STT_VAD_SILENCE_MS env var; env wins if both set)
+#stt_vad_silence_ms: 700
+
+# Silence after speech (ms) in stage-1 wake-word detection before force-finalizing.
+# (also settable via STT_STAGE1_VAD_SILENCE_MS env var; env wins if both set)
+#stt_stage1_vad_silence_ms: 500
+
+# Minimum RMS energy above which audio is considered speech in stage-1.
+# (also settable via STT_STAGE1_RMS_THRESHOLD env var; env wins if both set)
+#stt_stage1_rms_threshold: 0.02
+
+# ---------------------------------------------------------------------------
+# Connection and queue settings (all optional)
+# ---------------------------------------------------------------------------
+
+# Seconds between LiveKit reconnect attempts after a disconnection.
+#reconnect_delay: 5
+
+# Maximum number of outgoing MQTT messages to queue while the broker is
+# unreachable. When full, the oldest message is dropped.
+#mqtt_queue_max: 200
+
+# How often the config.yaml watcher polls for changes (seconds).
+#config_poll_interval: 2
+
+# ---------------------------------------------------------------------------
 # Wake words
 # ---------------------------------------------------------------------------
 # Each group has a primary word, optional aliases (alternative phrases that

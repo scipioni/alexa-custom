@@ -36,6 +36,34 @@ from alexa_custom.audio import (
 RECONNECT_DELAY = 5  # seconds between reconnect attempts
 
 
+async def _graceful_shutdown(
+    stt_stop: threading.Event | None,
+    mqtt_client,
+    livekit_stop: asyncio.Event | None,
+) -> None:
+    """Ordered teardown: STT → MQTT offline → LiveKit stop → drain → os.execv."""
+    import sys
+
+    logger.info("Graceful shutdown: stopping STT...")
+    if stt_stop is not None:
+        stt_stop.set()
+
+    if mqtt_client is not None:
+        logger.info("Graceful shutdown: publishing MQTT offline...")
+        try:
+            await asyncio.wait_for(mqtt_client.publish_offline(), timeout=0.5)
+        except Exception as e:
+            logger.debug("MQTT offline publish failed: %s", e)
+
+    if livekit_stop is not None:
+        logger.info("Graceful shutdown: stopping LiveKit session...")
+        livekit_stop.set()
+
+    await asyncio.sleep(0.3)
+    logger.info("Graceful shutdown: restarting process...")
+    os.execv(sys.executable, [sys.executable] + sys.argv)
+
+
 class PaplayAudioOutput:
     """Audio output via aplay (ALSA+PipeWire) for boards where PortAudio has no output.
 
@@ -81,10 +109,14 @@ class PaplayAudioOutput:
         else:
             cmd = [
                 tool,
-                "-D", "pipewire",
-                "-f", "S16_LE",
-                "-r", str(self.SAMPLE_RATE),
-                "-c", str(self.CHANNELS),
+                "-D",
+                "pipewire",
+                "-f",
+                "S16_LE",
+                "-r",
+                str(self.SAMPLE_RATE),
+                "-c",
+                str(self.CHANNELS),
             ]
 
         proc = await asyncio.create_subprocess_exec(
@@ -582,15 +614,15 @@ async def _async_main(
             except Exception as e:
                 logger.error(f"Startup action {action.type} failed: {e}")
 
-    # Use 16kHz for Bluetooth (if we can detect it) or 48kHz for USB/Internal.
-    # High sample rates on weak hardware (like Arduino Uno Q) cause mixer timeouts.
-    samplerate = 48000
-    from alexa_custom.audio import check_newpie_ready
+    # Use connection-type-appropriate sample rate from config (default: usb=48000, bt=16000).
+    from alexa_custom.audio import check_newpie_ready, _SAMPLERATE as _audio_samplerates
 
     _, conn_type = await asyncio.to_thread(check_newpie_ready)
+    samplerate = _audio_samplerates.get(conn_type, _audio_samplerates.get("usb", 48000))
     if conn_type == "bluetooth":
-        samplerate = 16000
-        logger.info("Bluetooth detected — using 16kHz sample rate for session")
+        logger.info(
+            f"Bluetooth detected — using {samplerate}Hz sample rate for session"
+        )
 
     devices = MediaDevices(
         input_sample_rate=samplerate, output_sample_rate=samplerate, num_channels=1
@@ -643,7 +675,12 @@ async def _async_main(
         if on_event:
             on_event(event, data)
 
-    reconnect_delay = RECONNECT_DELAY
+    reconnect_delay = (
+        actions_config.reconnect_delay
+        if actions_config is not None
+        else RECONNECT_DELAY
+    )
+    _base_reconnect_delay = reconnect_delay
     try:
         while not stop_event.is_set():
             # On-demand mode: wait for STT to signal a connect trigger.
@@ -704,12 +741,12 @@ async def _async_main(
 
             # In on-demand mode don't auto-reconnect; wait for another trigger.
             if connect_trigger is not None:
-                reconnect_delay = RECONNECT_DELAY
+                reconnect_delay = _base_reconnect_delay
                 logger.info("LiveKit session ended — waiting for next voice trigger")
                 continue
 
             if connected_this_session:
-                reconnect_delay = RECONNECT_DELAY
+                reconnect_delay = _base_reconnect_delay
             else:
                 reconnect_delay = min(reconnect_delay * 2, 30)
 
@@ -890,6 +927,15 @@ def main() -> None:
                 actions_config=config,
             )
 
+        def _web_shutdown_callback():
+            import sys as _sys
+
+            async def _do() -> None:
+                await asyncio.sleep(0.1)
+                os.execv(_sys.executable, [_sys.executable] + _sys.argv)
+
+            return _do()
+
         run_web(
             run_fn=_run_for_web,
             input_spec=input_spec,
@@ -900,6 +946,7 @@ def main() -> None:
             hot_reload=args.hot_reload,
             output_volume=output_volume,
             input_gain=input_gain,
+            shutdown_callback=_web_shutdown_callback,
         )
 
         import time as _time
@@ -934,6 +981,11 @@ def main() -> None:
             telegram_client = TelegramClient()
             stt_stop = threading.Event()
 
+            # Apply config-driven audio parameters
+            from alexa_custom import audio as _audio_mod
+
+            _audio_mod.configure(config)
+
             # Initialize MQTT if configured
             mqtt_client: MQTTClient | None = None
             mqtt_holder: list = [None]
@@ -947,6 +999,7 @@ def main() -> None:
                     port=mqtt_port,
                     topic_prefix=mqtt_prefix,
                     node_id=mqtt_node,
+                    queue_max=config.mqtt_queue_max,
                 )
                 mqtt_holder[0] = mqtt_client
 
@@ -958,12 +1011,37 @@ def main() -> None:
                 preroll_ms=config.tts_preroll_ms,
             )
 
+            def _tts_config_error(msg: str) -> None:
+                import threading as _threading
+                from alexa_custom.tts import get_engine
+
+                def _speak():
+                    try:
+                        get_engine().say("Errore di configurazione")
+                    except Exception:
+                        pass
+
+                _threading.Thread(target=_speak, daemon=True).start()
+
+            config_manager.set_error_callback(_tts_config_error)
+
+            def _on_config_reload(new_cfg) -> None:
+                _audio_mod.configure(new_cfg)
+
+            config_manager.register_reload_callback(_on_config_reload)
+
             async def _livekit_connect_fn() -> None:
                 connect_trigger.set()
 
             async def _run_main_loop():
                 main_tasks = []
                 loop = asyncio.get_running_loop()
+                livekit_stop_event: asyncio.Event | None = None
+
+                async def shutdown_callback() -> None:
+                    await _graceful_shutdown(
+                        stt_stop, mqtt_holder[0], livekit_stop_event
+                    )
 
                 # Register MQTT reload callback (reconnects if broker settings change)
                 mqtt_reload_cb = make_mqtt_reload_callback(mqtt_holder, loop)
@@ -973,7 +1051,9 @@ def main() -> None:
                 config_manager.start_watcher("config.yaml")
 
                 if args.hot_reload:
-                    config_manager.start_source_watcher("alexa_custom")
+                    config_manager.start_source_watcher(
+                        "alexa_custom", on_restart=shutdown_callback
+                    )
 
                 if mqtt_client:
                     # Setup callback for incoming MQTT actions

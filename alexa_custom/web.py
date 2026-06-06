@@ -488,10 +488,12 @@ class WebServer:
         port: int = 8080,
         output_volume: float = 0.5,
         input_gain: float = 1.0,
+        shutdown_callback: Callable | None = None,
     ) -> None:
         self._port = port
         self._output_volume = output_volume
         self._input_gain = input_gain
+        self._shutdown_callback = shutdown_callback
         self._clients: set[web.WebSocketResponse] = set()
         self._queue: asyncio.Queue = asyncio.Queue()
         self._pending_vu: dict[str, float] = {}
@@ -655,7 +657,10 @@ class WebServer:
             logger.info("Restart requested via web dashboard")
             await self._broadcast({"type": "restarting"})
             await asyncio.sleep(0.15)
-            os.execv(sys.executable, [sys.executable] + sys.argv)
+            if self._shutdown_callback is not None:
+                asyncio.create_task(self._shutdown_callback())
+            else:
+                os.execv(sys.executable, [sys.executable] + sys.argv)
 
     # ── broadcast helpers ─────────────────────────────────────────────────────
 
@@ -897,8 +902,14 @@ def run_web(
     hot_reload: bool = False,
     output_volume: float = 0.5,
     input_gain: float = 1.0,
+    shutdown_callback: Callable | None = None,
 ) -> None:
-    server = WebServer(port=port, output_volume=output_volume, input_gain=input_gain)
+    server = WebServer(
+        port=port,
+        output_volume=output_volume,
+        input_gain=input_gain,
+        shutdown_callback=shutdown_callback,
+    )
     try:
         asyncio.run(
             server.run(

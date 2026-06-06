@@ -33,6 +33,33 @@ _POST_PLAYBACK_MS = int(os.environ.get("AUDIO_POST_PLAYBACK_MS", "100"))
 _TONE_PREROLL_MS = int(os.environ.get("AUDIO_TONE_PREROLL_MS", "300"))
 
 
+_DEFAULT_CARD_NAME = "NewPie"
+_MIC_GAIN = 300  # percent, used by setup_audio()
+
+
+def configure(cfg) -> None:
+    """Update module-level audio parameters from ActionsConfig.
+
+    Call once after config load and again after each hot-reload.  Env-var
+    overrides (AUDIO_POST_PLAYBACK_MS, AUDIO_TONE_PREROLL_MS) still win when set.
+    """
+    global \
+        _POST_PLAYBACK_MS, \
+        _TONE_PREROLL_MS, \
+        _SAMPLERATE, \
+        _DEFAULT_CARD_NAME, \
+        _MIC_GAIN
+    _POST_PLAYBACK_MS = int(
+        os.environ.get("AUDIO_POST_PLAYBACK_MS", str(cfg.audio_post_playback_ms))
+    )
+    _TONE_PREROLL_MS = int(
+        os.environ.get("AUDIO_TONE_PREROLL_MS", str(cfg.audio_tone_preroll_ms))
+    )
+    _SAMPLERATE = dict(cfg.audio_sample_rates)
+    _DEFAULT_CARD_NAME = cfg.audio_card_name
+    _MIC_GAIN = cfg.audio_mic_gain
+
+
 def set_stt_gated_flag(flag: threading.Event):
     """Link an external event (like the STT gating flag) to our playback state."""
     global _playback_active
@@ -162,7 +189,7 @@ def set_pipewire_defaults(input_spec: str | None, output_spec: str | None):
 def find_alexa_card(pulse, spec: str | None = None):
     """Return the pulsectl card object matching the spec (name, desc, or index)."""
     if not spec:
-        spec = "NewPie"
+        spec = _DEFAULT_CARD_NAME
 
     spec_lower = spec.lower()
     is_numeric = spec.strip().isdigit()
@@ -194,7 +221,7 @@ def set_output_volume(
     """Set PulseAudio volume on the configured output sink."""
     if volume <= 0:
         return
-    needle = (output_spec or "NewPie").lower()
+    needle = (output_spec or _DEFAULT_CARD_NAME).lower()
     sink = next(
         (
             s
@@ -216,7 +243,7 @@ def set_input_gain(pulse: pulsectl.Pulse, input_spec: str | None, gain: float) -
     """Set PulseAudio volume on the configured input source (input gain boost)."""
     if gain <= 0:
         return
-    needle = (input_spec or "NewPie").lower()
+    needle = (input_spec or _DEFAULT_CARD_NAME).lower()
     source = next(
         (
             s
@@ -325,7 +352,9 @@ class AudioWatcher(threading.Thread):
         self._stop.set()
 
     def run(self):
-        logger.info(f"Audio watcher started (target: {self.output_spec or 'NewPie'})")
+        logger.info(
+            f"Audio watcher started (target: {self.output_spec or _DEFAULT_CARD_NAME})"
+        )
         while not self._stop.is_set():
             try:
                 with pulsectl.Pulse("alexa-watcher") as pulse:
@@ -376,7 +405,9 @@ def check_newpie_ready() -> tuple[bool, str]:
     with pulsectl.Pulse("alexa-check") as pulse:
         ok, conn = enforce_audio_state(pulse, input_spec, output_spec)
         if not ok:
-            print(f"ERROR: Audio device {output_spec or 'NewPie'!r} not found.")
+            print(
+                f"ERROR: Audio device {output_spec or _DEFAULT_CARD_NAME!r} not found."
+            )
             return False, "unknown"
 
         if is_virtual:
@@ -389,7 +420,7 @@ def check_newpie_ready() -> tuple[bool, str]:
         default_sink = sinks.get(info.default_sink_name)
         default_source = sources.get(info.default_source_name)
 
-        target_out = (output_spec or "NewPie").lower()
+        target_out = (output_spec or _DEFAULT_CARD_NAME).lower()
         if not default_sink or (
             target_out not in default_sink.description.lower()
             and target_out not in default_sink.name.lower()
@@ -399,7 +430,7 @@ def check_newpie_ready() -> tuple[bool, str]:
             )
             ok = False
 
-        target_in = (input_spec or "NewPie").lower()
+        target_in = (input_spec or _DEFAULT_CARD_NAME).lower()
         if not default_source or (
             target_in not in default_source.description.lower()
             and target_in not in default_source.name.lower()
@@ -996,12 +1027,12 @@ def setup_audio() -> None:
         )
     else:
         result = subprocess.run(
-            ["pactl", "set-source-volume", source.name, "300%"],
+            ["pactl", "set-source-volume", source.name, f"{_MIC_GAIN}%"],
             capture_output=True,
             text=True,
         )
         if result.returncode == 0:
-            print(f"Microphone gain set to 3x on {source.name}")
+            print(f"Microphone gain set to {_MIC_GAIN}% on {source.name}")
         else:
             print(f"WARNING: pactl set-source-volume failed: {result.stderr.strip()}")
 

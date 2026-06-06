@@ -565,6 +565,7 @@ def capture_transcript(
     flush_ms: int = 0,
     phrases: list[str] | None = None,
     start_after_playback: bool = False,
+    vad_silence_ms: int | None = None,
 ) -> str:
     """Capture audio for a set duration and return the transcribed text.
 
@@ -665,7 +666,13 @@ def capture_transcript(
                         on_stt_event("partial", {"text": full})
 
         # VAD endpoint: speech was heard, recognizer idle long enough → user done.
-        if got_speech and (time.monotonic() - last_activity) * 1000 >= _VAD_SILENCE_MS:
+        _effective_vad_ms = (
+            vad_silence_ms if vad_silence_ms is not None else _VAD_SILENCE_MS
+        )
+        if (
+            got_speech
+            and (time.monotonic() - last_activity) * 1000 >= _effective_vad_ms
+        ):
             break
 
     # Flush whatever recognizer hadn't finalised yet (deadline path or VAD path).
@@ -696,6 +703,9 @@ def _single_stage_loop(
     cooldown_until = 0.0
     was_playing = False
     alias_map = _build_alias_map(config.wake_words)
+    _eff_vad_ms = int(
+        os.environ.get("STT_VAD_SILENCE_MS", str(config.stt_vad_silence_ms))
+    )
 
     if on_stt_event:
         on_stt_event("listening", {"wake_words": [g.word for g in config.wake_words]})
@@ -720,6 +730,7 @@ def _single_stage_loop(
             flush_ms=flush_ms,
             phrases=phrases,
             start_after_playback=start_after_playback,
+            vad_silence_ms=_eff_vad_ms,
         )
 
     assert proc.stdout is not None
@@ -862,6 +873,19 @@ def _recognition_loop(
     loop: asyncio.AbstractEventLoop | None = None,
     dispatch_loop: asyncio.AbstractEventLoop | None = None,
 ) -> None:
+    # Effective thresholds: env-var wins if set, otherwise use config value.
+    _eff_stage1_vad_ms = int(
+        os.environ.get(
+            "STT_STAGE1_VAD_SILENCE_MS", str(config.stt_stage1_vad_silence_ms)
+        )
+    )
+    _eff_stage1_rms = float(
+        os.environ.get("STT_STAGE1_RMS_THRESHOLD", str(config.stt_stage1_rms_threshold))
+    )
+    _eff_vad_ms = int(
+        os.environ.get("STT_VAD_SILENCE_MS", str(config.stt_vad_silence_ms))
+    )
+
     alias_map = _build_alias_map(config.wake_words)
     is_vosk = isinstance(backend, VoskSTT)
     if is_vosk:
@@ -1040,7 +1064,7 @@ def _recognition_loop(
             # own endpoint (which requires rule2_min_trailing_silence = 1.2 s).
             rms = _rms_level(data)
             chunk_ms = len(data) / (16000 * 2) * 1000
-            if rms > _STAGE1_RMS_THRESHOLD:
+            if rms > _eff_stage1_rms:
                 stage1_last_speech_t = time.monotonic()
                 stage1_speech_ms += chunk_ms
 
@@ -1048,7 +1072,7 @@ def _recognition_loop(
                 stage1_speech_ms >= _STAGE1_MIN_SPEECH_MS
                 and stage1_last_speech_t > 0
                 and (time.monotonic() - stage1_last_speech_t) * 1000
-                >= _STAGE1_VAD_SILENCE_MS
+                >= _eff_stage1_vad_ms
             )
             endpoint_fired = backend.accept_waveform(data)
 
@@ -1080,6 +1104,7 @@ def _recognition_loop(
                             mqtt_client=mqtt_client,
                             loop=loop,
                             dispatch_loop=dispatch_loop,
+                            vad_silence_ms=_eff_vad_ms,
                         )
                         _drain_pipe(proc)
                         stage1_last_speech_t = 0.0
@@ -1115,6 +1140,7 @@ def _wake_detected(
     mqtt_client: MQTTClient | None = None,
     loop: asyncio.AbstractEventLoop | None = None,
     dispatch_loop: asyncio.AbstractEventLoop | None = None,
+    vad_silence_ms: int | None = None,
 ) -> None:
     logger.info(f"Wake word detected: '{wake_group.word}'")
     if on_stt_event:
@@ -1140,6 +1166,7 @@ def _wake_detected(
         stop_event,
         on_stt_event,
         flush_ms=300,
+        vad_silence_ms=vad_silence_ms,
     )
     logger.info(f"Command transcript: '{transcript}'")
 
@@ -1190,6 +1217,7 @@ def _wake_detected(
             flush_ms=flush_ms,
             phrases=phrases,
             start_after_playback=start_after_playback,
+            vad_silence_ms=vad_silence_ms,
         )
 
     # Dispatch using the persistent loop (we're in a daemon thread, not async context)

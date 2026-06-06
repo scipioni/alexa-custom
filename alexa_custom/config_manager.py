@@ -16,15 +16,25 @@ class ConfigManager:
         self.config = config
         self._callbacks: list[Callable[[ActionsConfig], None]] = []
         self._watcher_task: asyncio.Task | None = None
+        self._on_config_error: Callable[[str], None] | None = None
 
     def register_reload_callback(self, fn: Callable[[ActionsConfig], None]) -> None:
         self._callbacks.append(fn)
+
+    def set_error_callback(self, fn: Callable[[str], None] | None) -> None:
+        self._on_config_error = fn
 
     def _reload(self, path: str | Path) -> None:
         try:
             new_config = load_config(path)
         except (ConfigError, Exception) as e:
-            logger.error("Config reload failed, keeping previous config: %s", e)
+            msg = str(e)
+            logger.error("Config reload failed, keeping previous config: %s", msg)
+            if self._on_config_error:
+                try:
+                    self._on_config_error(msg)
+                except Exception as cb_err:
+                    logger.debug("Error callback raised: %s", cb_err)
             return
 
         if new_config is None:
@@ -44,10 +54,17 @@ class ConfigManager:
         if env_keys:
             logger.debug("Config reload applied env keys: %s", ", ".join(env_keys))
 
-    def start_watcher(self, path: str | Path, interval: float = 2.0) -> None:
+    def start_watcher(self, path: str | Path, interval: float | None = None) -> None:
         p = Path(path)
+        # Explicit interval wins; otherwise use config value; final fallback is 2.0 s.
+        if interval is not None:
+            cfg_interval = interval
+        elif self.config is not None:
+            cfg_interval = float(self.config.config_poll_interval)
+        else:
+            cfg_interval = 2.0
         self._watcher_task = asyncio.get_running_loop().create_task(
-            self._poll_loop(p, interval)
+            self._poll_loop(p, cfg_interval)
         )
 
     def stop_watcher(self) -> None:
