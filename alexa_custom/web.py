@@ -1,4 +1,4 @@
-"""Web dashboard for alexa-custom — launch with: alexa-client --web"""
+"""Web dashboard for alexa-custom."""
 
 from __future__ import annotations
 
@@ -74,6 +74,7 @@ class WebServer:
             "stt_state": "idle",
             "stt_text": "",
             "actions_config": {},
+            "llm_state": "idle",
         }
 
     # ── thread-safe enqueue ───────────────────────────────────────────────────
@@ -99,6 +100,8 @@ class WebServer:
             self._state["room"] = data.get("room", "")
         elif event == "starting":
             self._state["status"] = "Starting…"
+        elif event == "idle":
+            self._state["status"] = "Ready"
         elif event == "connecting":
             self._state["status"] = "Connecting…"
         elif event == "disconnected":
@@ -165,6 +168,18 @@ class WebServer:
             self._state["stt_text"] = data.get(
                 "text", data.get("word", data.get("transcript", ""))
             )
+        elif event == "llm_thinking":
+            self._state["llm_state"] = "thinking"
+            self._state["stt_state"] = "llm_thinking"
+            self._state["stt_text"] = data.get("transcript", "")
+        elif event == "llm_reply":
+            self._state["llm_state"] = "idle"
+            self._state["stt_state"] = "llm_reply"
+            self._state["stt_text"] = data.get("reply", "")
+        elif event == "llm_unreachable":
+            self._state["llm_state"] = "idle"
+            self._state["stt_state"] = "llm_unreachable"
+            self._state["stt_text"] = ""
 
         self._enqueue("stt", {"state": event, **data})
 
@@ -198,6 +213,7 @@ class WebServer:
                     "stt_state": self._state["stt_state"],
                     "stt_text": self._state["stt_text"],
                     "actions_config": self._state["actions_config"],
+                    "llm_state": self._state["llm_state"],
                 }
             )
         )
@@ -327,7 +343,21 @@ class WebServer:
             for t in config.triggers
         ]
 
-        return {"wake_words": ww, "global_triggers": gt}
+        llm_info: dict | None = None
+        if config.llm is not None:
+            host = config.llm.host
+            # strip protocol and port for display
+            display_host = (
+                host.replace("https://", "").replace("http://", "").split(":")[0]
+            )
+            llm_info = {
+                "enabled": True,
+                "model": config.llm.model,
+                "host": display_host,
+                "fallback": config.llm.fallback_on_no_match,
+            }
+
+        return {"wake_words": ww, "global_triggers": gt, "llm": llm_info}
 
     # ── LiveKit worker thread ─────────────────────────────────────────────────
 

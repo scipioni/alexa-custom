@@ -6,7 +6,7 @@ Map recognized trigger phrases to a sequence of actions.
 ## Requirements
 
 ### Requirement: Config-driven trigger-to-action mapping
-The system SHALL load trigger phrases and action sequences from `config.yaml` (falling back to `actions.yaml` with a deprecation warning when `config.yaml` is absent). Each trigger entry defines a `phrase` (matched against STT output) and a list of `actions` to execute sequentially. In addition to local triggers, all recognized phrases SHALL be published to MQTT for external processing. The active trigger list SHALL be updated without process restart when the config file changes on disk.
+The system SHALL load trigger phrases and action sequences from `config.yaml` and, when `actions_file:` is configured, also from `actions.yaml`. Each trigger entry defines a `phrase` (matched against STT output) and a list of `actions` to execute sequentially. Triggers from `actions.yaml` are appended after inline triggers from `config.yaml` in the active list. In addition to local triggers, all recognized phrases SHALL be published to MQTT for external processing. The active trigger list SHALL be updated without process restart when either config file changes on disk.
 
 #### Scenario: Single action on phrase match
 - **WHEN** the recognized command matches a configured trigger phrase
@@ -20,9 +20,17 @@ The system SHALL load trigger phrases and action sequences from `config.yaml` (f
 - **WHEN** neither `config.yaml` nor `actions.yaml` exists at startup
 - **THEN** the process behaves as before (auto-connect to LiveKit, no wake word detection)
 
-#### Scenario: Trigger list updated after hot reload
-- **WHEN** a new trigger phrase is added to `config.yaml` and the file is saved
-- **THEN** the next recognized command is matched against the updated trigger list (including the new phrase)
+#### Scenario: Trigger list updated after hot reload of actions.yaml
+- **WHEN** a new trigger phrase is appended to `actions.yaml` and the file is saved
+- **THEN** the next recognized command is matched against the updated trigger list
+
+#### Scenario: Unmatched command with LLM fallback enabled
+- **WHEN** no trigger matches the transcription and `llm.fallback_on_no_match` is `true`
+- **THEN** the transcript is routed to the `ConversationEngine` instead of playing the timeout tone
+
+#### Scenario: Unmatched command with LLM not configured
+- **WHEN** no trigger matches and `llm:` is absent from `config.yaml`
+- **THEN** the timeout tone plays as before
 
 ### Requirement: mqtt_publish action type
 The system SHALL support an `mqtt_publish` action type that allows publishing a specific `payload` to a specific `topic` on the configured MQTT broker.

@@ -21,7 +21,6 @@ from livekit.rtc import (
 from alexa_custom._env import require_env
 import sounddevice as sd
 from alexa_custom.config import ActionsConfig
-from alexa_custom.config_manager import ConfigManager
 from alexa_custom.mqtt import MQTTClient
 
 import subprocess
@@ -617,6 +616,9 @@ async def _async_main(
             except Exception as e:
                 logger.error(f"Startup action {action.type} failed: {e}")
 
+    if on_event:
+        on_event("idle", {})
+
     # Use connection-type-appropriate sample rate from config (default: usb=48000, bt=16000).
     from alexa_custom.audio import check_newpie_ready, _SAMPLERATE as _audio_samplerates
 
@@ -841,7 +843,6 @@ def main() -> None:
     from alexa_custom.config import load_config
 
     config = load_config("config.yaml")
-    config_manager = ConfigManager(config)
 
     ensure_setup()
 
@@ -850,18 +851,6 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="alexa-custom LiveKit client")
     parser.add_argument(
         "--version", action="version", version=f"alexa-custom {__version__}"
-    )
-    parser.add_argument(
-        "--web",
-        action="store_true",
-        default=True,
-        help="Launch web dashboard (default)",
-    )
-    parser.add_argument(
-        "--no-web",
-        action="store_false",
-        dest="web",
-        help="Disable web dashboard",
     )
     parser.add_argument(
         "--web-port", type=int, default=None, help="Web dashboard port (default: 8080)"
@@ -874,257 +863,99 @@ def main() -> None:
     if args.hot_reload:
         logger.info("Hot-reload enabled (watching alexa_custom/*.py)")
 
-    if args.web:
-        from alexa_custom.web import run_web
-        from alexa_custom.config import load_web_config
+    from alexa_custom.web import run_web
+    from alexa_custom.config import load_web_config
 
-        input_spec = os.environ.get("INPUT_DEVICE", "").strip() or None
-        output_spec = os.environ.get("OUTPUT_DEVICE", "").strip() or None
-        output_volume = config.output_volume if config is not None else 0.5
-        input_gain = config.input_gain if config is not None else 1.0
-        room = os.environ.get("LIVEKIT_ROOM", "")
+    input_spec = os.environ.get("INPUT_DEVICE", "").strip() or None
+    output_spec = os.environ.get("OUTPUT_DEVICE", "").strip() or None
+    output_volume = config.output_volume if config is not None else 0.5
+    input_gain = config.input_gain if config is not None else 1.0
+    room = os.environ.get("LIVEKIT_ROOM", "")
 
-        # Port: CLI flag > config.yaml web.port > default 8080
-        web_cfg = load_web_config()
-        web_port = args.web_port or int(web_cfg.get("port", 8080))
+    # Port: CLI flag > config.yaml web.port > default 8080
+    web_cfg = load_web_config()
+    web_port = args.web_port or int(web_cfg.get("port", 8080))
 
-        connect_trigger: threading.Event | None = None
-        livekit_connected_flag: threading.Event | None = None
-        stt_params: dict | None = None
+    connect_trigger: threading.Event | None = None
+    livekit_connected_flag: threading.Event | None = None
+    stt_params: dict | None = None
 
-        if config is not None:
-            from alexa_custom.actions import TelegramClient
-            from alexa_custom.tts import init_engine
+    if config is not None:
+        from alexa_custom.actions import TelegramClient
+        from alexa_custom.tts import init_engine
 
-            connect_trigger = threading.Event()
-            livekit_connected_flag = threading.Event()
+        connect_trigger = threading.Event()
+        livekit_connected_flag = threading.Event()
 
-            init_engine(
-                backend_type=config.tts_backend,
-                voice=config.tts_voice,
-                stt_gated_flag=livekit_connected_flag,
-                preroll_ms=config.tts_preroll_ms,
-            )
-
-            async def _livekit_connect_fn_web() -> None:
-                assert connect_trigger is not None
-                connect_trigger.set()
-
-            stt_params = {
-                "config": config,
-                "stop_event": threading.Event(),
-                "telegram_client": TelegramClient(),
-                "connect_fn": _livekit_connect_fn_web,
-                "connected_flag": livekit_connected_flag,
-            }
-
-        async def _run_for_web(
-            stop_threading: threading.Event,
-            on_event: Callable,
-            stop_asyncio: asyncio.Event,
-        ) -> None:
-            await _async_main(
-                ext_stop_event=stop_asyncio,
-                on_event=on_event,
-                connect_trigger=connect_trigger,
-                livekit_connected_flag=livekit_connected_flag,
-                actions_config=config,
-            )
-
-        def _web_shutdown_callback():
-            import sys as _sys
-
-            async def _do() -> None:
-                await asyncio.sleep(0.1)
-                os.execv(_sys.executable, [_sys.executable] + _sys.argv)
-
-            return _do()
-
-        run_web(
-            run_fn=_run_for_web,
-            input_spec=input_spec,
-            output_spec=output_spec,
-            room=room,
-            stt_params=stt_params,
-            port=web_port,
-            hot_reload=args.hot_reload,
-            output_volume=output_volume,
-            input_gain=input_gain,
-            shutdown_callback=_web_shutdown_callback,
+        init_engine(
+            backend_type=config.tts_backend,
+            voice=config.tts_voice,
+            stt_gated_flag=livekit_connected_flag,
+            preroll_ms=config.tts_preroll_ms,
         )
 
-        import time as _time
-        import os as _os
+        async def _livekit_connect_fn_web() -> None:
+            assert connect_trigger is not None
+            connect_trigger.set()
 
-        _time.sleep(0.2)
-        _os._exit(0)
+        stt_params = {
+            "config": config,
+            "stop_event": threading.Event(),
+            "telegram_client": TelegramClient(),
+            "connect_fn": _livekit_connect_fn_web,
+            "connected_flag": livekit_connected_flag,
+        }
 
-    else:
-        from alexa_custom.audio import AudioWatcher
-
-        input_spec = os.environ.get("INPUT_DEVICE", "").strip() or None
-        output_spec = os.environ.get("OUTPUT_DEVICE", "").strip() or None
-        output_volume = config.output_volume if config is not None else 0.5
-        input_gain = config.input_gain if config is not None else 1.0
-
-        audio_watcher = AudioWatcher(
-            input_spec=input_spec,
-            output_spec=output_spec,
-            output_volume=output_volume,
-            input_gain=input_gain,
-        )
-        audio_watcher.start()
-
-        if config is not None:
-            from alexa_custom.actions import TelegramClient, _run_action
-            from alexa_custom.stt import start_stt_thread
-            from alexa_custom.tts import init_engine
-
-            connect_trigger = threading.Event()
-            livekit_connected_flag = threading.Event()
-            telegram_client = TelegramClient()
-            stt_stop = threading.Event()
-
-            # Apply config-driven audio parameters
-            from alexa_custom import audio as _audio_mod
-
-            _audio_mod.configure(config)
-
-            # Initialize MQTT if configured
-            mqtt_client: MQTTClient | None = None
-            mqtt_holder: list = [None]
-            mqtt_host = os.environ.get("MQTT_HOST")
-            if mqtt_host:
-                mqtt_port = int(os.environ.get("MQTT_PORT", "1883"))
-                mqtt_prefix = os.environ.get("MQTT_TOPIC_PREFIX", "alexa")
-                mqtt_node = os.environ.get("MQTT_NODE_ID")
-                mqtt_client = MQTTClient(
-                    host=mqtt_host,
-                    port=mqtt_port,
-                    topic_prefix=mqtt_prefix,
-                    node_id=mqtt_node,
-                    queue_max=config.mqtt_queue_max,
-                )
-                mqtt_holder[0] = mqtt_client
-
-            # Initialize TTS with gating
-            init_engine(
-                backend_type=config.tts_backend,
-                voice=config.tts_voice,
-                stt_gated_flag=livekit_connected_flag,
-                preroll_ms=config.tts_preroll_ms,
+        if config.llm is not None:
+            logger.info(
+                f"LLM enabled — backend: {config.llm.backend}, "
+                f"model: {config.llm.model}, host: {config.llm.host}"
+                + (", fallback on no match" if config.llm.fallback_on_no_match else "")
+                + (", command learning" if config.llm.learn_commands else "")
             )
-
-            def _tts_config_error(msg: str) -> None:
-                import threading as _threading
-                from alexa_custom.tts import get_engine
-
-                def _speak():
-                    try:
-                        get_engine().say("Errore di configurazione")
-                    except Exception:
-                        pass
-
-                _threading.Thread(target=_speak, daemon=True).start()
-
-            config_manager.set_error_callback(_tts_config_error)
-
-            def _on_config_reload(new_cfg) -> None:
-                _audio_mod.configure(new_cfg)
-
-            config_manager.register_reload_callback(_on_config_reload)
-
-            async def _livekit_connect_fn() -> None:
-                connect_trigger.set()
-
-            async def _run_main_loop():
-                main_tasks = []
-                loop = asyncio.get_running_loop()
-                livekit_stop_event: asyncio.Event | None = None
-
-                async def shutdown_callback() -> None:
-                    await _graceful_shutdown(
-                        stt_stop, mqtt_holder[0], livekit_stop_event
-                    )
-
-                # Register MQTT reload callback (reconnects if broker settings change)
-                mqtt_reload_cb = make_mqtt_reload_callback(mqtt_holder, loop)
-                config_manager.register_reload_callback(mqtt_reload_cb)
-
-                # Start config file watcher
-                config_manager.start_watcher("config.yaml")
-
-                if args.hot_reload:
-                    config_manager.start_source_watcher(
-                        "alexa_custom", on_restart=shutdown_callback
-                    )
-
-                if mqtt_client:
-                    # Setup callback for incoming MQTT actions
-                    async def _on_mqtt_action(action_data: dict):
-                        from alexa_custom.config import ActionEntry
-
-                        action = ActionEntry(
-                            type=action_data["type"],
-                            params=action_data.get("params", {}),
-                        )
-                        logger.info(f"Executing remote action from MQTT: {action.type}")
-                        active_mqtt = mqtt_holder[0]
-                        await _run_action(
-                            action,
-                            telegram_client=telegram_client,
-                            livekit_connect_fn=_livekit_connect_fn,
-                            livekit_connected=livekit_connected_flag.is_set(),
-                            mqtt_client=active_mqtt,
-                        )
-
-                    mqtt_client.set_on_command(_on_mqtt_action)
-                    main_tasks.append(asyncio.create_task(mqtt_client.run()))
-
-                stt_ready = threading.Event()
-                start_stt_thread(
-                    config=lambda: config_manager.config,
-                    stop_event=stt_stop,
-                    telegram_client=telegram_client,
-                    livekit_connect_fn=_livekit_connect_fn,
-                    livekit_connected_flag=livekit_connected_flag,
-                    mqtt_client=mqtt_client,
-                    loop=loop,
-                    stt_ready_event=stt_ready,
-                )
-                current = config_manager.config
-                logger.info(
-                    f"STT started — wake words: {current.wake_words}, "
-                    f"{len(current.triggers)} trigger(s) configured"
-                )
-
-                main_tasks.append(
-                    asyncio.create_task(
-                        _async_main(
-                            connect_trigger=connect_trigger,
-                            livekit_connected_flag=livekit_connected_flag,
-                            actions_config=config_manager.config,
-                            mqtt_client=mqtt_client,
-                            stt_ready_event=stt_ready,
-                        )
-                    )
-                )
-
-                try:
-                    await asyncio.gather(*main_tasks)
-                finally:
-                    config_manager.stop_watcher()
-
-            try:
-                asyncio.run(_run_main_loop())
-            finally:
-                stt_stop.set()
-                audio_watcher.stop()
         else:
-            try:
-                asyncio.run(_async_main(actions_config=config))
-            finally:
-                audio_watcher.stop()
+            logger.info("LLM disabled")
+
+    async def _run_for_web(
+        stop_threading: threading.Event,
+        on_event: Callable,
+        stop_asyncio: asyncio.Event,
+    ) -> None:
+        await _async_main(
+            ext_stop_event=stop_asyncio,
+            on_event=on_event,
+            connect_trigger=connect_trigger,
+            livekit_connected_flag=livekit_connected_flag,
+            actions_config=config,
+        )
+
+    def _web_shutdown_callback():
+        import sys as _sys
+
+        async def _do() -> None:
+            await asyncio.sleep(0.1)
+            os.execv(_sys.executable, [_sys.executable] + _sys.argv)
+
+        return _do()
+
+    run_web(
+        run_fn=_run_for_web,
+        input_spec=input_spec,
+        output_spec=output_spec,
+        room=room,
+        stt_params=stt_params,
+        port=web_port,
+        hot_reload=args.hot_reload,
+        output_volume=output_volume,
+        input_gain=input_gain,
+        shutdown_callback=_web_shutdown_callback,
+    )
+
+    import time as _time
+    import os as _os
+
+    _time.sleep(0.2)
+    _os._exit(0)
 
 
 if __name__ == "__main__":

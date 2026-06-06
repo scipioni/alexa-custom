@@ -23,6 +23,7 @@ dependencies = [
     "piper-tts>=1.2.0",
     "sherpa-onnx>=1.0.0",
     "rapidfuzz>=3.0.0",
+    "ruamel.yaml>=0.18",
 ]
 
 [project.scripts]

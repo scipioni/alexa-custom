@@ -27,7 +27,7 @@ task setup         # install systemd user service
 
 Manual entry points:
 ```bash
-alexa-client [--web] [--web-port PORT]   # main daemon
+alexa-client [--web-port PORT]             # main daemon
 alexa-audio                              # mic→speaker loopback test
 alexa-devices                            # list audio devices
 alexa-setup                              # download/update STT models

@@ -1,0 +1,97 @@
+# actions.yaml — trigger/action definitions for alexa-custom
+#
+# This file is the single source of truth for all voice commands.
+# It is referenced by config.yaml via:
+#
+#   actions_file: actions.yaml
+#
+# The learning agent (llm_learn action) appends new commands here automatically.
+# You can also edit this file manually — it is hot-reloaded within ~4 seconds.
+#
+# Schema:
+#   triggers:        global fallback triggers (active for all wake words)
+#   wake_triggers:   per-wake-word trigger lists (keyed by wake word string)
+
+# ---------------------------------------------------------------------------
+# Global triggers — active for every wake word group
+# ---------------------------------------------------------------------------
+triggers:
+  - phrase: "test"
+    actions:
+      - type: log
+        message: "command recognition working"
+
+  - phrase: "di qualcosa"
+    actions:
+      - type: say
+        text: "Ciao dal sistema vocale"
+        lang: "it-IT"
+
+  - phrase: "suona"
+    actions:
+      - type: tone
+        name: info
+
+  - phrase: "aggiorna"
+    actions:
+      - type: shell
+        command: "systemctl --user restart alexa-client"
+
+  - phrase: "connettiti"
+    actions:
+      - type: livekit_join
+
+  - phrase: "manda messaggio"
+    actions:
+      - type: telegram
+        text: "Messaggio vocale ricevuto"
+
+  - phrase: "accendi la luce"
+    actions:
+      - type: mqtt_publish
+        topic: "home/light/set"
+        payload: "ON"
+
+  # Start a free-form chat session with the Ollama agent
+  - phrase: "chatta con me"
+    actions:
+      - type: llm_chat
+
+  # Enter learning mode to teach a new voice command
+  - phrase: "impara nuovo comando"
+    actions:
+      - type: llm_learn
+
+# ---------------------------------------------------------------------------
+# Per-wake-word triggers — override / extend the global list for a specific
+# wake word. The key must match the 'word:' field in config.yaml wake_words.
+# ---------------------------------------------------------------------------
+wake_triggers:
+  galileo:
+    - phrase: "chiama stefano"
+      actions:
+        - type: ask
+          text: "Vuoi chiamare Stefano?"
+          lang: "it-IT"
+          timeout: 5.0
+          on_reply:
+            - phrase: "si"
+              actions:
+                - type: say
+                  text: "Sto chiamando Stefano"
+                - type: livekit_join
+                - type: telegram
+                  text: "Collegati con casa <room>"
+            - phrase: "no"
+              actions:
+                - type: say
+                  text: "Chiamata annullata"
+          on_else:
+            - type: say
+              text: "Non ho capito"
+
+  assistente:
+    - phrase: "che ora è"
+      actions:
+        - type: shell
+          command: "date +'Sono le %H e %M' | piper --output_raw | pw-play --raw -"
