@@ -21,11 +21,11 @@ The system SHALL provide a modular architecture for text-to-speech, allowing dif
 - **THEN** the voice is loaded once during init; subsequent `say()` calls use the already-loaded voice without re-opening the file
 
 ### Requirement: say action type
-The system SHALL support a `say` action type that converts text to audible speech through the PipeWire default sink.
+The system SHALL support a `say` action type that converts text to audible speech through the PipeWire default sink. For the Piper backend, audio SHALL be streamed sentence-by-sentence via `paplay --raw` stdin rather than played from a pre-rendered WAV file.
 
 #### Scenario: Assistant speaks to user
 - **WHEN** a `say` action is executed with the text "Chiamo subito"
-- **THEN** the system generates the audio and plays it via `pw-play` or `aplay`
+- **THEN** the system generates the audio and plays it; for the Piper backend this is via `paplay --raw`, with `aplay -D pipewire` as fallback if `paplay` is absent
 
 ### Requirement: STT Gating during speech
 The system SHALL automatically pause the microphone recognition pipeline while the assistant is speaking to prevent acoustic feedback and self-triggering.
