@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -39,62 +39,80 @@ def make_llm_config(**kwargs) -> LLMConfig:
     return LLMConfig(**defaults)
 
 
+def _fake_stream(*responses):
+    """Return a chat_stream replacement that yields each response as one token."""
+    it = iter(responses)
+
+    async def stream(messages, model):
+        yield next(it, "ok.")
+
+    return stream
+
+
+def _failing_stream(exc):
+    """Return a chat_stream replacement that raises exc immediately."""
+
+    async def stream(messages, model):
+        raise exc
+        yield  # pragma: no cover — makes this an async generator
+
+    return stream
+
+
+async def _noop_say(text: str) -> None:
+    pass
+
+
 # ---------------------------------------------------------------------------
-# OllamaClient tests (task 4.3)
+# OllamaClient tests
 # ---------------------------------------------------------------------------
 
 
 class TestOllamaClient:
     @pytest.mark.asyncio
     async def test_successful_chat(self):
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.json.return_value = {"message": {"content": "Ciao!"}}
+        client = OllamaClient("http://localhost:11434", timeout=5.0)
+        client.chat_stream = _fake_stream("Ciao!")
+        result = await client.chat([{"role": "user", "content": "ciao"}], "llama3.2")
+        assert result == "Ciao!"
 
-        with patch("httpx.AsyncClient.post", new=AsyncMock(return_value=mock_resp)):
-            client = OllamaClient("http://localhost:11434", timeout=5.0)
-            result = await client.chat(
-                [{"role": "user", "content": "ciao"}], "llama3.2"
-            )
+    @pytest.mark.asyncio
+    async def test_chat_concatenates_tokens(self):
+        client = OllamaClient("http://localhost:11434", timeout=5.0)
+
+        async def multi_token(messages, model):
+            yield "Ci"
+            yield "ao"
+            yield "!"
+
+        client.chat_stream = multi_token
+        result = await client.chat([], "llama3.2")
         assert result == "Ciao!"
 
     @pytest.mark.asyncio
     async def test_connect_error_raises_unreachable(self):
-        import httpx
-
-        with patch(
-            "httpx.AsyncClient.post",
-            new=AsyncMock(side_effect=httpx.ConnectError("refused")),
-        ):
-            client = OllamaClient("http://localhost:11434", timeout=5.0)
-            with pytest.raises(OllamaUnreachable):
-                await client.chat([], "llama3.2")
+        client = OllamaClient("http://localhost:11434", timeout=5.0)
+        client.chat_stream = _failing_stream(OllamaUnreachable("refused"))
+        with pytest.raises(OllamaUnreachable):
+            await client.chat([], "llama3.2")
 
     @pytest.mark.asyncio
     async def test_timeout_raises_unreachable(self):
-        import httpx
-
-        with patch(
-            "httpx.AsyncClient.post",
-            new=AsyncMock(side_effect=httpx.TimeoutException("timeout")),
-        ):
-            client = OllamaClient("http://localhost:11434", timeout=5.0)
-            with pytest.raises(OllamaUnreachable):
-                await client.chat([], "llama3.2")
+        client = OllamaClient("http://localhost:11434", timeout=5.0)
+        client.chat_stream = _failing_stream(OllamaUnreachable("timeout"))
+        with pytest.raises(OllamaUnreachable):
+            await client.chat([], "llama3.2")
 
     @pytest.mark.asyncio
     async def test_non_2xx_raises_unreachable(self):
-        mock_resp = MagicMock()
-        mock_resp.status_code = 500
-        mock_resp.text = "Internal Server Error"
-        with patch("httpx.AsyncClient.post", new=AsyncMock(return_value=mock_resp)):
-            client = OllamaClient("http://localhost:11434", timeout=5.0)
-            with pytest.raises(OllamaUnreachable):
-                await client.chat([], "llama3.2")
+        client = OllamaClient("http://localhost:11434", timeout=5.0)
+        client.chat_stream = _failing_stream(OllamaUnreachable("HTTP 500"))
+        with pytest.raises(OllamaUnreachable):
+            await client.chat([], "llama3.2")
 
 
 # ---------------------------------------------------------------------------
-# ConversationEngine tests (task 5.4)
+# ConversationEngine tests
 # ---------------------------------------------------------------------------
 
 
@@ -106,60 +124,98 @@ class TestConversationEngine:
     @pytest.mark.asyncio
     async def test_reply_returns_text(self):
         engine = self._make_engine()
-        engine._client.chat = AsyncMock(return_value="Risposta")
-        result = await engine.reply("Ciao")
-        assert result == "Risposta"
+        engine._client.chat_stream = _fake_stream("Risposta.")
+        spoken: list[str] = []
+
+        async def say_fn(t: str) -> None:
+            spoken.append(t)
+
+        result = await engine.reply_streaming("Ciao", say_fn)
+        assert result == "Risposta."
+        assert spoken == ["Risposta."]
+
+    @pytest.mark.asyncio
+    async def test_reply_streaming_multi_sentence(self):
+        engine = self._make_engine()
+
+        async def stream(messages, model):
+            yield "Prima frase. Seconda frase."
+
+        engine._client.chat_stream = stream
+        spoken: list[str] = []
+
+        async def say_fn(t: str) -> None:
+            spoken.append(t)
+
+        result = await engine.reply_streaming("test", say_fn)
+        assert len(spoken) == 2
+        assert "Prima frase." in spoken[0]
+        assert "Seconda frase." in spoken[1]
+        assert "Prima frase." in result
+        assert "Seconda frase." in result
 
     @pytest.mark.asyncio
     async def test_history_accumulates(self):
         engine = self._make_engine()
-        engine._client.chat = AsyncMock(return_value="ok")
-        await engine.reply("messaggio uno")
-        await engine.reply("messaggio due")
+
+        async def stream(messages, model):
+            yield "ok."
+
+        engine._client.chat_stream = stream
+        await engine.reply_streaming("messaggio uno", _noop_say)
+        await engine.reply_streaming("messaggio due", _noop_say)
         assert len(engine._history) == 4  # 2 user + 2 assistant
 
     @pytest.mark.asyncio
     async def test_history_capped_at_context_turns(self):
         engine = self._make_engine(context_turns=2)
-        engine._client.chat = AsyncMock(return_value="ok")
+
+        async def stream(messages, model):
+            yield "ok."
+
+        engine._client.chat_stream = stream
         for i in range(5):
-            await engine.reply(f"msg {i}")
+            await engine.reply_streaming(f"msg {i}", _noop_say)
         assert len(engine._history) <= 4  # context_turns * 2
 
     @pytest.mark.asyncio
     async def test_history_reset_after_context_window(self):
         engine = self._make_engine(context_window_secs=1)
-        engine._client.chat = AsyncMock(return_value="ok")
-        await engine.reply("primo")
+
+        async def stream(messages, model):
+            yield "ok."
+
+        engine._client.chat_stream = stream
+        await engine.reply_streaming("primo", _noop_say)
         assert len(engine._history) == 2
-        engine._last_ts = time.monotonic() - 2  # simulate 2s elapsed
-        await engine.reply("secondo")
+        engine._last_ts = time.monotonic() - 2  # simulate 2 s elapsed
+        await engine.reply_streaming("secondo", _noop_say)
         assert len(engine._history) == 2  # reset: only the new exchange
 
     @pytest.mark.asyncio
     async def test_unreachable_returns_sentinel(self):
         engine = self._make_engine()
-        engine._client.chat = AsyncMock(side_effect=OllamaUnreachable("down"))
-        result = await engine.reply("ciao")
+        engine._client.chat_stream = _failing_stream(OllamaUnreachable("down"))
+        result = await engine.reply_streaming("ciao", _noop_say)
         assert result == _UNREACHABLE
 
     @pytest.mark.asyncio
     async def test_system_prompt_override(self):
         engine = self._make_engine(system_prompt="Tu sei un robot.")
-        captured = []
+        captured: list[dict] = []
 
-        async def mock_chat(messages, model):
+        async def stream(messages, model):
             captured.extend(messages)
-            return "ok"
+            yield "ok."
 
-        engine._client.chat = mock_chat
-        await engine.reply("test")
+        engine._client.chat_stream = stream
+        await engine.reply_streaming("test", _noop_say)
         assert captured[0]["role"] == "system"
         assert captured[0]["content"] == "Tu sei un robot."
 
 
 # ---------------------------------------------------------------------------
-# ActionsFileStore tests (task 3.5)
+# ActionsFileStore tests
 # ---------------------------------------------------------------------------
 
 
@@ -241,7 +297,7 @@ class TestNormalizeConfirm:
 
 
 # ---------------------------------------------------------------------------
-# LearnWizard integration test (task 6.7)
+# LearnWizard integration test
 # ---------------------------------------------------------------------------
 
 
@@ -262,7 +318,6 @@ class TestLearnWizard:
         async def listen_fn(timeout: float) -> str:
             return next(listened, "")
 
-        # Mock OllamaClient.chat to return action type
         with patch(
             "alexa_custom.llm.OllamaClient.chat",
             new=AsyncMock(return_value="say"),
@@ -302,12 +357,11 @@ class TestLearnWizard:
 
 
 # ---------------------------------------------------------------------------
-# Task 10.3 — end-to-end smoke test
-# Requires live audio/STT infrastructure; marked skip for CI.
+# End-to-end smoke test (requires live audio/STT; skipped in CI)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.skip(reason="requires live audio and STT; run manually on target board")
 def test_e2e_llm_fallback_smoke():
-    """Verify info tone plays and ConversationEngine.reply is called on nomatch."""
+    """Verify info tone plays and ConversationEngine.reply_streaming is called on nomatch."""
     pass
