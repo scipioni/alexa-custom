@@ -157,7 +157,7 @@ actions_file: actions.yaml
 #  model: ssfdre38/gemma4-nano        # model name as shown by 'ollama list'
 #  context_turns: 10                 # exchange pairs kept in conversation history
 #  context_window_secs: 60           # seconds of inactivity before history resets
-#  fallback_on_no_match: true        # route unmatched commands to LLM
+#  fallback_on_no_match: false       # route unmatched commands to LLM (default: false)
 #  learn_commands: true              # enable llm_learn action type
 #  request_timeout: 60.0             # read timeout for LLM inference (connect timeout is always 5 s)
 #  # system_prompt: null             # optional override for the default system prompt

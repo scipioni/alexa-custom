@@ -250,7 +250,7 @@ llm:
         assert cfg.llm.host == "http://192.168.1.10:11434"
         assert cfg.llm.model == "llama3.2"
         assert cfg.llm.context_turns == 10
-        assert cfg.llm.fallback_on_no_match is True
+        assert cfg.llm.fallback_on_no_match is False
 
     def test_llm_invalid_backend_raises(self, tmp_path):
         p = write_file(
