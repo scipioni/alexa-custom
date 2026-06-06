@@ -57,6 +57,67 @@ class TestClientAsync:
         mock_room.local_participant.publish_track.assert_called_once()
         mock_room.disconnect.assert_called_once()
 
+    @pytest.mark.asyncio
+    @patch("alexa_custom.client.Room")
+    @patch("alexa_custom.client.get_token")
+    @patch("alexa_custom.client.LocalAudioTrack")
+    @patch("alexa_custom.client.TrackPublishOptions")
+    async def test_run_session_participant_left_disconnects(
+        self, mock_opts, mock_local_track, mock_get_token, mock_room_class
+    ):
+        mock_room = MagicMock()
+        mock_room.connect = AsyncMock()
+        mock_room.disconnect = AsyncMock()
+        mock_room.local_participant.publish_track = AsyncMock()
+        mock_room.local_participant.identity = "test-identity"
+        mock_room.remote_participants = {}
+
+        callbacks = {}
+
+        def mock_on(event_name):
+            def decorator(func):
+                callbacks[event_name] = func
+                return func
+
+            return decorator
+
+        mock_room.on.side_effect = mock_on
+
+        mock_room_class.return_value = mock_room
+        mock_get_token.return_value = "test-token"
+
+        mic = MagicMock()
+        devices = MagicMock()
+        player = MagicMock()
+        player.start = AsyncMock()
+        player.aclose = AsyncMock()
+        devices.open_output.return_value = player
+        pw_device = 0
+        stop_event = asyncio.Event()
+
+        # Simulate other participant disconnected
+        async def simulate_participant_left():
+            # Wait for connection to be active
+            await asyncio.sleep(0.05)
+            # When participant disconnected is fired, they are no longer in remote_participants
+            mock_participant = MagicMock()
+            mock_participant.identity = "other-user"
+            mock_room.remote_participants = {}  # empty now
+
+            # Fire the event callback
+            callbacks["participant_disconnected"](mock_participant)
+
+        asyncio.create_task(simulate_participant_left())
+
+        with patch.dict(
+            os.environ, {"LIVEKIT_URL": "http://test.url", "LIVEKIT_ROOM": "test-room"}
+        ):
+            # Run without setting stop_event! It should disconnect automatically
+            # when the last participant leaves the room.
+            await run_session(mic, devices, pw_device, stop_event)
+
+        mock_room.disconnect.assert_called_once()
+
 
 class TestClientUtils(unittest.TestCase):
     def test_calculate_peak_empty(self):
