@@ -115,3 +115,66 @@ class TestClientUtils(unittest.TestCase):
         assert "https://meet.livekit.io/custom/?" in url
         assert "liveKitUrl=http%3A%2F%2Ftest.url" in url
         assert "token=" in url
+
+
+class TestClientCLI(unittest.TestCase):
+    @patch("alexa_custom.client.ensure_setup")
+    @patch("alexa_custom.config.load_config")
+    @patch("alexa_custom.client.ConfigManager")
+    @patch("alexa_custom.web.run_web")
+    @patch("alexa_custom.audio.AudioWatcher")
+    @patch("alexa_custom.client._async_main", new_callable=AsyncMock)
+    @patch("os._exit")
+    def test_cli_args_defaults_to_web(
+        self,
+        mock_os_exit,
+        mock_async_main,
+        mock_audio_watcher,
+        mock_run_web,
+        mock_config_mgr,
+        mock_load_config,
+        mock_ensure_setup,
+    ):
+        from alexa_custom.client import main
+        import sys
+
+        # Mock config to be None so we avoid running deep async main loops
+        mock_load_config.return_value = None
+
+        # Test 1: No arguments passed - should default to web
+        with patch.object(sys, "argv", ["alexa-client"]):
+            main()
+            mock_run_web.assert_called_once()
+            mock_audio_watcher.assert_not_called()
+            mock_os_exit.assert_called_once_with(0)
+
+    @patch("alexa_custom.client.ensure_setup")
+    @patch("alexa_custom.config.load_config")
+    @patch("alexa_custom.client.ConfigManager")
+    @patch("alexa_custom.web.run_web")
+    @patch("alexa_custom.audio.AudioWatcher")
+    @patch("alexa_custom.client._async_main", new_callable=AsyncMock)
+    @patch("os._exit")
+    def test_cli_args_no_web(
+        self,
+        mock_os_exit,
+        mock_async_main,
+        mock_audio_watcher,
+        mock_run_web,
+        mock_config_mgr,
+        mock_load_config,
+        mock_ensure_setup,
+    ):
+        from alexa_custom.client import main
+        import sys
+
+        # Mock config to be None so we avoid running deep async main loops
+        mock_load_config.return_value = None
+
+        # Test 2: --no-web passed - should NOT launch web, should use AudioWatcher
+        with patch.object(sys, "argv", ["alexa-client", "--no-web"]):
+            main()
+            mock_run_web.assert_not_called()
+            mock_audio_watcher.return_value.start.assert_called_once()
+            mock_audio_watcher.return_value.stop.assert_called_once()
+            mock_os_exit.assert_not_called()
