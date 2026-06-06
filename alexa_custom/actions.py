@@ -119,6 +119,8 @@ async def dispatch(
     listen_fn: Callable[[float], Awaitable[str]] | None = None,
     mqtt_client: MQTTClient | None = None,
     on_stt_event: Callable[[str, dict], None] | None = None,
+    actions_config=None,
+    wake_word: str | None = None,
 ) -> None:
     for action in trigger.actions:
         await _run_action(
@@ -129,6 +131,8 @@ async def dispatch(
             listen_fn,
             mqtt_client,
             on_stt_event,
+            actions_config=actions_config,
+            wake_word=wake_word,
         )
 
 
@@ -219,6 +223,8 @@ async def handle_ask(
     listen_fn: Callable[[float], Awaitable[str]] | None,
     mqtt_client: MQTTClient | None,
     on_stt_event: Callable[[str, dict], None] | None,
+    actions_config=None,
+    wake_word: str | None = None,
     **_,
 ):
     from alexa_custom.tts import get_engine
@@ -289,6 +295,8 @@ async def handle_ask(
                 listen_fn,
                 mqtt_client,
                 on_stt_event,
+                actions_config=actions_config,
+                wake_word=wake_word,
             )
         elif action.on_else:
             logger.info(f"No reply trigger matched '{transcript}', running on_else")
@@ -303,6 +311,8 @@ async def handle_ask(
                     listen_fn,
                     mqtt_client,
                     on_stt_event,
+                    actions_config=actions_config,
+                    wake_word=wake_word,
                 )
         else:
             logger.info(f"No reply trigger matched '{transcript}' and no on_else")
@@ -322,6 +332,8 @@ async def handle_ask(
                 listen_fn,
                 mqtt_client,
                 on_stt_event,
+                actions_config=actions_config,
+                wake_word=wake_word,
             )
 
     if mqtt_client:
@@ -375,6 +387,112 @@ async def handle_mqtt_publish(action: ActionEntry, mqtt_client: MQTTClient | Non
     await mqtt_client.publish(topic, payload, retain=retain)
 
 
+@registry.register("llm_chat")
+async def handle_llm_chat(
+    action: ActionEntry,
+    listen_fn: Callable[[float], Awaitable[str]] | None,
+    mqtt_client: MQTTClient | None,
+    on_stt_event: Callable[[str, dict], None] | None = None,
+    actions_config=None,
+    wake_word: str | None = None,
+    **_,
+) -> None:
+    from alexa_custom.llm import _UNREACHABLE, get_engine
+    from alexa_custom.tts import get_engine as get_tts
+
+    if actions_config is None or actions_config.llm is None:
+        logger.warning("llm_chat action: LLM not configured — skipping")
+        return
+    if listen_fn is None:
+        logger.warning("llm_chat action: no listen_fn available — skipping")
+        return
+
+    cfg = actions_config.llm
+    lang = "it-IT"
+    if wake_word and actions_config.wake_words:
+        for grp in actions_config.wake_words:
+            if grp.word == wake_word:
+                lang = grp.lang
+                break
+
+    system_prompt_override = action.params.get("system_prompt")
+    import dataclasses
+
+    if system_prompt_override:
+        cfg = dataclasses.replace(cfg, system_prompt=system_prompt_override)
+
+    engine = get_engine(cfg, lang)
+
+    from alexa_custom.audio import play_tone
+
+    await asyncio.to_thread(play_tone, "info")
+
+    for _ in range(cfg.context_turns):
+        transcript = (await listen_fn(10.0)).strip()
+        if not transcript:
+            break
+        from alexa_custom.llm import is_exit_phrase
+
+        if is_exit_phrase(transcript, cfg.exit_phrases):
+            engine.reset()
+            break
+        if on_stt_event:
+            on_stt_event("llm_thinking", {"transcript": transcript})
+        reply = await engine.reply(transcript)
+        if reply == _UNREACHABLE:
+            if on_stt_event:
+                on_stt_event("llm_unreachable", {})
+            await asyncio.to_thread(
+                get_tts().say, "agente remoto non raggiungibile", lang
+            )
+            break
+        if on_stt_event:
+            on_stt_event("llm_reply", {"transcript": transcript, "reply": reply})
+        await asyncio.to_thread(get_tts().say, reply, lang)
+
+
+@registry.register("llm_learn")
+async def handle_llm_learn(
+    action: ActionEntry,
+    listen_fn: Callable[[float], Awaitable[str]] | None,
+    mqtt_client: MQTTClient | None,
+    actions_config=None,
+    wake_word: str | None = None,
+    **_,
+) -> None:
+    from alexa_custom.llm import LearnWizard
+    from alexa_custom.tts import get_engine as get_tts
+
+    if actions_config is None or actions_config.llm is None:
+        logger.warning("llm_learn action: LLM not configured — skipping")
+        return
+    if listen_fn is None:
+        logger.warning("llm_learn action: no listen_fn available — skipping")
+        return
+    if not actions_config.actions_file:
+        logger.warning("llm_learn action: no actions_file configured — skipping")
+        return
+
+    cfg = actions_config.llm
+    lang = "it-IT"
+    if wake_word and actions_config.wake_words:
+        for grp in actions_config.wake_words:
+            if grp.word == wake_word:
+                lang = grp.lang
+                break
+
+    async def say_fn(text: str) -> None:
+        await asyncio.to_thread(get_tts().say, text, lang)
+
+    wizard = LearnWizard(
+        config=cfg,
+        lang=lang,
+        actions_file_path=actions_config.actions_file,
+        wake_word=wake_word,
+    )
+    await wizard.run(listen_fn, say_fn)
+
+
 async def _run_action(
     action: ActionEntry,
     telegram_client: TelegramClient,
@@ -383,6 +501,8 @@ async def _run_action(
     listen_fn: Callable[[float], Awaitable[str]] | None = None,
     mqtt_client: MQTTClient | None = None,
     on_stt_event: Callable[[str, dict], None] | None = None,
+    actions_config=None,
+    wake_word: str | None = None,
 ) -> None:
     await registry.execute(
         action.type,
@@ -393,4 +513,6 @@ async def _run_action(
         listen_fn=listen_fn,
         mqtt_client=mqtt_client,
         on_stt_event=on_stt_event,
+        actions_config=actions_config,
+        wake_word=wake_word,
     )

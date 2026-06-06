@@ -34,6 +34,35 @@ class WakeWordGroup:
     word: str
     aliases: list[str] = field(default_factory=list)
     triggers: list[Trigger] = field(default_factory=list)
+    lang: str = "it-IT"
+
+
+_DEFAULT_EXIT_PHRASES = [
+    "stop",
+    "esci",
+    "basta",
+    "fine",
+    "fermati",
+    "chiudi",
+    "exit",
+    "quit",
+    "annulla",
+    "cancella",
+]
+
+
+@dataclass
+class LLMConfig:
+    backend: str
+    host: str
+    model: str = "ssfdre38/gemma4-nano"
+    context_turns: int = 10
+    context_window_secs: int = 60
+    fallback_on_no_match: bool = True
+    learn_commands: bool = True
+    system_prompt: str | None = None
+    request_timeout: float = 10.0
+    exit_phrases: list[str] = field(default_factory=lambda: list(_DEFAULT_EXIT_PHRASES))
 
 
 _VALID_MODES = {"two-stage", "single-stage"}
@@ -73,6 +102,16 @@ class ActionsConfig:
     stt_stage1_rms_threshold: float = 0.02
     # Config watcher
     config_poll_interval: int = 2
+    # External actions file
+    actions_file: str | None = None
+    # LLM
+    llm: LLMConfig | None = None
+
+
+@dataclass
+class ActionsData:
+    triggers: list[Trigger] = field(default_factory=list)
+    wake_triggers: dict[str, list[Trigger]] = field(default_factory=dict)
 
 
 def _parse_actions(raw_actions: list[Any], path_prefix: str) -> list[ActionEntry]:
@@ -178,11 +217,82 @@ def _parse_wake_word_groups(raw_groups: list[Any], source: str) -> list[WakeWord
             else:
                 seen[norm] = i
 
+        lang = str(entry.get("lang", "it-IT"))
+
         groups.append(
-            WakeWordGroup(word=word, aliases=aliases, triggers=group_triggers)
+            WakeWordGroup(
+                word=word, aliases=aliases, triggers=group_triggers, lang=lang
+            )
         )
 
     return groups
+
+
+def _parse_actions_file(path: Path) -> ActionsData:
+    """Parse an actions.yaml file into an ActionsData (global triggers + wake_triggers map)."""
+    try:
+        with path.open() as f:
+            raw = yaml.safe_load(f) or {}
+    except yaml.YAMLError as e:
+        raise ConfigError(f"actions.yaml parse error: {e}") from e
+
+    if not isinstance(raw, dict):
+        raise ConfigError("actions.yaml must be a YAML mapping at the top level")
+
+    triggers: list[Trigger] = []
+    raw_triggers = raw.get("triggers")
+    if raw_triggers is not None:
+        if not isinstance(raw_triggers, list):
+            raise ConfigError("actions.yaml: 'triggers' must be a list if present")
+        triggers = _parse_triggers(raw_triggers, "actions.yaml:triggers")
+
+    wake_triggers: dict[str, list[Trigger]] = {}
+    raw_wake = raw.get("wake_triggers")
+    if raw_wake is not None:
+        if not isinstance(raw_wake, dict):
+            raise ConfigError(
+                "actions.yaml: 'wake_triggers' must be a mapping if present"
+            )
+        for word, raw_wt in raw_wake.items():
+            if not isinstance(raw_wt, list):
+                raise ConfigError(
+                    f"actions.yaml: 'wake_triggers.{word}' must be a list"
+                )
+            wake_triggers[str(word)] = _parse_triggers(
+                raw_wt, f"actions.yaml:wake_triggers.{word}"
+            )
+
+    return ActionsData(triggers=triggers, wake_triggers=wake_triggers)
+
+
+def _parse_llm_config(raw_llm: dict, source: str) -> LLMConfig:
+    backend = str(raw_llm.get("backend", ""))
+    if backend != "ollama":
+        raise ConfigError(f"{source}: 'llm.backend' must be 'ollama', got {backend!r}")
+    host = raw_llm.get("host")
+    if not host or not isinstance(host, str):
+        raise ConfigError(f"{source}: 'llm.host' is required")
+    model = raw_llm.get("model")
+    if not model or not isinstance(model, str):
+        raise ConfigError(f"{source}: 'llm.model' is required")
+    raw_exit = raw_llm.get("exit_phrases")
+    exit_phrases = (
+        [str(p) for p in raw_exit if p]
+        if isinstance(raw_exit, list)
+        else list(_DEFAULT_EXIT_PHRASES)
+    )
+    return LLMConfig(
+        backend=backend,
+        host=host,
+        model=model,
+        context_turns=int(raw_llm.get("context_turns", 10)),
+        context_window_secs=int(raw_llm.get("context_window_secs", 60)),
+        fallback_on_no_match=bool(raw_llm.get("fallback_on_no_match", True)),
+        learn_commands=bool(raw_llm.get("learn_commands", True)),
+        system_prompt=raw_llm.get("system_prompt") or None,
+        request_timeout=float(raw_llm.get("request_timeout", 10.0)),
+        exit_phrases=exit_phrases,
+    )
 
 
 def load_config(path: str | Path) -> ActionsConfig | None:
@@ -212,7 +322,37 @@ def load_config(path: str | Path) -> ActionsConfig | None:
     if applied_env_keys:
         logger.debug("Applied env keys from config: %s", ", ".join(applied_env_keys))
 
-    return _parse_actions_config(raw, source=str(p))
+    config = _parse_actions_config(raw, source=str(p))
+
+    # Merge actions.yaml when actions_file is configured
+    if config.actions_file:
+        af_path = Path(config.actions_file)
+        if not af_path.is_absolute():
+            af_path = p.parent / af_path
+        if af_path.exists():
+            actions_data = _parse_actions_file(af_path)
+            config.triggers = config.triggers + actions_data.triggers
+            word_map = {g.word: g for g in config.wake_words}
+            for word, wt_triggers in actions_data.wake_triggers.items():
+                if word in word_map:
+                    word_map[word].triggers = word_map[word].triggers + wt_triggers
+                else:
+                    logger.debug(
+                        "actions.yaml: wake_triggers key %r has no matching wake word group — ignored",
+                        word,
+                    )
+        else:
+            logger.warning("actions_file %r not found — skipping", str(af_path))
+    else:
+        # Suggest actions_file if actions.yaml exists alongside config and learn_commands is on
+        implicit_af = p.parent / "actions.yaml"
+        if implicit_af.exists() and config.llm and config.llm.learn_commands:
+            logger.info(
+                "actions.yaml found alongside config.yaml — consider adding "
+                "'actions_file: actions.yaml' to config.yaml so the learning agent can update it"
+            )
+
+    return config
 
 
 def _parse_actions_config(raw: dict, source: str = "config") -> ActionsConfig:
@@ -322,6 +462,18 @@ def _parse_actions_config(raw: dict, source: str = "config") -> ActionsConfig:
     stt_stage1_rms_threshold = float(raw.get("stt_stage1_rms_threshold", 0.02))
     config_poll_interval = int(raw.get("config_poll_interval", 2))
 
+    # actions_file: external trigger definitions writable by the learning agent
+    actions_file_raw = raw.get("actions_file")
+    actions_file: str | None = str(actions_file_raw) if actions_file_raw else None
+
+    # llm: optional Ollama-backed conversation engine
+    llm: LLMConfig | None = None
+    raw_llm = raw.get("llm")
+    if raw_llm is not None:
+        if not isinstance(raw_llm, dict):
+            raise ConfigError(f"{source}: 'llm' must be a mapping if present")
+        llm = _parse_llm_config(raw_llm, source)
+
     return ActionsConfig(
         wake_words=wake_words,
         command_timeout=command_timeout,
@@ -348,6 +500,8 @@ def _parse_actions_config(raw: dict, source: str = "config") -> ActionsConfig:
         stt_stage1_vad_silence_ms=stt_stage1_vad_silence_ms,
         stt_stage1_rms_threshold=stt_stage1_rms_threshold,
         config_poll_interval=config_poll_interval,
+        actions_file=actions_file,
+        llm=llm,
     )
 
 

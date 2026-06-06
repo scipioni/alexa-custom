@@ -222,3 +222,222 @@ class TestConfigManager:
         log_text = " ".join(r.message for r in caplog.records)
         assert "newsecret" not in log_text
         assert "topsecret" not in log_text
+
+
+# ---------------------------------------------------------------------------
+# LLM config, lang, actions_file tests (task 10.1)
+# ---------------------------------------------------------------------------
+
+
+class TestLLMConfig:
+    def test_llm_config_parsed(self, tmp_path):
+        p = write_file(
+            tmp_path,
+            "config.yaml",
+            """\
+wake_words:
+  - word: alexa
+llm:
+  backend: ollama
+  host: http://192.168.1.10:11434
+  model: llama3.2
+""",
+        )
+        from alexa_custom.config import load_config
+
+        cfg = load_config(p)
+        assert cfg.llm is not None
+        assert cfg.llm.host == "http://192.168.1.10:11434"
+        assert cfg.llm.model == "llama3.2"
+        assert cfg.llm.context_turns == 10
+        assert cfg.llm.fallback_on_no_match is True
+
+    def test_llm_invalid_backend_raises(self, tmp_path):
+        p = write_file(
+            tmp_path,
+            "config.yaml",
+            """\
+wake_words:
+  - word: alexa
+llm:
+  backend: openai
+  host: http://localhost
+  model: gpt-4
+""",
+        )
+        from alexa_custom.config import load_config, ConfigError
+
+        with pytest.raises(ConfigError, match="ollama"):
+            load_config(p)
+
+    def test_llm_absent_gives_none(self, tmp_path):
+        p = write_file(tmp_path, "config.yaml", "wake_words:\n  - word: alexa\n")
+        from alexa_custom.config import load_config
+
+        cfg = load_config(p)
+        assert cfg.llm is None
+
+    def test_wake_word_lang_field(self, tmp_path):
+        p = write_file(
+            tmp_path,
+            "config.yaml",
+            """\
+wake_words:
+  - word: alexa
+    lang: en-US
+""",
+        )
+        from alexa_custom.config import load_config
+
+        cfg = load_config(p)
+        assert cfg.wake_words[0].lang == "en-US"
+
+    def test_wake_word_lang_default(self, tmp_path):
+        p = write_file(tmp_path, "config.yaml", "wake_words:\n  - word: alexa\n")
+        from alexa_custom.config import load_config
+
+        cfg = load_config(p)
+        assert cfg.wake_words[0].lang == "it-IT"
+
+
+class TestActionsFileMerge:
+    def test_global_triggers_merged(self, tmp_path):
+        write_file(
+            tmp_path,
+            "actions.yaml",
+            """\
+triggers:
+  - phrase: "learned trigger"
+    actions:
+      - type: log
+        message: ok
+""",
+        )
+        p = write_file(
+            tmp_path,
+            "config.yaml",
+            """\
+wake_words:
+  - word: alexa
+actions_file: actions.yaml
+""",
+        )
+        from alexa_custom.config import load_config
+
+        cfg = load_config(p)
+        phrases = [t.phrase for t in cfg.triggers]
+        assert "learned trigger" in phrases
+
+    def test_wake_triggers_merged_into_group(self, tmp_path):
+        write_file(
+            tmp_path,
+            "actions.yaml",
+            """\
+wake_triggers:
+  alexa:
+    - phrase: "comando specifico"
+      actions:
+        - type: log
+          message: ok
+""",
+        )
+        p = write_file(
+            tmp_path,
+            "config.yaml",
+            """\
+wake_words:
+  - word: alexa
+actions_file: actions.yaml
+""",
+        )
+        from alexa_custom.config import load_config
+
+        cfg = load_config(p)
+        grp = cfg.wake_words[0]
+        phrases = [t.phrase for t in grp.triggers]
+        assert "comando specifico" in phrases
+
+    def test_unknown_wake_word_key_ignored(self, tmp_path):
+        write_file(
+            tmp_path,
+            "actions.yaml",
+            """\
+wake_triggers:
+  unknown_word:
+    - phrase: "xyz"
+      actions:
+        - type: log
+          message: ok
+""",
+        )
+        p = write_file(
+            tmp_path,
+            "config.yaml",
+            """\
+wake_words:
+  - word: alexa
+actions_file: actions.yaml
+""",
+        )
+        from alexa_custom.config import load_config
+
+        cfg = load_config(p)  # should not raise
+        assert len(cfg.wake_words[0].triggers) == 0
+
+    def test_missing_actions_file_logs_warning(self, tmp_path, caplog):
+        p = write_file(
+            tmp_path,
+            "config.yaml",
+            """\
+wake_words:
+  - word: alexa
+actions_file: nonexistent.yaml
+""",
+        )
+        from alexa_custom.config import load_config
+        import logging
+
+        with caplog.at_level(logging.WARNING, logger="alexa_custom.config"):
+            cfg = load_config(p)
+        assert cfg is not None
+        assert any("nonexistent" in r.message for r in caplog.records)
+
+
+class TestActionsFileHotReload:
+    @pytest.mark.asyncio
+    async def test_actions_yaml_change_triggers_reload(self, tmp_path):
+        cfg_path = tmp_path / "config.yaml"
+        af_path = tmp_path / "actions.yaml"
+        af_path.write_text(
+            "triggers:\n  - phrase: old\n    actions:\n      - type: log\n        message: x\n"
+        )
+        cfg_path.write_text(
+            "wake_words:\n  - word: alexa\nactions_file: actions.yaml\n"
+        )
+        from alexa_custom.config import load_config
+        from alexa_custom.config_manager import ConfigManager
+        import asyncio
+        import time
+
+        config = load_config(cfg_path)
+        mgr = ConfigManager(config)
+
+        received = []
+        mgr.register_reload_callback(
+            lambda c: received.append([t.phrase for t in c.triggers])
+        )
+
+        mgr.start_watcher(cfg_path, interval=0.05)
+        await asyncio.sleep(0.05)
+
+        # Modify only actions.yaml
+        af_path.write_text(
+            "triggers:\n  - phrase: new_learned\n    actions:\n      - type: log\n        message: x\n"
+        )
+        time.sleep(0.01)
+
+        await asyncio.sleep(0.3)
+        mgr.stop_watcher()
+        await asyncio.sleep(0.05)
+
+        assert received and "new_learned" in received[-1]

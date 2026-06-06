@@ -347,7 +347,54 @@ def _approx_wake_match(
 
 
 def _resolve_triggers(group: WakeWordGroup, fallback: list[Trigger]) -> list[Trigger]:
-    return group.triggers if group.triggers else fallback
+    # Per-group triggers take priority (listed first for scoring), global triggers
+    # are always appended so they work regardless of which wake word is active.
+    return group.triggers + fallback
+
+
+def _llm_fallback(
+    transcript: str,
+    config: ActionsConfig,
+    listen_fn: Callable,
+    dispatch_loop: asyncio.AbstractEventLoop,
+    wake_group: WakeWordGroup,
+    on_stt_event: Callable[[str, dict], None] | None = None,
+) -> None:
+    from alexa_custom.llm import _UNREACHABLE, get_engine, is_exit_phrase
+    from alexa_custom.tts import get_engine as get_tts
+    from alexa_custom.audio import play_tone
+
+    lang = wake_group.lang
+    llm_cfg = config.llm
+
+    async def _run() -> None:
+        await asyncio.to_thread(play_tone, "info")
+        engine = get_engine(llm_cfg, lang)
+
+        current = transcript
+        while current:
+            if is_exit_phrase(current, llm_cfg.exit_phrases):
+                engine.reset()
+                return
+            if on_stt_event:
+                on_stt_event("llm_thinking", {"transcript": current})
+            reply = await engine.reply(current)
+            if reply == _UNREACHABLE:
+                if on_stt_event:
+                    on_stt_event("llm_unreachable", {})
+                await asyncio.to_thread(
+                    get_tts().say, "agente remoto non raggiungibile", lang
+                )
+                return
+            if on_stt_event:
+                on_stt_event("llm_reply", {"transcript": current, "reply": reply})
+            await asyncio.to_thread(get_tts().say, reply, lang)
+            current = (await listen_fn(10.0)).strip()
+
+    try:
+        dispatch_loop.run_until_complete(_run())
+    except Exception as e:
+        logger.error("LLM fallback error: %s", e)
 
 
 def _rms_level(data: bytes) -> float:
@@ -816,6 +863,8 @@ def _single_stage_loop(
         except Exception as e:
             logger.debug(f"Wake beep failed: {e}")
 
+        _dloop = dispatch_loop or asyncio.new_event_loop()
+
         if not command:
             if on_stt_event:
                 on_stt_event("nomatch", {"transcript": ""})
@@ -827,7 +876,14 @@ def _single_stage_loop(
         if trigger is None:
             if on_stt_event:
                 on_stt_event("nomatch", {"transcript": command})
-            _play_timeout()
+            if config.llm and config.llm.fallback_on_no_match:
+                _llm_fallback(
+                    command, config, _listen_fn, _dloop, wake_group, on_stt_event
+                )
+                _drain_pipe(proc)
+                backend.reset()
+            else:
+                _play_timeout()
             continue
 
         if on_stt_event:
@@ -835,7 +891,6 @@ def _single_stage_loop(
 
         connected = livekit_connected_flag.is_set()
         try:
-            _dloop = dispatch_loop or asyncio.new_event_loop()
             _dloop.run_until_complete(
                 dispatch(
                     trigger,
@@ -844,6 +899,8 @@ def _single_stage_loop(
                     livekit_connected=connected,
                     listen_fn=_listen_fn,
                     on_stt_event=on_stt_event,
+                    actions_config=config,
+                    wake_word=wake_group.word,
                 )
             )
             # Drop pipe backlog accumulated during dispatch (TTS/ask audio)
@@ -1170,10 +1227,38 @@ def _wake_detected(
     )
     logger.info(f"Command transcript: '{transcript}'")
 
+    # Define _listen_fn early so it can be reused by both dispatch and LLM fallback
+    async def _listen_fn(
+        timeout: float,
+        flush_ms: int = 0,
+        phrases: list[str] | None = None,
+        start_after_playback: bool = False,
+    ) -> str:
+        if on_stt_event:
+            on_stt_event("wake", {"word": "(reply)", "timeout": timeout})
+        return await asyncio.to_thread(
+            capture_transcript,
+            proc,
+            channels,
+            backend,
+            timeout,
+            stop_event,
+            on_stt_event,
+            flush_ms=flush_ms,
+            phrases=phrases,
+            start_after_playback=start_after_playback,
+            vad_silence_ms=vad_silence_ms,
+        )
+
+    _dloop = dispatch_loop or asyncio.new_event_loop()
+
     if not transcript:
         if on_stt_event:
             on_stt_event("nomatch", {"transcript": ""})
-        _play_timeout()
+        if config.llm and config.llm.fallback_on_no_match:
+            pass  # nothing to say to LLM without a transcript
+        else:
+            _play_timeout()
         return
 
     if mqtt_client:
@@ -1191,39 +1276,22 @@ def _wake_detected(
     if trigger is None:
         if on_stt_event:
             on_stt_event("nomatch", {"transcript": transcript})
-        _play_timeout()
+        if config.llm and config.llm.fallback_on_no_match:
+            _llm_fallback(
+                transcript, config, _listen_fn, _dloop, wake_group, on_stt_event
+            )
+            _drain_pipe(proc)
+            backend.reset()
+        else:
+            _play_timeout()
         return
 
     if on_stt_event:
         on_stt_event("matched", {"transcript": transcript, "trigger": trigger.phrase})
 
-    async def _listen_fn(
-        timeout: float,
-        flush_ms: int = 0,
-        phrases: list[str] | None = None,
-        start_after_playback: bool = False,
-    ) -> str:
-        # Emit event for UI to show we are listening for a reply
-        if on_stt_event:
-            on_stt_event("wake", {"word": "(reply)", "timeout": timeout})
-        return await asyncio.to_thread(
-            capture_transcript,
-            proc,
-            channels,
-            backend,
-            timeout,
-            stop_event,
-            on_stt_event,
-            flush_ms=flush_ms,
-            phrases=phrases,
-            start_after_playback=start_after_playback,
-            vad_silence_ms=vad_silence_ms,
-        )
-
     # Dispatch using the persistent loop (we're in a daemon thread, not async context)
     connected = livekit_connected_flag.is_set()
     try:
-        _dloop = dispatch_loop or asyncio.new_event_loop()
         _dloop.run_until_complete(
             dispatch(
                 trigger,
@@ -1232,6 +1300,8 @@ def _wake_detected(
                 livekit_connected=connected,
                 listen_fn=_listen_fn,
                 on_stt_event=on_stt_event,
+                actions_config=config,
+                wake_word=wake_group.word,
             )
         )
     except Exception as e:

@@ -126,23 +126,42 @@ class ConfigManager:
             pass
 
     async def _poll_loop(self, path: Path, interval: float) -> None:
-        try:
-            last_mtime = path.stat().st_mtime if path.exists() else None
-        except OSError:
-            last_mtime = None
+        def _mtime(p: Path) -> float | None:
+            try:
+                return p.stat().st_mtime if p.exists() else None
+            except OSError:
+                return None
+
+        last_mtime = _mtime(path)
+
+        # Also watch actions.yaml when it exists alongside config or is configured
+        actions_path = path.parent / "actions.yaml"
+        last_actions_mtime = _mtime(actions_path)
 
         try:
             while True:
                 await asyncio.sleep(interval)
-                try:
-                    mtime = path.stat().st_mtime if path.exists() else None
-                except OSError:
-                    mtime = None
 
-                if mtime != last_mtime:
+                # Re-resolve actions_path from current config in case actions_file changed
+                if self.config and self.config.actions_file:
+                    ap = Path(self.config.actions_file)
+                    if not ap.is_absolute():
+                        ap = path.parent / ap
+                    actions_path = ap
+
+                mtime = _mtime(path)
+                actions_mtime = _mtime(actions_path)
+
+                config_changed = mtime != last_mtime
+                actions_changed = actions_mtime != last_actions_mtime
+                if config_changed or actions_changed:
                     last_mtime = mtime
+                    last_actions_mtime = actions_mtime
                     if mtime is not None:
-                        logger.info("Config file changed, reloading: %s", path)
+                        if actions_changed and not config_changed:
+                            logger.info("actions.yaml changed, reloading config")
+                        else:
+                            logger.info("Config file changed, reloading: %s", path)
                         self._reload(path)
         except asyncio.CancelledError:
             pass

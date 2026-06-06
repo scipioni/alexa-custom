@@ -19,8 +19,8 @@ env:
   # --- Audio devices ---
   # Substring of the PipeWire/ALSA device name, or a sounddevice index.
   # Omit to use system defaults.
-  #INPUT_DEVICE: pipewire
-  #OUTPUT_DEVICE: pipewire
+  INPUT_DEVICE: pipewire
+  OUTPUT_DEVICE: pipewire
 
   # --- WebRTC microphone processing (all default to 1 = enabled) ---
   #MIC_AGC: 1                 # Automatic Gain Control
@@ -68,7 +68,7 @@ env:
 # ---------------------------------------------------------------------------
 # web: — browser dashboard (optional)
 # ---------------------------------------------------------------------------
-# Start with: alexa-client --web [--web-port PORT]
+# Dashboard is served automatically. Use --web-port to change the port.
 # The dashboard is served at http://<host>:PORT/ — no authentication,
 # bind to LAN interfaces only.
 
@@ -136,16 +136,56 @@ env:
 #config_poll_interval: 2
 
 # ---------------------------------------------------------------------------
+# actions_file: — external trigger/action definitions (agent-writable)
+# ---------------------------------------------------------------------------
+# Move all triggers and wake-word-specific trigger lists into actions.yaml.
+# The learning agent appends new commands there automatically.
+# Omit this key to keep triggers inline in this file (backward-compatible).
+
+actions_file: actions.yaml
+
+# ---------------------------------------------------------------------------
+# llm: — Ollama-backed free-form voice AI (optional)
+# ---------------------------------------------------------------------------
+# When configured, unmatched commands are routed to the Ollama conversation
+# engine instead of playing the timeout beep.
+# Requires a running Ollama instance accessible at the configured host URL.
+
+#llm:
+#  backend: ollama
+#  host: http://192.168.1.10:11434   # Ollama server URL (remote only)
+#  model: ssfdre38/gemma4-nano        # model name as shown by 'ollama list'
+#  context_turns: 10                 # exchange pairs kept in conversation history
+#  context_window_secs: 60           # seconds of inactivity before history resets
+#  fallback_on_no_match: true        # route unmatched commands to LLM
+#  learn_commands: true              # enable llm_learn action type
+#  request_timeout: 10.0             # HTTP request timeout in seconds
+#  # system_prompt: null             # optional override for the default system prompt
+#  exit_phrases:                     # phrases that immediately end the conversation
+#    - stop                          # (replaces defaults when set)
+#    - basta
+#    - esci
+#    - fine
+#    - fermati
+#    - chiudi
+#    - exit
+#    - quit
+#    - annulla
+#    - cancella
+
+# ---------------------------------------------------------------------------
 # Wake words
 # ---------------------------------------------------------------------------
-# Each group has a primary word, optional aliases (alternative phrases that
-# map to the same group), and an optional per-group trigger list.
+# Each group has a primary word, optional aliases, an optional lang tag for
+# the LLM conversation language, and an optional per-group trigger list.
 # If a group defines no triggers, the global top-level triggers list is used.
+# With actions_file configured, triggers can also live in actions.yaml.
 
 wake_words:
   - word: "galileo"
     aliases:
       - "ehi galileo"       # alternative recognition phrase for the same group
+    lang: "it-IT"           # BCP-47 language used by the LLM conversation engine
     triggers:               # commands active only after this wake word
       - phrase: "chiama stefano"
         actions:
@@ -172,6 +212,7 @@ wake_words:
 
   # This group has no per-group triggers — falls back to the global list below.
   - word: "assistente"
+    lang: "it-IT"
 
 # ---------------------------------------------------------------------------
 # Recognition settings
