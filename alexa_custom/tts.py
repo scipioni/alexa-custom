@@ -187,7 +187,9 @@ class PiperTTS(TTSBackend):
                         proc.stdin.write(bytes(n_preroll * 2))  # type: ignore[union-attr]
 
                 assert proc.stdin is not None
-                proc.stdin.write(np.asarray(arr, dtype=np.int16).tobytes())
+                # Digitally scale the audio chunk by the global output volume
+                scaled_arr = (np.asarray(arr, dtype=np.int16) * _audio_module._OUTPUT_VOLUME).astype(np.int16)
+                proc.stdin.write(scaled_arr.tobytes())
 
             if proc is None:
                 return
