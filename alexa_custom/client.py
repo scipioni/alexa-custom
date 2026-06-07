@@ -74,8 +74,9 @@ class PaplayAudioOutput:
     SAMPLE_RATE = 48000
     CHANNELS = 1
 
-    def __init__(self) -> None:
+    def __init__(self, on_frame_peak: Callable[[float], None] | None = None) -> None:
         self._tasks: list[asyncio.Task] = []
+        self._on_frame_peak = on_frame_peak
 
     async def start(self) -> None:
         pass
@@ -140,6 +141,11 @@ class PaplayAudioOutput:
                         )
                     break
                 proc.stdin.write(bytes(event.frame.data))
+                if self._on_frame_peak is not None:
+                    samples = np.frombuffer(event.frame.data, dtype=np.int16)
+                    if len(samples) > 0:
+                        peak = float(np.max(np.abs(samples.astype(np.int32)))) / 32768.0
+                        self._on_frame_peak(peak)
         except asyncio.CancelledError:
             pass
         finally:
@@ -313,11 +319,13 @@ class LiveKitSessionManager:
         devices: MediaDevices,
         pw_device: int,
         on_event: Callable[[str, dict], None] | None = None,
+        empty_room_timeout: int = 0,
     ):
         self.mic = mic
         self.devices = devices
         self.pw_device = pw_device
         self.on_event = on_event
+        self._empty_room_timeout = empty_room_timeout
         self.room = Room()
         self.disconnected = asyncio.Event()
         self.call_connected = False
@@ -340,9 +348,6 @@ class LiveKitSessionManager:
                 self.emit(
                     "track_subscribed",
                     {"identity": participant.identity, "track_sid": track.sid},
-                )
-                self.tap_tasks.append(
-                    asyncio.create_task(self._tap_remote(participant.identity, track))
                 )
 
                 async def _add():
@@ -396,13 +401,8 @@ class LiveKitSessionManager:
             if self.disconnected.is_set() or stop_event.is_set():
                 break
 
-    async def _tap_remote(self, identity: str, track):
-        stream = AudioStream(track)
-        self.subscribed_tracks[identity] = stream
-        async for event in stream:
-            self.volumes["spk"] = max(self.volumes["spk"], calculate_peak(event.frame))
-            if identity not in self.subscribed_tracks or self.disconnected.is_set():
-                break
+    def _update_spk(self, peak: float) -> None:
+        self.volumes["spk"] = max(self.volumes["spk"], peak)
 
     async def _volume_emitter(self, stop_event: asyncio.Event):
         while not self.disconnected.is_set() and not stop_event.is_set():
@@ -439,9 +439,7 @@ class LiveKitSessionManager:
 
     async def run(self, stop_event: asyncio.Event):
         """Connect to one LiveKit session; return when disconnected or stop_event fires."""
-        empty_room_timeout = (
-            0.0  # not configurable at session level; set via config.system
-        )
+        empty_room_timeout = self._empty_room_timeout
 
         if self.pw_device is None:
             # PortAudio was built ALSA-only on this board and can't open any output.
@@ -449,7 +447,7 @@ class LiveKitSessionManager:
             logger.debug(
                 "Using PaplayAudioOutput for remote audio (PortAudio unavailable)"
             )
-            self.player = PaplayAudioOutput()
+            self.player = PaplayAudioOutput(on_frame_peak=self._update_spk)
         else:
             self.player = self.devices.open_output(output_device=self.pw_device)
         await self.player.start()
@@ -525,9 +523,12 @@ async def run_session(
     pw_device: int,
     stop_event: asyncio.Event,
     on_event: Callable[[str, dict], None] | None = None,
+    empty_room_timeout: int = 0,
 ):
     """Connect to one LiveKit session; return when disconnected or stop_event fires."""
-    manager = LiveKitSessionManager(mic, devices, pw_device, on_event)
+    manager = LiveKitSessionManager(
+        mic, devices, pw_device, on_event, empty_room_timeout
+    )
     await manager.run(stop_event)
 
 
@@ -715,6 +716,9 @@ async def _async_main(
 
             _wrapped_on_event("reconnecting" if _ever_connected else "connecting", {})
             connected_this_session = False
+            _empty_room_timeout = (
+                actions_config.system.empty_room_timeout if actions_config else 0
+            )
 
             def _on_event_interceptor(event: str, data: dict):
                 nonlocal connected_this_session, _ever_connected
@@ -747,6 +751,7 @@ async def _async_main(
                     pw_device,
                     stop_event,
                     on_event=_on_event_interceptor,
+                    empty_room_timeout=_empty_room_timeout,
                 )
             except Exception as e:
                 logger.error(f"Session error: {e}")
@@ -867,8 +872,8 @@ def main() -> None:
 
     from alexa_custom.config import load_secrets
 
-    load_secrets("conf/secrets.yaml")
-    config = load_config("conf/config.yaml")
+    secrets = load_secrets("conf/secrets.yaml")
+    config = load_config("conf/config.yaml", secrets=secrets)
 
     ensure_setup()
 
@@ -910,6 +915,7 @@ def main() -> None:
 
         connect_trigger = threading.Event()
         livekit_connected_flag = threading.Event()
+        stt_ready_event = threading.Event()
 
         init_engine(
             backend_type=config.tts.backend,
@@ -928,6 +934,7 @@ def main() -> None:
             "telegram_client": TelegramClient(),
             "connect_fn": _livekit_connect_fn_web,
             "connected_flag": livekit_connected_flag,
+            "stt_ready_event": stt_ready_event,
         }
 
         if config.llm is not None:
@@ -951,6 +958,7 @@ def main() -> None:
             connect_trigger=connect_trigger,
             livekit_connected_flag=livekit_connected_flag,
             actions_config=config,
+            stt_ready_event=stt_params["stt_ready_event"] if stt_params else None,
         )
 
     def _web_shutdown_callback():

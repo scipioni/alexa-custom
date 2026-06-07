@@ -349,7 +349,11 @@ def _parse_wake_word_groups(raw_groups: list[Any], source: str) -> list[WakeWord
         group_id = str(raw_id).strip() if raw_id else word
         groups.append(
             WakeWordGroup(
-                word=word, aliases=aliases, triggers=group_triggers, lang=lang, id=group_id
+                word=word,
+                aliases=aliases,
+                triggers=group_triggers,
+                lang=lang,
+                id=group_id,
             )
         )
 
@@ -730,7 +734,10 @@ def load_secrets(path: str | Path = "conf/secrets.yaml") -> SecretsConfig:
 # ---------------------------------------------------------------------------
 
 
-def load_config(path: str | Path = "conf/config.yaml") -> ActionsConfig | None:
+def load_config(
+    path: str | Path = "conf/config.yaml",
+    secrets: "SecretsConfig | None" = None,
+) -> "ActionsConfig | None":
     """Load conf/config.yaml and merge action files from conf/actions/."""
     p = Path(path)
     if not p.exists():
@@ -751,7 +758,7 @@ def load_config(path: str | Path = "conf/config.yaml") -> ActionsConfig | None:
             "move credentials to conf/secrets.yaml"
         )
 
-    return _parse_actions_config(raw, source=str(p))
+    return _parse_actions_config(raw, source=str(p), secrets=secrets)
 
 
 def _parse_actions_config(
