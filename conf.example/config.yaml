@@ -20,14 +20,14 @@ wake_words:
 # ---------------------------------------------------------------------------
 recognition:
   mode: two-stage         # two-stage | single-stage
-  command_timeout: 3.0    # seconds to listen after wake word (two-stage only)
+  command_timeout: 2.5    # seconds to listen after wake word (two-stage only)
   wake_tone: wake         # tone on wake: wake | startup | success | error | info | warning | none
 
 # ---------------------------------------------------------------------------
 # STT — speech-to-text
 # ---------------------------------------------------------------------------
 stt:
-  vad_silence_ms: 700     # idle ms after last speech before command window closes
+  vad_silence_ms: 500     # idle ms after last speech before command window closes
 
   stage1:                  # continuous wake-word detection (low CPU)
     backend: vosk          # vosk | sherpa-onnx
@@ -35,7 +35,7 @@ stt:
     confidence: 0.65       # Vosk minimum confidence (0.0–1.0) to accept wake word
     vad_silence_ms: 500    # stage-1 force-finalize after this many ms of silence
     rms_threshold: 0.02    # stage-1 minimum RMS energy considered speech
-    min_speech_ms: 300     # minimum sustained speech before silence timer starts
+    min_speech_ms: 200     # minimum sustained speech before silence timer starts
 
   stage2:                  # command recognition after wake
     backend: vosk          # can differ from stage1 for higher accuracy
@@ -48,13 +48,13 @@ stt:
 tts:
   backend: piper           # piper | pico
   voice: it_IT-paola-medium  # Piper voice name (run 'alexa-setup --piper-voice <name>')
-  preroll_ms: 400          # silence prepended to TTS audio (covers PipeWire cold-start)
+  preroll_ms: 300          # silence prepended to TTS audio (covers PipeWire cold-start)
 
 # ---------------------------------------------------------------------------
 # Audio hardware
 # ---------------------------------------------------------------------------
 audio:
-  card_name: NewPie        # substring to identify audio card in PipeWire/ALSA
+  #card_name: NewPie        # substring to identify audio card in PipeWire/ALSA
   input_device: pipewire   # PipeWire source name substring, or 'pipewire' for default
   output_device: pipewire  # PipeWire sink name substring, or 'pipewire' for default
   output_volume: 0.5       # speaker volume 0.0–1.0 (set via wpctl, persisted by WirePlumber)

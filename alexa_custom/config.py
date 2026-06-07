@@ -93,7 +93,7 @@ class STTStage1Config:
     confidence: float = 0.65
     vad_silence_ms: int = 500
     rms_threshold: float = 0.02
-    min_speech_ms: int = 300
+    min_speech_ms: int = 200
 
 
 @dataclass
@@ -104,7 +104,7 @@ class STTStage2Config:
 
 @dataclass
 class STTConfig:
-    vad_silence_ms: int = 700
+    vad_silence_ms: int = 500
     stage1: STTStage1Config = field(default_factory=STTStage1Config)
     stage2: STTStage2Config = field(default_factory=STTStage2Config)
 
@@ -113,7 +113,7 @@ class STTConfig:
 class TTSConfig:
     backend: str = "piper"
     voice: str = "it_IT-paola-medium"
-    preroll_ms: int = 400
+    preroll_ms: int = 300
 
 
 _VALID_MODES = {"two-stage", "single-stage"}
@@ -122,7 +122,7 @@ _VALID_MODES = {"two-stage", "single-stage"}
 @dataclass
 class RecognitionConfig:
     mode: str = "two-stage"
-    command_timeout: float = 3.0
+    command_timeout: float = 2.5
     wake_tone: str = "wake"
 
 

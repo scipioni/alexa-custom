@@ -46,7 +46,7 @@ _STAGE1_RMS_THRESHOLD = float(os.environ.get("STT_STAGE1_RMS_THRESHOLD", "0.02")
 # Minimum sustained speech (ms above threshold) required before the silence
 # timer can fire.  Prevents brief background noise bursts from prematurely
 # finalizing sherpa's stream and discarding a partial wake word.
-_STAGE1_MIN_SPEECH_MS = int(os.environ.get("STT_STAGE1_MIN_SPEECH_MS", "300"))
+_STAGE1_MIN_SPEECH_MS = int(os.environ.get("STT_STAGE1_MIN_SPEECH_MS", "200"))
 
 
 class STTBackend(ABC):
@@ -198,7 +198,7 @@ def get_stt_backend(cfg: STTStage1Config | STTStage2Config) -> STTBackend:
 # Once we have detected any speech, return as soon as the recognizer has been
 # idle (no new partial / no new final) for this many ms. Trims 1-4s off every
 # reply window vs. waiting for the full `timeout`. Override via env.
-_VAD_SILENCE_MS = int(os.environ.get("STT_VAD_SILENCE_MS", "700"))
+_VAD_SILENCE_MS = int(os.environ.get("STT_VAD_SILENCE_MS", "500"))
 
 
 def normalize_text(text: str) -> str:
@@ -971,6 +971,7 @@ def _recognition_loop(
 ) -> None:
     _eff_stage1_vad_ms = config.stt.stage1.vad_silence_ms
     _eff_stage1_rms = config.stt.stage1.rms_threshold
+    _eff_stage1_min_speech_ms = config.stt.stage1.min_speech_ms
     _eff_vad_ms = config.stt.vad_silence_ms
 
     alias_map = _build_alias_map(config.wake_words)
@@ -1156,7 +1157,7 @@ def _recognition_loop(
                 stage1_speech_ms += chunk_ms
 
             vad_triggered = (
-                stage1_speech_ms >= _STAGE1_MIN_SPEECH_MS
+                stage1_speech_ms >= _eff_stage1_min_speech_ms
                 and stage1_last_speech_t > 0
                 and (time.monotonic() - stage1_last_speech_t) * 1000
                 >= _eff_stage1_vad_ms
