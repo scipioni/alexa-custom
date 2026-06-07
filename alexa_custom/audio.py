@@ -787,6 +787,9 @@ def play_tone(name: str):
         ),
         "wake": lambda: np.concatenate(
             [
+                _gap(
+                    0.5
+                ),  # pipeline warm-up — first tone after idle is silent otherwise
                 _generate_note(440.00, 0.10, volume=0.6),  # A4
                 _gap(0.02),
                 _generate_note(554.37, 0.15, volume=0.6),  # C#5
@@ -794,6 +797,7 @@ def play_tone(name: str):
         ),
         "success": lambda: np.concatenate(
             [
+                _gap(0.5),
                 _generate_note(783.99, 0.10),  # G5
                 _gap(0.05),
                 _generate_note(1046.50, 0.20),  # C6
@@ -801,14 +805,16 @@ def play_tone(name: str):
         ),
         "error": lambda: np.concatenate(
             [
+                _gap(0.5),
                 _generate_note(261.63, 0.15, volume=0.6),  # C4
                 _gap(0.05),
                 _generate_note(233.08, 0.30, volume=0.6),  # Bb3 (dissonant)
             ]
         ),
-        "info": lambda: _generate_note(880.00, 0.15),  # A5
+        "info": lambda: np.concatenate([_gap(0.5), _generate_note(880.00, 0.15)]),  # A5
         "warning": lambda: np.concatenate(
             [
+                _gap(0.5),
                 _generate_note(1318.51, 0.10),  # E6
                 _gap(0.05),
                 _generate_note(1046.50, 0.10),  # C6
