@@ -400,7 +400,7 @@ def _llm_fallback(
                 return
             if on_stt_event:
                 on_stt_event("llm_reply", {"transcript": current, "reply": reply})
-            current = (await listen_fn(10.0)).strip()
+            current = (await listen_fn(10.0, flush_ms=300)).strip()
 
     try:
         dispatch_loop.run_until_complete(_run())
