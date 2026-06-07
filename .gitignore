@@ -5,5 +5,4 @@ __pycache__/
 .venv/
 *.egg-info/
 models/
-actions.yaml
-conf/secrets.yaml
+/conf
