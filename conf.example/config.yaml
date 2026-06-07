@@ -1,0 +1,119 @@
+# conf/config.yaml.example — all supported configuration keys with comments
+#
+# Copy to conf/config.yaml and edit as needed.
+# Credentials (LiveKit, Telegram, LLM, MQTT passwords) go in conf/secrets.yaml.
+# This file is hot-reloaded every ~system.config_poll_interval seconds.
+
+# ---------------------------------------------------------------------------
+# Wake words (required)
+# Each group listens for its 'word' and optional 'aliases'.
+# Per-group triggers (wake_triggers in action files) override the global list.
+# ---------------------------------------------------------------------------
+wake_words:
+  - word: "galileo"
+    # aliases: ["ehi galileo", "hey galileo"]
+    lang: "it-IT"
+  - word: "assistente"
+
+# ---------------------------------------------------------------------------
+# Recognition
+# ---------------------------------------------------------------------------
+recognition:
+  mode: two-stage         # two-stage | single-stage
+  command_timeout: 3.0    # seconds to listen after wake word (two-stage only)
+  wake_tone: wake         # tone on wake: wake | startup | success | error | info | warning | none
+
+# ---------------------------------------------------------------------------
+# STT — speech-to-text
+# ---------------------------------------------------------------------------
+stt:
+  vad_silence_ms: 700     # idle ms after last speech before command window closes
+
+  stage1:                  # continuous wake-word detection (low CPU)
+    backend: vosk          # vosk | sherpa-onnx
+    # model_path: models/it
+    confidence: 0.65       # Vosk minimum confidence (0.0–1.0) to accept wake word
+    vad_silence_ms: 500    # stage-1 force-finalize after this many ms of silence
+    rms_threshold: 0.02    # stage-1 minimum RMS energy considered speech
+    min_speech_ms: 300     # minimum sustained speech before silence timer starts
+
+  stage2:                  # command recognition after wake
+    backend: vosk          # can differ from stage1 for higher accuracy
+    # backend: sherpa-onnx
+    # model_path: models/it/kroko_128l
+
+# ---------------------------------------------------------------------------
+# TTS — text-to-speech
+# ---------------------------------------------------------------------------
+tts:
+  backend: piper           # piper | pico
+  voice: it_IT-paola-medium  # Piper voice name (run 'alexa-setup --piper-voice <name>')
+  preroll_ms: 400          # silence prepended to TTS audio (covers PipeWire cold-start)
+
+# ---------------------------------------------------------------------------
+# Audio hardware
+# ---------------------------------------------------------------------------
+audio:
+  card_name: NewPie        # substring to identify audio card in PipeWire/ALSA
+  input_device: pipewire   # PipeWire source name substring, or 'pipewire' for default
+  output_device: pipewire  # PipeWire sink name substring, or 'pipewire' for default
+  output_volume: 0.5       # speaker volume 0.0–1.0 (set via wpctl, persisted by WirePlumber)
+  input_gain: 1.0          # microphone gain multiplier (values > 1.0 boost mic)
+  mic_gain: 300            # ALSA mic gain percent used by 'task audio:setup'
+  post_playback_ms: 100    # STT gate hold after playback ends (lets echo decay)
+  tone_preroll_ms: 300     # silence before tones/beeps (covers PipeWire cold-start)
+  sample_rates:
+    usb: 48000
+    bluetooth: 16000
+    internal: 48000
+  webrtc:                  # LiveKit WebRTC microphone processing (all default to true)
+    agc: true              # Automatic Gain Control
+    aec: true              # Acoustic Echo Cancellation
+    noise_suppression: true
+    high_pass_filter: true
+
+# ---------------------------------------------------------------------------
+# LLM (Ollama)
+# ---------------------------------------------------------------------------
+llm:
+  backend: ollama
+  # host is set in conf/secrets.yaml as 'llm_host'
+  model: ssfdre38/gemma4-nano   # model name as shown by 'ollama list'
+  context_turns: 10             # conversation pairs kept in history
+  context_window_secs: 60       # inactivity seconds before history resets
+  fallback_on_no_match: false   # route unmatched commands to LLM
+  learn_commands: true          # enable llm_learn action type
+  request_timeout: 60.0         # HTTP request timeout
+  # system_prompt: null         # optional override for the default system prompt
+
+# ---------------------------------------------------------------------------
+# MQTT / Home Assistant
+# ---------------------------------------------------------------------------
+# Omit this section to disable MQTT entirely.
+# mqtt:
+#   host: 127.0.0.1        # broker hostname; required to enable MQTT
+#   port: 1883
+#   topic_prefix: alexa
+#   node_id: living_room   # defaults to system hostname
+#   queue_max: 200         # max queued outgoing messages while broker is unreachable
+
+# ---------------------------------------------------------------------------
+# Web dashboard
+# ---------------------------------------------------------------------------
+# web:
+#   port: 8080
+
+# ---------------------------------------------------------------------------
+# Action files
+# ---------------------------------------------------------------------------
+actions:
+  dir: conf/actions                         # directory auto-discovered for .yaml files
+  learn_file: conf/actions/learned.yaml    # file the llm_learn action appends to
+
+# ---------------------------------------------------------------------------
+# System tuning
+# ---------------------------------------------------------------------------
+# system:
+#   reconnect_delay: 5         # seconds between LiveKit reconnect attempts
+#   config_poll_interval: 2    # hot-reload polling interval in seconds
+#   empty_room_timeout: 0      # disconnect after N seconds with no participants (0 = never)
