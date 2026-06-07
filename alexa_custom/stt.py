@@ -400,7 +400,7 @@ def _llm_fallback(
                 return
             if on_stt_event:
                 on_stt_event("llm_reply", {"transcript": current, "reply": reply})
-            current = (await listen_fn(10.0)).strip()
+            current = (await listen_fn(10.0, flush_ms=300)).strip()
 
     try:
         dispatch_loop.run_until_complete(_run())
@@ -673,7 +673,13 @@ def capture_transcript(
     # parec emits s16le -> 2 bytes per sample.
     if flush_ms > 0:
         bytes_to_flush = int(16000 * channels * 2 * (flush_ms / 1000))
-        proc.stdout.read(bytes_to_flush)
+        while bytes_to_flush > 0:
+            chunk = _read_with_timeout(
+                proc.stdout, min(_CHUNK * channels, bytes_to_flush), 0.05
+            )
+            if not chunk:
+                break
+            bytes_to_flush -= len(chunk)
 
     grammar = _phrases_to_grammar(phrases) if phrases else None
     if isinstance(backend, VoskSTT):
@@ -982,10 +988,8 @@ def _recognition_loop(
             vosk_model, 16000, _grammar_json(config.wake_words)
         )
         stage1.SetWords(True)
-        display_rec = vosk.KaldiRecognizer(vosk_model, 16000) if on_stt_event else None
     else:
         stage1 = None
-        display_rec = None
     cooldown_until = 0.0
     was_gated = False
     was_playing = False
@@ -1023,8 +1027,6 @@ def _recognition_loop(
             _drain_pipe(proc)
             if is_vosk:
                 stage1.Reset()
-                if display_rec is not None:
-                    display_rec.Reset()
             else:
                 stage1_backend.reset()
                 stage1_last_speech_t = 0.0
@@ -1070,8 +1072,6 @@ def _recognition_loop(
         if time.monotonic() < cooldown_until:
             if is_vosk:
                 stage1.Reset()
-                if display_rec:
-                    display_rec.Reset()
             else:
                 stage1_backend.reset()
                 stage1_last_speech_t = 0.0
@@ -1079,13 +1079,10 @@ def _recognition_loop(
             continue
 
         if is_vosk:
-            if display_rec is not None and rms > _eff_stage1_rms:
-                display_rec.AcceptWaveform(data)
-                partial = (
-                    json.loads(display_rec.PartialResult()).get("partial", "").strip()
-                )
+            if on_stt_event:
+                partial = json.loads(stage1.PartialResult()).get("partial", "").strip()
                 if partial:
-                    on_stt_event("transcribing", {"text": partial})  # type: ignore[misc]
+                    on_stt_event("transcribing", {"text": partial})
 
             if stage1.AcceptWaveform(data):
                 result = json.loads(stage1.Result())
@@ -1121,11 +1118,6 @@ def _recognition_loop(
                         vosk_model, 16000, _grammar_json(config.wake_words)
                     )
                     stage1.SetWords(True)
-                    display_rec = (
-                        vosk.KaldiRecognizer(vosk_model, 16000)
-                        if on_stt_event
-                        else None
-                    )
                     if on_stt_event:
                         on_stt_event(
                             "listening",
@@ -1144,8 +1136,6 @@ def _recognition_loop(
                             f"two-stage: drained {backlog} backlog bytes after segment"
                         )
                     stage1.Reset()
-                    if display_rec is not None:
-                        display_rec.Reset()
         else:
             # sherpa-onnx: open-vocabulary stage1 with energy VAD for low latency.
             # Track RMS per chunk; after _STAGE1_VAD_SILENCE_MS ms of silence
