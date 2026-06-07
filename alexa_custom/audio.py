@@ -355,6 +355,9 @@ class AudioWatcher(threading.Thread):
         while not self._stop.is_set():
             try:
                 with pulsectl.Pulse("alexa-watcher") as pulse:
+                    # Opening any pulsectl connection causes PipeWire to reset the
+                    # hardware PCM to 0%. Restore immediately so playback is audible.
+                    _restore_hw_pcm()
                     self._check_and_enforce(pulse)
                     pulse.event_mask_set("card", "sink", "source")
                     pulse.event_callback_set(lambda _: None)
