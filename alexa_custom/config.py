@@ -170,6 +170,7 @@ class LLMConfig:
     system_prompt: str | None = None
     request_timeout: float = 60.0
     exit_phrases: list[str] = field(default_factory=lambda: list(_DEFAULT_EXIT_PHRASES))
+    api_key: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -510,8 +511,10 @@ def _parse_llm_config(
     raw_llm: dict, source: str, host_override: str | None = None
 ) -> LLMConfig:
     backend = str(raw_llm.get("backend", ""))
-    if backend != "ollama":
-        raise ConfigError(f"{source}: 'llm.backend' must be 'ollama', got {backend!r}")
+    if backend not in {"ollama", "openai"}:
+        raise ConfigError(
+            f"{source}: 'llm.backend' must be 'ollama' or 'openai', got {backend!r}"
+        )
     host = host_override or raw_llm.get("host")
     if not host or not isinstance(host, str):
         raise ConfigError(
@@ -537,6 +540,7 @@ def _parse_llm_config(
         system_prompt=raw_llm.get("system_prompt") or None,
         request_timeout=float(raw_llm.get("request_timeout", 60.0)),
         exit_phrases=exit_phrases,
+        api_key=str(raw_llm.get("api_key", "")),
     )
 
 
