@@ -1049,8 +1049,9 @@ def _recognition_loop(
                 was_gated = True
             continue
 
+        rms = _rms_level(data)
         if on_stt_event:
-            on_stt_event("level", {"mic": _rms_level(data)})
+            on_stt_event("level", {"mic": rms})
 
         if was_gated:
             logger.info("STT resumed (call ended)")
@@ -1078,7 +1079,7 @@ def _recognition_loop(
             continue
 
         if is_vosk:
-            if display_rec is not None:
+            if display_rec is not None and rms > _eff_stage1_rms:
                 display_rec.AcceptWaveform(data)
                 partial = (
                     json.loads(display_rec.PartialResult()).get("partial", "").strip()
