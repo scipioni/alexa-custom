@@ -15,6 +15,8 @@ from alexa_custom.llm import (
     OllamaClient,
     OllamaUnreachable,
     _UNREACHABLE,
+    _split_sentences,
+    get_engine,
     normalize_confirm,
 )
 
@@ -61,6 +63,79 @@ def _failing_stream(exc):
 
 async def _noop_say(text: str) -> None:
     pass
+
+
+# ---------------------------------------------------------------------------
+# _split_sentences tests
+# ---------------------------------------------------------------------------
+
+
+class TestSplitSentences:
+    def test_basic_split_on_period(self):
+        sentences, rem = _split_sentences("Ciao. Come stai?")
+        assert sentences == ["Ciao.", "Come stai?"]
+        assert rem == ""
+
+    def test_period_alone_splits(self):
+        sentences, rem = _split_sentences("Ciao.")
+        assert sentences == ["Ciao."]
+        assert rem == ""
+
+    def test_split_on_exclamation(self):
+        sentences, rem = _split_sentences("Benvenuto! Prego.")
+        assert sentences == ["Benvenuto!", "Prego."]
+        assert rem == ""
+
+    def test_no_split_on_decimal_number(self):
+        # decimal period must not split the sentence; final period ends it normally
+        sentences, rem = _split_sentences("La temperatura è 10.5 gradi.")
+        assert sentences == ["La temperatura è 10.5 gradi."]
+        assert rem == ""
+
+    def test_no_split_on_lowercase_continuation(self):
+        # period followed by lowercase is treated as mid-sentence (e.g. abbreviation)
+        sentences, rem = _split_sentences("Sto parlando con il dr. stefano.")
+        assert sentences == ["Sto parlando con il dr. stefano."]
+        assert rem == ""
+
+    def test_multiple_sentences(self):
+        sentences, rem = _split_sentences("Prima frase. Seconda frase. Terza")
+        assert len(sentences) == 2
+        assert sentences[0] == "Prima frase."
+        assert sentences[1] == "Seconda frase."
+        assert rem == "Terza"
+
+    def test_remainder_when_no_terminal_punct(self):
+        sentences, rem = _split_sentences("Frase incompleta")
+        assert sentences == []
+        assert rem == "Frase incompleta"
+
+
+# ---------------------------------------------------------------------------
+# get_engine cache key tests
+# ---------------------------------------------------------------------------
+
+
+class TestGetEngineCache:
+    def test_same_config_returns_same_engine(self):
+        cfg = make_llm_config()
+        e1 = get_engine(cfg, "it-IT")
+        e2 = get_engine(cfg, "it-IT")
+        assert e1 is e2
+
+    def test_different_system_prompt_returns_new_engine(self):
+        cfg1 = make_llm_config(system_prompt=None)
+        cfg2 = make_llm_config(system_prompt="Sei un robot.")
+        e1 = get_engine(cfg1, "it-IT")
+        e2 = get_engine(cfg2, "it-IT")
+        assert e1 is not e2
+
+    def test_different_timeout_returns_new_engine(self):
+        cfg1 = make_llm_config(request_timeout=5.0)
+        cfg2 = make_llm_config(request_timeout=30.0)
+        e1 = get_engine(cfg1, "it-IT")
+        e2 = get_engine(cfg2, "it-IT")
+        assert e1 is not e2
 
 
 # ---------------------------------------------------------------------------

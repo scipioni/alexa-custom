@@ -121,6 +121,7 @@ async def dispatch(
     on_stt_event: Callable[[str, dict], None] | None = None,
     actions_config=None,
     wake_word: str | None = None,
+    transcript: str | None = None,
 ) -> None:
     for action in trigger.actions:
         await _run_action(
@@ -133,6 +134,7 @@ async def dispatch(
             on_stt_event,
             actions_config=actions_config,
             wake_word=wake_word,
+            transcript=transcript,
         )
 
 
@@ -327,6 +329,7 @@ async def handle_ask(
                 on_stt_event,
                 actions_config=actions_config,
                 wake_word=wake_word,
+                transcript=transcript,
             )
         elif action.on_else:
             logger.info(f"No reply trigger matched '{transcript}', running on_else")
@@ -365,6 +368,13 @@ async def handle_ask(
                 actions_config=actions_config,
                 wake_word=wake_word,
             )
+    else:
+        logger.info("No transcript received (timeout) and no on_else")
+        if on_stt_event:
+            on_stt_event("nomatch", {"transcript": ""})
+        from alexa_custom.audio import play_timeout_beep
+
+        await asyncio.to_thread(play_timeout_beep)
 
     if mqtt_client:
         await mqtt_client.publish(
@@ -425,6 +435,7 @@ async def handle_llm_chat(
     on_stt_event: Callable[[str, dict], None] | None = None,
     actions_config=None,
     wake_word: str | None = None,
+    transcript: str | None = None,
     **_,
 ) -> None:
     from alexa_custom.llm import _UNREACHABLE, get_engine
@@ -457,31 +468,54 @@ async def handle_llm_chat(
 
     await asyncio.to_thread(play_tone, "info")
 
-    for _ in range(cfg.context_turns):
-        transcript = (await listen_fn(10.0)).strip()
-        if not transcript:
-            break
-        from alexa_custom.llm import is_exit_phrase
+    # Use the command that triggered this action as the first turn so the LLM
+    # has context about what the user said.  Subsequent turns come from listen_fn.
+    _pending = transcript or ""
+    try:
+        for _ in range(cfg.context_turns):
+            if _pending:
+                turn_text = _pending
+                _pending = ""
+            else:
+                if mqtt_client:
+                    await mqtt_client.publish(
+                        f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
+                        "listening",
+                    )
+                turn_text = (await listen_fn(10.0, flush_ms=300)).strip()
+            if not turn_text:
+                break
+            from alexa_custom.llm import is_exit_phrase
 
-        if is_exit_phrase(transcript, cfg.exit_phrases):
-            engine.reset()
-            break
-        if on_stt_event:
-            on_stt_event("llm_thinking", {"transcript": transcript})
-
-        async def _say(text: str) -> None:
-            await asyncio.to_thread(get_tts().say, text, lang)
-
-        reply = await engine.reply_streaming(transcript, _say)
-        if reply == _UNREACHABLE:
+            if is_exit_phrase(turn_text, cfg.exit_phrases):
+                engine.reset()
+                break
             if on_stt_event:
-                on_stt_event("llm_unreachable", {})
-            await asyncio.to_thread(
-                get_tts().say, "agente remoto non raggiungibile", lang
+                on_stt_event("llm_thinking", {"transcript": turn_text})
+            if mqtt_client:
+                await mqtt_client.publish(
+                    f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
+                    "speaking",
+                )
+
+            async def _say(text: str) -> None:
+                await asyncio.to_thread(get_tts().say, text, lang)
+
+            reply = await engine.reply_streaming(turn_text, _say)
+            if reply == _UNREACHABLE:
+                if on_stt_event:
+                    on_stt_event("llm_unreachable", {})
+                await asyncio.to_thread(
+                    get_tts().say, "agente remoto non raggiungibile", lang
+                )
+                break
+            if on_stt_event:
+                on_stt_event("llm_reply", {"transcript": turn_text, "reply": reply})
+    finally:
+        if mqtt_client:
+            await mqtt_client.publish(
+                f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "idle"
             )
-            break
-        if on_stt_event:
-            on_stt_event("llm_reply", {"transcript": transcript, "reply": reply})
 
 
 @registry.register("llm_learn")
@@ -536,6 +570,7 @@ async def _run_action(
     on_stt_event: Callable[[str, dict], None] | None = None,
     actions_config=None,
     wake_word: str | None = None,
+    transcript: str | None = None,
 ) -> None:
     await registry.execute(
         action.type,
@@ -548,4 +583,5 @@ async def _run_action(
         on_stt_event=on_stt_event,
         actions_config=actions_config,
         wake_word=wake_word,
+        transcript=transcript,
     )

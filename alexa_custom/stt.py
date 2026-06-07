@@ -9,9 +9,8 @@ import select
 import subprocess
 import threading
 import time
-import unicodedata
 from abc import ABC, abstractmethod
-from typing import Awaitable, Callable, TYPE_CHECKING
+from typing import Awaitable, Callable, Iterator, TYPE_CHECKING
 
 import numpy as np
 import vosk
@@ -19,9 +18,10 @@ import vosk
 if TYPE_CHECKING:
     from alexa_custom.mqtt import MQTTClient
 
-from alexa_custom.actions import TelegramClient, dispatch, match_trigger
+from alexa_custom.actions import TelegramClient, dispatch, match_trigger, normalize_text
 from alexa_custom.audio import is_playback_active, play_timeout_beep, play_wake_beep
 from alexa_custom.config import (
+    ActionEntry,
     ActionsConfig,
     STTStage1Config,
     STTStage2Config,
@@ -201,18 +201,6 @@ def get_stt_backend(cfg: STTStage1Config | STTStage2Config) -> STTBackend:
 _VAD_SILENCE_MS = int(os.environ.get("STT_VAD_SILENCE_MS", "500"))
 
 
-def normalize_text(text: str) -> str:
-    """Lowercase and remove diacritics (e.g., 'sì' -> 'si')."""
-    if not text:
-        return ""
-    # Normalize to NFD (decomposed) to separate diacritics from base characters
-    nfd = unicodedata.normalize("NFD", text.lower())
-    # Filter out non-spacing marks (Mn category)
-    stripped = "".join(c for c in nfd if not unicodedata.combining(c))
-    # Back to NFC (composed)
-    return unicodedata.normalize("NFC", stripped).strip()
-
-
 def resolve_capture_source(input_spec: str | None = None) -> tuple[str | None, int]:
     """Map audio.input_device value to a PipeWire source name and channel count via pactl."""
     if input_spec is None:
@@ -360,54 +348,6 @@ def _resolve_triggers(group: WakeWordGroup, fallback: list[Trigger]) -> list[Tri
     return group.triggers + fallback
 
 
-def _llm_fallback(
-    transcript: str,
-    config: ActionsConfig,
-    listen_fn: Callable,
-    dispatch_loop: asyncio.AbstractEventLoop,
-    wake_group: WakeWordGroup,
-    on_stt_event: Callable[[str, dict], None] | None = None,
-) -> None:
-    from alexa_custom.llm import _UNREACHABLE, get_engine, is_exit_phrase
-    from alexa_custom.tts import get_engine as get_tts
-    from alexa_custom.audio import play_tone
-
-    lang = wake_group.lang
-    llm_cfg = config.llm
-
-    async def _run() -> None:
-        await asyncio.to_thread(play_tone, "info")
-        engine = get_engine(llm_cfg, lang)
-
-        current = transcript
-        while current:
-            if is_exit_phrase(current, llm_cfg.exit_phrases):
-                engine.reset()
-                return
-            if on_stt_event:
-                on_stt_event("llm_thinking", {"transcript": current})
-
-            async def _say(text: str) -> None:
-                await asyncio.to_thread(get_tts().say, text, lang)
-
-            reply = await engine.reply_streaming(current, _say)
-            if reply == _UNREACHABLE:
-                if on_stt_event:
-                    on_stt_event("llm_unreachable", {})
-                await asyncio.to_thread(
-                    get_tts().say, "agente remoto non raggiungibile", lang
-                )
-                return
-            if on_stt_event:
-                on_stt_event("llm_reply", {"transcript": current, "reply": reply})
-            current = (await listen_fn(10.0, flush_ms=300)).strip()
-
-    try:
-        dispatch_loop.run_until_complete(_run())
-    except Exception as e:
-        logger.error("LLM fallback error: %s", e)
-
-
 def _rms_level(data: bytes) -> float:
     samples = np.frombuffer(data, dtype=np.int16)
     n = len(samples)
@@ -473,6 +413,85 @@ def _downmix_to_mono(data: bytes, channels: int) -> bytes:
     idx = np.argmax(np.abs(samples), axis=1)
     mono = samples[np.arange(len(samples)), idx]
     return mono.tobytes()
+
+
+def _iter_gated_audio(
+    proc: subprocess.Popen,
+    channels: int,
+    stop_event: threading.Event,
+    on_playback_end: Callable[[], None] | None = None,
+    name: str = "stt",
+) -> Iterator[bytes | None]:
+    """Yield downmixed mono chunks; yield None once per playback-end drain.
+
+    Handles parec-exit (returns), read stalls, and playback-gate filtering.
+    After TTS ends, drains the pipe backlog, calls on_playback_end to reset
+    backend state, and yields None so the caller can issue a continue.
+    """
+    was_playing = False
+    _stall_logged = False
+    assert proc.stdout is not None
+    while not stop_event.is_set():
+        raw_data = _read_with_timeout(proc.stdout, _CHUNK * channels, 2.0)
+        if not raw_data:
+            if proc.poll() is not None:
+                logger.warning("%s: parec process exited — restarting capture", name)
+                return
+            if not _stall_logged:
+                logger.debug("%s: read timeout (parec stall?) — waiting", name)
+                _stall_logged = True
+            continue
+        _stall_logged = False
+
+        if is_playback_active():
+            was_playing = True
+            continue
+
+        if was_playing:
+            logger.debug("%s: playback ended — draining pipe and resetting", name)
+            _drain_pipe(proc)
+            was_playing = False
+            if on_playback_end is not None:
+                on_playback_end()
+            yield None
+            continue
+
+        yield _downmix_to_mono(raw_data, channels)
+
+
+def _make_listen_fn(
+    proc: subprocess.Popen,
+    channels: int,
+    backend: STTBackend,
+    stop_event: threading.Event,
+    on_stt_event: Callable[[str, dict], None] | None,
+    vad_silence_ms: int | None,
+) -> Callable:
+    """Return an async listen function closed over the given capture context."""
+
+    async def _listen_fn(
+        timeout: float,
+        flush_ms: int = 0,
+        phrases: list[str] | None = None,
+        start_after_playback: bool = False,
+    ) -> str:
+        if on_stt_event:
+            on_stt_event("wake", {"word": "(reply)", "timeout": timeout})
+        return await asyncio.to_thread(
+            capture_transcript,
+            proc,
+            channels,
+            backend,
+            timeout,
+            stop_event,
+            on_stt_event,
+            flush_ms=flush_ms,
+            phrases=phrases,
+            start_after_playback=start_after_playback,
+            vad_silence_ms=vad_silence_ms,
+        )
+
+    return _listen_fn
 
 
 def run_stt_worker(
@@ -794,65 +813,22 @@ def _single_stage_loop(
     """Single-stage: full transcription always; wake word + command in one phrase."""
     backend = stage2_backend
     cooldown_until = 0.0
-    was_playing = False
     alias_map = _build_alias_map(config.wake_words)
     _eff_vad_ms = config.stt.vad_silence_ms
 
     if on_stt_event:
         on_stt_event("listening", {"wake_words": [g.word for g in config.wake_words]})
 
-    async def _listen_fn(
-        timeout: float,
-        flush_ms: int = 0,
-        phrases: list[str] | None = None,
-        start_after_playback: bool = False,
-    ) -> str:
-        # Emit event for UI to show we are listening for a reply
-        if on_stt_event:
-            on_stt_event("wake", {"word": "(reply)", "timeout": timeout})
-        return await asyncio.to_thread(
-            capture_transcript,
-            proc,
-            channels,
-            backend,
-            timeout,
-            stop_event,
-            on_stt_event,
-            flush_ms=flush_ms,
-            phrases=phrases,
-            start_after_playback=start_after_playback,
-            vad_silence_ms=_eff_vad_ms,
-        )
-
-    assert proc.stdout is not None
-    _stall_logged = False
-    while not stop_event.is_set():
-        # Adjust chunk size for multi-channel
-        raw_data = _read_with_timeout(proc.stdout, _CHUNK * channels, 2.0)
-        if not raw_data:
-            if proc.poll() is not None:  # parec exited
-                logger.warning(
-                    "single-stage: parec process exited — restarting capture"
-                )
-                break
-            if not _stall_logged:
-                logger.debug("single-stage: read timeout (parec stall?) — waiting")
-                _stall_logged = True
-            continue  # read timeout — re-check stop_event
-        _stall_logged = False
-
-        if is_playback_active():
-            was_playing = True
+    _listen_fn = _make_listen_fn(
+        proc, channels, backend, stop_event, on_stt_event, _eff_vad_ms
+    )
+    _dloop = dispatch_loop
+    assert _dloop is not None, "dispatch_loop must be provided to _single_stage_loop"
+    for data in _iter_gated_audio(
+        proc, channels, stop_event, on_playback_end=backend.reset, name="single-stage"
+    ):
+        if data is None:
             continue
-
-        if was_playing:
-            logger.debug("single-stage: playback ended — draining pipe and resetting")
-            _drain_pipe(proc)
-            backend.reset()
-            was_playing = False
-            continue
-
-        data = _downmix_to_mono(raw_data, channels)
 
         if livekit_connected_flag.is_set():
             cooldown_until = time.monotonic() + _STT_COOLDOWN
@@ -907,8 +883,6 @@ def _single_stage_loop(
         except Exception as e:
             logger.debug(f"Wake beep failed: {e}")
 
-        _dloop = dispatch_loop or asyncio.new_event_loop()
-
         if not command:
             if on_stt_event:
                 on_stt_event("nomatch", {"transcript": ""})
@@ -921,9 +895,27 @@ def _single_stage_loop(
             if on_stt_event:
                 on_stt_event("nomatch", {"transcript": command})
             if config.llm and config.llm.fallback_on_no_match:
-                _llm_fallback(
-                    command, config, _listen_fn, _dloop, wake_group, on_stt_event
+                _fb_trigger = Trigger(
+                    phrase="__llm_fallback__",
+                    actions=[ActionEntry(type="llm_chat", params={})],
                 )
+                try:
+                    _dloop.run_until_complete(
+                        dispatch(
+                            _fb_trigger,
+                            telegram_client,
+                            livekit_connect_fn,
+                            livekit_connected=livekit_connected_flag.is_set(),
+                            listen_fn=_listen_fn,
+                            on_stt_event=on_stt_event,
+                            actions_config=config,
+                            wake_word=wake_group.word,
+                            transcript=command,
+                            mqtt_client=mqtt_client,
+                        )
+                    )
+                except Exception as e:
+                    logger.error("LLM fallback error: %s", e)
                 _drain_pipe(proc)
                 backend.reset()
             else:
@@ -945,6 +937,7 @@ def _single_stage_loop(
                     on_stt_event=on_stt_event,
                     actions_config=config,
                     wake_word=wake_group.word,
+                    transcript=command,
                 )
             )
             # Drop pipe backlog accumulated during dispatch (TTS/ask audio)
@@ -992,7 +985,6 @@ def _recognition_loop(
         stage1 = None
     cooldown_until = 0.0
     was_gated = False
-    was_playing = False
     stage1_last_speech_t = 0.0  # for sherpa energy VAD
     stage1_speech_ms = 0.0  # accumulated ms above RMS threshold in current utterance
 
@@ -1004,37 +996,23 @@ def _recognition_loop(
             f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "idle", loop=loop
         )
 
-    assert proc.stdout is not None
-    _stall_logged = False
-    while not stop_event.is_set():
-        raw_data = _read_with_timeout(proc.stdout, _CHUNK * channels, 2.0)
-        if not raw_data:
-            if proc.poll() is not None:  # parec exited
-                logger.warning("two-stage: parec process exited — restarting capture")
-                break
-            if not _stall_logged:
-                logger.debug("two-stage: read timeout (parec stall?) — waiting")
-                _stall_logged = True
-            continue  # read timeout — re-check stop_event
-        _stall_logged = False
+    if is_vosk:
 
-        if is_playback_active():
-            was_playing = True
+        def _on_playback_end() -> None:
+            stage1.Reset()
+    else:
+
+        def _on_playback_end() -> None:
+            nonlocal stage1_last_speech_t, stage1_speech_ms
+            stage1_backend.reset()
+            stage1_last_speech_t = 0.0
+            stage1_speech_ms = 0.0
+
+    for data in _iter_gated_audio(
+        proc, channels, stop_event, on_playback_end=_on_playback_end, name="two-stage"
+    ):
+        if data is None:
             continue
-
-        if was_playing:
-            logger.debug("two-stage: playback ended — draining pipe and resetting")
-            _drain_pipe(proc)
-            if is_vosk:
-                stage1.Reset()
-            else:
-                stage1_backend.reset()
-                stage1_last_speech_t = 0.0
-                stage1_speech_ms = 0.0
-            was_playing = False
-            continue
-
-        data = _downmix_to_mono(raw_data, channels)
 
         if livekit_connected_flag.is_set():
             cooldown_until = time.monotonic() + _STT_COOLDOWN
@@ -1110,7 +1088,7 @@ def _recognition_loop(
                     )
                     logger.debug(
                         f"two-stage: dispatch returned — livekit_flag={livekit_connected_flag.is_set()} "
-                        f"was_gated={was_gated} was_playing={was_playing}"
+                        f"was_gated={was_gated}"
                     )
                     _drain_pipe(proc)
                     vosk_model = stage1_backend.model
@@ -1141,7 +1119,6 @@ def _recognition_loop(
             # Track RMS per chunk; after _STAGE1_VAD_SILENCE_MS ms of silence
             # following speech, force-finalize instead of waiting for sherpa's
             # own endpoint (which requires rule2_min_trailing_silence = 1.2 s).
-            rms = _rms_level(data)
             chunk_ms = len(data) / (16000 * 2) * 1000
             if rms > _eff_stage1_rms:
                 stage1_last_speech_t = time.monotonic()
@@ -1250,30 +1227,10 @@ def _wake_detected(
     )
     logger.info(f"Command transcript: '{transcript}'")
 
-    # Define _listen_fn early so it can be reused by both dispatch and LLM fallback
-    async def _listen_fn(
-        timeout: float,
-        flush_ms: int = 0,
-        phrases: list[str] | None = None,
-        start_after_playback: bool = False,
-    ) -> str:
-        if on_stt_event:
-            on_stt_event("wake", {"word": "(reply)", "timeout": timeout})
-        return await asyncio.to_thread(
-            capture_transcript,
-            proc,
-            channels,
-            backend,
-            timeout,
-            stop_event,
-            on_stt_event,
-            flush_ms=flush_ms,
-            phrases=phrases,
-            start_after_playback=start_after_playback,
-            vad_silence_ms=vad_silence_ms,
-        )
-
-    _dloop = dispatch_loop or asyncio.new_event_loop()
+    _listen_fn = _make_listen_fn(
+        proc, channels, backend, stop_event, on_stt_event, vad_silence_ms
+    )
+    _dloop = dispatch_loop
 
     if not transcript:
         if on_stt_event:
@@ -1300,9 +1257,27 @@ def _wake_detected(
         if on_stt_event:
             on_stt_event("nomatch", {"transcript": transcript})
         if config.llm and config.llm.fallback_on_no_match:
-            _llm_fallback(
-                transcript, config, _listen_fn, _dloop, wake_group, on_stt_event
+            _fb_trigger = Trigger(
+                phrase="__llm_fallback__",
+                actions=[ActionEntry(type="llm_chat", params={})],
             )
+            try:
+                _dloop.run_until_complete(
+                    dispatch(
+                        _fb_trigger,
+                        telegram_client,
+                        livekit_connect_fn,
+                        livekit_connected=livekit_connected_flag.is_set(),
+                        listen_fn=_listen_fn,
+                        on_stt_event=on_stt_event,
+                        actions_config=config,
+                        wake_word=wake_group.word,
+                        transcript=transcript,
+                        mqtt_client=mqtt_client,
+                    )
+                )
+            except Exception as e:
+                logger.error("LLM fallback error: %s", e)
             _drain_pipe(proc)
             backend.reset()
         else:
@@ -1325,6 +1300,8 @@ def _wake_detected(
                 on_stt_event=on_stt_event,
                 actions_config=config,
                 wake_word=wake_group.word,
+                transcript=transcript,
+                mqtt_client=mqtt_client,
             )
         )
     except Exception as e:

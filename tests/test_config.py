@@ -456,9 +456,9 @@ llm:
 wake_words:
   - word: alexa
 llm:
-  backend: openai
+  backend: unsupported_backend
   host: http://localhost
-  model: gpt-4
+  model: some-model
 """,
         )
         from alexa_custom.config import load_config
@@ -466,6 +466,28 @@ llm:
         cfg = load_config(p)
         assert cfg is not None
         assert cfg.llm is None
+
+    def test_llm_openai_backend_loads(self, tmp_path):
+        p = write_file(
+            tmp_path,
+            "config.yaml",
+            """\
+wake_words:
+  - word: alexa
+llm:
+  backend: openai
+  host: https://api.openai.com
+  model: gpt-4o
+  api_key: sk-test
+""",
+        )
+        from alexa_custom.config import load_config
+
+        cfg = load_config(p)
+        assert cfg is not None
+        assert cfg.llm is not None
+        assert cfg.llm.backend == "openai"
+        assert cfg.llm.api_key == "sk-test"
 
     def test_llm_absent_gives_none(self, tmp_path):
         p = write_file(tmp_path, "config.yaml", "wake_words:\n  - word: alexa\n")

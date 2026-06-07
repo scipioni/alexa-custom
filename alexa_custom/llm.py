@@ -68,19 +68,33 @@ _SENTENCE_END = frozenset(".!?")
 
 
 def _split_sentences(buf: str) -> tuple[list[str], str]:
-    """Return (complete_sentences, remainder) from buf."""
+    """Return (complete_sentences, remainder) from buf.
+
+    Avoids splitting on '.' inside decimal numbers (e.g. "10.5 gradi") or when
+    the next non-whitespace character is lowercase (mid-sentence continuation).
+    """
     sentences: list[str] = []
     start = 0
     for i, ch in enumerate(buf):
-        if ch in _SENTENCE_END:
-            # Swallow any trailing whitespace after the punctuation.
+        if ch not in _SENTENCE_END:
+            continue
+        if ch == ".":
+            prev = buf[i - 1] if i > 0 else ""
             end = i + 1
             while end < len(buf) and buf[end] in " \t":
                 end += 1
-            sentence = buf[start:end].strip()
-            if sentence:
-                sentences.append(sentence)
-            start = end
+            nxt = buf[end] if end < len(buf) else ""
+            # decimal numbers: digit.digit; mid-sentence: next char is lowercase
+            if prev.isdigit() or (nxt and not nxt.isupper()):
+                continue
+        else:
+            end = i + 1
+            while end < len(buf) and buf[end] in " \t":
+                end += 1
+        sentence = buf[start:end].strip()
+        if sentence:
+            sentences.append(sentence)
+        start = end
     return sentences, buf[start:]
 
 
@@ -151,11 +165,75 @@ class OllamaClient:
             raise OllamaUnreachable(f"Ollama HTTP error: {e}") from e
 
 
+class OpenAIClient:
+    """OpenAI-compatible chat client (any /v1/chat/completions endpoint)."""
+
+    def __init__(self, host: str, api_key: str = "", timeout: float = 60.0) -> None:
+        self._host = host.rstrip("/")
+        self._api_key = api_key
+        self._timeout = timeout
+        self._http_timeout = httpx.Timeout(
+            connect=_CONNECT_TIMEOUT, read=timeout, write=10.0, pool=5.0
+        )
+
+    async def chat(self, messages: list[dict[str, str]], model: str) -> str:
+        tokens: list[str] = []
+        async for token in self.chat_stream(messages, model):
+            tokens.append(token)
+        return "".join(tokens)
+
+    async def warmup(self, model: str) -> None:
+        pass
+
+    async def chat_stream(self, messages: list[dict[str, str]], model: str):
+        url = f"{self._host}/v1/chat/completions"
+        headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
+        payload = {"model": model, "messages": messages, "stream": True}
+        try:
+            async with httpx.AsyncClient(timeout=self._http_timeout) as client:
+                async with client.stream(
+                    "POST", url, json=payload, headers=headers
+                ) as resp:
+                    if resp.status_code >= 400:
+                        body = await resp.aread()
+                        raise OllamaUnreachable(
+                            f"OpenAI API returned HTTP {resp.status_code}: {body[:200]}"
+                        )
+                    async for line in resp.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        data = line[6:]
+                        if data.strip() == "[DONE]":
+                            break
+                        try:
+                            chunk = __import__("json").loads(data)
+                        except ValueError:
+                            continue
+                        token = (
+                            chunk.get("choices", [{}])[0]
+                            .get("delta", {})
+                            .get("content", "")
+                        )
+                        if token:
+                            yield token
+        except httpx.TimeoutException as e:
+            raise OllamaUnreachable(
+                f"OpenAI API timeout after {self._timeout}s: {e}"
+            ) from e
+        except httpx.HTTPError as e:
+            raise OllamaUnreachable(f"OpenAI API HTTP error: {e}") from e
+
+
 class ConversationEngine:
     def __init__(self, config: LLMConfig, lang: str = "it-IT") -> None:
         self._config = config
         self._lang = lang
-        self._client = OllamaClient(config.host, config.request_timeout)
+        if config.backend == "openai":
+            self._client: OllamaClient | OpenAIClient = OpenAIClient(
+                config.host, config.api_key, config.request_timeout
+            )
+        else:
+            self._client = OllamaClient(config.host, config.request_timeout)
         self._history: list[dict[str, str]] = []
         self._last_ts: float = 0.0
 
@@ -235,13 +313,19 @@ class ConversationEngine:
         self._last_ts = 0.0
 
 
-# Module-level engine cache keyed by (host, model, lang) so the same engine
-# is reused across wake-word invocations.
-_engines: dict[tuple[str, str, str], ConversationEngine] = {}
+# Module-level engine cache. Key includes system_prompt and request_timeout so a
+# config hot-reload with changed values produces a fresh engine.
+_engines: dict[tuple, ConversationEngine] = {}
 
 
 def get_engine(config: LLMConfig, lang: str = "it-IT") -> ConversationEngine:
-    key = (config.host, config.model, lang)
+    key = (
+        config.host,
+        config.model,
+        lang,
+        config.system_prompt or "",
+        config.request_timeout,
+    )
     if key not in _engines:
         engine = ConversationEngine(config, lang)
         _engines[key] = engine
@@ -403,6 +487,11 @@ class LearnWizard:
             return None
 
         action_types = await self._extract_action_types(intent)
+        if not action_types:
+            await say_fn("Non ho capito. Puoi ripetere cosa vuoi che faccia?")
+            intent = (await listen_fn(15.0)).strip()
+            if intent:
+                action_types = await self._extract_action_types(intent)
         if not action_types:
             await say_fn("Non ho capito le azioni da eseguire. Operazione annullata.")
             return None

@@ -5,71 +5,29 @@ Load, merge, and hot-reload configuration from `config.yaml`, providing environm
 
 ## Requirements
 
-### Requirement: Unified config.yaml with env section
-The system SHALL load configuration from `config.yaml` when present. The file SHALL support an optional top-level `env:` key containing a flat string-to-string mapping of environment variables. Values in `env:` SHALL be written into `os.environ`, overwriting any existing values. The `wake_words` key SHALL be a list of wake word group objects; each object SHALL have a required string `word` field, an optional `aliases` list of strings, an optional `lang` string (BCP-47, default `it-IT`), and an optional `triggers` list following the existing trigger schema. A top-level `triggers` key SHALL be accepted as a global fallback and MAY be an empty list or absent. An optional top-level `actions_file:` key specifies the path to an `actions.yaml` file whose triggers are merged into the active config at load time. An optional top-level `llm:` key configures the Ollama-backed conversation engine. All other top-level keys are parsed using the existing actions config schema.
+### Requirement: conf/config.yaml with nested subsystem blocks
+The system SHALL load configuration from `conf/config.yaml`. The file SHALL use the following top-level blocks, all optional unless noted:
 
-#### Scenario: env section populates os.environ
-- **WHEN** `config.yaml` contains `env: { LIVEKIT_URL: wss://example.com }`
-- **THEN** `os.environ["LIVEKIT_URL"]` equals `"wss://example.com"` after load
+- `wake_words` (required): list of wake word group objects (unchanged schema)
+- `recognition:`: mode, command_timeout, wake_tone
+- `audio:`: hardware and routing settings
+- `stt:`: backend config with `stage1:` and `stage2:` sub-blocks
+- `tts:`: backend and voice settings
+- `llm:`: Ollama behavior settings (host moved to secrets)
+- `mqtt:`: broker connection settings (credentials moved to secrets)
+- `web:`: dashboard port
+- `system:`: reconnect_delay, config_poll_interval, empty_room_timeout
+- `actions:`: dir and learn_file paths
 
-#### Scenario: env section overwrites .env value
-- **WHEN** `.env` sets `TELEGRAM_BOT_TOKEN=old` and `config.yaml env:` sets `TELEGRAM_BOT_TOKEN: new`
-- **THEN** `os.environ["TELEGRAM_BOT_TOKEN"]` equals `"new"` (config.yaml takes precedence)
+No flat legacy aliases are supported. The `env:` section is not accepted.
 
-#### Scenario: Wake word group with aliases parsed correctly
-- **WHEN** `config.yaml` contains a wake word group with `word: galileo` and `aliases: [hey galileo]`
-- **THEN** `config.wake_words[0].word` equals `"galileo"` and `config.wake_words[0].aliases` equals `["hey galileo"]`
+#### Scenario: Nested audio block parsed
+- **WHEN** `conf/config.yaml` contains `audio: {output_volume: 0.3, card_name: NewPie}`
+- **THEN** `config.audio.output_volume` equals `0.3` and `config.audio.card_name` equals `"NewPie"`
 
-#### Scenario: Wake word group with lang field
-- **WHEN** a wake word group specifies `lang: en-US`
-- **THEN** `config.wake_words[0].lang` equals `"en-US"`
-
-#### Scenario: Wake word group without lang defaults to it-IT
-- **WHEN** a wake word group has no `lang` field
-- **THEN** `config.wake_words[0].lang` equals `"it-IT"`
-
-#### Scenario: actions_file key accepted
-- **WHEN** `config.yaml` contains `actions_file: actions.yaml`
-- **THEN** the loader reads and merges `actions.yaml` from the same directory
-
-#### Scenario: llm key accepted and parsed into LLMConfig
-- **WHEN** `config.yaml` contains a valid `llm:` block with `host`, `model`, and `backend`
-- **THEN** `config.llm` is a populated `LLMConfig` instance
-
-#### Scenario: llm key absent
-- **WHEN** `config.yaml` has no `llm:` key
-- **THEN** `config.llm` is `None` and no LLM features are activated
-
-#### Scenario: Wake word group with per-group triggers
-- **WHEN** a wake word group defines its own `triggers` list
-- **THEN** `config.wake_words[0].triggers` is a non-empty list of `Trigger` objects
-
-#### Scenario: Wake word group without triggers uses global fallback
-- **WHEN** a wake word group has no `triggers` key and the top-level `triggers` list is non-empty
-- **THEN** `config.wake_words[0].triggers` is an empty list and `config.triggers` is non-empty
-
-#### Scenario: Old flat wake_words list rejected
-- **WHEN** `config.yaml` contains `wake_words: [galileo, assistente]` (flat strings)
-- **THEN** a `ConfigError` is raised with a message indicating the new format is required
-
-#### Scenario: config.yaml without env section
-- **WHEN** `config.yaml` exists but has no `env:` key
-- **THEN** the file is parsed using the actions config schema; `os.environ` is unchanged
-
-### Requirement: Backward-compatible fallback to actions.yaml
-The system SHALL fall back to loading `actions.yaml` when `config.yaml` does not exist. A deprecation warning SHALL be logged when the fallback is used. `.env` is always loaded as the lowest-priority source regardless of which primary config file is used.
-
-#### Scenario: Only actions.yaml present
-- **WHEN** `config.yaml` does not exist but `actions.yaml` does
-- **THEN** triggers and wake words are loaded from `actions.yaml` and a deprecation warning is logged
-
-#### Scenario: Neither config file present
-- **WHEN** neither `config.yaml` nor `actions.yaml` exists
-- **THEN** the system starts without trigger-based wake word detection (existing behavior)
-
-#### Scenario: Both files present
-- **WHEN** both `config.yaml` and `actions.yaml` exist
-- **THEN** `config.yaml` is used exclusively and `actions.yaml` is ignored
+#### Scenario: env: section causes ConfigError
+- **WHEN** `conf/config.yaml` contains a top-level `env:` key
+- **THEN** a `ConfigError` is raised with a message directing the user to `conf/secrets.yaml`
 
 ### Requirement: Hot-reload watcher
 The system SHALL monitor `config.yaml` for modifications using an asyncio-based polling watcher with a configurable interval (default 2 seconds, overridable via `config_poll_interval` in config.yaml). When a file modification is detected, the system SHALL reload the config. If the reload succeeds, all registered reload callbacks SHALL be invoked with the new config. If the reload fails due to a YAML parse error or `ConfigError`, the previous config SHALL remain active; the registered `on_config_error` callback SHALL be invoked with the error message if one is registered; no reload callbacks are invoked on failure.
@@ -120,61 +78,75 @@ The system SHALL support an optional top-level `web:` key in `config.yaml`. When
 - **WHEN** `config.yaml` has no `web:` key
 - **THEN** the web interface uses port 8080 when started with `--web`
 
-### Requirement: Audio and timing knobs in config.yaml
-The system SHALL read all previously hardcoded audio timing constants and device identity from `config.yaml`. The following optional fields SHALL be supported with backward-compatible defaults:
+### Requirement: audio: block schema
+The `audio:` block SHALL accept:
 
-| Field | Default | Was |
+| Field | Default | Description |
 |---|---|---|
-| `audio_card_name` | `"NewPie"` | hardcoded string |
-| `audio_sample_rates.usb` | `48000` | hardcoded `_SAMPLERATE` dict |
-| `audio_sample_rates.bluetooth` | `16000` | hardcoded |
-| `audio_sample_rates.internal` | `48000` | hardcoded |
-| `audio_post_playback_ms` | `100` | `AUDIO_POST_PLAYBACK_MS` env var |
-| `audio_tone_preroll_ms` | `300` | `AUDIO_TONE_PREROLL_MS` env var |
-| `audio_mic_gain` | `300` | hardcoded `pactl 300%` |
-| `reconnect_delay` | `5` | hardcoded `_RECONNECT_DELAY` |
-| `mqtt_queue_max` | `200` | unbounded |
+| `card_name` | `"NewPie"` | Substring to identify the audio card |
+| `input_device` | `null` | PipeWire source name substring or `"pipewire"` |
+| `output_device` | `null` | PipeWire sink name substring or `"pipewire"` |
+| `output_volume` | `0.5` | Speaker volume 0.0–1.0 |
+| `input_gain` | `1.0` | Microphone gain multiplier |
+| `sample_rates.usb` | `48000` | Sample rate for USB audio |
+| `sample_rates.bluetooth` | `16000` | Sample rate for Bluetooth audio |
+| `sample_rates.internal` | `48000` | Sample rate for internal audio |
+| `post_playback_ms` | `100` | STT gate hold after playback ends |
+| `tone_preroll_ms` | `300` | Silence before tones/beeps |
+| `mic_gain` | `300` | ALSA mic gain percent (used by audio:setup task) |
+| `webrtc.agc` | `true` | LiveKit AGC |
+| `webrtc.aec` | `true` | LiveKit AEC |
+| `webrtc.noise_suppression` | `true` | LiveKit noise suppression |
+| `webrtc.high_pass_filter` | `true` | LiveKit high-pass filter |
 
-All fields SHALL remain optional; existing `config.yaml` files with none of these fields SHALL continue to work identically.
+#### Scenario: input_device and output_device replace env vars
+- **WHEN** `audio.input_device: pipewire` and `audio.output_device: pipewire` are set
+- **THEN** the STT capture and routing code uses these values instead of `INPUT_DEVICE` / `OUTPUT_DEVICE` env vars
 
-#### Scenario: Default values apply when fields absent
-- **WHEN** `config.yaml` exists but contains none of the new fields
-- **THEN** the system behaves identically to the previous release (all defaults match prior hardcoded values)
+### Requirement: recognition: block schema
+The `recognition:` block SHALL accept:
 
-#### Scenario: audio_card_name overrides default device search
-- **WHEN** `config.yaml` sets `audio_card_name: ConferenceCam`
-- **THEN** `audio.find_alexa_card()` searches for a card matching `conferencecam` (case-insensitive) instead of `newpie`
-
-#### Scenario: audio_sample_rates.bluetooth override
-- **WHEN** `config.yaml` sets `audio_sample_rates: {bluetooth: 8000}`
-- **THEN** the session sample rate for a Bluetooth device is 8000 Hz
-
-#### Scenario: audio_post_playback_ms tunable
-- **WHEN** `config.yaml` sets `audio_post_playback_ms: 200`
-- **THEN** the STT gate remains closed for 200 ms after each playback ends
-
-#### Scenario: reconnect_delay tunable
-- **WHEN** `config.yaml` sets `reconnect_delay: 10`
-- **THEN** the client waits 10 seconds before reconnecting to LiveKit after a disconnection
-
-### Requirement: STT thresholds in config.yaml
-The system SHALL read STT sensitivity knobs from `config.yaml`. The following optional fields SHALL be supported:
-
-| Field | Default | Was |
+| Field | Default | Description |
 |---|---|---|
-| `stt_vad_silence_ms` | `700` | `STT_VAD_SILENCE_MS` env var |
-| `stt_stage1_vad_silence_ms` | `500` | `STT_STAGE1_VAD_SILENCE_MS` env var |
-| `stt_stage1_rms_threshold` | `0.02` | `STT_STAGE1_RMS_THRESHOLD` env var |
+| `mode` | `"two-stage"` | `"two-stage"` or `"single-stage"` |
+| `command_timeout` | `3.0` | Seconds to listen for command after wake |
+| `wake_tone` | `"wake"` | Tone name played on wake detection |
 
-Env-var overrides SHALL still be honoured if set, taking precedence over the config value, to preserve backward-compatibility for deployments that set thresholds via environment.
+The `confidence` field is removed from this block; it moves to `stt.stage1.confidence`.
 
-#### Scenario: stt_vad_silence_ms from config
-- **WHEN** `config.yaml` sets `stt_vad_silence_ms: 1000`
-- **THEN** the command capture window waits for 1000 ms of silence before finalising
+#### Scenario: recognition block parsed
+- **WHEN** `recognition: {mode: two-stage, command_timeout: 5.0}`
+- **THEN** `config.recognition.command_timeout` equals `5.0`
 
-#### Scenario: Env var overrides config value
-- **WHEN** `config.yaml` sets `stt_vad_silence_ms: 1000` and `STT_VAD_SILENCE_MS=500` is in the environment
-- **THEN** the effective value is 500 ms (env var wins)
+### Requirement: mqtt: block schema
+The `mqtt:` block SHALL accept:
+
+| Field | Default | Description |
+|---|---|---|
+| `host` | `null` | MQTT broker hostname; null disables MQTT |
+| `port` | `1883` | Broker port |
+| `topic_prefix` | `"alexa"` | MQTT topic prefix |
+| `node_id` | *(hostname)* | Node identifier for MQTT topics |
+| `queue_max` | `200` | Max outgoing message queue depth |
+
+MQTT credentials (username, password) come from `conf/secrets.yaml`, not this block.
+
+#### Scenario: MQTT disabled when host absent
+- **WHEN** the `mqtt:` block has no `host` field or `mqtt:` is absent entirely
+- **THEN** no MQTT connection is attempted and MQTT-related actions are no-ops
+
+### Requirement: system: block schema
+The `system:` block SHALL accept:
+
+| Field | Default | Description |
+|---|---|---|
+| `reconnect_delay` | `5` | Seconds between LiveKit reconnect attempts |
+| `config_poll_interval` | `2` | Hot-reload polling interval in seconds |
+| `empty_room_timeout` | `0` | Seconds before disconnecting from empty LiveKit room; 0 = never |
+
+#### Scenario: empty_room_timeout configured
+- **WHEN** `system.empty_room_timeout: 30`
+- **THEN** the daemon disconnects from LiveKit after 30 seconds with no other participants
 
 ### Requirement: `LLMConfig` dataclass
 The system SHALL parse an `llm:` top-level key in `config.yaml` into a `LLMConfig` dataclass with the following fields:
