@@ -585,9 +585,11 @@ async def _async_main(
     # (otherwise sounds play through the old default, like HDMI)
     from alexa_custom.audio import check_newpie_ready
 
+    _input_spec = actions_config.audio.input_device if actions_config else None
+    _output_spec = actions_config.audio.output_device if actions_config else None
     logger.info("Waiting for audio hardware to initialize...")
     for _ in range(15):  # Wait up to 7.5 seconds
-        ok, _ = await asyncio.to_thread(check_newpie_ready)
+        ok, _ = await asyncio.to_thread(check_newpie_ready, _input_spec, _output_spec)
         if ok:
             # Extra settle time for PipeWire/WirePlumber to finalize routing
             await asyncio.sleep(2.0)
@@ -632,7 +634,9 @@ async def _async_main(
     # Use connection-type-appropriate sample rate from config (default: usb=48000, bt=16000).
     from alexa_custom.audio import check_newpie_ready, _SAMPLERATE as _audio_samplerates
 
-    _, conn_type = await asyncio.to_thread(check_newpie_ready)
+    _, conn_type = await asyncio.to_thread(
+        check_newpie_ready, _input_spec, _output_spec
+    )
     samplerate = _audio_samplerates.get(conn_type, _audio_samplerates.get("usb", 48000))
     if conn_type == "bluetooth":
         logger.info(
