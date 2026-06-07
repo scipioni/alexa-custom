@@ -193,7 +193,14 @@ class PiperTTS(TTSBackend):
                 return
 
             proc.stdin.close()
-            proc.wait()
+            try:
+                proc.wait(timeout=60.0)
+            except subprocess.TimeoutExpired:
+                logger.warning(
+                    "Piper TTS (streaming): paplay hang detected, killing process"
+                )
+                proc.kill()
+                proc.wait()
             if _audio_module._POST_PLAYBACK_MS > 0:
                 time.sleep(_audio_module._POST_PLAYBACK_MS / 1000.0)
 
