@@ -22,6 +22,9 @@ _playback_active = threading.Event()
 # and so the STT-gating flag is owned by exactly one playback at a time.
 _audio_lock = threading.Lock()
 
+# Digitally scales audio played through the system to match the user's volume preference
+_OUTPUT_VOLUME = 0.5
+
 # Hold the STT-gating flag this long after the playback subprocess returns, to let
 # PipeWire/ALSA buffers drain through hardware and the acoustic echo decay before
 # capture resumes. Override via env AUDIO_POST_PLAYBACK_MS.
@@ -48,7 +51,8 @@ def configure(cfg) -> None:
         _TONE_PREROLL_MS, \
         _SAMPLERATE, \
         _DEFAULT_CARD_NAME, \
-        _MIC_GAIN
+        _MIC_GAIN, \
+        _OUTPUT_VOLUME
     _POST_PLAYBACK_MS = int(
         os.environ.get("AUDIO_POST_PLAYBACK_MS", str(cfg.audio_post_playback_ms))
     )
@@ -58,6 +62,7 @@ def configure(cfg) -> None:
     _SAMPLERATE = dict(cfg.audio_sample_rates)
     _DEFAULT_CARD_NAME = cfg.audio_card_name
     _MIC_GAIN = cfg.audio_mic_gain
+    _OUTPUT_VOLUME = cfg.output_volume
 
 
 def set_stt_gated_flag(flag: threading.Event):
@@ -219,6 +224,8 @@ def set_output_volume(
     pulse: pulsectl.Pulse, output_spec: str | None, volume: float
 ) -> None:
     """Set output volume via wpctl so WirePlumber persists the setting."""
+    global _OUTPUT_VOLUME
+    _OUTPUT_VOLUME = volume
     if volume <= 0:
         return
     result = subprocess.run(
@@ -563,6 +570,9 @@ def _play_array(audio: np.ndarray, samplerate: int) -> None:
     import tempfile
     import wave as _wave
 
+    # Digitally scale the audio by the global output volume
+    audio = audio * _OUTPUT_VOLUME
+
     channels = audio.shape[1] if audio.ndim > 1 else 1
     frames = audio.shape[0]
     duration_s = frames / samplerate
@@ -658,7 +668,7 @@ def _play_raw(data: bytes, samplerate: int, channels: int) -> None:
 def play_wav_file(file_path: str) -> None:
     """Play a WAV file via pw-play (native PipeWire) or aplay (ALSA fallback)."""
     if _PW_PLAY:
-        cmd = [_PW_PLAY, file_path]
+        cmd = [_PW_PLAY, f"--volume={_OUTPUT_VOLUME:.4f}", file_path]
     else:
         cmd = ["aplay", "-D", "pipewire", "-q", file_path]
 
