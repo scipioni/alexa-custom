@@ -1,137 +1,186 @@
-# 🎙️ LiveKit Headless Audio Client
+# LiveKit Headless Audio Client
 
-A high-performance, headless Python client that transforms your conference speakerphone into a proactive, voice-activated smart assistant.
+A headless Python client that turns a USB conference speakerphone into a voice-activated smart assistant.
 
 Optimized for **PipeWire** and fully integrated with **Home Assistant**.
 
 ---
 
-## ⚡ Quick Start
+## Quick Start
 
 ```bash
 # 1. Install system dependencies
-sudo apt install libportaudio2 pulseaudio-utils
+sudo apt install pulseaudio-utils pipewire
 
 # 2. Setup virtual environment
 python -m venv .venv
 .venv/bin/pip install -e .
 
-# 3. Setup STT models
+# 3. Download STT models
 alexa-setup
 
-# 4. Configure USB Audio Defaults (run once after first boot)
-task audio:setup            # Sets NewPie as default, installs PCM restore service
-task audio:status           # Verify ALSA/WirePlumber default endpoints
+# 4. Configure USB audio (run once after first boot)
+task audio:setup            # sets NewPie as default, installs PCM restore service
+task audio:status           # verify routing and endpoints
 
 # 5. Create config
-cp config.yaml.example config.yaml
-# Edit config.yaml — fill in credentials under env: and customize triggers
+mkdir -p conf/actions
+cp conf/config.yaml.example conf/config.yaml
+cp conf/secrets.yaml.example conf/secrets.yaml
+# Edit conf/secrets.yaml — add LiveKit, Telegram, LLM credentials
+# Edit conf/config.yaml  — set wake words, audio device, STT backend
 
-# 6. Run it!
-alexa-client                # browser dashboard at http://<host>:8080 (disable with --no-web)
+# 6. Run
+alexa-client                # web dashboard at http://<host>:8080
 ```
 
-### Configuration
+---
 
-All configuration lives in a single `config.yaml` file:
+## Configuration
+
+Configuration lives in the `conf/` directory:
+
+| File | Purpose | Hot-reload |
+|------|---------|-----------|
+| `conf/config.yaml` | Wake words, audio, STT, TTS, LLM, MQTT | Yes (~2 s) |
+| `conf/secrets.yaml` | Credentials (git-ignored) | Restart required |
+| `conf/actions/*.yaml` | Voice triggers and startup actions | Yes (~2 s) |
+
+### conf/secrets.yaml
 
 ```yaml
-env:                        # replaces .env — credentials and settings
-  LIVEKIT_URL: wss://...
-  LIVEKIT_API_KEY: ...
+livekit:
+  url: wss://your-project.livekit.cloud
+  api_key: YOUR_KEY
+  api_secret: YOUR_SECRET
+  room: your-room
 
-wake_words: [galileo]       # voice trigger words
-command_timeout: 3.0        # seconds to listen after wake word
-triggers:                   # phrase → action mappings
-  - phrase: "chiama"
+telegram:
+  bot_token: "123456:TOKEN"
+  chat_id: "12345678"
+
+llm_host: http://192.168.1.10:11434   # Ollama host
+```
+
+### conf/config.yaml (key blocks)
+
+```yaml
+wake_words:
+  - word: galileo
+    lang: it-IT
+
+recognition:
+  command_timeout: 3.0      # seconds to listen after wake word
+
+stt:
+  stage1:                   # continuous wake-word detection (low CPU)
+    backend: vosk
+    confidence: 0.65
+  stage2:                   # command recognition after wake
+    backend: vosk
+
+audio:
+  input_device: pipewire    # or 'NewPie' to pin to the USB mic
+  output_device: pipewire   # or 'NewPie' to pin to the USB speaker
+  output_volume: 0.5
+
+tts:
+  backend: piper
+  voice: it_IT-paola-medium
+```
+
+### conf/actions/
+
+Action files are loaded alphabetically with `system.yaml` first (highest priority):
+
+- **`system.yaml`** — startup message, system-level triggers (restart, help, etc.)
+- **`user.yaml`** (or any name) — your custom triggers and wake-word shortcuts
+
+```yaml
+# conf/actions/system.yaml
+on_startup:
+  - type: say
+    text: Sistema pronto
+    lang: it-IT
+
+triggers:
+  - phrase: che ora è
     actions:
-      - type: livekit_join
+      - type: shell
+        command: date +%H:%M
 ```
 
-**Hot-reload**: Edit and save `config.yaml` while the daemon is running — triggers, wake words, and env vars update within ~4 seconds without a restart.
-
-**Migration from `actions.yaml` + `.env`**: `actions.yaml` still works (deprecated warning logged). To migrate, copy `actions.yaml` content into `config.yaml` and add an `env:` section with values from `.env`. See `config.yaml.example` for the full format.
+See `conf/config.yaml.example` and `conf/secrets.yaml.example` for the full reference.
 
 ---
 
-## ✨ Key Features
+## Key Features
 
-- **Proactive Audio Management**: Automatically handles Bluetooth profiles (mSBC) and PipeWire routing.
-- **Voice-Activated**: Built-in Wake Word detection (Vosk) with customizable `config.yaml` (hot-reloaded — no restart needed).
+- **Two-stage STT**: Lightweight wake-word detection (stage 1) → full command recognition (stage 2). Backends configurable independently.
+- **Hot-reload**: Edit `conf/config.yaml` or any action file while the daemon is running — changes apply within ~2 seconds.
+- **Multi-file actions**: Drop `.yaml` files into `conf/actions/` for modular command sets; `system.yaml` always loads first.
+- **LLM learning**: Say "impara nuovo comando" to teach the assistant a new trigger via voice dialogue (stored in `conf/actions/learned.yaml`).
 - **Bidirectional MQTT**: Home Assistant Discovery support. Forward voice commands to HA and trigger local actions via MQTT.
-- **Web Dashboard**: Real-time browser UI (VU meters, STT status, participants, live logs, restart button) — accessible from any device on the LAN.
-- **Multi-Turn Dialogue**: Interactive "Ask" actions for complex voice interactions.
-- **Headless Optimized**: Low CPU usage, suitable for embedded Linux boards and single-board computers.
+- **Web Dashboard**: Real-time browser UI — VU meters, STT status, live logs, restart button.
+- **PipeWire native**: Direct integration without PortAudio shims.
 
 ---
 
-## 🏗 Architecture
-
-```mermaid
-graph LR
-    User((User)) -- "Voice" --> Mic[Mic]
-    Mic --> STT[STT Engine]
-    STT --> Wake{Wake Word?}
-    Wake -- "Yes" --> Actions[Actions]
-    Wake -- "No" --> STT
-    
-    Actions --> TTS[TTS Engine]
-    TTS --> Spk[Speaker]
-    Spk -- "Feedback" --> User
-
-    Actions <--> Ext[Home Assistant / LiveKit / Telegram]
-```
-
----
-
-## 📚 Documentation
-
-Dive deeper into specific topics:
-
-- 🛠 **[Hardware Setup](docs/setup_hardware.md)**: PipeWire, Bluetooth, and device-specific fixes.
-- 🚀 **[Software Installation](docs/setup_software.md)**: Dependencies, venv, and STT models.
-- ⚙️ **[Configuration](docs/configuration.md)**: Environment variables, `config.yaml`, and hot-reload.
-- 🤖 **[MQTT & Home Assistant](docs/mqtt_integration.md)**: Auto-discovery and remote control.
-- 🔍 **[Troubleshooting](docs/troubleshooting.md)**: Common audio, connection, and permission fixes.
-
----
-
-## 🛠 Commands
+## Commands
 
 | Command | Description |
 |---------|-------------|
-| `alexa-client` | Start the assistant daemon (web dashboard enabled by default, default port 8080) |
-| `alexa-client --no-web` | Start the assistant daemon headless (disable web dashboard) |
-| `alexa-client --web-port 9090` | Start with the web dashboard on a custom port |
-| `alexa-audio` | Run a microphone → speaker loopback test |
-| `alexa-devices` | List all detected audio devices |
-| `alexa-setup` | Download/Update STT models |
+| `alexa-client` | Start the assistant daemon |
+| `alexa-client --web-port 9090` | Start with dashboard on a custom port |
+| `alexa-audio` | Microphone → speaker loopback test |
+| `alexa-devices` | List detected audio devices |
+| `alexa-setup` | Download/update STT and TTS models |
 
----
+## Task Automation
 
-## ⚡ Task Automation (Taskfile)
-
-If you have `task` installed, you can use these automated helper commands:
-
-| Task Command | Description |
-|--------------|-------------|
-| `task audio:setup` | Sets NewPie as default sink/source, installs PCM restore service for boot |
-| `task audio:restart` | Restart WirePlumber and restore NewPie routing and PCM volume |
-| `task audio:status` | Check host ALSA, WirePlumber, and active default audio endpoints |
-| `task audio:test` | Play a test WAV file to verify speaker output |
+| Task | Description |
+|------|-------------|
+| `task audio:setup` | Set NewPie as default, install PCM restore service |
+| `task audio:restart` | Restart WirePlumber and restore routing/PCM |
+| `task audio:status` | Show audio device status dashboard |
+| `task audio:test` | Play a test WAV to verify speaker output |
 | `task test` | Run regression tests |
-| `task test-stt-e2e` | Run end-to-end speech-to-text validation tests |
-| `task lint` / `task format` | Run code quality checks and auto-formatting |
+| `task lint` / `task format` | Code quality checks and formatting |
 
 ---
 
-## 🧩 Project Structure
+## Project Structure
 
-- `alexa_custom/client.py`: Main LiveKit & loop logic.
-- `alexa_custom/stt.py`: Vosk speech-to-text pipeline.
-- `alexa_custom/mqtt.py`: MQTT & HA Discovery.
-- `alexa_custom/actions.py`: Action dispatcher & Telegram.
-- `alexa_custom/audio.py`: Hardware monitoring & proactive fixes.
+```
+conf/
+  config.yaml         main config (hot-reloaded)
+  secrets.yaml        credentials (git-ignored)
+  actions/
+    system.yaml       startup + system triggers (loaded first)
+    user.yaml         your custom triggers
+    learned.yaml      auto-created by llm_learn
+
+alexa_custom/
+  client.py           main loop, LiveKit session
+  stt.py              two-stage STT pipeline (Vosk / sherpa-onnx)
+  tts.py              TTS engine (Piper)
+  audio.py            PipeWire routing, AudioWatcher, device enumeration
+  actions.py          action dispatcher
+  config.py           typed config dataclasses and loaders
+  config_manager.py   hot-reload watcher
+  mqtt.py             MQTT / Home Assistant Discovery
+  web.py              aiohttp web dashboard
+```
+
+---
+
+## Documentation
+
+- **[Hardware Setup](docs/setup_hardware.md)** — PipeWire, Bluetooth, device-specific fixes
+- **[Software Installation](docs/setup_software.md)** — Dependencies, venv, STT models
+- **[Configuration](docs/configuration.md)** — Full config reference
+- **[MQTT & Home Assistant](docs/mqtt_integration.md)** — Auto-discovery and remote control
+- **[Troubleshooting](docs/troubleshooting.md)** — Common audio, connection, and permission fixes
 
 ---
 
