@@ -35,6 +35,7 @@ def set_playback_level(level: float) -> None:
     global _playback_level
     _playback_level = level
 
+
 # Digitally scales audio played through the system to match the user's volume preference
 _OUTPUT_VOLUME = 0.5
 
