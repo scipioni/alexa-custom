@@ -391,12 +391,20 @@ class AudioWatcher(threading.Thread):
                 self.on_status_change(ok, conn)
 
 
-def check_newpie_ready() -> tuple[bool, str]:
+def check_newpie_ready(
+    input_spec: str | None = None,
+    output_spec: str | None = None,
+) -> tuple[bool, str]:
     """
     Verify configured audio device is connected and ready.
+
+    input_spec / output_spec override the INPUT_DEVICE / OUTPUT_DEVICE env vars
+    when the caller has already loaded them from config.
     """
-    input_spec = os.environ.get("INPUT_DEVICE", "").strip() or None
-    output_spec = os.environ.get("OUTPUT_DEVICE", "").strip() or None
+    if input_spec is None:
+        input_spec = os.environ.get("INPUT_DEVICE", "").strip() or None
+    if output_spec is None:
+        output_spec = os.environ.get("OUTPUT_DEVICE", "").strip() or None
     is_virtual = (output_spec or "").lower() in ("pipewire", "default")
 
     with pulsectl.Pulse("alexa-check") as pulse:
