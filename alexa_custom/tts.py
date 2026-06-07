@@ -192,6 +192,10 @@ class PiperTTS(TTSBackend):
                     np.asarray(arr, dtype=np.int16) * _audio_module._OUTPUT_VOLUME
                 ).astype(np.int16)
                 proc.stdin.write(scaled_arr.tobytes())
+                n = len(scaled_arr)
+                if n:
+                    rms = float(np.linalg.norm(scaled_arr)) / (32768.0 * n ** 0.5)
+                    _audio_module.set_playback_level(rms)
 
             if proc is None:
                 return
@@ -218,6 +222,7 @@ class PiperTTS(TTSBackend):
                     pass
         finally:
             if proc is not None:
+                _audio_module.set_playback_level(0.0)
                 _audio_module._playback_active.clear()
                 _audio_module._audio_lock.release()
 
