@@ -287,6 +287,29 @@ class WebServer:
             await asyncio.sleep(30)
             self._clients = {ws for ws in self._clients if not ws.closed}
 
+    async def _stt_watchdog_loop(
+        self, stt_thread_holder: list, stt_params: dict
+    ) -> None:
+        from alexa_custom.stt import start_stt_thread
+
+        while True:
+            await asyncio.sleep(5)
+            if not stt_thread_holder[0].is_alive():
+                logger.warning("STT thread died unexpectedly — restarting")
+                await self._broadcast({"type": "stt", "state": "stt_dead"})
+                new_stop = threading.Event()
+                stt_params["stop_event"] = new_stop
+                new_thread = start_stt_thread(
+                    config=stt_params["config"],
+                    stop_event=new_stop,
+                    telegram_client=stt_params["telegram_client"],
+                    livekit_connect_fn=stt_params["connect_fn"],
+                    livekit_connected_flag=stt_params["connected_flag"],
+                    on_stt_event=self.on_stt_event,
+                    stt_ready_event=stt_params.get("stt_ready_event"),
+                )
+                stt_thread_holder[0] = new_thread
+
     # ── logging ───────────────────────────────────────────────────────────────
 
     def _install_log_handler(self) -> None:
@@ -434,6 +457,7 @@ class WebServer:
         broadcast_task = asyncio.create_task(self._broadcast_loop())
         vu_task = asyncio.create_task(self._vu_flush_loop())
         prune_task = asyncio.create_task(self._prune_clients_loop())
+        watchdog_task: asyncio.Task | None = None
 
         if stt_params and "config" in stt_params:
             self._state["actions_config"] = self._serialize_config(stt_params["config"])
@@ -461,13 +485,18 @@ class WebServer:
         if stt_params is not None:
             from alexa_custom.stt import start_stt_thread
 
-            start_stt_thread(
+            stt_thread = start_stt_thread(
                 config=stt_params["config"],
                 stop_event=stt_params["stop_event"],
                 telegram_client=stt_params["telegram_client"],
                 livekit_connect_fn=stt_params["connect_fn"],
                 livekit_connected_flag=stt_params["connected_flag"],
                 on_stt_event=self.on_stt_event,
+                stt_ready_event=stt_params.get("stt_ready_event"),
+            )
+            stt_thread_holder = [stt_thread]
+            watchdog_task = asyncio.create_task(
+                self._stt_watchdog_loop(stt_thread_holder, stt_params)
             )
 
         try:
@@ -494,6 +523,8 @@ class WebServer:
             broadcast_task.cancel()
             vu_task.cancel()
             prune_task.cancel()
+            if watchdog_task is not None:
+                watchdog_task.cancel()
             await runner.cleanup()
 
 

@@ -194,7 +194,7 @@ class PiperTTS(TTSBackend):
                 proc.stdin.write(scaled_arr.tobytes())
                 n = len(scaled_arr)
                 if n:
-                    rms = float(np.linalg.norm(scaled_arr)) / (32768.0 * n ** 0.5)
+                    rms = float(np.linalg.norm(scaled_arr)) / (32768.0 * n**0.5)
                     _audio_module.set_playback_level(rms)
 
             if proc is None:
