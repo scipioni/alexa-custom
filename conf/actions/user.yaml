@@ -1,0 +1,82 @@
+# conf/actions/user.yaml — user-defined triggers
+#
+# Edit freely. This file is hot-reloaded every ~config_poll_interval seconds.
+# The learning agent (llm_learn) appends new commands to conf/actions/learned.yaml.
+#
+# Schema:
+#   triggers:        global fallback triggers (active for all wake words)
+#   wake_triggers:   per-wake-word trigger lists (keyed by wake word string)
+
+# ---------------------------------------------------------------------------
+# Global triggers — active for every wake word group
+# ---------------------------------------------------------------------------
+triggers:
+  - phrase: "test"
+    actions:
+      - type: log
+        message: "command recognition working"
+
+  - phrase: "di qualcosa"
+    actions:
+      - type: say
+        text: "Ciao dal sistema vocale"
+        lang: "it-IT"
+
+  - phrase: "suona"
+    actions:
+      - type: tone
+        name: info
+
+  - phrase: "aggiorna"
+    actions:
+      - type: shell
+        command: "systemctl --user restart alexa-client"
+
+  - phrase: "connettiti"
+    actions:
+      - type: livekit_join
+
+  - phrase: "manda messaggio"
+    actions:
+      - type: telegram
+        text: "Messaggio vocale ricevuto"
+
+  - phrase: "accendi la luce"
+    actions:
+      - type: mqtt_publish
+        topic: "home/light/set"
+        payload: "ON"
+
+# ---------------------------------------------------------------------------
+# Per-wake-word triggers
+# ---------------------------------------------------------------------------
+wake_triggers:
+  galileo:
+    - phrase: "chiama stefano"
+      actions:
+        - type: ask
+          text: "Vuoi chiamare Stefano?"
+          lang: "it-IT"
+          timeout: 5.0
+          on_reply:
+            - phrase: "si"
+              actions:
+                - type: say
+                  text: "Sto chiamando Stefano"
+                - type: livekit_join
+                - type: telegram
+                  text: "Collegati con casa <room>"
+            - phrase: "no"
+              actions:
+                - type: say
+                  text: "Chiamata annullata"
+          on_else:
+            - type: say
+              text: "Non ho capito"
+
+    - phrase: "che ora è"
+      aliases:
+        - "che ore sono"
+      actions:
+        - type: say
+          text: "$(date +'Sono le %H e %M')"

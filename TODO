@@ -1,4 +1,11 @@
+rules:
+- alexa-custom must be running on "arduino uno q" and generic linux distro on PC 
+
+
+todos:
 - double stt: vosk for first stage and sherpa-onnx for second stage
 - dark/light mode for web UI
 - set volume command: low, medium, high with persistence
-- 
+- semantic versioning of alexa-custom and changelog
+- display output on arduino uno q when activated
+- view and change configuration from web

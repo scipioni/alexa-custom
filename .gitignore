@@ -6,3 +6,4 @@ __pycache__/
 *.egg-info/
 models/
 actions.yaml
+conf/secrets.yaml

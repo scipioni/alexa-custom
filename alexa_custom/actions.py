@@ -502,8 +502,8 @@ async def handle_llm_learn(
     if listen_fn is None:
         logger.warning("llm_learn action: no listen_fn available — skipping")
         return
-    if not actions_config.actions_file:
-        logger.warning("llm_learn action: no actions_file configured — skipping")
+    if actions_config.actions is None or not actions_config.actions.learn_file:
+        logger.warning("llm_learn action: no actions.learn_file configured — skipping")
         return
 
     cfg = actions_config.llm
@@ -520,7 +520,7 @@ async def handle_llm_learn(
     wizard = LearnWizard(
         config=cfg,
         lang=lang,
-        actions_file_path=actions_config.actions_file,
+        actions_file_path=actions_config.actions.learn_file,
         wake_word=wake_word,
     )
     await wizard.run(listen_fn, say_fn)
