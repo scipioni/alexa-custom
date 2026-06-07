@@ -11,6 +11,7 @@
 # ---------------------------------------------------------------------------
 wake_words:
   - word: "galileo"
+    # id: galileo          # stable key used in wake_triggers (defaults to word)
     # aliases: ["ehi galileo", "hey galileo"]
     lang: "it-IT"
   - word: "assistente"

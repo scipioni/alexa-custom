@@ -41,6 +41,11 @@ class WakeWordGroup:
     aliases: list[str] = field(default_factory=list)
     triggers: list[Trigger] = field(default_factory=list)
     lang: str = "it-IT"
+    id: str = ""  # stable key for wake_triggers in action files; defaults to word
+
+    def __post_init__(self):
+        if not self.id:
+            self.id = self.word
 
 
 _DEFAULT_EXIT_PHRASES = [
@@ -340,9 +345,11 @@ def _parse_wake_word_groups(raw_groups: list[Any], source: str) -> list[WakeWord
                 seen[norm] = i
 
         lang = str(entry.get("lang", "it-IT"))
+        raw_id = entry.get("id")
+        group_id = str(raw_id).strip() if raw_id else word
         groups.append(
             WakeWordGroup(
-                word=word, aliases=aliases, triggers=group_triggers, lang=lang
+                word=word, aliases=aliases, triggers=group_triggers, lang=lang, id=group_id
             )
         )
 
@@ -569,7 +576,7 @@ def _load_actions_dir(
     for p in other_paths:
         paths.append((p, False))
 
-    word_set = {g.word for g in wake_words}
+    id_set = {g.id for g in wake_words}
 
     on_startup: list[ActionEntry] = []
     all_triggers: list[Trigger] = []
@@ -613,7 +620,7 @@ def _load_actions_dir(
                 )
             else:
                 for word, raw_wt in raw_wake.items():
-                    if word not in word_set:
+                    if word not in id_set:
                         logger.debug(
                             "%s: wake_triggers key %r has no matching wake word group — ignored",
                             source,
@@ -844,11 +851,11 @@ def _parse_actions_config(
 
     on_startup, actions_data = _load_actions_dir(actions_dir, wake_words)
 
-    # Merge wake_triggers into wake word groups
-    word_map = {g.word: g for g in wake_words}
-    for word, wt_list in actions_data.wake_triggers.items():
-        if word in word_map:
-            word_map[word].triggers = word_map[word].triggers + wt_list
+    # Merge wake_triggers into wake word groups (keyed by group id)
+    id_map = {g.id: g for g in wake_words}
+    for group_id, wt_list in actions_data.wake_triggers.items():
+        if group_id in id_map:
+            id_map[group_id].triggers = id_map[group_id].triggers + wt_list
 
     return ActionsConfig(
         wake_words=wake_words,
