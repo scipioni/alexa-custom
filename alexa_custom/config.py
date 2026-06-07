@@ -15,6 +15,11 @@ class ConfigError(ValueError):
     pass
 
 
+# ---------------------------------------------------------------------------
+# Leaf dataclasses (shared with action parsing)
+# ---------------------------------------------------------------------------
+
+
 @dataclass
 class ActionEntry:
     type: str
@@ -52,6 +57,102 @@ _DEFAULT_EXIT_PHRASES = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# Sub-config dataclasses
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class AudioWebRTCConfig:
+    agc: bool = True
+    aec: bool = True
+    noise_suppression: bool = True
+    high_pass_filter: bool = True
+
+
+@dataclass
+class AudioConfig:
+    card_name: str = "NewPie"
+    input_device: str | None = None
+    output_device: str | None = None
+    output_volume: float = 0.5
+    input_gain: float = 1.0
+    sample_rates: dict = field(
+        default_factory=lambda: {"usb": 48000, "bluetooth": 16000, "internal": 48000}
+    )
+    post_playback_ms: int = 100
+    tone_preroll_ms: int = 300
+    mic_gain: int = 300
+    webrtc: AudioWebRTCConfig = field(default_factory=AudioWebRTCConfig)
+
+
+@dataclass
+class STTStage1Config:
+    backend: str = "vosk"
+    model_path: str | None = None
+    confidence: float = 0.65
+    vad_silence_ms: int = 500
+    rms_threshold: float = 0.02
+    min_speech_ms: int = 300
+
+
+@dataclass
+class STTStage2Config:
+    backend: str = "vosk"
+    model_path: str | None = None
+
+
+@dataclass
+class STTConfig:
+    vad_silence_ms: int = 700
+    stage1: STTStage1Config = field(default_factory=STTStage1Config)
+    stage2: STTStage2Config = field(default_factory=STTStage2Config)
+
+
+@dataclass
+class TTSConfig:
+    backend: str = "piper"
+    voice: str = "it_IT-paola-medium"
+    preroll_ms: int = 400
+
+
+_VALID_MODES = {"two-stage", "single-stage"}
+
+
+@dataclass
+class RecognitionConfig:
+    mode: str = "two-stage"
+    command_timeout: float = 3.0
+    wake_tone: str = "wake"
+
+
+@dataclass
+class MQTTConfig:
+    host: str = ""
+    port: int = 1883
+    topic_prefix: str = "alexa"
+    node_id: str | None = None
+    queue_max: int = 200
+
+
+@dataclass
+class WebConfig:
+    port: int = 8080
+
+
+@dataclass
+class SystemConfig:
+    reconnect_delay: int = 5
+    config_poll_interval: int = 2
+    empty_room_timeout: int = 0
+
+
+@dataclass
+class ActionsDirectoryConfig:
+    dir: str = "conf/actions"
+    learn_file: str = "conf/actions/learned.yaml"
+
+
 @dataclass
 class LLMConfig:
     backend: str
@@ -66,53 +167,69 @@ class LLMConfig:
     exit_phrases: list[str] = field(default_factory=lambda: list(_DEFAULT_EXIT_PHRASES))
 
 
-_VALID_MODES = {"two-stage", "single-stage"}
+# ---------------------------------------------------------------------------
+# Secrets dataclasses
+# ---------------------------------------------------------------------------
 
 
 @dataclass
-class ActionsConfig:
-    wake_words: list[WakeWordGroup]
-    command_timeout: float
-    triggers: list[Trigger]  # global fallback; may be empty
-    on_startup: list[ActionEntry] = field(default_factory=list)
-    recognition_mode: str = "two-stage"
-    wake_confidence: float = 0.75
-    wake_tone: str = "wake"
-    tts_preroll_ms: int = 400
-    tts_backend: str = "piper"
-    tts_voice: str = "it_IT-paola-medium"
-    stt_backend: str = "vosk"
-    stt_model_path: str | None = None
-    output_volume: float = 0.5
-    input_gain: float = 1.0
-    # Audio hardware
-    audio_card_name: str = "NewPie"
-    audio_sample_rates: dict = field(
-        default_factory=lambda: {"usb": 48000, "bluetooth": 16000, "internal": 48000}
-    )
-    audio_post_playback_ms: int = 100
-    audio_tone_preroll_ms: int = 300
-    audio_mic_gain: int = 300
-    # Connection timing
-    reconnect_delay: int = 5
-    # MQTT
-    mqtt_queue_max: int = 200
-    # STT thresholds
-    stt_vad_silence_ms: int = 700
-    stt_stage1_vad_silence_ms: int = 500
-    stt_stage1_rms_threshold: float = 0.02
-    # Config watcher
-    config_poll_interval: int = 2
-    # External actions file
-    actions_file: str | None = None
-    # LLM
-    llm: LLMConfig | None = None
+class LiveKitSecretsConfig:
+    url: str = ""
+    api_key: str = ""
+    api_secret: str = ""
+    room: str = ""
+
+
+@dataclass
+class TelegramSecretsConfig:
+    bot_token: str = ""
+    chat_id: str = ""
+
+
+@dataclass
+class MQTTSecretsConfig:
+    username: str = ""
+    password: str = ""
+
+
+@dataclass
+class SecretsConfig:
+    livekit: LiveKitSecretsConfig = field(default_factory=LiveKitSecretsConfig)
+    telegram: TelegramSecretsConfig = field(default_factory=TelegramSecretsConfig)
+    llm_host: str | None = None
+    mqtt: MQTTSecretsConfig = field(default_factory=MQTTSecretsConfig)
+
+
+# ---------------------------------------------------------------------------
+# Top-level config
+# ---------------------------------------------------------------------------
 
 
 @dataclass
 class ActionsData:
     triggers: list[Trigger] = field(default_factory=list)
     wake_triggers: dict[str, list[Trigger]] = field(default_factory=dict)
+
+
+@dataclass
+class ActionsConfig:
+    wake_words: list[WakeWordGroup]
+    triggers: list[Trigger]  # merged global fallback; may be empty
+    on_startup: list[ActionEntry] = field(default_factory=list)
+    audio: AudioConfig = field(default_factory=AudioConfig)
+    stt: STTConfig = field(default_factory=STTConfig)
+    tts: TTSConfig = field(default_factory=TTSConfig)
+    recognition: RecognitionConfig = field(default_factory=RecognitionConfig)
+    mqtt: MQTTConfig | None = None
+    web: WebConfig = field(default_factory=WebConfig)
+    system: SystemConfig = field(default_factory=SystemConfig)
+    actions: ActionsDirectoryConfig = field(default_factory=ActionsDirectoryConfig)
+    llm: LLMConfig | None = None
+
+
+# ---------------------------------------------------------------------------
+# Primitive parsers (actions, triggers, wake word groups)
+# ---------------------------------------------------------------------------
 
 
 def _parse_actions(raw_actions: list[Any], path_prefix: str) -> list[ActionEntry]:
@@ -180,7 +297,7 @@ def _parse_triggers(raw_triggers: list[Any], path_prefix: str) -> list[Trigger]:
 
 def _parse_wake_word_groups(raw_groups: list[Any], source: str) -> list[WakeWordGroup]:
     groups: list[WakeWordGroup] = []
-    seen: dict[str, int] = {}  # normalized phrase → group index for duplicate detection
+    seen: dict[str, int] = {}
 
     for i, entry in enumerate(raw_groups):
         if not isinstance(entry, dict):
@@ -223,7 +340,6 @@ def _parse_wake_word_groups(raw_groups: list[Any], source: str) -> list[WakeWord
                 seen[norm] = i
 
         lang = str(entry.get("lang", "it-IT"))
-
         groups.append(
             WakeWordGroup(
                 word=word, aliases=aliases, triggers=group_triggers, lang=lang
@@ -233,50 +349,163 @@ def _parse_wake_word_groups(raw_groups: list[Any], source: str) -> list[WakeWord
     return groups
 
 
-def _parse_actions_file(path: Path) -> ActionsData:
-    """Parse an actions.yaml file into an ActionsData (global triggers + wake_triggers map)."""
-    try:
-        with path.open() as f:
-            raw = yaml.safe_load(f) or {}
-    except yaml.YAMLError as e:
-        raise ConfigError(f"actions.yaml parse error: {e}") from e
-
-    if not isinstance(raw, dict):
-        raise ConfigError("actions.yaml must be a YAML mapping at the top level")
-
-    triggers: list[Trigger] = []
-    raw_triggers = raw.get("triggers")
-    if raw_triggers is not None:
-        if not isinstance(raw_triggers, list):
-            raise ConfigError("actions.yaml: 'triggers' must be a list if present")
-        triggers = _parse_triggers(raw_triggers, "actions.yaml:triggers")
-
-    wake_triggers: dict[str, list[Trigger]] = {}
-    raw_wake = raw.get("wake_triggers")
-    if raw_wake is not None:
-        if not isinstance(raw_wake, dict):
-            raise ConfigError(
-                "actions.yaml: 'wake_triggers' must be a mapping if present"
-            )
-        for word, raw_wt in raw_wake.items():
-            if not isinstance(raw_wt, list):
-                raise ConfigError(
-                    f"actions.yaml: 'wake_triggers.{word}' must be a list"
-                )
-            wake_triggers[str(word)] = _parse_triggers(
-                raw_wt, f"actions.yaml:wake_triggers.{word}"
-            )
-
-    return ActionsData(triggers=triggers, wake_triggers=wake_triggers)
+# ---------------------------------------------------------------------------
+# Sub-config parsers
+# ---------------------------------------------------------------------------
 
 
-def _parse_llm_config(raw_llm: dict, source: str) -> LLMConfig:
+def _parse_audio_config(raw: dict) -> AudioConfig:
+    webrtc_raw = raw.get("webrtc") or {}
+    if not isinstance(webrtc_raw, dict):
+        webrtc_raw = {}
+    webrtc = AudioWebRTCConfig(
+        agc=bool(webrtc_raw.get("agc", True)),
+        aec=bool(webrtc_raw.get("aec", True)),
+        noise_suppression=bool(webrtc_raw.get("noise_suppression", True)),
+        high_pass_filter=bool(webrtc_raw.get("high_pass_filter", True)),
+    )
+
+    sample_rates_raw = raw.get("sample_rates") or {}
+    if not isinstance(sample_rates_raw, dict):
+        sample_rates_raw = {}
+    sample_rates = {
+        "usb": int(sample_rates_raw.get("usb", 48000)),
+        "bluetooth": int(sample_rates_raw.get("bluetooth", 16000)),
+        "internal": int(sample_rates_raw.get("internal", 48000)),
+    }
+
+    output_volume = float(raw.get("output_volume", 0.5))
+    if not (0.0 <= output_volume <= 1.0):
+        raise ConfigError(
+            f"'audio.output_volume' must be between 0.0 and 1.0, got {output_volume}"
+        )
+
+    input_gain = float(raw.get("input_gain", 1.0))
+    if input_gain < 0.0:
+        raise ConfigError(f"'audio.input_gain' must be >= 0.0, got {input_gain}")
+
+    input_device = raw.get("input_device") or None
+    output_device = raw.get("output_device") or None
+
+    return AudioConfig(
+        card_name=str(raw.get("card_name", "NewPie")),
+        input_device=str(input_device) if input_device else None,
+        output_device=str(output_device) if output_device else None,
+        output_volume=output_volume,
+        input_gain=input_gain,
+        sample_rates=sample_rates,
+        post_playback_ms=int(raw.get("post_playback_ms", 100)),
+        tone_preroll_ms=int(raw.get("tone_preroll_ms", 300)),
+        mic_gain=int(raw.get("mic_gain", 300)),
+        webrtc=webrtc,
+    )
+
+
+def _parse_stt_stage1_config(raw: dict) -> STTStage1Config:
+    backend = str(raw.get("backend", "vosk"))
+    if backend not in ("vosk", "sherpa-onnx"):
+        raise ConfigError(
+            f"'stt.stage1.backend' must be 'vosk' or 'sherpa-onnx', got {backend!r}"
+        )
+    model_path_raw = raw.get("model_path")
+    return STTStage1Config(
+        backend=backend,
+        model_path=str(model_path_raw) if model_path_raw else None,
+        confidence=float(raw.get("confidence", 0.65)),
+        vad_silence_ms=int(raw.get("vad_silence_ms", 500)),
+        rms_threshold=float(raw.get("rms_threshold", 0.02)),
+        min_speech_ms=int(raw.get("min_speech_ms", 300)),
+    )
+
+
+def _parse_stt_stage2_config(raw: dict) -> STTStage2Config:
+    backend = str(raw.get("backend", "vosk"))
+    if backend not in ("vosk", "sherpa-onnx"):
+        raise ConfigError(
+            f"'stt.stage2.backend' must be 'vosk' or 'sherpa-onnx', got {backend!r}"
+        )
+    model_path_raw = raw.get("model_path")
+    return STTStage2Config(
+        backend=backend,
+        model_path=str(model_path_raw) if model_path_raw else None,
+    )
+
+
+def _parse_stt_config(raw: dict) -> STTConfig:
+    stage1_raw = raw.get("stage1") or {}
+    if not isinstance(stage1_raw, dict):
+        raise ConfigError("'stt.stage1' must be a mapping if present")
+    stage2_raw = raw.get("stage2") or {}
+    if not isinstance(stage2_raw, dict):
+        raise ConfigError("'stt.stage2' must be a mapping if present")
+    return STTConfig(
+        vad_silence_ms=int(raw.get("vad_silence_ms", 700)),
+        stage1=_parse_stt_stage1_config(stage1_raw),
+        stage2=_parse_stt_stage2_config(stage2_raw),
+    )
+
+
+def _parse_tts_config(raw: dict) -> TTSConfig:
+    backend = str(raw.get("backend", "piper"))
+    return TTSConfig(
+        backend=backend,
+        voice=str(raw.get("voice", "it_IT-paola-medium")),
+        preroll_ms=int(raw.get("preroll_ms", 400)),
+    )
+
+
+def _parse_recognition_config(raw: dict) -> RecognitionConfig:
+    mode = str(raw.get("mode", "two-stage"))
+    if mode not in _VALID_MODES:
+        raise ConfigError(
+            f"'recognition.mode' must be one of {sorted(_VALID_MODES)}, got {mode!r}"
+        )
+    return RecognitionConfig(
+        mode=mode,
+        command_timeout=float(raw.get("command_timeout", 3.0)),
+        wake_tone=str(raw.get("wake_tone", "wake")),
+    )
+
+
+def _parse_mqtt_config(raw: dict) -> MQTTConfig | None:
+    host = raw.get("host")
+    if not host:
+        return None
+    return MQTTConfig(
+        host=str(host),
+        port=int(raw.get("port", 1883)),
+        topic_prefix=str(raw.get("topic_prefix", "alexa")),
+        node_id=str(raw.get("node_id")) if raw.get("node_id") else None,
+        queue_max=int(raw.get("queue_max", 200)),
+    )
+
+
+def _parse_system_config(raw: dict) -> SystemConfig:
+    return SystemConfig(
+        reconnect_delay=int(raw.get("reconnect_delay", 5)),
+        config_poll_interval=int(raw.get("config_poll_interval", 2)),
+        empty_room_timeout=int(raw.get("empty_room_timeout", 0)),
+    )
+
+
+def _parse_actions_dir_config(raw: dict) -> ActionsDirectoryConfig:
+    return ActionsDirectoryConfig(
+        dir=str(raw.get("dir", "conf/actions")),
+        learn_file=str(raw.get("learn_file", "conf/actions/learned.yaml")),
+    )
+
+
+def _parse_llm_config(
+    raw_llm: dict, source: str, host_override: str | None = None
+) -> LLMConfig:
     backend = str(raw_llm.get("backend", ""))
     if backend != "ollama":
         raise ConfigError(f"{source}: 'llm.backend' must be 'ollama', got {backend!r}")
-    host = raw_llm.get("host")
+    host = host_override or raw_llm.get("host")
     if not host or not isinstance(host, str):
-        raise ConfigError(f"{source}: 'llm.host' is required")
+        raise ConfigError(
+            f"{source}: 'llm.host' is required (set in conf/secrets.yaml)"
+        )
     model = raw_llm.get("model")
     if not model or not isinstance(model, str):
         raise ConfigError(f"{source}: 'llm.model' is required")
@@ -300,8 +529,202 @@ def _parse_llm_config(raw_llm: dict, source: str) -> LLMConfig:
     )
 
 
-def load_config(path: str | Path) -> ActionsConfig | None:
-    """Load config.yaml, apply env: section to os.environ, parse actions schema."""
+# ---------------------------------------------------------------------------
+# Multi-file action loading
+# ---------------------------------------------------------------------------
+
+
+def _parse_actions_file_raw(path: Path, source: str) -> dict:
+    """Load a single action YAML file; return raw dict."""
+    try:
+        with path.open() as f:
+            raw = yaml.safe_load(f) or {}
+    except yaml.YAMLError as e:
+        raise ConfigError(f"{source}: YAML parse error: {e}") from e
+    if not isinstance(raw, dict):
+        raise ConfigError(f"{source}: must be a YAML mapping at the top level")
+    return raw
+
+
+def _load_actions_dir(
+    dir_path: Path,
+    wake_words: list[WakeWordGroup],
+    system_file: str = "system.yaml",
+) -> tuple[list[ActionEntry], ActionsData]:
+    """Load all .yaml files from dir_path; system_file first, rest alphabetically.
+
+    Returns (on_startup_actions, merged_actions_data).
+    on_startup is only read from system_file.
+    """
+    if not dir_path.is_dir():
+        logger.warning("Actions directory not found: %s", dir_path)
+        return [], ActionsData()
+
+    # Collect files: system first, then others alphabetically
+    system_path = dir_path / system_file
+    other_paths = sorted(p for p in dir_path.glob("*.yaml") if p.name != system_file)
+    paths: list[tuple[Path, bool]] = []  # (path, is_system)
+    if system_path.exists():
+        paths.append((system_path, True))
+    for p in other_paths:
+        paths.append((p, False))
+
+    word_set = {g.word for g in wake_words}
+
+    on_startup: list[ActionEntry] = []
+    all_triggers: list[Trigger] = []
+    all_wake_triggers: dict[str, list[Trigger]] = {}
+
+    for path, is_system in paths:
+        source = str(path)
+        try:
+            raw = _parse_actions_file_raw(path, source)
+        except ConfigError as e:
+            logger.error("Skipping action file %s: %s", path, e)
+            continue
+
+        # on_startup: only from system file
+        if is_system:
+            raw_startup = raw.get("on_startup")
+            if raw_startup is not None:
+                if not isinstance(raw_startup, list):
+                    logger.warning("%s: 'on_startup' must be a list — ignored", source)
+                else:
+                    on_startup = _parse_actions(raw_startup, f"{source}:on_startup")
+        elif raw.get("on_startup") is not None:
+            logger.debug(
+                "%s: 'on_startup' ignored (only honoured in %s)", source, system_file
+            )
+
+        # triggers: concatenate in load order
+        raw_triggers = raw.get("triggers")
+        if raw_triggers is not None:
+            if not isinstance(raw_triggers, list):
+                logger.warning("%s: 'triggers' must be a list — ignored", source)
+            else:
+                all_triggers.extend(_parse_triggers(raw_triggers, f"{source}:triggers"))
+
+        # wake_triggers: merge per word, concatenate in load order
+        raw_wake = raw.get("wake_triggers")
+        if raw_wake is not None:
+            if not isinstance(raw_wake, dict):
+                logger.warning(
+                    "%s: 'wake_triggers' must be a mapping — ignored", source
+                )
+            else:
+                for word, raw_wt in raw_wake.items():
+                    if word not in word_set:
+                        logger.debug(
+                            "%s: wake_triggers key %r has no matching wake word group — ignored",
+                            source,
+                            word,
+                        )
+                        continue
+                    if not isinstance(raw_wt, list):
+                        logger.warning(
+                            "%s: 'wake_triggers.%s' must be a list — ignored",
+                            source,
+                            word,
+                        )
+                        continue
+                    wt = _parse_triggers(raw_wt, f"{source}:wake_triggers.{word}")
+                    if word in all_wake_triggers:
+                        all_wake_triggers[word].extend(wt)
+                    else:
+                        all_wake_triggers[word] = wt
+
+    return on_startup, ActionsData(
+        triggers=all_triggers, wake_triggers=all_wake_triggers
+    )
+
+
+# ---------------------------------------------------------------------------
+# Secrets loader
+# ---------------------------------------------------------------------------
+
+
+def load_secrets(path: str | Path = "conf/secrets.yaml") -> SecretsConfig:
+    """Load conf/secrets.yaml, apply values to os.environ, return SecretsConfig.
+
+    Missing file is silently ignored (all fields default to empty strings).
+    """
+    p = Path(path)
+    if not p.exists():
+        logger.debug("Secrets file not found: %s — skipping", p)
+        return SecretsConfig()
+
+    try:
+        with p.open() as f:
+            raw = yaml.safe_load(f) or {}
+    except yaml.YAMLError as e:
+        raise ConfigError(f"conf/secrets.yaml parse error: {e}") from e
+
+    if not isinstance(raw, dict):
+        raise ConfigError("conf/secrets.yaml must be a YAML mapping at the top level")
+
+    lk_raw = raw.get("livekit") or {}
+    lk = LiveKitSecretsConfig(
+        url=str(lk_raw.get("url", "")),
+        api_key=str(lk_raw.get("api_key", "")),
+        api_secret=str(lk_raw.get("api_secret", "")),
+        room=str(lk_raw.get("room", "")),
+    )
+    tg_raw = raw.get("telegram") or {}
+    tg = TelegramSecretsConfig(
+        bot_token=str(tg_raw.get("bot_token", "")),
+        chat_id=str(tg_raw.get("chat_id", "")),
+    )
+    mqtt_raw = raw.get("mqtt") or {}
+    mq = MQTTSecretsConfig(
+        username=str(mqtt_raw.get("username", "")),
+        password=str(mqtt_raw.get("password", "")),
+    )
+    llm_host = raw.get("llm_host") or None
+    if llm_host:
+        llm_host = str(llm_host)
+
+    secrets = SecretsConfig(livekit=lk, telegram=tg, llm_host=llm_host, mqtt=mq)
+
+    # Apply to os.environ
+    env_updates: list[str] = []
+    if lk.url:
+        os.environ["LIVEKIT_URL"] = lk.url
+        env_updates.append("LIVEKIT_URL")
+    if lk.api_key:
+        os.environ["LIVEKIT_API_KEY"] = lk.api_key
+        env_updates.append("LIVEKIT_API_KEY")
+    if lk.api_secret:
+        os.environ["LIVEKIT_API_SECRET"] = lk.api_secret
+        env_updates.append("LIVEKIT_API_SECRET")
+    if lk.room:
+        os.environ["LIVEKIT_ROOM"] = lk.room
+        env_updates.append("LIVEKIT_ROOM")
+    if tg.bot_token:
+        os.environ["TELEGRAM_BOT_TOKEN"] = tg.bot_token
+        env_updates.append("TELEGRAM_BOT_TOKEN")
+    if tg.chat_id:
+        os.environ["TELEGRAM_CHAT_ID"] = tg.chat_id
+        env_updates.append("TELEGRAM_CHAT_ID")
+    if mq.username:
+        os.environ["MQTT_USERNAME"] = mq.username
+        env_updates.append("MQTT_USERNAME")
+    if mq.password:
+        os.environ["MQTT_PASSWORD"] = mq.password
+        env_updates.append("MQTT_PASSWORD")
+
+    if env_updates:
+        logger.debug("Applied secrets env keys: %s", ", ".join(env_updates))
+
+    return secrets
+
+
+# ---------------------------------------------------------------------------
+# Main config loader
+# ---------------------------------------------------------------------------
+
+
+def load_config(path: str | Path = "conf/config.yaml") -> ActionsConfig | None:
+    """Load conf/config.yaml and merge action files from conf/actions/."""
     p = Path(path)
     if not p.exists():
         return None
@@ -310,58 +733,26 @@ def load_config(path: str | Path) -> ActionsConfig | None:
         with p.open() as f:
             raw = yaml.safe_load(f)
     except yaml.YAMLError as e:
-        raise ConfigError(f"config.yaml parse error: {e}") from e
+        raise ConfigError(f"conf/config.yaml parse error: {e}") from e
 
     if not isinstance(raw, dict):
-        raise ConfigError("config.yaml must be a YAML mapping at the top level")
+        raise ConfigError("conf/config.yaml must be a YAML mapping at the top level")
 
-    # Apply env: section into os.environ (overwrites existing values)
-    env_section = raw.pop("env", None)
-    applied_env_keys: list[str] = []
-    if env_section is not None:
-        if not isinstance(env_section, dict):
-            raise ConfigError("config.yaml: 'env' must be a mapping")
-        for k, v in env_section.items():
-            os.environ[str(k)] = str(v)
-            applied_env_keys.append(str(k))
-    if applied_env_keys:
-        logger.debug("Applied env keys from config: %s", ", ".join(applied_env_keys))
+    if "env" in raw:
+        raise ConfigError(
+            "conf/config.yaml: 'env:' key is not supported — "
+            "move credentials to conf/secrets.yaml"
+        )
 
-    config = _parse_actions_config(raw, source=str(p))
-
-    # Merge actions.yaml when actions_file is configured
-    if config.actions_file:
-        af_path = Path(config.actions_file)
-        if not af_path.is_absolute():
-            af_path = p.parent / af_path
-        if af_path.exists():
-            actions_data = _parse_actions_file(af_path)
-            config.triggers = config.triggers + actions_data.triggers
-            word_map = {g.word: g for g in config.wake_words}
-            for word, wt_triggers in actions_data.wake_triggers.items():
-                if word in word_map:
-                    word_map[word].triggers = word_map[word].triggers + wt_triggers
-                else:
-                    logger.debug(
-                        "actions.yaml: wake_triggers key %r has no matching wake word group — ignored",
-                        word,
-                    )
-        else:
-            logger.warning("actions_file %r not found — skipping", str(af_path))
-    else:
-        # Suggest actions_file if actions.yaml exists alongside config and learn_commands is on
-        implicit_af = p.parent / "actions.yaml"
-        if implicit_af.exists() and config.llm and config.llm.learn_commands:
-            logger.info(
-                "actions.yaml found alongside config.yaml — consider adding "
-                "'actions_file: actions.yaml' to config.yaml so the learning agent can update it"
-            )
-
-    return config
+    return _parse_actions_config(raw, source=str(p))
 
 
-def _parse_actions_config(raw: dict, source: str = "config") -> ActionsConfig:
-    """Parse a raw YAML dict (env: already stripped) into ActionsConfig."""
+def _parse_actions_config(
+    raw: dict,
+    source: str = "config",
+    secrets: SecretsConfig | None = None,
+) -> ActionsConfig:
+    """Parse a raw YAML dict into ActionsConfig."""
     raw_wake_words = raw.get("wake_words")
     if (
         not raw_wake_words
@@ -372,152 +763,104 @@ def _parse_actions_config(raw: dict, source: str = "config") -> ActionsConfig:
 
     wake_words = _parse_wake_word_groups(raw_wake_words, source)
 
-    command_timeout = float(raw.get("command_timeout", 3.0))
+    audio_raw = raw.get("audio") or {}
+    if not isinstance(audio_raw, dict):
+        raise ConfigError(f"{source}: 'audio' must be a mapping if present")
+    audio = _parse_audio_config(audio_raw)
 
-    recognition_mode = str(raw.get("recognition_mode", "two-stage"))
-    if recognition_mode not in _VALID_MODES:
-        raise ConfigError(
-            f"{source}: 'recognition_mode' must be one of {sorted(_VALID_MODES)}, got {recognition_mode!r}"
-        )
-
-    wake_confidence = float(raw.get("wake_confidence", 0.75))
-    wake_tone = str(raw.get("wake_tone", "wake"))
-
-    # A `tts:` block, when present, overrides top-level keys. Both shapes are
-    # supported so existing configs keep working:
-    #     tts_preroll_ms: 400
-    # or
-    #     tts:
-    #       backend: piper
-    #       voice: it_IT-paola-medium
-    #       preroll_ms: 400
-    tts_section = raw.get("tts") or {}
-    if not isinstance(tts_section, dict):
-        raise ConfigError(f"{source}: 'tts' must be a mapping if present")
-
-    tts_preroll_ms = int(tts_section.get("preroll_ms", raw.get("tts_preroll_ms", 400)))
-    tts_backend = str(tts_section.get("backend", raw.get("tts_backend", "piper")))
-    tts_voice = str(
-        tts_section.get("voice", raw.get("tts_voice", "it_IT-paola-medium"))
-    )
-
-    stt_section = raw.get("stt") or {}
-    if not isinstance(stt_section, dict):
+    stt_raw = raw.get("stt") or {}
+    if not isinstance(stt_raw, dict):
         raise ConfigError(f"{source}: 'stt' must be a mapping if present")
+    stt = _parse_stt_config(stt_raw)
 
-    stt_backend = str(stt_section.get("backend", raw.get("stt_backend", "vosk")))
-    if stt_backend not in ("vosk", "sherpa-onnx"):
-        raise ConfigError(
-            f"{source}: 'stt.backend' must be 'vosk' or 'sherpa-onnx', got {stt_backend!r}"
-        )
+    tts_raw = raw.get("tts") or {}
+    if not isinstance(tts_raw, dict):
+        raise ConfigError(f"{source}: 'tts' must be a mapping if present")
+    tts = _parse_tts_config(tts_raw)
 
-    stt_model_path_raw = stt_section.get("model_path") or raw.get("stt_model_path")
-    stt_model_path: str | None = None
-    if stt_model_path_raw is not None:
-        if not isinstance(stt_model_path_raw, str):
-            raise ConfigError(f"{source}: 'stt.model_path' must be a string if present")
-        stt_model_path = stt_model_path_raw
+    recognition_raw = raw.get("recognition") or {}
+    if not isinstance(recognition_raw, dict):
+        raise ConfigError(f"{source}: 'recognition' must be a mapping if present")
+    recognition = _parse_recognition_config(recognition_raw)
 
-    output_volume = float(raw.get("output_volume", 0.5))
-    if not (0.0 <= output_volume <= 1.0):
-        raise ConfigError(
-            f"{source}: 'output_volume' must be between 0.0 and 1.0, got {output_volume}"
-        )
+    mqtt_raw = raw.get("mqtt") or {}
+    if not isinstance(mqtt_raw, dict):
+        raise ConfigError(f"{source}: 'mqtt' must be a mapping if present")
+    mqtt = _parse_mqtt_config(mqtt_raw)
 
-    input_gain = float(raw.get("input_gain", 1.0))
-    if input_gain < 0.0:
-        raise ConfigError(f"{source}: 'input_gain' must be >= 0.0, got {input_gain}")
+    web_raw = raw.get("web") or {}
+    if not isinstance(web_raw, dict):
+        raise ConfigError(f"{source}: 'web' must be a mapping if present")
+    web = WebConfig(port=int(web_raw.get("port", 8080)))
 
-    on_startup: list[ActionEntry] = []
-    raw_startup = raw.get("on_startup")
-    if raw_startup is not None:
-        if not isinstance(raw_startup, list):
-            raise ConfigError(f"{source}: 'on_startup' must be a list")
-        on_startup = _parse_actions(raw_startup, "on_startup")
+    system_raw = raw.get("system") or {}
+    if not isinstance(system_raw, dict):
+        raise ConfigError(f"{source}: 'system' must be a mapping if present")
+    system = _parse_system_config(system_raw)
 
-    # top-level triggers are the global fallback; absent means no fallback
-    raw_triggers = raw.get("triggers")
-    if raw_triggers is None:
-        triggers: list[Trigger] = []
-    elif not isinstance(raw_triggers, list):
-        raise ConfigError(f"{source}: 'triggers' must be a list if present")
-    else:
-        triggers = _parse_triggers(raw_triggers, "triggers")
+    actions_raw = raw.get("actions") or {}
+    if not isinstance(actions_raw, dict):
+        raise ConfigError(f"{source}: 'actions' must be a mapping if present")
+    actions_dir_cfg = _parse_actions_dir_config(actions_raw)
 
-    audio_card_name = str(raw.get("audio_card_name", "NewPie"))
-
-    audio_sample_rates_raw = raw.get("audio_sample_rates") or {}
-    if not isinstance(audio_sample_rates_raw, dict):
-        raise ConfigError(
-            f"{source}: 'audio_sample_rates' must be a mapping if present"
-        )
-    audio_sample_rates = {
-        "usb": int(audio_sample_rates_raw.get("usb", 48000)),
-        "bluetooth": int(audio_sample_rates_raw.get("bluetooth", 16000)),
-        "internal": int(audio_sample_rates_raw.get("internal", 48000)),
-    }
-
-    audio_post_playback_ms = int(raw.get("audio_post_playback_ms", 100))
-    audio_tone_preroll_ms = int(raw.get("audio_tone_preroll_ms", 300))
-    audio_mic_gain = int(raw.get("audio_mic_gain", 300))
-    reconnect_delay = int(raw.get("reconnect_delay", 5))
-    mqtt_queue_max = int(raw.get("mqtt_queue_max", 200))
-    stt_vad_silence_ms = int(raw.get("stt_vad_silence_ms", 700))
-    stt_stage1_vad_silence_ms = int(raw.get("stt_stage1_vad_silence_ms", 500))
-    stt_stage1_rms_threshold = float(raw.get("stt_stage1_rms_threshold", 0.02))
-    config_poll_interval = int(raw.get("config_poll_interval", 2))
-
-    # actions_file: external trigger definitions writable by the learning agent
-    actions_file_raw = raw.get("actions_file")
-    actions_file: str | None = str(actions_file_raw) if actions_file_raw else None
-
-    # llm: optional Ollama-backed conversation engine
+    # LLM: merge llm_host from secrets if available
     llm: LLMConfig | None = None
     raw_llm = raw.get("llm")
     if raw_llm is not None:
         if not isinstance(raw_llm, dict):
             raise ConfigError(f"{source}: 'llm' must be a mapping if present")
-        llm = _parse_llm_config(raw_llm, source)
+        llm_host_override = (secrets.llm_host if secrets else None) or raw_llm.get(
+            "host"
+        )
+        if not llm_host_override:
+            logger.warning(
+                "%s: LLM disabled — 'llm_host' not set in conf/secrets.yaml or 'llm.host' in config",
+                source,
+            )
+        else:
+            try:
+                llm = _parse_llm_config(
+                    raw_llm, source, host_override=str(llm_host_override)
+                )
+            except ConfigError as e:
+                logger.warning("LLM config error — LLM disabled: %s", e)
+
+    # Set audio WebRTC env vars from config
+    webrtc = audio.webrtc
+    os.environ.setdefault("MIC_AGC", "1" if webrtc.agc else "0")
+    os.environ.setdefault("MIC_AEC", "1" if webrtc.aec else "0")
+    os.environ.setdefault(
+        "MIC_NOISE_SUPPRESSION", "1" if webrtc.noise_suppression else "0"
+    )
+    os.environ.setdefault(
+        "MIC_HIGH_PASS_FILTER", "1" if webrtc.high_pass_filter else "0"
+    )
+
+    # Load and merge action files
+    config_dir = Path(source).parent if source != "config" else Path(".")
+    actions_dir = Path(actions_dir_cfg.dir)
+    if not actions_dir.is_absolute():
+        actions_dir = config_dir.parent / actions_dir_cfg.dir
+
+    on_startup, actions_data = _load_actions_dir(actions_dir, wake_words)
+
+    # Merge wake_triggers into wake word groups
+    word_map = {g.word: g for g in wake_words}
+    for word, wt_list in actions_data.wake_triggers.items():
+        if word in word_map:
+            word_map[word].triggers = word_map[word].triggers + wt_list
 
     return ActionsConfig(
         wake_words=wake_words,
-        command_timeout=command_timeout,
-        triggers=triggers,
+        triggers=actions_data.triggers,
         on_startup=on_startup,
-        recognition_mode=recognition_mode,
-        wake_confidence=wake_confidence,
-        wake_tone=wake_tone,
-        tts_preroll_ms=tts_preroll_ms,
-        tts_backend=tts_backend,
-        tts_voice=tts_voice,
-        stt_backend=stt_backend,
-        stt_model_path=stt_model_path,
-        output_volume=output_volume,
-        input_gain=input_gain,
-        audio_card_name=audio_card_name,
-        audio_sample_rates=audio_sample_rates,
-        audio_post_playback_ms=audio_post_playback_ms,
-        audio_tone_preroll_ms=audio_tone_preroll_ms,
-        audio_mic_gain=audio_mic_gain,
-        reconnect_delay=reconnect_delay,
-        mqtt_queue_max=mqtt_queue_max,
-        stt_vad_silence_ms=stt_vad_silence_ms,
-        stt_stage1_vad_silence_ms=stt_stage1_vad_silence_ms,
-        stt_stage1_rms_threshold=stt_stage1_rms_threshold,
-        config_poll_interval=config_poll_interval,
-        actions_file=actions_file,
+        audio=audio,
+        stt=stt,
+        tts=tts,
+        recognition=recognition,
+        mqtt=mqtt,
+        web=web,
+        system=system,
+        actions=actions_dir_cfg,
         llm=llm,
     )
-
-
-def load_web_config(base_dir: str | Path = ".") -> dict:
-    """Return the optional web: section from config.yaml as a dict (keys: port, enabled)."""
-    p = Path(base_dir) / "config.yaml"
-    if not p.exists():
-        return {}
-    try:
-        with p.open() as f:
-            raw = yaml.safe_load(f) or {}
-        return raw.get("web", {}) if isinstance(raw, dict) else {}
-    except Exception:
-        return {}

@@ -50,17 +50,12 @@ class ConfigManager:
             except Exception as e:
                 logger.error("Reload callback %r raised: %s", cb, e)
 
-    def _log_env_reload(self, env_keys: list[str]) -> None:
-        if env_keys:
-            logger.debug("Config reload applied env keys: %s", ", ".join(env_keys))
-
     def start_watcher(self, path: str | Path, interval: float | None = None) -> None:
         p = Path(path)
-        # Explicit interval wins; otherwise use config value; final fallback is 2.0 s.
         if interval is not None:
             cfg_interval = interval
         elif self.config is not None:
-            cfg_interval = float(self.config.config_poll_interval)
+            cfg_interval = float(self.config.system.config_poll_interval)
         else:
             cfg_interval = 2.0
         self._watcher_task = asyncio.get_running_loop().create_task(
@@ -118,7 +113,6 @@ class ConfigManager:
                             logger.error(
                                 "Source watcher on_restart callback failed: %s", e
                             )
-                    # Small delay to let multiple files finish saving
                     await asyncio.sleep(0.3)
                     os.execv(sys.executable, [sys.executable] + sys.argv)
                 last_mtimes = mtimes
@@ -132,36 +126,57 @@ class ConfigManager:
             except OSError:
                 return None
 
+        def _dir_mtimes(d: Path) -> dict[str, float]:
+            result: dict[str, float] = {}
+            if not d.is_dir():
+                return result
+            for p in d.glob("*.yaml"):
+                # Never watch secrets.yaml
+                if p.name == "secrets.yaml":
+                    continue
+                try:
+                    result[str(p)] = p.stat().st_mtime
+                except OSError:
+                    pass
+            return result
+
         last_mtime = _mtime(path)
 
-        # Also watch actions.yaml when it exists alongside config or is configured
-        actions_path = path.parent / "actions.yaml"
-        last_actions_mtime = _mtime(actions_path)
+        # Resolve actions directory from current config, fall back to default
+        actions_dir = self._resolve_actions_dir(path)
+        last_actions_mtimes = _dir_mtimes(actions_dir)
 
         try:
             while True:
                 await asyncio.sleep(interval)
 
-                # Re-resolve actions_path from current config in case actions_file changed
-                if self.config and self.config.actions_file:
-                    ap = Path(self.config.actions_file)
-                    if not ap.is_absolute():
-                        ap = path.parent / ap
-                    actions_path = ap
+                # Re-resolve actions dir in case config changed it
+                actions_dir = self._resolve_actions_dir(path)
 
                 mtime = _mtime(path)
-                actions_mtime = _mtime(actions_path)
+                actions_mtimes = _dir_mtimes(actions_dir)
 
                 config_changed = mtime != last_mtime
-                actions_changed = actions_mtime != last_actions_mtime
+                actions_changed = actions_mtimes != last_actions_mtimes
+
                 if config_changed or actions_changed:
                     last_mtime = mtime
-                    last_actions_mtime = actions_mtime
+                    last_actions_mtimes = actions_mtimes
                     if mtime is not None:
                         if actions_changed and not config_changed:
-                            logger.info("actions.yaml changed, reloading config")
+                            logger.info("Action file changed, reloading config")
                         else:
                             logger.info("Config file changed, reloading: %s", path)
                         self._reload(path)
         except asyncio.CancelledError:
             pass
+
+    def _resolve_actions_dir(self, config_path: Path) -> Path:
+        """Return the actions directory as an absolute Path."""
+        if self.config is not None:
+            d = Path(self.config.actions.dir)
+        else:
+            d = Path("conf/actions")
+        if not d.is_absolute():
+            d = config_path.parent.parent / d
+        return d

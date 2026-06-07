@@ -439,7 +439,9 @@ class LiveKitSessionManager:
 
     async def run(self, stop_event: asyncio.Event):
         """Connect to one LiveKit session; return when disconnected or stop_event fires."""
-        empty_room_timeout = float(os.environ.get("EMPTY_ROOM_TIMEOUT", "0") or "0")
+        empty_room_timeout = (
+            0.0  # not configurable at session level; set via config.system
+        )
 
         if self.pw_device is None:
             # PortAudio was built ALSA-only on this board and can't open any output.
@@ -540,8 +542,16 @@ async def _async_main(
 ) -> None:
     logger.info(f"Browser join URL:\n  {browser_join_url()}")
 
-    input_spec = os.environ.get("INPUT_DEVICE", "").strip() or None
-    output_spec = os.environ.get("OUTPUT_DEVICE", "").strip() or None
+    input_spec = (
+        actions_config.audio.input_device
+        if actions_config is not None
+        else os.environ.get("INPUT_DEVICE", "").strip() or None
+    )
+    output_spec = (
+        actions_config.audio.output_device
+        if actions_config is not None
+        else os.environ.get("OUTPUT_DEVICE", "").strip() or None
+    )
 
     # Route PipeWire to the requested devices, then always talk to LiveKit
     # through the PipeWire virtual device — never open hw: devices directly.
@@ -680,7 +690,7 @@ async def _async_main(
             on_event(event, data)
 
     reconnect_delay = (
-        actions_config.reconnect_delay
+        actions_config.system.reconnect_delay
         if actions_config is not None
         else RECONNECT_DELAY
     )
@@ -765,12 +775,21 @@ async def _async_main(
         logger.info("Shutting down LiveKit loop...")
 
 
-def _mqtt_settings() -> dict:
+def _mqtt_settings_from_config(config: ActionsConfig | None) -> dict:
+    if config is not None and config.mqtt is not None:
+        return {
+            "host": config.mqtt.host,
+            "port": str(config.mqtt.port),
+            "prefix": config.mqtt.topic_prefix,
+            "node_id": config.mqtt.node_id,
+            "queue_max": config.mqtt.queue_max,
+        }
     return {
-        "host": os.environ.get("MQTT_HOST"),
-        "port": os.environ.get("MQTT_PORT", "1883"),
-        "prefix": os.environ.get("MQTT_TOPIC_PREFIX", "alexa"),
-        "node_id": os.environ.get("MQTT_NODE_ID"),
+        "host": None,
+        "port": "1883",
+        "prefix": "alexa",
+        "node_id": None,
+        "queue_max": 200,
     }
 
 
@@ -779,11 +798,11 @@ def make_mqtt_reload_callback(
     loop: asyncio.AbstractEventLoop,
 ):
     """Return a reload callback that reconnects MQTT when broker settings change."""
-    prev_settings = _mqtt_settings()
+    prev_settings: dict = {}
 
     def _callback(new_config: ActionsConfig) -> None:
         nonlocal prev_settings
-        current = _mqtt_settings()
+        current = _mqtt_settings_from_config(new_config)
         if current == prev_settings:
             return
         prev_settings = current
@@ -842,7 +861,10 @@ def main() -> None:
 
     from alexa_custom.config import load_config
 
-    config = load_config("config.yaml")
+    from alexa_custom.config import load_secrets
+
+    load_secrets("conf/secrets.yaml")
+    config = load_config("conf/config.yaml")
 
     ensure_setup()
 
@@ -864,17 +886,15 @@ def main() -> None:
         logger.info("Hot-reload enabled (watching alexa_custom/*.py)")
 
     from alexa_custom.web import run_web
-    from alexa_custom.config import load_web_config
 
-    input_spec = os.environ.get("INPUT_DEVICE", "").strip() or None
-    output_spec = os.environ.get("OUTPUT_DEVICE", "").strip() or None
-    output_volume = config.output_volume if config is not None else 0.5
-    input_gain = config.input_gain if config is not None else 1.0
+    input_spec = config.audio.input_device if config is not None else None
+    output_spec = config.audio.output_device if config is not None else None
+    output_volume = config.audio.output_volume if config is not None else 0.5
+    input_gain = config.audio.input_gain if config is not None else 1.0
     room = os.environ.get("LIVEKIT_ROOM", "")
 
-    # Port: CLI flag > config.yaml web.port > default 8080
-    web_cfg = load_web_config()
-    web_port = args.web_port or int(web_cfg.get("port", 8080))
+    # Port: CLI flag > config.web.port > default 8080
+    web_port = args.web_port or (config.web.port if config is not None else 8080)
 
     connect_trigger: threading.Event | None = None
     livekit_connected_flag: threading.Event | None = None
@@ -888,10 +908,10 @@ def main() -> None:
         livekit_connected_flag = threading.Event()
 
         init_engine(
-            backend_type=config.tts_backend,
-            voice=config.tts_voice,
+            backend_type=config.tts.backend,
+            voice=config.tts.voice,
             stt_gated_flag=livekit_connected_flag,
-            preroll_ms=config.tts_preroll_ms,
+            preroll_ms=config.tts.preroll_ms,
         )
 
         async def _livekit_connect_fn_web() -> None:

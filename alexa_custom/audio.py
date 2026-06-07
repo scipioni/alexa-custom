@@ -43,8 +43,7 @@ _MIC_GAIN = 300  # percent, used by setup_audio()
 def configure(cfg) -> None:
     """Update module-level audio parameters from ActionsConfig.
 
-    Call once after config load and again after each hot-reload.  Env-var
-    overrides (AUDIO_POST_PLAYBACK_MS, AUDIO_TONE_PREROLL_MS) still win when set.
+    Call once after config load and again after each hot-reload.
     """
     global \
         _POST_PLAYBACK_MS, \
@@ -53,16 +52,12 @@ def configure(cfg) -> None:
         _DEFAULT_CARD_NAME, \
         _MIC_GAIN, \
         _OUTPUT_VOLUME
-    _POST_PLAYBACK_MS = int(
-        os.environ.get("AUDIO_POST_PLAYBACK_MS", str(cfg.audio_post_playback_ms))
-    )
-    _TONE_PREROLL_MS = int(
-        os.environ.get("AUDIO_TONE_PREROLL_MS", str(cfg.audio_tone_preroll_ms))
-    )
-    _SAMPLERATE = dict(cfg.audio_sample_rates)
-    _DEFAULT_CARD_NAME = cfg.audio_card_name
-    _MIC_GAIN = cfg.audio_mic_gain
-    _OUTPUT_VOLUME = cfg.output_volume
+    _POST_PLAYBACK_MS = int(cfg.audio.post_playback_ms)
+    _TONE_PREROLL_MS = int(cfg.audio.tone_preroll_ms)
+    _SAMPLERATE = dict(cfg.audio.sample_rates)
+    _DEFAULT_CARD_NAME = cfg.audio.card_name
+    _MIC_GAIN = cfg.audio.mic_gain
+    _OUTPUT_VOLUME = cfg.audio.output_volume
 
 
 def set_stt_gated_flag(flag: threading.Event):
@@ -942,11 +937,13 @@ def setup_audio() -> None:
     """Set output device PCM hardware volume to 100% and persist it across reboots."""
     output_spec = os.environ.get("OUTPUT_DEVICE", "").strip()
     if not output_spec:
-        if os.path.exists("config.yaml"):
-            from alexa_custom.config import load_config
+        if os.path.exists("conf/config.yaml"):
+            from alexa_custom.config import load_config, load_secrets
 
-            load_config("config.yaml")
-            output_spec = os.environ.get("OUTPUT_DEVICE", "").strip()
+            load_secrets("conf/secrets.yaml")
+            cfg = load_config("conf/config.yaml")
+            if cfg and cfg.audio.output_device:
+                output_spec = cfg.audio.output_device
     if not output_spec:
         print(
             "ERROR: OUTPUT_DEVICE is not set — set it in config.yaml under env: or export OUTPUT_DEVICE"
@@ -1068,32 +1065,33 @@ def main_test():
 
     print("--- Audio System Test ---")
 
-    # Load config to respect INPUT_DEVICE / OUTPUT_DEVICE and env: section
-    config = load_config("config.yaml")
+    from alexa_custom.config import load_secrets
 
-    input_spec = os.environ.get("INPUT_DEVICE", "").strip() or None
-    output_spec = os.environ.get("OUTPUT_DEVICE", "").strip() or None
+    load_secrets("conf/secrets.yaml")
+    config = load_config("conf/config.yaml")
+
+    input_spec = config.audio.input_device if config else None
+    output_spec = config.audio.output_device if config else None
 
     try:
         set_pipewire_defaults(input_spec, output_spec)
     except Exception as e:
         print(f"WARNING: Could not set PipeWire defaults: {e}")
 
-    if config and config.output_volume > 0:
+    if config and config.audio.output_volume > 0:
         with pulsectl.Pulse("alexa-test") as pulse:
             _restore_hw_pcm()
-            set_output_volume(pulse, output_spec, config.output_volume)
+            set_output_volume(pulse, output_spec, config.audio.output_volume)
 
     print("1. Playing tone...")
     play_tone("info")
 
     print("2. TTS: Asking for name...")
-    # Initialize engine with settings from config if available
     if config:
         init_engine(
-            backend_type=config.tts_backend,
-            voice=config.tts_voice,
-            preroll_ms=config.tts_preroll_ms,
+            backend_type=config.tts.backend,
+            voice=config.tts.voice,
+            preroll_ms=config.tts.preroll_ms,
         )
     else:
         init_engine(backend_type="piper")

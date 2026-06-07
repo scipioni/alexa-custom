@@ -21,7 +21,13 @@ if TYPE_CHECKING:
 
 from alexa_custom.actions import TelegramClient, dispatch, match_trigger
 from alexa_custom.audio import is_playback_active, play_timeout_beep, play_wake_beep
-from alexa_custom.config import ActionsConfig, Trigger, WakeWordGroup
+from alexa_custom.config import (
+    ActionsConfig,
+    STTStage1Config,
+    STTStage2Config,
+    Trigger,
+    WakeWordGroup,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -182,10 +188,10 @@ class SherpaOnnxSTT(STTBackend):
         self._delegate.reset(self._stream)
 
 
-def get_stt_backend(backend: str, model_path: str | None = None) -> STTBackend:
-    if backend == "sherpa-onnx":
-        return SherpaOnnxSTT(model_path or _SHERPA_MODEL_PATH)
-    vosk_path = model_path or _MODEL_PATH
+def get_stt_backend(cfg: STTStage1Config | STTStage2Config) -> STTBackend:
+    if cfg.backend == "sherpa-onnx":
+        return SherpaOnnxSTT(cfg.model_path or _SHERPA_MODEL_PATH)
+    vosk_path = cfg.model_path or _MODEL_PATH
     return VoskSTT(_load_model(vosk_path))
 
 
@@ -207,8 +213,10 @@ def normalize_text(text: str) -> str:
     return unicodedata.normalize("NFC", stripped).strip()
 
 
-def resolve_capture_source(input_spec: str | None) -> tuple[str | None, int]:
-    """Map INPUT_DEVICE value to a PipeWire source name and channel count via pactl."""
+def resolve_capture_source(input_spec: str | None = None) -> tuple[str | None, int]:
+    """Map audio.input_device value to a PipeWire source name and channel count via pactl."""
+    if input_spec is None:
+        input_spec = os.environ.get("INPUT_DEVICE", "").strip() or None
     channels = 1
     if not input_spec:
         return None, channels
@@ -493,15 +501,15 @@ def run_stt_worker(
         def _get_config():
             return config  # type: ignore[return-value]
 
-    input_spec = os.environ.get("INPUT_DEVICE", "").strip() or None
+    current_config = _get_config()
+    input_spec = current_config.audio.input_device
     source, channels = resolve_capture_source(input_spec)
 
-    current_config = _get_config()
     logger.info(
         f"STT: wake words={[g.word for g in current_config.wake_words]}, "
-        f"timeout={current_config.command_timeout}s, "
+        f"timeout={current_config.recognition.command_timeout}s, "
         f"source={source or 'default'} ({channels} ch), "
-        f"stt_backend={current_config.stt_backend}"
+        f"stage1={current_config.stt.stage1.backend} stage2={current_config.stt.stage2.backend}"
     )
 
     if mqtt_client:
@@ -509,17 +517,29 @@ def run_stt_worker(
             f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "idle", loop=loop
         )
 
-    current_config = _get_config()
     try:
         t0 = time.monotonic()
-        backend = get_stt_backend(
-            current_config.stt_backend, current_config.stt_model_path
+        stage1_backend = get_stt_backend(current_config.stt.stage1)
+        logger.info(
+            f"STT stage1 backend ({current_config.stt.stage1.backend}) loaded in {time.monotonic() - t0:.1f}s"
         )
-        logger.info(f"STT backend loaded in {time.monotonic() - t0:.1f}s")
+        t0 = time.monotonic()
+        stage2_backend = get_stt_backend(current_config.stt.stage2)
+        logger.info(
+            f"STT stage2 backend ({current_config.stt.stage2.backend}) loaded in {time.monotonic() - t0:.1f}s"
+        )
     except RuntimeError as e:
         logger.error(f"STT backend creation failed: {e}")
         return
-    backend_key = (current_config.stt_backend, current_config.stt_model_path)
+
+    stage1_key = (
+        current_config.stt.stage1.backend,
+        current_config.stt.stage1.model_path,
+    )
+    stage2_key = (
+        current_config.stt.stage2.backend,
+        current_config.stt.stage2.model_path,
+    )
 
     _dispatch_loop = asyncio.new_event_loop()
     try:
@@ -527,25 +547,39 @@ def run_stt_worker(
             current_config = _get_config()
             loop_fn = (
                 _single_stage_loop
-                if current_config.recognition_mode == "single-stage"
+                if current_config.recognition.mode == "single-stage"
                 else _recognition_loop
             )
-            # Reload backend only when the config changes it
-            new_backend_key = (
-                current_config.stt_backend,
-                current_config.stt_model_path,
+
+            new_stage1_key = (
+                current_config.stt.stage1.backend,
+                current_config.stt.stage1.model_path,
             )
-            if new_backend_key != backend_key:
+            new_stage2_key = (
+                current_config.stt.stage2.backend,
+                current_config.stt.stage2.model_path,
+            )
+
+            if new_stage1_key != stage1_key:
                 try:
-                    backend = get_stt_backend(
-                        current_config.stt_backend, current_config.stt_model_path
-                    )
-                    backend_key = new_backend_key
-                    logger.info("STT backend reloaded after config change")
+                    stage1_backend = get_stt_backend(current_config.stt.stage1)
+                    stage1_key = new_stage1_key
+                    logger.info("STT stage1 backend reloaded after config change")
                 except RuntimeError as e:
-                    logger.error(f"STT backend reload failed: {e}")
+                    logger.error(f"STT stage1 backend reload failed: {e}")
                     time.sleep(2)
                     continue
+
+            if new_stage2_key != stage2_key:
+                try:
+                    stage2_backend = get_stt_backend(current_config.stt.stage2)
+                    stage2_key = new_stage2_key
+                    logger.info("STT stage2 backend reloaded after config change")
+                except RuntimeError as e:
+                    logger.error(f"STT stage2 backend reload failed: {e}")
+                    time.sleep(2)
+                    continue
+
             proc: subprocess.Popen | None = None
             try:
                 proc = start_capture(source, channels)
@@ -555,7 +589,8 @@ def run_stt_worker(
                 loop_fn(
                     proc=proc,
                     channels=channels,
-                    backend=backend,
+                    stage1_backend=stage1_backend,
+                    stage2_backend=stage2_backend,
                     config=current_config,
                     stop_event=stop_event,
                     telegram_client=telegram_client,
@@ -738,7 +773,8 @@ def capture_transcript(
 def _single_stage_loop(
     proc: subprocess.Popen,
     channels: int,
-    backend: STTBackend,
+    stage1_backend: STTBackend,
+    stage2_backend: STTBackend,
     config: ActionsConfig,
     stop_event: threading.Event,
     telegram_client: TelegramClient,
@@ -750,12 +786,11 @@ def _single_stage_loop(
     dispatch_loop: asyncio.AbstractEventLoop | None = None,
 ) -> None:
     """Single-stage: full transcription always; wake word + command in one phrase."""
+    backend = stage2_backend
     cooldown_until = 0.0
     was_playing = False
     alias_map = _build_alias_map(config.wake_words)
-    _eff_vad_ms = int(
-        os.environ.get("STT_VAD_SILENCE_MS", str(config.stt_vad_silence_ms))
-    )
+    _eff_vad_ms = config.stt.vad_silence_ms
 
     if on_stt_event:
         on_stt_event("listening", {"wake_words": [g.word for g in config.wake_words]})
@@ -862,7 +897,7 @@ def _single_stage_loop(
             on_stt_event("wake", {"word": wake_group.word, "timeout": 0})
 
         try:
-            play_wake_beep(config.wake_tone)
+            play_wake_beep(config.recognition.wake_tone)
         except Exception as e:
             logger.debug(f"Wake beep failed: {e}")
 
@@ -922,7 +957,8 @@ def _single_stage_loop(
 def _recognition_loop(
     proc: subprocess.Popen,
     channels: int,
-    backend: STTBackend,
+    stage1_backend: STTBackend,
+    stage2_backend: STTBackend,
     config: ActionsConfig,
     stop_event: threading.Event,
     telegram_client: TelegramClient,
@@ -933,23 +969,14 @@ def _recognition_loop(
     loop: asyncio.AbstractEventLoop | None = None,
     dispatch_loop: asyncio.AbstractEventLoop | None = None,
 ) -> None:
-    # Effective thresholds: env-var wins if set, otherwise use config value.
-    _eff_stage1_vad_ms = int(
-        os.environ.get(
-            "STT_STAGE1_VAD_SILENCE_MS", str(config.stt_stage1_vad_silence_ms)
-        )
-    )
-    _eff_stage1_rms = float(
-        os.environ.get("STT_STAGE1_RMS_THRESHOLD", str(config.stt_stage1_rms_threshold))
-    )
-    _eff_vad_ms = int(
-        os.environ.get("STT_VAD_SILENCE_MS", str(config.stt_vad_silence_ms))
-    )
+    _eff_stage1_vad_ms = config.stt.stage1.vad_silence_ms
+    _eff_stage1_rms = config.stt.stage1.rms_threshold
+    _eff_vad_ms = config.stt.vad_silence_ms
 
     alias_map = _build_alias_map(config.wake_words)
-    is_vosk = isinstance(backend, VoskSTT)
+    is_vosk = isinstance(stage1_backend, VoskSTT)
     if is_vosk:
-        vosk_model = backend.model
+        vosk_model = stage1_backend.model
         stage1 = vosk.KaldiRecognizer(
             vosk_model, 16000, _grammar_json(config.wake_words)
         )
@@ -998,7 +1025,7 @@ def _recognition_loop(
                 if display_rec is not None:
                     display_rec.Reset()
             else:
-                backend.reset()
+                stage1_backend.reset()
                 stage1_last_speech_t = 0.0
                 stage1_speech_ms = 0.0
             was_playing = False
@@ -1044,7 +1071,7 @@ def _recognition_loop(
                 if display_rec:
                     display_rec.Reset()
             else:
-                backend.reset()
+                stage1_backend.reset()
                 stage1_last_speech_t = 0.0
                 stage1_speech_ms = 0.0
             continue
@@ -1066,12 +1093,12 @@ def _recognition_loop(
                 logger.debug(f"Stage1 result: {text!r} conf={conf:.2f}")
                 norm_text = normalize_text(text)
                 wake_match = alias_map.get(norm_text)
-                if wake_match is not None and conf >= config.wake_confidence:
+                if wake_match is not None and conf >= config.stt.stage1.confidence:
                     _wake_detected(
                         wake_group=wake_match,
                         proc=proc,
                         channels=channels,
-                        backend=backend,
+                        backend=stage2_backend,
                         config=config,
                         stop_event=stop_event,
                         telegram_client=telegram_client,
@@ -1087,7 +1114,7 @@ def _recognition_loop(
                         f"was_gated={was_gated} was_playing={was_playing}"
                     )
                     _drain_pipe(proc)
-                    vosk_model = backend.model
+                    vosk_model = stage1_backend.model
                     stage1 = vosk.KaldiRecognizer(
                         vosk_model, 16000, _grammar_json(config.wake_words)
                     )
@@ -1134,15 +1161,15 @@ def _recognition_loop(
                 and (time.monotonic() - stage1_last_speech_t) * 1000
                 >= _eff_stage1_vad_ms
             )
-            endpoint_fired = backend.accept_waveform(data)
+            endpoint_fired = stage1_backend.accept_waveform(data)
 
             if endpoint_fired or vad_triggered:
                 if vad_triggered and not endpoint_fired:
-                    text = backend.finalize().strip()
+                    text = stage1_backend.finalize().strip()
                     trigger_src = "vad"
                 else:
-                    text = backend.text().strip()
-                    backend.reset()
+                    text = stage1_backend.text().strip()
+                    stage1_backend.reset()
                     trigger_src = "endpoint"
                 stage1_last_speech_t = 0.0
                 stage1_speech_ms = 0.0
@@ -1154,7 +1181,7 @@ def _recognition_loop(
                             wake_group=wake_match,
                             proc=proc,
                             channels=channels,
-                            backend=backend,
+                            backend=stage2_backend,
                             config=config,
                             stop_event=stop_event,
                             telegram_client=telegram_client,
@@ -1181,7 +1208,7 @@ def _recognition_loop(
                                 loop=loop,
                             )
             else:
-                partial = backend.partial_text().strip()
+                partial = stage1_backend.partial_text().strip()
                 if partial and on_stt_event:
                     on_stt_event("transcribing", {"text": partial})
 
@@ -1205,7 +1232,8 @@ def _wake_detected(
     logger.info(f"Wake word detected: '{wake_group.word}'")
     if on_stt_event:
         on_stt_event(
-            "wake", {"word": wake_group.word, "timeout": config.command_timeout}
+            "wake",
+            {"word": wake_group.word, "timeout": config.recognition.command_timeout},
         )
     if mqtt_client:
         mqtt_client.publish_threadsafe(
@@ -1214,7 +1242,7 @@ def _wake_detected(
             loop=loop,
         )
     try:
-        play_wake_beep(config.wake_tone)
+        play_wake_beep(config.recognition.wake_tone)
     except Exception as e:
         logger.debug(f"Wake beep failed: {e}")
 
@@ -1222,7 +1250,7 @@ def _wake_detected(
         proc,
         channels,
         backend,
-        config.command_timeout,
+        config.recognition.command_timeout,
         stop_event,
         on_stt_event,
         flush_ms=300,

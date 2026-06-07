@@ -35,7 +35,7 @@ tasks:
       - PYTHONPATH={{.PYTHONPATH}} {{.PYTEST}} tests/
 
   run:
-    desc: Run the alexa-client
+    desc: Run the alexa-client (loads from conf/config.yaml)
     cmds:
       - PYTHONPATH={{.PYTHONPATH}} python3 alexa_custom/client.py {{.CLI_ARGS}}
 
@@ -126,9 +126,8 @@ tasks:
       # Set WirePlumber persistent default routing by name (survives reboots)
       - pw-metadata -n default 0 default.audio.sink '{"name":"alsa_output.usb-0a12_NewPie_SABINESMICDFU-00.analog-stereo"}' 'Spa:String:JSON'
       - pw-metadata -n default 0 default.audio.source '{"name":"alsa_input.usb-0a12_NewPie_SABINESMICDFU-00.analog-stereo"}' 'Spa:String:JSON'
-      # Unmute hardware PCM volume now
+      # Unmute hardware PCM volume now (software volume is set from conf/config.yaml at startup)
       - amixer -c 0 sset PCM 100% || amixer -c NewPie sset PCM 100% || true
-      - wpctl set-volume @DEFAULT_SINK@ 1.0 || true
       # Install user service to re-apply PCM 100% after PipeWire init on every boot
       - mkdir -p ~/.config/systemd/user
       - cp setup/alsa-pcm-unmute.service ~/.config/systemd/user/alsa-pcm-unmute.service

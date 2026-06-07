@@ -302,11 +302,13 @@ class ActionsFileStore:
         yaml.preserve_quotes = True
 
         # Load existing content or start fresh
-        if p.exists():
+        file_exists = p.exists()
+        if file_exists:
             with p.open() as f:
                 doc = yaml.load(f)
         else:
             doc = None
+            p.parent.mkdir(parents=True, exist_ok=True)
 
         if doc is None:
             doc = CommentedMap()
@@ -348,6 +350,13 @@ class ActionsFileStore:
         buf = io.StringIO()
         yaml.dump(doc, buf)
         content = buf.getvalue()
+
+        if not file_exists:
+            content = (
+                "# conf/actions/learned.yaml — auto-created by the llm_learn action\n"
+                "# Add or edit triggers here; loaded alphabetically after system.yaml.\n"
+                "\n"
+            ) + content
 
         sep = ActionsFileStore._LEARNED_SEPARATOR
         if sep not in content:
