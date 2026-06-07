@@ -184,6 +184,7 @@ def set_pipewire_defaults(input_spec: str | None, output_spec: str | None):
                 raise RuntimeError(
                     f"PipeWire source not found for INPUT_DEVICE={input_spec!r}"
                 )
+    _restore_hw_pcm()
 
 
 def find_alexa_card(pulse, spec: str | None = None):
@@ -234,6 +235,9 @@ def set_output_volume(
         )
     else:
         logger.info(f"Set output volume to {volume:.0%} via wpctl")
+    # wpctl set-volume triggers WirePlumber to re-initialise the ALSA device,
+    # resetting the hardware PCM mixer to 0%. Restore immediately.
+    _restore_hw_pcm()
 
 
 def set_input_gain(pulse: pulsectl.Pulse, input_spec: str | None, gain: float) -> None:
@@ -448,6 +452,7 @@ def check_newpie_ready(
             )
             ok = False
 
+    _restore_hw_pcm()
     return ok, conn
 
 
@@ -1097,8 +1102,8 @@ def main_test():
 
     if config and config.audio.output_volume > 0:
         with pulsectl.Pulse("alexa-test") as pulse:
-            _restore_hw_pcm()
             set_output_volume(pulse, output_spec, config.audio.output_volume)
+        _restore_hw_pcm()
 
     print("1. Playing tone...")
     play_tone("info")

@@ -84,10 +84,16 @@ This headless host runs a modern **PipeWire** audio graph managed by **WirePlumb
 - **Fix**: `task audio:setup` installs `setup/99-newpie-no-autosuspend.rules` to `/etc/udev/rules.d/`, setting `autosuspend_delay_ms=-1` for the NewPie (USB ID `0a12:1260`).
 - **Ad-hoc recovery**: `task audio:restart`.
 
-### 5. pulsectl Triggers PCM Reset (Critical for Python Code)
-- **Problem**: Opening any `pulsectl.Pulse()` connection causes pipewire-pulse to re-open the ALSA device, resetting PCM to 0%. All subsequent Python audio is silent even though `pw-play file.wav` from the shell works fine.
-- **Fix**: Call `_restore_hw_pcm()` immediately after closing any `pulsectl.Pulse()` context — it runs `amixer -c 0 sset PCM 100%`. Already wired into `AudioWatcher` (on device connect) and `main_test()`.
-- **Rule**: Never open pulsectl without calling `_restore_hw_pcm()` right after.
+### 5. pulsectl and wpctl Trigger PCM Reset (Critical for Python Code)
+- **Problem**: Two operations cause pipewire-pulse to re-initialise the ALSA device, resetting the NewPie's hardware PCM mixer to 0% — making all subsequent audio silent even though `pw-play file.wav` from the shell works fine:
+  1. Opening any `pulsectl.Pulse()` connection.
+  2. Calling `wpctl set-volume` (WirePlumber re-inits the ALSA chain on every volume change).
+- **Fix**: Call `_restore_hw_pcm()` immediately after either operation — it runs `amixer -c 0 sset PCM 100%`:
+  - After closing any `pulsectl.Pulse()` context (outside the `with` block).
+  - At the end of `set_output_volume()` (already wired in), which wraps `wpctl set-volume`.
+  - Inside `AudioWatcher.run()` right after opening the watcher connection.
+  - Inside `AudioWatcher._check_and_enforce()` on device connect.
+- **Rule**: Never call `wpctl set-volume` or open pulsectl without calling `_restore_hw_pcm()` right after. `set_output_volume()` already does this — do not bypass it with raw `wpctl` calls.
 
 ### 6. pw-play Raw Stdin Unreliable on This Board
 - **Problem**: `pw-play --raw --rate N --format f32 -` exits 0 but produces no audio on PipeWire 1.4.2. `-a` (media-type flag) requires an argument and causes pw-play to exit with error, also silently swallowed.
