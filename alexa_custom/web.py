@@ -57,7 +57,7 @@ class WebServer:
         self._input_gain = input_gain
         self._shutdown_callback = shutdown_callback
         self._clients: set[web.WebSocketResponse] = set()
-        self._queue: asyncio.Queue = asyncio.Queue()
+        self._queue: asyncio.Queue = asyncio.Queue(maxsize=200)
         self._pending_vu: dict[str, float] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
         self._livekit_loop: asyncio.AbstractEventLoop | None = None
@@ -85,7 +85,15 @@ class WebServer:
         loop = self._loop
         if loop is None or loop.is_closed():
             return
-        loop.call_soon_threadsafe(self._queue.put_nowait, {"type": event_type, **data})
+        msg = {"type": event_type, **data}
+
+        def _put():
+            try:
+                self._queue.put_nowait(msg)
+            except asyncio.QueueFull:
+                pass
+
+        loop.call_soon_threadsafe(_put)
 
     def _update_pending_vu(self, mic: float, spk: float) -> None:
         """Must run on the event loop (via call_soon_threadsafe)."""
@@ -266,7 +274,7 @@ class WebServer:
     async def _vu_flush_loop(self) -> None:
         while True:
             await asyncio.sleep(0.25)
-            if self._pending_vu:
+            if self._pending_vu and self._clients:
                 await self._broadcast({"type": "volume_update", **self._pending_vu})
                 self._pending_vu.clear()
 
