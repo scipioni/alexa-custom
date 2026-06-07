@@ -218,25 +218,20 @@ def detect_connection(card) -> str:
 def set_output_volume(
     pulse: pulsectl.Pulse, output_spec: str | None, volume: float
 ) -> None:
-    """Set PulseAudio volume on the configured output sink."""
+    """Set output volume via wpctl so WirePlumber persists the setting."""
     if volume <= 0:
         return
-    needle = (output_spec or _DEFAULT_CARD_NAME).lower()
-    sink = next(
-        (
-            s
-            for s in pulse.sink_list()
-            if needle in s.description.lower() or needle in s.name.lower()
-        ),
-        None,
+    result = subprocess.run(
+        ["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", f"{volume:.4f}"],
+        capture_output=True,
+        check=False,
     )
-    if not sink:
-        logger.warning(f"Cannot set volume: sink matching {output_spec!r} not found")
-        return
-    from pulsectl import PulseVolumeInfo
-
-    pulse.volume_set(sink, PulseVolumeInfo(volume, channels=2))
-    logger.info(f"Set output volume to {volume:.0%} on {sink.description}")
+    if result.returncode != 0:
+        logger.warning(
+            f"wpctl set-volume failed: {result.stderr.decode(errors='replace').strip()}"
+        )
+    else:
+        logger.info(f"Set output volume to {volume:.0%} via wpctl")
 
 
 def set_input_gain(pulse: pulsectl.Pulse, input_spec: str | None, gain: float) -> None:
@@ -379,13 +374,13 @@ class AudioWatcher(threading.Thread):
         if ok != self.connected or conn != self.conn_type:
             if ok and not self.connected:
                 logger.info(f"Audio device {conn} connected and configured")
+                _restore_hw_pcm()
                 if self.output_volume > 0 and not self._volume_set:
                     set_output_volume(pulse, self.output_spec, self.output_volume)
                     self._volume_set = True
                 if self.input_gain > 0 and not self._gain_set:
                     set_input_gain(pulse, self.input_spec, self.input_gain)
                     self._gain_set = True
-                _restore_hw_pcm()
 
             self.connected = ok
             self.conn_type = conn
@@ -1076,8 +1071,8 @@ def main_test():
 
     if config and config.output_volume > 0:
         with pulsectl.Pulse("alexa-test") as pulse:
+            _restore_hw_pcm()
             set_output_volume(pulse, output_spec, config.output_volume)
-        _restore_hw_pcm()
 
     print("1. Playing tone...")
     play_tone("info")

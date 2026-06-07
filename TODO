@@ -1,0 +1,4 @@
+- double stt: vosk for first stage and sherpa-onnx for second stage
+- dark/light mode for web UI
+- set volume command: low, medium, high with persistence
+- 
