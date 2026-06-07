@@ -22,6 +22,19 @@ _playback_active = threading.Event()
 # and so the STT-gating flag is owned by exactly one playback at a time.
 _audio_lock = threading.Lock()
 
+# Current RMS level of local audio output (0.0–1.0); updated during TTS synthesis.
+# Reset to 0.0 when playback ends.  Read by the web VU flush loop for the SPK meter.
+_playback_level: float = 0.0
+
+
+def get_playback_level() -> float:
+    return _playback_level
+
+
+def set_playback_level(level: float) -> None:
+    global _playback_level
+    _playback_level = level
+
 # Digitally scales audio played through the system to match the user's volume preference
 _OUTPUT_VOLUME = 0.5
 

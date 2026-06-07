@@ -264,10 +264,13 @@ class WebServer:
             await self._broadcast(msg)
 
     async def _vu_flush_loop(self) -> None:
+        from alexa_custom.audio import get_playback_level
         while True:
             await asyncio.sleep(0.25)
-            if self._pending_vu:
-                await self._broadcast({"type": "volume_update", **self._pending_vu})
+            spk = max(self._pending_vu.get("spk", 0.0), get_playback_level())
+            mic = self._pending_vu.get("mic", 0.0)
+            if self._pending_vu or spk > 0:
+                await self._broadcast({"type": "volume_update", "mic": mic, "spk": spk})
                 self._pending_vu.clear()
 
     async def _prune_clients_loop(self) -> None:
