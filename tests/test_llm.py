@@ -110,6 +110,38 @@ class TestOllamaClient:
         with pytest.raises(OllamaUnreachable):
             await client.chat([], "llama3.2")
 
+    @pytest.mark.asyncio
+    @patch("alexa_custom.llm.httpx.AsyncClient")
+    async def test_chat_stream_handles_httpx_timeout(self, mock_client_class):
+        import httpx
+        from unittest.mock import MagicMock
+
+        mock_client = MagicMock()
+        mock_client.stream.side_effect = httpx.TimeoutException("mocked timeout")
+        mock_client_class.return_value.__aenter__.return_value = mock_client
+
+        client = OllamaClient("http://localhost:11434", timeout=5.0)
+        with pytest.raises(OllamaUnreachable) as exc_info:
+            async for _ in client.chat_stream([], "model"):
+                pass
+        assert "Ollama timeout" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    @patch("alexa_custom.llm.httpx.AsyncClient")
+    async def test_chat_stream_handles_httpx_http_error(self, mock_client_class):
+        import httpx
+        from unittest.mock import MagicMock
+
+        mock_client = MagicMock()
+        mock_client.stream.side_effect = httpx.HTTPError("mocked http error")
+        mock_client_class.return_value.__aenter__.return_value = mock_client
+
+        client = OllamaClient("http://localhost:11434", timeout=5.0)
+        with pytest.raises(OllamaUnreachable) as exc_info:
+            async for _ in client.chat_stream([], "model"):
+                pass
+        assert "Ollama HTTP error" in str(exc_info.value)
+
 
 # ---------------------------------------------------------------------------
 # ConversationEngine tests
@@ -212,6 +244,21 @@ class TestConversationEngine:
         await engine.reply_streaming("test", _noop_say)
         assert captured[0]["role"] == "system"
         assert captured[0]["content"] == "Tu sei un robot."
+
+    @pytest.mark.asyncio
+    async def test_reply_streaming_timeout(self):
+        import asyncio
+
+        engine = self._make_engine(request_timeout=0.01)
+
+        async def slow_stream(messages, model):
+            await asyncio.sleep(0.05)
+            yield "this should not be reached"
+
+        engine._client.chat_stream = slow_stream
+        result = await engine.reply_streaming("test", _noop_say)
+        assert result == _UNREACHABLE
+        assert len(engine._history) == 0  # history pop/cleared
 
 
 # ---------------------------------------------------------------------------

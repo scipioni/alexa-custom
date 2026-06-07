@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from pathlib import Path
@@ -142,14 +143,12 @@ class OllamaClient:
                             yield token
                         if chunk.get("done"):
                             break
-        except (httpx.ConnectError, httpx.ConnectTimeout) as e:
-            raise OllamaUnreachable(str(e)) from e
-        except httpx.ReadTimeout as e:
-            raise OllamaUnreachable(
-                f"Ollama inference timeout after {self._timeout}s: {e}"
-            ) from e
         except httpx.TimeoutException as e:
-            raise OllamaUnreachable(str(e)) from e
+            raise OllamaUnreachable(
+                f"Ollama timeout after {self._timeout}s: {e}"
+            ) from e
+        except httpx.HTTPError as e:
+            raise OllamaUnreachable(f"Ollama HTTP error: {e}") from e
 
 
 class ConversationEngine:
@@ -205,20 +204,24 @@ class ConversationEngine:
         buf = ""
         full_text = ""
         try:
-            async for token in self._client.chat_stream(messages, self._config.model):
-                buf += token
-                sentences, buf = _split_sentences(buf)
-                for sentence in sentences:
-                    full_text += sentence + " "
-                    await say_fn(sentence)
+            async with asyncio.timeout(self._config.request_timeout):
+                async for token in self._client.chat_stream(
+                    messages, self._config.model
+                ):
+                    buf += token
+                    sentences, buf = _split_sentences(buf)
+                    for sentence in sentences:
+                        full_text += sentence + " "
+                        await say_fn(sentence)
             # Speak any remaining fragment (no trailing punctuation)
             remainder = buf.strip()
             if remainder:
                 full_text += remainder
                 await say_fn(remainder)
-        except OllamaUnreachable as e:
-            logger.warning("Ollama unreachable: %s", e)
-            self._history.pop()
+        except (OllamaUnreachable, TimeoutError) as e:
+            logger.warning("Ollama streaming error or timeout: %s", e)
+            if self._history:
+                self._history.pop()
             return _UNREACHABLE
 
         self._commit(full_text.strip())
