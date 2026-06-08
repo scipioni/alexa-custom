@@ -37,3 +37,8 @@ alexa-audio-setup = "alexa_custom.audio:setup_audio"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["alexa_custom*"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
