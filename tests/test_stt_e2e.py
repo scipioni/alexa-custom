@@ -203,3 +203,127 @@ class TestApproxWakeMatch:
     def test_short_noise_ignored(self):
         # single-char tokens should not trigger a match
         assert _approx_wake_match("e il la le un", self.alias_map) is None
+
+
+# ---------------------------------------------------------------------------
+# Confuser tests
+# ---------------------------------------------------------------------------
+
+
+class TestSubphraseConfusers:
+    def setup_method(self):
+        from alexa_custom.stt import _subphrase_confusers
+
+        self._fn = _subphrase_confusers
+
+    def _groups(self, word, aliases=None):
+        return [WakeWordGroup(word=word, aliases=aliases or [], triggers=[])]
+
+    def test_multiword_wake_produces_component_confuser(self):
+        groups = self._groups("aiuto aiuto")
+        assert self._fn(groups) == {"aiuto"}
+
+    def test_alias_components_also_added(self):
+        groups = self._groups("aiuto aiuto", aliases=["mi serve aiuto"])
+        result = self._fn(groups)
+        assert "aiuto" in result
+        assert "mi" in result
+        assert "serve" in result
+
+    def test_single_word_wake_produces_no_confusers(self):
+        groups = self._groups("galileo")
+        assert self._fn(groups) == set()
+
+    def test_component_that_is_itself_a_standalone_wake_word_excluded(self):
+        groups = [
+            WakeWordGroup(word="aiuto", aliases=[], triggers=[]),
+            WakeWordGroup(word="aiuto aiuto", aliases=[], triggers=[]),
+        ]
+        result = self._fn(groups)
+        # "aiuto" is a standalone wake word, must not become a confuser
+        assert "aiuto" not in result
+
+
+class TestBuildConfuserSet:
+    def setup_method(self):
+        from alexa_custom.stt import _build_confuser_set
+        from alexa_custom.config import STTStage1Config
+
+        self._fn = _build_confuser_set
+        self._cfg = STTStage1Config
+
+    def _groups(self, word, aliases=None, confusers=None):
+        return [
+            WakeWordGroup(
+                word=word,
+                aliases=aliases or [],
+                triggers=[],
+                confusers=confusers or [],
+            )
+        ]
+
+    def test_auto_confusers_false_returns_only_manual(self):
+        groups = self._groups("aiuto aiuto", confusers=["arduino"])
+        cfg = self._cfg(auto_confusers=False, confuser_distance=3, max_confusers=30)
+        result = self._fn(groups, cfg)
+        assert result == {"arduino"}
+        assert "aiuto" not in result
+
+    def test_auto_confusers_true_includes_subphrase(self):
+        groups = self._groups("aiuto aiuto")
+        cfg = self._cfg(auto_confusers=True, confuser_distance=0, max_confusers=30)
+        result = self._fn(groups, cfg)
+        assert "aiuto" in result
+
+    def test_manual_confusers_always_included(self):
+        groups = self._groups("galileo", confusers=["arduino"])
+        cfg = self._cfg(auto_confusers=False)
+        result = self._fn(groups, cfg)
+        assert "arduino" in result
+
+
+class TestConfuserGrammarAndGuard:
+    def setup_method(self):
+        from alexa_custom.stt import (
+            _grammar_json,
+            _build_alias_map,
+            _build_confuser_set,
+        )
+        from alexa_custom.config import STTStage1Config
+
+        self._grammar_json = _grammar_json
+        self._build_alias_map = _build_alias_map
+        self._build_confuser_set = _build_confuser_set
+        self._cfg = STTStage1Config
+
+    def test_confusers_appear_in_grammar_not_in_alias_map(self):
+        import json
+
+        groups = [WakeWordGroup(word="aiuto aiuto", aliases=[], triggers=[])]
+        cfg = self._cfg(auto_confusers=True, confuser_distance=0, max_confusers=30)
+        confuser_set = self._build_confuser_set(groups, cfg)
+        alias_map = self._build_alias_map(groups)
+        grammar = json.loads(self._grammar_json(groups, confuser_set))
+
+        # "aiuto" is a confuser: in grammar, not in alias_map
+        assert "aiuto" in confuser_set
+        assert "aiuto" in grammar
+        assert "aiuto" not in alias_map
+
+        # "aiuto aiuto" is the wake word: in grammar and in alias_map
+        assert "aiuto aiuto" in grammar
+        assert "aiuto aiuto" in alias_map
+
+    def test_confuser_match_does_not_appear_in_alias_map(self):
+        groups = [
+            WakeWordGroup(
+                word="galileo", aliases=[], triggers=[], confusers=["arduino"]
+            )
+        ]
+        cfg = self._cfg(auto_confusers=False)
+        confuser_set = self._build_confuser_set(groups, cfg)
+        alias_map = self._build_alias_map(groups)
+
+        assert "arduino" in confuser_set
+        assert "arduino" not in alias_map
+        assert "galileo" in alias_map

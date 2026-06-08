@@ -289,8 +289,12 @@ def _phrases_to_grammar(phrases: list[str]) -> str:
     return json.dumps(phrases + ["[unk]"])
 
 
-def _grammar_json(groups: list[WakeWordGroup]) -> str:
+def _grammar_json(
+    groups: list[WakeWordGroup], confuser_set: set[str] | None = None
+) -> str:
     phrases = [p for g in groups for p in [g.word] + g.aliases]
+    if confuser_set:
+        phrases = phrases + [c for c in sorted(confuser_set) if c not in phrases]
     return _phrases_to_grammar(phrases)
 
 
@@ -300,6 +304,149 @@ def _build_alias_map(groups: list[WakeWordGroup]) -> dict[str, WakeWordGroup]:
         for group in groups
         for phrase in [group.word] + group.aliases
     }
+
+
+def _subphrase_confusers(groups: list[WakeWordGroup]) -> set[str]:
+    """Return tokens from multi-word wake phrases that are not standalone wake words/aliases."""
+    all_phrases: set[str] = {
+        normalize_text(p) for g in groups for p in [g.word] + g.aliases
+    }
+    confusers: set[str] = set()
+    for g in groups:
+        for phrase in [g.word] + g.aliases:
+            tokens = normalize_text(phrase).split()
+            if len(tokens) > 1:
+                for token in tokens:
+                    if token not in all_phrases:
+                        confusers.add(token)
+    return confusers
+
+
+def _lev_distance(a: str, b: str) -> int:
+    """Levenshtein distance between two strings."""
+    la, lb = len(a), len(b)
+    dp = list(range(lb + 1))
+    for i in range(1, la + 1):
+        prev = dp[0]
+        dp[0] = i
+        for j in range(1, lb + 1):
+            temp = dp[j]
+            dp[j] = prev if a[i - 1] == b[j - 1] else 1 + min(dp[j], dp[j - 1], prev)
+            prev = temp
+    return dp[lb]
+
+
+def _ipa(words: list[str], lang: str = "it") -> dict[str, str]:
+    """Return IPA strings for a list of words via espeak-ng. Returns {} on failure."""
+    try:
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+            f.write("\n".join(words))
+            fname = f.name
+        result = subprocess.run(
+            ["espeak-ng", f"-v{lang}", "--ipa", "-q", f"-f{fname}"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        os.unlink(fname)
+        lines = [
+            ln.strip().replace("ˈ", "").replace("ˌ", "").replace(" ", "")
+            for ln in result.stdout.splitlines()
+        ]
+        return {w: ipa for w, ipa in zip(words, lines) if ipa}
+    except Exception as exc:
+        logger.warning("espeak-ng unavailable, skipping phonetic confusers: %s", exc)
+        return {}
+
+
+def _phonetic_confusers(
+    groups: list[WakeWordGroup],
+    distance: int,
+    max_count: int,
+    existing: set[str],
+) -> set[str]:
+    """Return corpus words within IPA phoneme distance of any wake phrase."""
+    if distance <= 0:
+        return set()
+
+    corpus_path = os.path.join(os.path.dirname(__file__), "data", "it_corpus.txt")
+    try:
+        with open(corpus_path) as f:
+            corpus = [
+                line.strip() for line in f if line.strip() and not line.startswith("#")
+            ]
+    except OSError:
+        logger.warning("it_corpus.txt not found, skipping phonetic confusers")
+        return set()
+
+    wake_phrases = [normalize_text(p) for g in groups for p in [g.word] + g.aliases]
+    # Only single-word wake phrases are worth comparing phonetically
+    wake_words_single = [p for p in wake_phrases if len(p.split()) == 1]
+    if not wake_words_single:
+        return set()
+
+    all_words = list(set(corpus + wake_words_single))
+    ipa_map = _ipa(all_words)
+    if not ipa_map:
+        return set()
+
+    candidates: list[tuple[int, str]] = []
+    for word in corpus:
+        norm = normalize_text(word)
+        if norm in existing or norm in {normalize_text(p) for p in wake_phrases}:
+            continue
+        word_ipa = ipa_map.get(norm, "")
+        if not word_ipa:
+            continue
+        min_dist = min(
+            _lev_distance(word_ipa, ipa_map.get(w, ""))
+            for w in wake_words_single
+            if ipa_map.get(w)
+        )
+        if min_dist <= distance:
+            candidates.append((min_dist, norm))
+
+    candidates.sort()
+    if len(candidates) > max_count:
+        dropped = [w for _, w in candidates[max_count:]]
+        logger.debug(
+            "phonetic confusers: capped at %d, dropped: %s", max_count, dropped
+        )
+    return {w for _, w in candidates[:max_count]}
+
+
+def _build_confuser_set(
+    groups: list[WakeWordGroup],
+    stage1_cfg,
+) -> set[str]:
+    """Compute the full confuser set from sub-phrase, phonetic, and manual sources."""
+    manual: set[str] = {normalize_text(c) for g in groups for c in g.confusers}
+
+    if not stage1_cfg.auto_confusers:
+        if manual:
+            logger.debug(
+                "confusers (manual only, auto_confusers=false): %s", sorted(manual)
+            )
+        return manual
+
+    sub = _subphrase_confusers(groups)
+    remaining = max(0, stage1_cfg.max_confusers - len(sub) - len(manual))
+    phonetic = _phonetic_confusers(
+        groups, stage1_cfg.confuser_distance, remaining, sub | manual
+    )
+
+    result = manual | sub | phonetic
+    logger.debug(
+        "confusers: total=%d manual=%d sub-phrase=%d phonetic=%d — %s",
+        len(result),
+        len(manual),
+        len(sub),
+        len(phonetic),
+        sorted(result),
+    )
+    return result
 
 
 def _approx_wake_match(
@@ -974,11 +1121,12 @@ def _recognition_loop(
     _eff_vad_ms = config.stt.vad_silence_ms
 
     alias_map = _build_alias_map(config.wake_words)
+    confuser_set = _build_confuser_set(config.wake_words, config.stt.stage1)
     is_vosk = isinstance(stage1_backend, VoskSTT)
     if is_vosk:
         vosk_model = stage1_backend.model
         stage1 = vosk.KaldiRecognizer(
-            vosk_model, 16000, _grammar_json(config.wake_words)
+            vosk_model, 16000, _grammar_json(config.wake_words, confuser_set)
         )
         stage1.SetWords(True)
     else:
@@ -1069,6 +1217,10 @@ def _recognition_loop(
                 conf = words[0].get("conf", 0.0) if words else 0.0
                 logger.debug(f"Stage1 result: {text!r} conf={conf:.2f}")
                 norm_text = normalize_text(text)
+                if norm_text in confuser_set:
+                    logger.debug("Stage1 confuser rejected: %r", norm_text)
+                    stage1.Reset()
+                    continue
                 wake_match = alias_map.get(norm_text)
                 if wake_match is not None and conf >= config.stt.stage1.confidence:
                     _wake_detected(
@@ -1093,7 +1245,9 @@ def _recognition_loop(
                     _drain_pipe(proc)
                     vosk_model = stage1_backend.model
                     stage1 = vosk.KaldiRecognizer(
-                        vosk_model, 16000, _grammar_json(config.wake_words)
+                        vosk_model,
+                        16000,
+                        _grammar_json(config.wake_words, confuser_set),
                     )
                     stage1.SetWords(True)
                     if on_stt_event:

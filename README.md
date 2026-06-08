@@ -68,6 +68,14 @@ llm_host: http://192.168.1.10:11434   # Ollama host
 wake_words:
   - word: galileo
     lang: it-IT
+    # confusers:            # extra words added to grammar and silently rejected
+    #   - arduino           # useful for phonetically similar domain-specific terms
+
+  # For emergency-style wake words, prefer multi-word phrases so a single
+  # utterance in conversation does not trigger the assistant:
+  # - word: "aiuto aiuto"
+  #   aliases: ["aiutami"]
+  #   # "aiuto" (single word) is added as a confuser automatically
 
 recognition:
   command_timeout: 3.0      # seconds to listen after wake word
@@ -76,6 +84,9 @@ stt:
   stage1:                   # continuous wake-word detection (low CPU)
     backend: vosk
     confidence: 0.65
+    # auto_confusers: true  # derive confusers from wake phrases + phonetic distance
+    # confuser_distance: 3  # IPA phoneme edit distance threshold (0 = phonetic off)
+    # max_confusers: 30     # cap on auto-generated confusers
   stage2:                   # command recognition after wake
     backend: vosk
 
@@ -116,7 +127,7 @@ See `conf/config.yaml.example` and `conf/secrets.yaml.example` for the full refe
 
 ## Key Features
 
-- **Two-stage STT**: Lightweight wake-word detection (stage 1) → full command recognition (stage 2). Backends configurable independently.
+- **Two-stage STT**: Lightweight wake-word detection (stage 1) → full command recognition (stage 2). Backends configurable independently. Automatic confuser phrases reduce false positives for phonetically similar words and multi-word emergency wake phrases.
 - **Hot-reload**: Edit `conf/config.yaml` or any action file while the daemon is running — changes apply within ~2 seconds.
 - **Multi-file actions**: Drop `.yaml` files into `conf/actions/` for modular command sets; `system.yaml` always loads first.
 - **LLM learning**: Say "impara nuovo comando" to teach the assistant a new trigger via voice dialogue (stored in `conf/actions/learned.yaml`).

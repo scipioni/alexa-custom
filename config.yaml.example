@@ -180,11 +180,33 @@ actions_file: actions.yaml
 # the LLM conversation language, and an optional per-group trigger list.
 # If a group defines no triggers, the global top-level triggers list is used.
 # With actions_file configured, triggers can also live in actions.yaml.
+#
+# For emergency wake words, prefer multi-word phrases (e.g. "aiuto aiuto") so
+# a single utterance does not trigger the assistant. The component words are
+# automatically added as confusers — Vosk can recognise them but will not
+# trigger command mode.
+#
+# confusers: (optional) extra phrases added to the Vosk stage-1 grammar so
+# that phonetically similar words are recognised and rejected rather than
+# misidentified as the wake word. Automatic confusers (sub-phrase decomposition
+# and phonetic distance) are computed at startup unless auto_confusers is false.
+#
+# Example for an emergency-use assistant:
+#   wake_words:
+#     - word: "aiuto aiuto"
+#       aliases:
+#         - "aiutami"
+#         - "mi serve aiuto"
+#       # "aiuto" (single word) is added automatically as a confuser
+#       confusers:
+#         - "arduino"         # manual domain-specific confuser
 
 wake_words:
   - word: "galileo"
     aliases:
       - "ehi galileo"       # alternative recognition phrase for the same group
+    #confusers:
+    #  - "arduino"           # words to add to grammar and silently reject
     lang: "it-IT"           # BCP-47 language used by the LLM conversation engine
     triggers:               # commands active only after this wake word
       - phrase: "chiama stefano"
@@ -275,6 +297,10 @@ stt:
   backend: vosk
   # model_path: models/it/kroko_128l  # Optional: override default model path for sherpa-onnx
   # model_path: models/it             # For vosk
+  stage1:
+    # auto_confusers: true        # set to false to disable all automatic confuser generation
+    # confuser_distance: 3        # IPA phoneme edit distance threshold for automatic phonetic confusers
+    # max_confusers: 30           # cap on total auto-generated confusers (grammar size limit)
 
 # ---------------------------------------------------------------------------
 # Startup actions
