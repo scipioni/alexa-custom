@@ -132,6 +132,8 @@ class SherpaOnnxSTT(STTBackend):
         decoder_int8 = os.path.join(model_dir, "decoder.int8.onnx")
         joiner_int8 = os.path.join(model_dir, "joiner.int8.onnx")
 
+        model_onnx = os.path.join(model_dir, "model.onnx")
+
         if os.path.exists(joiner) or os.path.exists(joiner_int8):
             self._delegate = sherpa_onnx.OnlineRecognizer.from_transducer(
                 tokens=tokens,
@@ -148,6 +150,30 @@ class SherpaOnnxSTT(STTBackend):
                 rule2_min_trailing_silence=1.2,
                 rule3_min_utterance_length=20,
             )
+        elif os.path.exists(model_onnx):
+            if hasattr(sherpa_onnx.OnlineRecognizer, "from_zipformer2_ctc"):
+                self._delegate = sherpa_onnx.OnlineRecognizer.from_zipformer2_ctc(
+                    tokens=tokens,
+                    model=model_onnx,
+                    num_threads=4,
+                    sample_rate=16000,
+                    feature_dim=80,
+                    provider="cpu",
+                    enable_endpoint_detection=True,
+                    rule1_min_trailing_silence=2.4,
+                    rule2_min_trailing_silence=1.2,
+                    rule3_min_utterance_length=20,
+                )
+            else:
+                logger.warning(
+                    "sherpa-onnx: model.onnx found but from_zipformer2_ctc not available "
+                    "in installed version — falling back to from_paraformer"
+                )
+                self._delegate = sherpa_onnx.OnlineRecognizer.from_paraformer(
+                    tokens=tokens,
+                    encoder=encoder,
+                    decoder=decoder,
+                )
         else:
             self._delegate = sherpa_onnx.OnlineRecognizer.from_paraformer(
                 tokens=tokens,
@@ -188,9 +214,208 @@ class SherpaOnnxSTT(STTBackend):
         self._delegate.reset(self._stream)
 
 
-def get_stt_backend(cfg: STTStage1Config | STTStage2Config) -> STTBackend:
+def _load_token_vocab(tokens_path: str) -> dict[str, str]:
+    """Read tokens.txt and return {symbol: token_string} for keyword tokenisation.
+
+    Strips the SentencePiece word-boundary prefix (▁) from token keys so that
+    plain-text words can be looked up without knowing whether they appear at the
+    start of an utterance.  The raw token string (including ▁) is kept as the
+    value so it is written verbatim to the keywords file.
+    """
+    vocab: dict[str, str] = {}
+    try:
+        with open(tokens_path) as f:
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) >= 2:
+                    sym = parts[0]
+                    # Index by both the raw symbol and the stripped version so
+                    # that greedy BPE matching works on plain-text input.
+                    vocab[sym] = sym
+                    stripped = sym.lstrip("▁")
+                    if stripped and stripped != sym:
+                        vocab.setdefault(stripped, sym)
+    except OSError as e:
+        logger.warning("Could not read tokens.txt at %r: %s", tokens_path, e)
+    return vocab
+
+
+def _tokenize_keyword(word: str, vocab: dict[str, str]) -> str:
+    """Tokenize a keyword string using greedy longest-match against the model vocab.
+
+    Handles SentencePiece/BPE vocabularies (e.g. the kroko Italian model):
+    "galileo" → "ga li le o" rather than "g a l i l e o".
+
+    Words are processed one at a time (split on spaces).  Each word gets a
+    leading ▁ prepended during matching so word-initial subwords (▁ga) are
+    preferred when present; the fallback is the bare subword.  Unknown
+    characters are skipped with a warning.
+    """
+    _BOUNDARY = "▁"
+    result_tokens: list[str] = []
+
+    for w in word.split():
+        # Try matching with leading boundary marker first, then without.
+        remaining = w
+        word_tokens: list[str] = []
+        first = True
+        while remaining:
+            matched = False
+            # Try longest substrings first, with/without boundary prefix.
+            for length in range(len(remaining), 0, -1):
+                candidate = remaining[:length]
+                # On the first token of a word, prefer ▁-prefixed version.
+                if first:
+                    prefixed = _BOUNDARY + candidate
+                    if prefixed in vocab:
+                        word_tokens.append(vocab[prefixed])
+                        remaining = remaining[length:]
+                        matched = True
+                        first = False
+                        break
+                if candidate in vocab:
+                    word_tokens.append(vocab[candidate])
+                    remaining = remaining[length:]
+                    matched = True
+                    first = False
+                    break
+            if not matched:
+                logger.warning(
+                    "KWS: character %r in %r not in model vocab — skipping",
+                    remaining[0],
+                    w,
+                )
+                remaining = remaining[1:]
+                first = False
+        result_tokens.extend(word_tokens)
+
+    return " ".join(result_tokens)
+
+
+class SherpaKeywordSpotter(STTBackend):
+    """Stage-1 backend using sherpa_onnx.KeywordSpotter.
+
+    Uses the same encoder/decoder/joiner files as SherpaOnnxSTT (transducer).
+    Keywords are auto-generated from the supplied wake-word list by tokenising
+    each word against the model's tokens.txt.
+    """
+
+    def __init__(
+        self,
+        model_dir: str,
+        keywords: list[str],
+        keywords_score: float = 1.0,
+        keywords_threshold: float = 0.25,
+    ) -> None:
+        import sherpa_onnx
+        import tempfile
+
+        if not os.path.isdir(model_dir):
+            raise RuntimeError(
+                f"sherpa-onnx model not found at {model_dir!r}. Run 'alexa-setup --sherpa-onnx' to download it."
+            )
+
+        tokens = os.path.join(model_dir, "tokens.txt")
+        encoder = os.path.join(model_dir, "encoder.onnx")
+        decoder = os.path.join(model_dir, "decoder.onnx")
+        joiner = os.path.join(model_dir, "joiner.onnx")
+        encoder_int8 = os.path.join(model_dir, "encoder.int8.onnx")
+        decoder_int8 = os.path.join(model_dir, "decoder.int8.onnx")
+        joiner_int8 = os.path.join(model_dir, "joiner.int8.onnx")
+
+        vocab = _load_token_vocab(tokens)
+        kw_lines: list[str] = []
+        for kw in keywords:
+            line = _tokenize_keyword(normalize_text(kw), vocab)
+            if line:
+                kw_lines.append(line)
+            else:
+                logger.warning(
+                    "KWS: keyword %r produced empty token sequence — skipped", kw
+                )
+        if not kw_lines:
+            raise RuntimeError(
+                "KWS: no valid keywords could be tokenised from the wake word list"
+            )
+
+        self._kw_file = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False, prefix="alexa_kws_"
+        )
+        self._kw_file.write("\n".join(kw_lines) + "\n")
+        self._kw_file.close()
+
+        self._spotter = sherpa_onnx.KeywordSpotter(
+            tokens=tokens,
+            encoder=encoder_int8 if os.path.exists(encoder_int8) else encoder,
+            decoder=decoder_int8 if os.path.exists(decoder_int8) else decoder,
+            joiner=joiner_int8 if os.path.exists(joiner_int8) else joiner,
+            keywords_file=self._kw_file.name,
+            num_threads=2,
+            sample_rate=16000,
+            feature_dim=80,
+            keywords_score=keywords_score,
+            keywords_threshold=keywords_threshold,
+            provider="cpu",
+        )
+        self._stream = self._spotter.create_stream()
+        self._last_keyword: str = ""
+
+    def __del__(self) -> None:
+        try:
+            if hasattr(self, "_kw_file") and os.path.exists(self._kw_file.name):
+                os.unlink(self._kw_file.name)
+        except Exception:
+            pass
+
+    def accept_waveform(self, data: bytes) -> bool:
+        samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+        self._stream.accept_waveform(sample_rate=16000, waveform=samples)
+        while self._spotter.is_ready(self._stream):
+            self._spotter.decode_stream(self._stream)
+        result = self._spotter.get_result(self._stream)
+        keyword = (
+            result.keyword.strip()
+            if hasattr(result, "keyword")
+            else str(result).strip()
+        )
+        if keyword:
+            self._last_keyword = keyword
+            self._spotter.reset_stream(self._stream)
+            return True
+        return False
+
+    def text(self) -> str:
+        return self._last_keyword
+
+    def partial_text(self) -> str:
+        return ""
+
+    def reset(self) -> None:
+        self._stream = self._spotter.create_stream()
+        self._last_keyword = ""
+
+    def finalize(self) -> str:
+        return ""
+
+
+def get_stt_backend(
+    cfg: STTStage1Config | STTStage2Config,
+    keywords: list[str] | None = None,
+) -> STTBackend:
     if cfg.backend == "sherpa-onnx":
-        return SherpaOnnxSTT(cfg.model_path or _SHERPA_MODEL_PATH)
+        model_path = cfg.model_path or _SHERPA_MODEL_PATH
+        if isinstance(cfg, STTStage1Config) and cfg.keyword_spotter:
+            if not keywords:
+                raise RuntimeError(
+                    "keyword_spotter=true requires at least one wake word in config"
+                )
+            return SherpaKeywordSpotter(
+                model_dir=model_path,
+                keywords=keywords,
+                keywords_score=cfg.keywords_score,
+                keywords_threshold=cfg.keywords_threshold,
+            )
+        return SherpaOnnxSTT(model_path)
     vosk_path = cfg.model_path or _MODEL_PATH
     return VoskSTT(_load_model(vosk_path))
 
@@ -362,7 +587,9 @@ def _ipa(words: list[str], lang: str = "it") -> dict[str, str] | None:
         ]
         return {w: ipa for w, ipa in zip(words, lines) if ipa}
     except Exception as exc:
-        logger.debug("espeak-ng unavailable, falling back to orthographic distance: %s", exc)
+        logger.debug(
+            "espeak-ng unavailable, falling back to orthographic distance: %s", exc
+        )
         return None
 
 
@@ -397,7 +624,9 @@ def _phonetic_confusers(
     # Fall back to orthographic keys when espeak-ng is unavailable.
     # Italian spelling is phonetically regular enough for a useful approximation.
     if ipa_result is None:
-        logger.debug("phonetic confusers: using orthographic distance (espeak-ng absent)")
+        logger.debug(
+            "phonetic confusers: using orthographic distance (espeak-ng absent)"
+        )
         ipa_map: dict[str, str] = {w: w for w in all_words}
     else:
         ipa_map = ipa_result
@@ -695,7 +924,12 @@ def run_stt_worker(
 
     try:
         t0 = time.monotonic()
-        stage1_backend = get_stt_backend(current_config.stt.stage1)
+        _kws_keywords = [
+            p for g in current_config.wake_words for p in [g.word] + g.aliases
+        ]
+        stage1_backend = get_stt_backend(
+            current_config.stt.stage1, keywords=_kws_keywords
+        )
         logger.info(
             f"STT stage1 backend ({current_config.stt.stage1.backend}) loaded in {time.monotonic() - t0:.1f}s"
         )
@@ -738,7 +972,14 @@ def run_stt_worker(
 
             if new_stage1_key != stage1_key:
                 try:
-                    stage1_backend = get_stt_backend(current_config.stt.stage1)
+                    _kws_keywords = [
+                        p
+                        for g in current_config.wake_words
+                        for p in [g.word] + g.aliases
+                    ]
+                    stage1_backend = get_stt_backend(
+                        current_config.stt.stage1, keywords=_kws_keywords
+                    )
                     stage1_key = new_stage1_key
                     logger.info("STT stage1 backend reloaded after config change")
                 except RuntimeError as e:
@@ -1133,6 +1374,7 @@ def _recognition_loop(
     alias_map = _build_alias_map(config.wake_words)
     confuser_set = _build_confuser_set(config.wake_words, config.stt.stage1)
     is_vosk = isinstance(stage1_backend, VoskSTT)
+    is_kws = isinstance(stage1_backend, SherpaKeywordSpotter)
     if is_vosk:
         vosk_model = stage1_backend.model
         stage1 = vosk.KaldiRecognizer(
@@ -1164,6 +1406,10 @@ def _recognition_loop(
 
         def _on_playback_end() -> None:
             stage1.Reset()
+    elif is_kws:
+
+        def _on_playback_end() -> None:
+            stage1_backend.reset()
     else:
 
         def _on_playback_end() -> None:
@@ -1214,13 +1460,55 @@ def _recognition_loop(
         if time.monotonic() < cooldown_until:
             if is_vosk:
                 stage1.Reset()
+            elif is_kws:
+                stage1_backend.reset()
             else:
                 stage1_backend.reset()
                 stage1_last_speech_t = 0.0
                 stage1_speech_ms = 0.0
             continue
 
-        if is_vosk:
+        if is_kws:
+            if stage1_backend.accept_waveform(data):
+                keyword = stage1_backend.text()
+                wake_match = alias_map.get(normalize_text(keyword))
+                if wake_match:
+                    logger.debug(f"Stage1 KWS hit: {keyword!r}")
+                    _wake_detected(
+                        wake_group=wake_match,
+                        proc=proc,
+                        channels=channels,
+                        backend=stage2_backend,
+                        config=config,
+                        stop_event=stop_event,
+                        telegram_client=telegram_client,
+                        livekit_connect_fn=livekit_connect_fn,
+                        livekit_connected_flag=livekit_connected_flag,
+                        on_stt_event=on_stt_event,
+                        mqtt_client=mqtt_client,
+                        loop=loop,
+                        dispatch_loop=dispatch_loop,
+                        vad_silence_ms=_eff_vad_ms,
+                    )
+                    _drain_pipe(proc)
+                    if on_stt_event:
+                        on_stt_event(
+                            "listening",
+                            {"wake_words": [g.word for g in config.wake_words]},
+                        )
+                    if mqtt_client:
+                        mqtt_client.publish_threadsafe(
+                            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
+                            "idle",
+                            loop=loop,
+                        )
+                else:
+                    logger.debug(
+                        "Stage1 KWS hit but keyword %r not in alias_map — ignoring",
+                        keyword,
+                    )
+                    stage1_backend.reset()
+        elif is_vosk:
             if on_stt_event:
                 partial = json.loads(stage1.PartialResult()).get("partial", "").strip()
                 if partial:

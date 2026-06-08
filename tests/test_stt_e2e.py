@@ -327,3 +327,221 @@ class TestConfuserGrammarAndGuard:
         assert "arduino" in confuser_set
         assert "arduino" not in alias_map
         assert "galileo" in alias_map
+
+
+# ---------------------------------------------------------------------------
+# KeywordSpotter helpers (unit tests, no real model needed)
+# ---------------------------------------------------------------------------
+
+
+class TestSherpaOnnxSTTModelDetection:
+    """Unit tests for model-type auto-detection — no real model required."""
+
+    def _make_mock_sherpa(self, called_factories: list):
+        import types
+
+        mock_delegate = types.SimpleNamespace(
+            create_stream=lambda: object(),
+        )
+
+        def make_factory(name):
+            def factory(**kw):
+                called_factories.append(name)
+                return mock_delegate
+
+            return staticmethod(factory)
+
+        mock_recognizer = type(
+            "OnlineRecognizer",
+            (),
+            {
+                "from_transducer": make_factory("from_transducer"),
+                "from_zipformer2_ctc": make_factory("from_zipformer2_ctc"),
+                "from_paraformer": make_factory("from_paraformer"),
+            },
+        )
+        mock_sherpa = types.ModuleType("sherpa_onnx")
+        mock_sherpa.OnlineRecognizer = mock_recognizer
+        return mock_sherpa
+
+    def test_transducer_selected_when_joiner_present(self, monkeypatch, tmp_path):
+        import sys
+
+        called = []
+        sys.modules["sherpa_onnx"] = self._make_mock_sherpa(called)
+        model_dir = tmp_path / "m"
+        model_dir.mkdir()
+        for f in ("encoder.onnx", "decoder.onnx", "joiner.onnx", "tokens.txt"):
+            (model_dir / f).write_bytes(b"")
+        SherpaOnnxSTT(str(model_dir))
+        assert called == ["from_transducer"]
+
+    def test_zipformer2_ctc_selected_when_model_onnx_present(
+        self, monkeypatch, tmp_path
+    ):
+        import sys
+
+        called = []
+        sys.modules["sherpa_onnx"] = self._make_mock_sherpa(called)
+        model_dir = tmp_path / "m"
+        model_dir.mkdir()
+        for f in ("model.onnx", "tokens.txt"):
+            (model_dir / f).write_bytes(b"")
+        SherpaOnnxSTT(str(model_dir))
+        assert called == ["from_zipformer2_ctc"]
+
+    def test_paraformer_fallback_when_no_joiner_no_model_onnx(
+        self, monkeypatch, tmp_path
+    ):
+        import sys
+
+        called = []
+        sys.modules["sherpa_onnx"] = self._make_mock_sherpa(called)
+        model_dir = tmp_path / "m"
+        model_dir.mkdir()
+        for f in ("encoder.onnx", "decoder.onnx", "tokens.txt"):
+            (model_dir / f).write_bytes(b"")
+        SherpaOnnxSTT(str(model_dir))
+        assert called == ["from_paraformer"]
+
+    def test_paraformer_fallback_when_zipformer2_ctc_unavailable(
+        self, monkeypatch, tmp_path
+    ):
+        import sys
+
+        called = []
+        mock_sherpa = self._make_mock_sherpa(called)
+        del mock_sherpa.OnlineRecognizer.from_zipformer2_ctc
+        sys.modules["sherpa_onnx"] = mock_sherpa
+        model_dir = tmp_path / "m"
+        model_dir.mkdir()
+        for f in ("model.onnx", "tokens.txt"):
+            (model_dir / f).write_bytes(b"")
+        SherpaOnnxSTT(str(model_dir))
+        assert called == ["from_paraformer"]
+
+
+class TestTokenizeKeyword:
+    def test_bpe_greedy_longest_match(self):
+        # Simulates the kroko Italian model: multi-char subwords preferred
+        from alexa_custom.stt import _tokenize_keyword
+
+        vocab = {"ga": "ga", "li": "li", "le": "le", "o": "o", "g": "g", "a": "a"}
+        assert _tokenize_keyword("galileo", vocab) == "ga li le o"
+
+    def test_word_boundary_prefix_preferred(self):
+        # ▁-prefixed token should be chosen for word-initial position
+        from alexa_custom.stt import _tokenize_keyword
+
+        vocab = {"▁ga": "▁ga", "ga": "ga", "li": "li", "le": "le", "o": "o"}
+        result = _tokenize_keyword("galileo", vocab)
+        assert result.startswith("▁ga"), f"Expected ▁ga prefix, got {result!r}"
+
+    def test_multi_word_each_word_processed(self):
+        from alexa_custom.stt import _tokenize_keyword
+
+        vocab = {
+            "▁e": "▁e",
+            "hi": "hi",
+            "ga": "ga",
+            "li": "li",
+            "le": "le",
+            "o": "o",
+            "h": "h",
+            "i": "i",
+        }
+        result = _tokenize_keyword("ehi galileo", vocab)
+        assert "ga" in result
+        assert "le" in result
+
+    def test_unknown_char_skipped(self):
+        from alexa_custom.stt import _tokenize_keyword
+
+        vocab = {"a": "a", "b": "b"}
+        result = _tokenize_keyword("abz", vocab)
+        assert result == "a b"
+
+    def test_empty_word_returns_empty(self):
+        from alexa_custom.stt import _tokenize_keyword
+
+        assert _tokenize_keyword("", {}) == ""
+
+
+class TestSherpaKeywordSpotterUnit:
+    """Unit tests using a mock sherpa_onnx.KeywordSpotter — no real model."""
+
+    def _make_mock_spotter(self, monkeypatch, keyword_hit: str = ""):
+        import types
+        import alexa_custom.stt as stt_mod
+
+        mock_result = types.SimpleNamespace(keyword=keyword_hit)
+        mock_stream = object()
+
+        mock_kws_cls = type(
+            "MockKWS",
+            (),
+            {
+                "__init__": lambda self, **kw: None,
+                "create_stream": lambda self: mock_stream,
+                "is_ready": lambda self, s: False,
+                "decode_stream": lambda self, s: None,
+                "get_result": lambda self, s: mock_result,
+                "reset_stream": lambda self, s: None,
+            },
+        )
+
+        mock_sherpa = types.ModuleType("sherpa_onnx")
+        mock_sherpa.KeywordSpotter = mock_kws_cls
+        monkeypatch.setattr(
+            stt_mod, "_load_token_vocab", lambda path: {c: c for c in "galileo "}
+        )
+        monkeypatch.setitem(__import__("sys").modules, "sherpa_onnx", mock_sherpa)
+        return mock_stream
+
+    def _make_env(self, tmp_path, keyword_hit: str):
+        """Build a mock sherpa_onnx module + model dir for KWS tests."""
+        import sys
+        import types as _t
+
+        mock_stream = _t.SimpleNamespace(
+            accept_waveform=lambda sample_rate, waveform: None,
+        )
+        mock_result = _t.SimpleNamespace(keyword=keyword_hit)
+
+        mock_sherpa_mod = _t.ModuleType("sherpa_onnx")
+        mock_sherpa_mod.KeywordSpotter = type(
+            "KWS",
+            (),
+            {
+                "__init__": lambda self, **kw: None,
+                "create_stream": lambda self: mock_stream,
+                "is_ready": lambda self, s: False,
+                "decode_stream": lambda self, s: None,
+                "get_result": lambda self, s: mock_result,
+                "reset_stream": lambda self, s: None,
+            },
+        )
+        sys.modules["sherpa_onnx"] = mock_sherpa_mod
+
+        model_dir = tmp_path / "model"
+        model_dir.mkdir()
+        (model_dir / "tokens.txt").write_text("g 1\na 2\nl 3\ni 4\ne 5\no 6\n")
+        for f in ("encoder.onnx", "decoder.onnx", "joiner.onnx"):
+            (model_dir / f).write_bytes(b"")
+        return model_dir
+
+    def test_accept_waveform_returns_false_when_no_hit(self, tmp_path):
+        from alexa_custom.stt import SherpaKeywordSpotter
+
+        model_dir = self._make_env(tmp_path, keyword_hit="")
+        spotter = SherpaKeywordSpotter(str(model_dir), ["galileo"])
+        assert spotter.accept_waveform(b"\x00\x00" * 512) is False
+        assert spotter.text() == ""
+
+    def test_accept_waveform_returns_true_on_keyword_hit(self, tmp_path):
+        from alexa_custom.stt import SherpaKeywordSpotter
+
+        model_dir = self._make_env(tmp_path, keyword_hit="galileo")
+        spotter = SherpaKeywordSpotter(str(model_dir), ["galileo"])
+        assert spotter.accept_waveform(b"\x00\x00" * 512) is True
+        assert spotter.text() == "galileo"

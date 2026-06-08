@@ -270,6 +270,30 @@ stt:
         result = load_config(cfg_path)
         assert result.stt.vad_silence_ms == 800
 
+    def test_keyword_spotter_fields_parsed(self, tmp_path):
+        cfg_path = write_file(
+            tmp_path,
+            "config.yaml",
+            "wake_words:\n  - word: galileo\nstt:\n  stage1:\n    backend: sherpa-onnx\n    keyword_spotter: true\n    keywords_score: 1.5\n    keywords_threshold: 0.3\n",
+        )
+        from alexa_custom.config import load_config
+
+        result = load_config(cfg_path)
+        assert result.stt.stage1.keyword_spotter is True
+        assert result.stt.stage1.keywords_score == pytest.approx(1.5)
+        assert result.stt.stage1.keywords_threshold == pytest.approx(0.3)
+
+    def test_keyword_spotter_defaults(self, tmp_path):
+        cfg_path = write_file(
+            tmp_path, "config.yaml", "wake_words:\n  - word: galileo\n"
+        )
+        from alexa_custom.config import load_config
+
+        result = load_config(cfg_path)
+        assert result.stt.stage1.keyword_spotter is False
+        assert result.stt.stage1.keywords_score == pytest.approx(1.0)
+        assert result.stt.stage1.keywords_threshold == pytest.approx(0.25)
+
     def test_invalid_stage1_backend_raises(self, tmp_path):
         cfg_path = write_file(
             tmp_path,
