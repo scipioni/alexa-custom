@@ -19,7 +19,7 @@ conf/
 Credentials and hostnames that should never be committed. Copy the example to get started:
 
 ```bash
-cp conf/secrets.yaml.example conf/secrets.yaml
+cp conf.example/secrets.yaml conf/secrets.yaml
 ```
 
 All values are optional — omit any section you don't use.
@@ -51,7 +51,7 @@ mqtt:
 Hot-reloaded every `system.config_poll_interval` seconds (default: 2). Copy the example:
 
 ```bash
-cp conf/config.yaml.example conf/config.yaml
+cp conf.example/config.yaml conf/config.yaml
 ```
 
 ### Wake Words
@@ -256,4 +256,4 @@ The old root-level `config.yaml` with a top-level `env:` block is no longer supp
 2. Move `triggers:` and `wake_triggers:` into `conf/actions/user.yaml`.
 3. Move the remaining settings (audio, stt, tts, mqtt, etc.) into `conf/config.yaml` using the nested block format shown above.
 
-See `conf/config.yaml.example` and `conf/secrets.yaml.example` for the full structure.
+See `conf.example/config.yaml` and `conf.example/secrets.yaml` for the full structure.
