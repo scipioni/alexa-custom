@@ -1,96 +1,125 @@
 # sherpa-onnx STT Backend
 
-alexa-custom supports **sherpa-onnx** as an alternative speech-to-text backend to Vosk. sherpa-onnx uses streaming models which are open-vocabulary (no grammar constraints), potentially offering better accuracy for command recognition at the cost of higher CPU usage.
+alexa-custom supports **sherpa-onnx** as an alternative speech-to-text backend to Vosk. sherpa-onnx streaming models are open-vocabulary (no grammar constraints), offering potentially better command accuracy. For stage-1 wake-word detection the optional **KeywordSpotter** mode uses the same model files but with a keyword-boosted decoder — lower CPU, no false transcriptions.
 
 ---
 
 ## Compared to Vosk
 
-| Feature | Vosk | sherpa-onnx |
-|---------|------|-------------|
-| Model | Kaldi-based | Streaming transducer/Paraformer |
-| Vocabulary | Grammar-constrained | Open-vocabulary |
-| CPU usage | Lower | Higher |
-| Accuracy | Good | Potentially better |
-| Wake word detection | Grammar-mode | Open transcription |
+| Feature | Vosk | sherpa-onnx (OnlineRecognizer) | sherpa-onnx (KeywordSpotter) |
+|---------|------|-------------------------------|------------------------------|
+| Model | Kaldi/grammar | Streaming transducer/CTC | Streaming transducer |
+| Vocabulary | Grammar-constrained | Open-vocabulary | Keyword-only |
+| Stage | 1 or 2 | 1 or 2 | Stage 1 only |
+| CPU usage | Lower | Higher | Lower (tuned for wake words) |
+| Wake word accuracy | Grammar-exact | Fuzzy match | Keyword-boosted beam search |
 
-For the constrained target hardware (Arduino Uno Q as USB audio gadget), **Vosk remains the default** for wake word detection due to its lower CPU footprint.
-
----
-
-## Supported Models
-
-The sherpa-onnx backend supports both **transducer** models (encoder/decoder/joiner) and **Paraformer** models (encoder/decoder).
-
-A working Italian model is **kroko_128l** — a streaming Zipformer transducer model converted to ONNX.
-
-### Model Files Required
-
-**For transducer models** (encoder/decoder/joiner):
-```
-models/sherpa-onnx/
-├── tokens.txt          # Vocabulary
-├── encoder.int8.onnx  # Encoder (int8 optimized)
-├── decoder.int8.onnx  # Decoder (int8 optimized)
-└── joiner.int8.onnx   # Joiner (int8 optimized)
-```
-
-**For Paraformer models** (encoder/decoder):
-```
-models/sherpa-onnx/
-├── tokens.txt      # Vocabulary
-├── encoder.onnx    # Encoder model
-└── decoder.onnx    # Decoder model
-```
+For the target hardware (Arduino Uno Q, Snapdragon 801, CPU-only), **Vosk remains the default** for stage-1 due to its lower footprint. `keyword_spotter: true` is the recommended sherpa-onnx mode for always-on wake detection on that board.
 
 ---
 
-## Downloading the Model
+## Supported Model Architectures
 
-### Automatic Download
+Model type is **auto-detected** from the files present in the model directory:
+
+| Files present | Architecture | Factory used |
+|---------------|-------------|--------------|
+| `joiner.onnx` or `joiner.int8.onnx` | Transducer (Zipformer, Conformer) | `from_transducer()` |
+| `model.onnx` only | Zipformer2 CTC | `from_zipformer2_ctc()` |
+| `encoder.onnx` + `decoder.onnx` only | Paraformer | `from_paraformer()` |
+
+---
+
+## Model Download
+
+### Automatic
 
 ```bash
-python -m alexa_custom.setup --sherpa-onnx
+alexa-setup --sherpa-onnx
 ```
 
-This downloads the kroko_128l Italian model to `models/it/kroko_128l/` via HuggingFace.
+Downloads the **kroko_128l** Italian Zipformer transducer model (~148 MB) to `models/it/kroko_128l/`:
 
-### Manual Download
+```
+models/it/kroko_128l/
+├── tokens.txt           # BPE vocabulary (878 tokens)
+├── encoder.int8.onnx    # ~147 MB
+├── decoder.int8.onnx    # ~593 KB
+└── joiner.int8.onnx     # ~330 KB
+```
 
-Download from HuggingFace using the `hf` CLI:
+### Manual
 
 ```bash
-hf download hudaiapa88/sherpa-stt-onnx \
-  --local-dir ./models \
-  --include "it/kroko_128l/*"
+BASE=https://huggingface.co/hudaiapa88/sherpa-stt-onnx/resolve/main/it/kroko_128l
+mkdir -p models/it/kroko_128l
+for f in encoder.int8.onnx decoder.int8.onnx joiner.int8.onnx tokens.txt; do
+  curl -L -o models/it/kroko_128l/$f $BASE/$f
+done
 ```
-
-Or place the model files directly in `models/it/kroko_128l/`.
 
 ---
 
 ## Configuration
 
-### config.yaml
+### Stage-2 command recognition (open-vocabulary)
+
+Use sherpa-onnx for the command window after wake detection:
 
 ```yaml
 stt:
-  backend: sherpa-onnx
+  stage2:
+    backend: sherpa-onnx
+    model_path: models/it/kroko_128l
 ```
 
-Or use the legacy single-key form:
+### Stage-1 wake detection — KeywordSpotter mode (recommended for Uno Q)
+
+Uses the same model files as stage-2 but with keyword-boosted decoding. Keywords are auto-generated from `wake_words` at startup using the model's `tokens.txt` — no extra file needed.
 
 ```yaml
-stt_backend: sherpa-onnx
+stt:
+  stage1:
+    backend: sherpa-onnx
+    model_path: models/it/kroko_128l
+    keyword_spotter: true
+    keywords_score: 1.0       # boost weight — raise if wake word is missed
+    keywords_threshold: 0.25  # fire threshold — raise to reduce false positives
 ```
 
-### Environment Variables
+### Stage-1 — open-vocabulary mode (higher CPU)
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `SHERPA_ONNX_PATH` | `models/sherpa-onnx` | Path to the sherpa-onnx model directory |
+Runs full ASR continuously and fuzzy-matches the transcript against wake words. Useful if you want partial transcription visible in the web dashboard during stage-1.
 
-Point to your model location:
+```yaml
+stt:
+  stage1:
+    backend: sherpa-onnx
+    model_path: models/it/kroko_128l
+    vad_silence_ms: 500
+    rms_threshold: 0.02
+    min_speech_ms: 200
+```
+
+### Full example (both stages on Uno Q)
+
+```yaml
+stt:
+  stage1:
+    backend: sherpa-onnx
+    model_path: models/it/kroko_128l
+    keyword_spotter: true
+    keywords_score: 1.0
+    keywords_threshold: 0.25
+  stage2:
+    backend: sherpa-onnx
+    model_path: models/it/kroko_128l
+  vad_silence_ms: 700
+```
+
+### Environment variable override
+
+`SHERPA_ONNX_PATH` sets the default model path when `model_path` is not specified in config:
 
 ```bash
 SHERPA_ONNX_PATH=models/it/kroko_128l alexa-client
@@ -98,48 +127,48 @@ SHERPA_ONNX_PATH=models/it/kroko_128l alexa-client
 
 ---
 
-## Switching Backends
+## Tuning on Hardware
 
-### At Runtime
+After deploying to the Uno Q, check the logs:
 
-Edit `config.yaml` and set `stt.backend: vosk` or `stt.backend: sherpa-onnx`. The change takes effect on next hot-reload (approx. 4 seconds).
-
-### Via CLI
-
-```bash
-# Use Vosk (default)
-alexa-client
-
-# Use sherpa-onnx
-SHERPA_ONNX_PATH=models/it/kroko_128l alexa-client
 ```
+Stage1 KWS hit: 'galileo'       ← KeywordSpotter fired correctly
+Stage1 KWS hit but keyword ...  ← fired but alias-map lookup failed (check wake_words config)
+```
+
+If the wake word is missed too often: raise `keywords_score` (e.g. `1.5`) or lower `keywords_threshold` (e.g. `0.15`).
+
+If false positives are too frequent: raise `keywords_threshold` (e.g. `0.4`).
 
 ---
 
 ## Troubleshooting
 
-### Model Not Found
+### Model not found
 
 ```
-RuntimeError: sherpa-onnx model not found at 'models/sherpa-onnx'. Run 'alexa-setup --sherpa-onnx' to download it.
+RuntimeError: sherpa-onnx model not found at 'models/sherpa-onnx'
 ```
 
-Ensure your model is in the path specified by `SHERPA_ONNX_PATH`:
+Run `alexa-setup --sherpa-onnx` or set `model_path` in `stt.stage1` / `stt.stage2` to the correct directory.
 
-```bash
-ls models/it/kroko_128l/
-# Should show: tokens.txt, encoder.int8.onnx, decoder.int8.onnx, joiner.int8.onnx
+### KeywordSpotter produces empty keyword line
+
+```
+WARNING KWS: keyword 'xyz' produced empty token sequence — skipped
 ```
 
-### High CPU Usage
+The wake word contains characters outside the model's BPE vocabulary. Use simpler Italian words or check `tokens.txt`.
 
-If sherpa-onnx causes high CPU usage on your device, switch back to Vosk:
+### High CPU on Uno Q
+
+Switch stage-1 to Vosk (grammar-constrained) and keep sherpa-onnx only for stage-2:
 
 ```yaml
 stt:
-  backend: vosk
+  stage1:
+    backend: vosk
+  stage2:
+    backend: sherpa-onnx
+    model_path: models/it/kroko_128l
 ```
-
-### Audio Quality Issues
-
-sherpa-onnx expects 16kHz mono PCM audio (same as Vosk). If you see degraded accuracy, check that your audio source is delivering at the correct sample rate.
