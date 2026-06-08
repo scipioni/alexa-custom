@@ -4,6 +4,13 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>alexa-custom</title>
+  <script>
+    (function() {
+      var stored = localStorage.getItem('theme');
+      var theme = stored || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+      if (theme === 'light') document.documentElement.setAttribute('data-theme', 'light');
+    })();
+  </script>
   <style>
     :root {
       --bg:      #0f0f13;
@@ -19,6 +26,19 @@
       --llm:     #a78bfa;
       --llm-dim: rgba(167,139,250,0.15);
       --llm-border: rgba(167,139,250,0.3);
+      --bar-bg:      rgba(0,0,0,0.3);
+      --transcribing: #94a3b8;
+      --reply-trig:   #86efac;
+    }
+
+    [data-theme="light"] {
+      --bg:           #f1f5f9;
+      --surface:      rgba(0,0,0,0.04);
+      --border:       rgba(0,0,0,0.12);
+      --text:         #0f172a;
+      --bar-bg:       rgba(255,255,255,0.6);
+      --transcribing: #475569;
+      --reply-trig:   #16a34a;
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -41,7 +61,7 @@
       display: flex;
       align-items: center;
       gap: 10px;
-      background: rgba(0,0,0,0.3);
+      background: var(--bar-bg);
       backdrop-filter: blur(8px);
     }
     .sdot {
@@ -55,6 +75,16 @@
     #room { color: var(--muted); font-size: 12px; }
     #ws-ind { font-size: 11px; color: var(--muted); }
     #ws-ind.ok { color: var(--match); }
+    #btn-theme {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-size: 13px; cursor: pointer;
+      padding: 2px 7px; border-radius: 5px;
+      line-height: 1.6; transition: border-color 0.2s, color 0.2s;
+      flex-shrink: 0;
+    }
+    #btn-theme:hover { border-color: var(--info); color: var(--info); }
 
     /* LLM badge */
     #llm-badge {
@@ -406,6 +436,7 @@
     <span id="st">Connecting…</span>
     <span id="room"></span>
     <span id="ws-ind">WS disconnected</span>
+    <button id="btn-theme" aria-label="Toggle theme" onclick="toggleTheme()">☀</button>
     <div id="llm-badge">
       <span id="llm-badge-dots" style="display:none">
         <span class="llm-dot"></span><span class="llm-dot"></span><span class="llm-dot"></span>
@@ -715,7 +746,7 @@
           res += '<div style="margin-left:' + (indent * 12) + 'px" class="aact">' + esc(a.label) + '</div>';
           if (a.type === 'ask' && a.on_reply) {
             a.on_reply.forEach(r => {
-              res += '<div style="margin-left:' + ((indent+1)*12) + 'px;color:#86efac" class="atrig">⮑ ' + esc(r.phrase) + '</div>';
+              res += '<div style="margin-left:' + ((indent+1)*12) + 'px;color:var(--reply-trig)" class="atrig">⮑ ' + esc(r.phrase) + '</div>';
               res += renderList(r.actions, indent + 2);
             });
             if (a.on_else && a.on_else.length) {
@@ -794,7 +825,7 @@
           break;
         case 'transcribing':
           h.innerHTML = '<span class="hero-icon" style="color:var(--muted)">◌</span>'
-            + '<span class="hero-text" style="color:#94a3b8">' + esc(text) + ' …</span>';
+            + '<span class="hero-text" style="color:var(--transcribing)">' + esc(text) + ' …</span>';
           break;
         case 'wake':
           h.innerHTML = '<span class="hero-icon" style="color:var(--wake)">◉</span>'
@@ -829,7 +860,7 @@
           h.innerHTML = '<div class="llm-orb"><span class="hero-icon" style="color:var(--llm)">◈</span>'
             + '<div class="llm-orb-ring"></div></div>'
             + '<span class="hero-text">'
-            + (transcript ? '<span style="color:#94a3b8;font-style:italic">"' + esc(transcript) + '"</span>' : '')
+            + (transcript ? '<span style="color:var(--transcribing);font-style:italic">"' + esc(transcript) + '"</span>' : '')
             + '<span class="hero-think-dots">'
             + '<span class="td"></span><span class="td"></span><span class="td"></span>'
             + '</span></span>';
@@ -922,7 +953,36 @@
         .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
     }
 
+    function applyTheme(theme) {
+      if (theme === 'light') {
+        document.documentElement.setAttribute('data-theme', 'light');
+      } else {
+        document.documentElement.removeAttribute('data-theme');
+      }
+      const btn = document.getElementById('btn-theme');
+      if (btn) btn.textContent = theme === 'light' ? '🌙' : '☀';
+    }
+
+    function toggleTheme() {
+      const current = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+      const next = current === 'light' ? 'dark' : 'light';
+      localStorage.setItem('theme', next);
+      applyTheme(next);
+    }
+
+    // Initialise button icon to match current theme (set by anti-flash script)
+    (function() {
+      const theme = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
+      const btn = document.getElementById('btn-theme');
+      if (btn) btn.textContent = theme === 'light' ? '🌙' : '☀';
+    })();
+
     connect();
+
+    // Follow OS preference changes unless user has a stored override
+    matchMedia('(prefers-color-scheme: light)').addEventListener('change', function(e) {
+      if (!localStorage.getItem('theme')) applyTheme(e.matches ? 'light' : 'dark');
+    });
   </script>
 </body>
 </html>
