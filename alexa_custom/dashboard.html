@@ -223,6 +223,9 @@
     }
     .awk { color: var(--wake); font-weight: 700; font-size: 12px; }
     .aalias { color: var(--muted); font-size: 11px; }
+    .aconfusers { color: var(--muted); font-size: 10px; margin-top: 6px; opacity: 0.7; }
+    .aconfusers-label { font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+    .aconfuser-pill { display: inline-block; background: rgba(148,163,184,0.12); border-radius: 3px; padding: 1px 5px; margin: 1px 2px; font-family: monospace; }
     .atrig { margin-top: 3px; color: var(--text); font-size: 12px; transition: opacity 0.2s; }
     .atrig.trig-hit {
       color: var(--match);
@@ -775,6 +778,12 @@
           h += '<div class="atrig">› ' + esc(t.phrase) + '</div>';
           h += renderList(t.actions);
         });
+      }
+
+      if (cfg.confusers && cfg.confusers.length) {
+        h += '<div class="aconfusers"><span class="aconfusers-label">confusers </span>';
+        cfg.confusers.forEach(c => { h += '<span class="aconfuser-pill">' + esc(c) + '</span>'; });
+        h += '</div>';
       }
 
       // LLM section
