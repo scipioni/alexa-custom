@@ -96,6 +96,10 @@ class STTStage1Config:
     backend: str = "vosk"
     model_path: str | None = None
     confidence: float = 0.65
+    # "first" preserves original behaviour (words[0] only).
+    # "min" requires every decoded token to clear the bar (strictest).
+    # "mean" uses the average across tokens (moderate).
+    confidence_mode: str = "first"
     vad_silence_ms: int = 500
     rms_threshold: float = 0.02
     min_speech_ms: int = 200
@@ -431,10 +435,16 @@ def _parse_stt_stage1_config(raw: dict) -> STTStage1Config:
             f"'stt.stage1.backend' must be 'vosk' or 'sherpa-onnx', got {backend!r}"
         )
     model_path_raw = raw.get("model_path")
+    confidence_mode = str(raw.get("confidence_mode", "first"))
+    if confidence_mode not in ("first", "min", "mean"):
+        raise ConfigError(
+            f"'stt.stage1.confidence_mode' must be 'first', 'min', or 'mean', got {confidence_mode!r}"
+        )
     return STTStage1Config(
         backend=backend,
         model_path=str(model_path_raw) if model_path_raw else None,
         confidence=float(raw.get("confidence", 0.65)),
+        confidence_mode=confidence_mode,
         vad_silence_ms=int(raw.get("vad_silence_ms", 500)),
         rms_threshold=float(raw.get("rms_threshold", 0.02)),
         min_speech_ms=int(raw.get("min_speech_ms", 300)),

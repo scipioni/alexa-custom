@@ -41,6 +41,10 @@ stt:
     backend: vosk          # vosk | sherpa-onnx
     # model_path: models/it
     confidence: 0.65       # Vosk minimum confidence (0.0–1.0) to accept wake word
+    # confidence_mode: first  # how to aggregate per-token confidence: first | min | mean
+    #   first — gate on the first decoded token only (original behaviour, safe default)
+    #   min   — every token must clear the bar; strictest, best against partial matches
+    #   mean  — average across all tokens; moderate trade-off
     vad_silence_ms: 500    # stage-1 force-finalize after this many ms of silence
     rms_threshold: 0.02    # stage-1 minimum RMS energy considered speech
     min_speech_ms: 200     # minimum sustained speech before silence timer starts

@@ -742,6 +742,57 @@ def _rms_level(data: bytes) -> float:
     return float(np.linalg.norm(samples)) / (32768.0 * n**0.5)
 
 
+def _vosk_confidence(words: list[dict], mode: str) -> float:
+    """Aggregate per-token confidences from a Vosk result according to ``mode``.
+
+    ``first``: only the first token (original behaviour, safe for single-token words).
+    ``min``:   minimum across all tokens — strictest; requires every token to clear the bar.
+    ``mean``:  arithmetic mean across all tokens.
+    Falls back to 0.0 on empty word list.
+    """
+    if not words:
+        return 0.0
+    confs = [w.get("conf", 0.0) for w in words]
+    if mode == "min":
+        return min(confs)
+    if mode == "mean":
+        return sum(confs) / len(confs)
+    return confs[0]  # "first" (default)
+
+
+def _vosk_check_result(
+    trigger_chunk: bytes,
+    result: dict,
+    alias_map: dict,
+    confuser_set: set,
+    confidence: float,
+    confidence_mode: str,
+    rms_threshold: float,
+) -> "WakeWordGroup | None":
+    """Process a completed Vosk stage-1 result and return the matched WakeWordGroup or None.
+
+    Called only when AcceptWaveform returned True (an endpoint has fired).
+    ``trigger_chunk`` is the audio chunk that caused the endpoint — its RMS is used
+    to gate quiet far-field cross-talk.
+    Callers remain responsible for calling stage1.Reset() / stage1.Result() around this.
+    """
+    text = result.get("text", "").strip()
+    words = result.get("result", [])
+    conf = _vosk_confidence(words, confidence_mode)
+    logger.debug("Stage1 result: %r conf=%.2f (mode=%s)", text, conf, confidence_mode)
+    norm_text = normalize_text(text)
+    if norm_text in confuser_set:
+        logger.debug("Stage1 confuser rejected: %r", norm_text)
+        return None
+    wake_match = alias_map.get(norm_text)
+    if wake_match is None or conf < confidence:
+        return None
+    if _rms_level(trigger_chunk) < rms_threshold:
+        logger.debug("Stage1 RMS gate rejected %r (quiet chunk)", text)
+        return None
+    return wake_match
+
+
 def _read_with_timeout(stdout, nbytes: int, timeout: float) -> bytes:
     """Best-effort read of up to ``nbytes`` from ``stdout`` within ``timeout`` seconds.
 
@@ -1514,64 +1565,65 @@ def _recognition_loop(
                 if partial:
                     on_stt_event("transcribing", {"text": partial})
 
-            if stage1.AcceptWaveform(data):
-                result = json.loads(stage1.Result())
-                text = result.get("text", "").strip()
-                words = result.get("result", [])
-                conf = words[0].get("conf", 0.0) if words else 0.0
-                logger.debug(f"Stage1 result: {text!r} conf={conf:.2f}")
-                norm_text = normalize_text(text)
-                if norm_text in confuser_set:
-                    logger.debug("Stage1 confuser rejected: %r", norm_text)
-                    stage1.Reset()
-                    continue
-                wake_match = alias_map.get(norm_text)
-                if wake_match is not None and conf >= config.stt.stage1.confidence:
-                    _wake_detected(
-                        wake_group=wake_match,
-                        proc=proc,
-                        channels=channels,
-                        backend=stage2_backend,
-                        config=config,
-                        stop_event=stop_event,
-                        telegram_client=telegram_client,
-                        livekit_connect_fn=livekit_connect_fn,
-                        livekit_connected_flag=livekit_connected_flag,
-                        on_stt_event=on_stt_event,
-                        mqtt_client=mqtt_client,
+            if not stage1.AcceptWaveform(data):
+                continue
+
+            result = json.loads(stage1.Result())
+            wake_match = _vosk_check_result(
+                data,
+                result,
+                alias_map,
+                confuser_set,
+                config.stt.stage1.confidence,
+                config.stt.stage1.confidence_mode,
+                config.stt.stage1.rms_threshold,
+            )
+            if wake_match is not None:
+                _wake_detected(
+                    wake_group=wake_match,
+                    proc=proc,
+                    channels=channels,
+                    backend=stage2_backend,
+                    config=config,
+                    stop_event=stop_event,
+                    telegram_client=telegram_client,
+                    livekit_connect_fn=livekit_connect_fn,
+                    livekit_connected_flag=livekit_connected_flag,
+                    on_stt_event=on_stt_event,
+                    mqtt_client=mqtt_client,
+                    loop=loop,
+                    dispatch_loop=dispatch_loop,
+                )
+                logger.debug(
+                    f"two-stage: dispatch returned — livekit_flag={livekit_connected_flag.is_set()} "
+                    f"was_gated={was_gated}"
+                )
+                _drain_pipe(proc)
+                vosk_model = stage1_backend.model
+                stage1 = vosk.KaldiRecognizer(
+                    vosk_model,
+                    16000,
+                    _grammar_json(config.wake_words, confuser_set),
+                )
+                stage1.SetWords(True)
+                if on_stt_event:
+                    on_stt_event(
+                        "listening",
+                        {"wake_words": [g.word for g in config.wake_words]},
+                    )
+                if mqtt_client:
+                    mqtt_client.publish_threadsafe(
+                        f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
+                        "idle",
                         loop=loop,
-                        dispatch_loop=dispatch_loop,
                     )
+            else:
+                backlog = _drain_pipe(proc)
+                if backlog:
                     logger.debug(
-                        f"two-stage: dispatch returned — livekit_flag={livekit_connected_flag.is_set()} "
-                        f"was_gated={was_gated}"
+                        f"two-stage: drained {backlog} backlog bytes after segment"
                     )
-                    _drain_pipe(proc)
-                    vosk_model = stage1_backend.model
-                    stage1 = vosk.KaldiRecognizer(
-                        vosk_model,
-                        16000,
-                        _grammar_json(config.wake_words, confuser_set),
-                    )
-                    stage1.SetWords(True)
-                    if on_stt_event:
-                        on_stt_event(
-                            "listening",
-                            {"wake_words": [g.word for g in config.wake_words]},
-                        )
-                    if mqtt_client:
-                        mqtt_client.publish_threadsafe(
-                            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
-                            "idle",
-                            loop=loop,
-                        )
-                else:
-                    backlog = _drain_pipe(proc)
-                    if backlog:
-                        logger.debug(
-                            f"two-stage: drained {backlog} backlog bytes after segment"
-                        )
-                    stage1.Reset()
+                stage1.Reset()
         else:
             # sherpa-onnx: open-vocabulary stage1 with energy VAD for low latency.
             # Track RMS per chunk; after _STAGE1_VAD_SILENCE_MS ms of silence
