@@ -51,7 +51,6 @@ _TONE_PREROLL_MS = int(os.environ.get("AUDIO_TONE_PREROLL_MS", "300"))
 
 
 _DEFAULT_CARD_NAME = "NewPie"
-_MIC_GAIN = 300  # percent, used by setup_audio()
 
 
 def configure(cfg) -> None:
@@ -64,13 +63,11 @@ def configure(cfg) -> None:
         _TONE_PREROLL_MS, \
         _SAMPLERATE, \
         _DEFAULT_CARD_NAME, \
-        _MIC_GAIN, \
         _OUTPUT_VOLUME
     _POST_PLAYBACK_MS = int(cfg.audio.post_playback_ms)
     _TONE_PREROLL_MS = int(cfg.audio.tone_preroll_ms)
     _SAMPLERATE = dict(cfg.audio.sample_rates)
     _DEFAULT_CARD_NAME = cfg.audio.card_name
-    _MIC_GAIN = cfg.audio.mic_gain
     _OUTPUT_VOLUME = cfg.audio.output_volume
 
 
@@ -971,6 +968,7 @@ def _usb_ids_for_alsa_card(card_index: int) -> tuple[str, str] | None:
 
 def setup_audio() -> None:
     """Set output device PCM hardware volume to 100% and persist it across reboots."""
+    cfg = None
     output_spec = os.environ.get("OUTPUT_DEVICE", "").strip()
     if not output_spec:
         if os.path.exists("conf/config.yaml"):
@@ -1048,6 +1046,7 @@ def setup_audio() -> None:
 
     # Boost microphone input gain via PipeWire (persisted by WirePlumber state).
     input_spec = os.environ.get("INPUT_DEVICE", "").strip() or output_spec
+    input_gain_pct = int((cfg.audio.input_gain if cfg else 1.0) * 100)
     with pulsectl.Pulse("alexa-setup") as pulse:
         needle = input_spec.lower()
         source = next(
@@ -1065,12 +1064,12 @@ def setup_audio() -> None:
         )
     else:
         result = subprocess.run(
-            ["pactl", "set-source-volume", source.name, f"{_MIC_GAIN}%"],
+            ["pactl", "set-source-volume", source.name, f"{input_gain_pct}%"],
             capture_output=True,
             text=True,
         )
         if result.returncode == 0:
-            print(f"Microphone gain set to {_MIC_GAIN}% on {source.name}")
+            print(f"Microphone gain set to {input_gain_pct}% on {source.name}")
         else:
             print(f"WARNING: pactl set-source-volume failed: {result.stderr.strip()}")
 

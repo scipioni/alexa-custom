@@ -88,7 +88,6 @@ class AudioConfig:
     )
     post_playback_ms: int = 100
     tone_preroll_ms: int = 300
-    mic_gain: int = 300
     webrtc: AudioWebRTCConfig = field(default_factory=AudioWebRTCConfig)
 
 
@@ -418,7 +417,6 @@ def _parse_audio_config(raw: dict) -> AudioConfig:
         sample_rates=sample_rates,
         post_playback_ms=int(raw.get("post_playback_ms", 100)),
         tone_preroll_ms=int(raw.get("tone_preroll_ms", 300)),
-        mic_gain=int(raw.get("mic_gain", 300)),
         webrtc=webrtc,
     )
 
