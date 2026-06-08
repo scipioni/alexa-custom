@@ -25,8 +25,8 @@ task audio:status           # verify routing and endpoints
 
 # 5. Create config
 mkdir -p conf/actions
-cp conf/config.yaml.example conf/config.yaml
-cp conf/secrets.yaml.example conf/secrets.yaml
+cp conf.example/config.yaml conf/config.yaml
+cp conf.example/secrets.yaml conf/secrets.yaml
 # Edit conf/secrets.yaml — add LiveKit, Telegram, LLM credentials
 # Edit conf/config.yaml  — set wake words, audio device, STT backend
 
@@ -121,7 +121,7 @@ triggers:
         command: date +%H:%M
 ```
 
-See `conf/config.yaml.example` and `conf/secrets.yaml.example` for the full reference.
+See `conf.example/config.yaml` and `conf.example/secrets.yaml` for the full reference.
 
 ---
 

@@ -119,7 +119,6 @@ alexa_custom/
   config_manager.py  hot-reload watcher (~4 s polling)
   web.py          aiohttp web dashboard
 config.yaml       live config (credentials, triggers, wake words)
-config.yaml.example
 models/           bundled STT/TTS model files
 docs/             extended notes (audio platform, hardware, setup)
 kernel/           kernel build scripts/configs for the board
