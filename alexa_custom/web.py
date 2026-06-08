@@ -361,6 +361,10 @@ class WebServer:
                 res.append(entry)
             return res
 
+        from alexa_custom.stt import _build_confuser_set
+
+        confuser_set = _build_confuser_set(config.wake_words, config.stt.stage1)
+
         ww = []
         for g in config.wake_words:
             entry = {
@@ -392,7 +396,12 @@ class WebServer:
                 "fallback": config.llm.fallback_on_no_match,
             }
 
-        return {"wake_words": ww, "global_triggers": gt, "llm": llm_info}
+        return {
+            "wake_words": ww,
+            "confusers": sorted(confuser_set),
+            "global_triggers": gt,
+            "llm": llm_info,
+        }
 
     # ── LiveKit worker thread ─────────────────────────────────────────────────
 
