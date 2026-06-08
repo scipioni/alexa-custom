@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
 import sys
 import urllib.request
 import zipfile
@@ -13,7 +12,12 @@ _SHERPA_MODELS = {
         "models/it/kroko_128l",
     ),
 }
-_SHERPA_DEST = Path("models/it/kroko_128l")
+_SHERPA_FILES = [
+    "encoder.int8.onnx",
+    "decoder.int8.onnx",
+    "joiner.int8.onnx",
+    "tokens.txt",
+]
 
 
 def download_sherpa_onnx(lang: str = "ita", force: bool = False) -> None:
@@ -24,7 +28,7 @@ def download_sherpa_onnx(lang: str = "ita", force: bool = False) -> None:
         )
         sys.exit(1)
 
-    repo, dest_path = _SHERPA_MODELS[lang]
+    base_url, dest_path = _SHERPA_MODELS[lang]
     dest = Path(dest_path)
 
     if dest.exists() and not force:
@@ -37,31 +41,10 @@ def download_sherpa_onnx(lang: str = "ita", force: bool = False) -> None:
         print(f"Removing existing sherpa-onnx model at {dest.resolve()} …")
         shutil.rmtree(dest)
 
-    print(f"Downloading sherpa-onnx model ({lang}) via huggingface-cli …")
-    hf_cmd = shutil.which("hf")
-    if not hf_cmd:
-        print(
-            "huggingface-cli not found. Install with: pip install huggingface_hub",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    model_path = dest.name
-    parent = dest.parent
-    cmd = [
-        hf_cmd,
-        "download",
-        repo,
-        "--local-dir",
-        str(parent),
-        "--include",
-        f"{model_path}/*",
-    ]
-    print(f"Running: {' '.join(cmd)}")
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        print(f"Download failed: {result.stderr}", file=sys.stderr)
-        sys.exit(1)
+    dest.mkdir(parents=True, exist_ok=True)
+    for filename in _SHERPA_FILES:
+        print(f"Downloading sherpa-onnx {filename} …")
+        _download(f"{base_url}/{filename}", dest / filename)
 
     print(f"sherpa-onnx model ready at {dest.resolve()}")
 
@@ -207,7 +190,7 @@ def main() -> None:
     parser.add_argument(
         "--sherpa-onnx",
         action="store_true",
-        help="Also download the sherpa-onnx Paraformer-ita model (alternative STT backend)",
+        help="Also download the sherpa-onnx kroko Italian transducer model (alternative STT backend)",
     )
     args = parser.parse_args()
 
