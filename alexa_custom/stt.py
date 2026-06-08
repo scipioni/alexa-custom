@@ -336,8 +336,13 @@ def _lev_distance(a: str, b: str) -> int:
     return dp[lb]
 
 
-def _ipa(words: list[str], lang: str = "it") -> dict[str, str]:
-    """Return IPA strings for a list of words via espeak-ng. Returns {} on failure."""
+def _ipa(words: list[str], lang: str = "it") -> dict[str, str] | None:
+    """Return IPA strings for a list of words via espeak-ng.
+
+    Returns None when espeak-ng is unavailable (caller should fall back to
+    orthographic distance).  Returns a partial dict (missing words skipped)
+    on partial failure.
+    """
     try:
         import tempfile
 
@@ -357,8 +362,8 @@ def _ipa(words: list[str], lang: str = "it") -> dict[str, str]:
         ]
         return {w: ipa for w, ipa in zip(words, lines) if ipa}
     except Exception as exc:
-        logger.warning("espeak-ng unavailable, skipping phonetic confusers: %s", exc)
-        return {}
+        logger.debug("espeak-ng unavailable, falling back to orthographic distance: %s", exc)
+        return None
 
 
 def _phonetic_confusers(
@@ -388,20 +393,25 @@ def _phonetic_confusers(
         return set()
 
     all_words = list(set(corpus + wake_words_single))
-    ipa_map = _ipa(all_words)
-    if not ipa_map:
-        return set()
+    ipa_result = _ipa(all_words)
+    # Fall back to orthographic keys when espeak-ng is unavailable.
+    # Italian spelling is phonetically regular enough for a useful approximation.
+    if ipa_result is None:
+        logger.debug("phonetic confusers: using orthographic distance (espeak-ng absent)")
+        ipa_map: dict[str, str] = {w: w for w in all_words}
+    else:
+        ipa_map = ipa_result
 
     candidates: list[tuple[int, str]] = []
     for word in corpus:
         norm = normalize_text(word)
         if norm in existing or norm in {normalize_text(p) for p in wake_phrases}:
             continue
-        word_ipa = ipa_map.get(norm, "")
-        if not word_ipa:
+        word_key = ipa_map.get(norm, "")
+        if not word_key:
             continue
         min_dist = min(
-            _lev_distance(word_ipa, ipa_map.get(w, ""))
+            _lev_distance(word_key, ipa_map.get(w, ""))
             for w in wake_words_single
             if ipa_map.get(w)
         )
