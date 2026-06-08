@@ -13,8 +13,15 @@ wake_words:
   - word: "galileo"
     # id: galileo          # stable key used in wake_triggers (defaults to word)
     # aliases: ["ehi galileo", "hey galileo"]
+    # confusers: ["arduino"]  # extra words added to grammar and silently rejected
     lang: "it-IT"
   - word: "assistente"
+
+  # For emergency-style wake words prefer multi-word phrases so a single
+  # utterance in normal conversation does not trigger the assistant.
+  # "aiuto" (single word) is added as a confuser automatically.
+  # - word: "aiuto aiuto"
+  #   aliases: ["aiutami", "mi serve aiuto"]
 
 # ---------------------------------------------------------------------------
 # Recognition
@@ -37,6 +44,9 @@ stt:
     vad_silence_ms: 500    # stage-1 force-finalize after this many ms of silence
     rms_threshold: 0.02    # stage-1 minimum RMS energy considered speech
     min_speech_ms: 200     # minimum sustained speech before silence timer starts
+    # auto_confusers: true   # derive confusers automatically (sub-phrase + phonetic)
+    # confuser_distance: 3   # IPA phoneme edit distance threshold (0 = phonetic off)
+    # max_confusers: 30      # cap on total auto-generated confusers
 
   stage2:                  # command recognition after wake
     backend: vosk          # can differ from stage1 for higher accuracy
