@@ -1253,6 +1253,7 @@ def _recognition_loop(
                         mqtt_client=mqtt_client,
                         loop=loop,
                         dispatch_loop=dispatch_loop,
+                        confuser_set=confuser_set,
                     )
                     logger.debug(
                         f"two-stage: dispatch returned — livekit_flag={livekit_connected_flag.is_set()} "
@@ -1331,6 +1332,7 @@ def _recognition_loop(
                             loop=loop,
                             dispatch_loop=dispatch_loop,
                             vad_silence_ms=_eff_vad_ms,
+                            confuser_set=confuser_set,
                         )
                         _drain_pipe(proc)
                         stage1_last_speech_t = 0.0
@@ -1367,6 +1369,7 @@ def _wake_detected(
     loop: asyncio.AbstractEventLoop | None = None,
     dispatch_loop: asyncio.AbstractEventLoop | None = None,
     vad_silence_ms: int | None = None,
+    confuser_set: set[str] | None = None,
 ) -> None:
     logger.info(f"Wake word detected: '{wake_group.word}'")
     if on_stt_event:
@@ -1395,6 +1398,13 @@ def _wake_detected(
         flush_ms=300,
         vad_silence_ms=vad_silence_ms,
     )
+    if confuser_set and transcript:
+        words = normalize_text(transcript).split()
+        filtered = [w for w in words if w not in confuser_set]
+        if filtered != words:
+            original = transcript
+            transcript = " ".join(filtered)
+            logger.debug("Stage2 confuser filter: %r → %r", original, transcript)
     logger.info(f"Command transcript: '{transcript}'")
 
     _listen_fn = _make_listen_fn(
