@@ -1147,7 +1147,13 @@ def _recognition_loop(
     stage1_speech_ms = 0.0  # accumulated ms above RMS threshold in current utterance
 
     if on_stt_event:
-        on_stt_event("listening", {"wake_words": [g.word for g in config.wake_words]})
+        on_stt_event(
+            "listening",
+            {
+                "wake_words": [g.word for g in config.wake_words],
+                "confusers": sorted(confuser_set),
+            },
+        )
 
     if mqtt_client:
         mqtt_client.publish_threadsafe(
