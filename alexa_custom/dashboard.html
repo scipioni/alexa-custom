@@ -228,31 +228,77 @@
       flex-shrink: 0;
     }
 
-    .ww-row {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
+    /* ── trigger tree panel ─────────────────────────────────────────────── */
+    #ww-tree-panel { flex-shrink: 0; }
+    #ww-tree-content {
+      padding: 6px 10px 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 0;
+    }
+
+    /* wake word group */
+    .ww-group { margin-bottom: 2px; }
+    .ww-card {
+      border-radius: 7px;
+      padding: 4px 6px;
+      transition: background 0.25s, box-shadow 0.25s;
+    }
+    .ww-card.ww-active {
+      background: rgba(251,146,60,0.06);
+      box-shadow: inset 2px 0 0 var(--wake);
+      animation: glow-pulse 1.2s ease-out;
+    }
+    .ww-node-hdr {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 0 2px;
+    }
+    .ww-node-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--info);
+      flex-shrink: 0;
+      opacity: 0.7;
+    }
+    .ww-node-word {
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--info);
+    }
+    .ww-node-alias {
+      font-size: 9px;
+      color: var(--muted);
+      opacity: 0.7;
+    }
+    .ww-node-triggers {
+      margin-left: 12px;
+      border-left: 1px solid var(--border);
+      padding-left: 8px;
+      margin-bottom: 4px;
+    }
+
+    /* global section separator */
+    .ww-global-sep {
+      display: flex;
+      align-items: center;
       gap: 8px;
-      flex-shrink: 0;
+      margin: 5px 0 3px;
+      font-size: 8px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      opacity: 0.6;
     }
-
-    .center-col > .ww-panel {
-      flex-shrink: 0;
-    }
-
-    .ww-panel-content {
-      overflow-y: auto;
-      padding: 6px 8px;
+    .ww-global-sep::before, .ww-global-sep::after {
+      content: '';
       flex: 1;
-      min-height: 0;
-    }
-
-    #ww-content-globali {
-      column-count: 2;
-      column-gap: 12px;
-    }
-
-    #ww-content-globali .atrig {
-      break-inside: avoid;
+      height: 1px;
+      background: var(--border);
     }
 
     .center-col > #log-panel {
@@ -948,11 +994,9 @@
         </span>
       </div>
 
-      <div class="ww-row" id="ww-panels-container"></div>
-
-      <div class="panel ww-panel" id="ww-panel-globali" style="display:none">
-        <div class="panel-hdr">GLOBALI</div>
-        <div class="ww-panel-content" id="ww-content-globali"></div>
+      <div class="panel" id="ww-tree-panel">
+        <div class="panel-hdr">TRIGGERS</div>
+        <div id="ww-tree-content"></div>
       </div>
 
       <div class="panel" id="log-panel">
@@ -1432,51 +1476,46 @@
     function renderActions(cfg) {
       if (!cfg) return;
 
-      const wwContainer = document.getElementById('ww-panels-container');
-      if (wwContainer) {
-        wwContainer.innerHTML = '';
-        (cfg.wake_words || []).forEach(w => {
-          const panel = document.createElement('div');
-          panel.className = 'panel ww-panel';
-
-          const hdr = document.createElement('div');
-          hdr.className = 'panel-hdr';
-          hdr.textContent = w.word.toUpperCase();
-          panel.appendChild(hdr);
-
-          let h = '<div class="ww-card" data-word="' + esc(w.word) + '" data-aliases="' + esc((w.aliases||[]).join(',')) + '">';
-          if (w.aliases && w.aliases.length)
-            h += '<div class="aalias">' + esc(w.aliases.join(', ')) + '</div>';
-          h += '<div class="ainteract"></div>';
-          (w.triggers || []).forEach(t => {
-            h += '<div class="atrig"><div class="trig-row">'
-              + '<span class="trig-phrase">' + esc(t.phrase) + _aliases(t.aliases) + '</span>'
-              + '<span class="trig-badges">' + _badges(t.actions) + '</span>'
-              + '</div>' + renderTrigTree(t.actions) + '</div>';
-          });
-          h += '</div>';
-
-          const content = document.createElement('div');
-          content.className = 'ww-panel-content';
-          content.innerHTML = h || '<span style="color:var(--muted);font-size:11px">—</span>';
-          panel.appendChild(content);
-          wwContainer.appendChild(panel);
-        });
+      function trigRows(triggers) {
+        return (triggers || []).map(t =>
+          '<div class="atrig"><div class="trig-row">'
+          + '<span class="trig-phrase">' + esc(t.phrase) + _aliases(t.aliases) + '</span>'
+          + '<span class="trig-badges">' + _badges(t.actions) + '</span>'
+          + '</div>' + renderTrigTree(t.actions) + '</div>'
+        ).join('');
       }
 
-      // Global triggers — single shared panel
-      const globaliPanel = document.getElementById('ww-panel-globali');
-      const globaliContent = document.getElementById('ww-content-globali');
-      if (cfg.global_triggers && cfg.global_triggers.length && globaliPanel && globaliContent) {
-        globaliPanel.style.display = 'flex';
-        let gh = '';
-        cfg.global_triggers.forEach(t => {
-          gh += '<div class="atrig"><div class="trig-row">'
-            + '<span class="trig-phrase">' + esc(t.phrase) + _aliases(t.aliases) + '</span>'
-            + '<span class="trig-badges">' + _badges(t.actions) + '</span>'
-            + '</div>' + renderTrigTree(t.actions) + '</div>';
+      const tree = document.getElementById('ww-tree-content');
+      if (tree) {
+        let h = '';
+
+        (cfg.wake_words || []).forEach(w => {
+          const aliases = (w.aliases || []).join(', ');
+          h += '<div class="ww-group">'
+            + '<div class="ww-card" data-word="' + esc(w.word) + '" data-aliases="' + esc((w.aliases||[]).join(',')) + '">'
+            + '<div class="ww-node-hdr">'
+            + '<span class="ww-node-dot"></span>'
+            + '<span class="ww-node-word">' + esc(w.word) + '</span>'
+            + (aliases ? '<span class="ww-node-alias">· ' + esc(aliases) + '</span>' : '')
+            + '</div>'
+            + '<div class="ainteract"></div>'
+            + '<div class="ww-node-triggers">'
+            + (w.triggers && w.triggers.length
+                ? trigRows(w.triggers)
+                : '<span style="color:var(--muted);font-size:10px;opacity:0.5">—</span>')
+            + '</div>'
+            + '</div>'
+            + '</div>';
         });
-        globaliContent.innerHTML = gh || '';
+
+        if (cfg.global_triggers && cfg.global_triggers.length) {
+          h += '<div class="ww-global-sep">global</div>'
+            + '<div class="ww-node-triggers" style="margin-left:0;border-left:none;padding-left:2px">'
+            + trigRows(cfg.global_triggers)
+            + '</div>';
+        }
+
+        tree.innerHTML = h;
       }
 
       // LLM section — render in monitoring column
