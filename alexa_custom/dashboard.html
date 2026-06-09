@@ -1583,8 +1583,8 @@
       const theme = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
       const btn = document.getElementById('btn-theme');
       if (btn) btn.textContent = theme === 'light' ? '🌙' : '☀';
-      const savedMode = localStorage.getItem('dashboard-mode');
-      if (savedMode) applyMode(savedMode);
+      const savedMode = localStorage.getItem('dashboard-mode') || 'user';
+      applyMode(savedMode);
     })();
 
     connect();
