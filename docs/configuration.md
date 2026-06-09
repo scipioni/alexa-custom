@@ -199,7 +199,20 @@ system:
   reconnect_delay: 5          # seconds between LiveKit reconnect attempts
   config_poll_interval: 2     # hot-reload polling interval (seconds)
   empty_room_timeout: 0       # disconnect after N seconds with no participants (0 = never)
+  wait_for_participant: true   # poll LiveKit REST API before joining; connect only when a caller appears
+  answer_timeout: 60          # seconds to poll before giving up and returning to idle
 ```
+
+#### `wait_for_participant` behaviour
+
+When `true` (the default), triggering `livekit_join` does **not** immediately connect to the room. Instead:
+
+1. STT continues running in stage-1 — the device stays ready for further voice commands.
+2. The LiveKit REST API is polled every 2 s for remote participants in the configured room.
+3. When a participant appears → the mic opens, the room is joined, and full duplex starts normally.
+4. If `answer_timeout` seconds pass with nobody in the room → the poll stops, an `answer_timeout` event is emitted, and the system returns to idle.
+
+Set to `false` to restore the old behaviour (connect immediately on trigger, wait inside the session).
 
 ---
 

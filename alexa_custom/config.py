@@ -157,6 +157,8 @@ class SystemConfig:
     reconnect_delay: int = 5
     config_poll_interval: int = 2
     empty_room_timeout: int = 0
+    wait_for_participant: bool = True
+    answer_timeout: float = 60
 
 
 @dataclass
@@ -514,6 +516,8 @@ def _parse_system_config(raw: dict) -> SystemConfig:
         reconnect_delay=int(raw.get("reconnect_delay", 5)),
         config_poll_interval=int(raw.get("config_poll_interval", 2)),
         empty_room_timeout=int(raw.get("empty_room_timeout", 0)),
+        wait_for_participant=bool(raw.get("wait_for_participant", True)),
+        answer_timeout=float(raw.get("answer_timeout", 60)),
     )
 
 

@@ -130,3 +130,5 @@ actions:
 #   reconnect_delay: 5         # seconds between LiveKit reconnect attempts
 #   config_poll_interval: 2    # hot-reload polling interval in seconds
 #   empty_room_timeout: 0      # disconnect after N seconds with no participants (0 = never)
+#   wait_for_participant: true  # join room silently and wait for a remote participant before going live
+#   answer_timeout: 60         # seconds to wait for a participant before disconnecting (wait_for_participant only)
