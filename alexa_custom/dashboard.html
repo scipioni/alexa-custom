@@ -485,19 +485,46 @@
     }
     #cpu-secondary {
       display: flex;
-      gap: 8px;
-      margin-top: 1px;
+      gap: 6px;
+      margin-top: 3px;
     }
-    .cpu-sec-val {
-      font-size: 9px;
-      font-variant-numeric: tabular-nums;
-      color: var(--muted);
+    .cpu-stat-chip {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      background: rgba(255,255,255,0.03);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 4px 7px;
+    }
+    .cpu-stat-top {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
     }
     .cpu-sec-lbl {
       font-size: 8px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
       color: var(--muted);
-      opacity: 0.6;
-      letter-spacing: 0.06em;
+    }
+    .cpu-sec-val {
+      font-size: 11px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+    }
+    .cpu-stat-bar-track {
+      height: 2px;
+      border-radius: 1px;
+      background: rgba(255,255,255,0.07);
+      overflow: hidden;
+    }
+    .cpu-stat-bar-fill {
+      height: 100%;
+      border-radius: 1px;
+      transition: width 0.6s ease, background-color 0.4s ease;
     }
     @keyframes cpu-dot-pulse {
       0%, 100% { opacity: 1; }
@@ -884,8 +911,20 @@
               </div>
             </div>
             <div id="cpu-secondary">
-              <span class="cpu-sec-lbl">5m</span><span class="cpu-sec-val" id="cpu-load5">—</span>
-              <span class="cpu-sec-lbl">15m</span><span class="cpu-sec-val" id="cpu-load15">—</span>
+              <div class="cpu-stat-chip">
+                <div class="cpu-stat-top">
+                  <span class="cpu-sec-lbl">5m</span>
+                  <span class="cpu-sec-val" id="cpu-load5">—</span>
+                </div>
+                <div class="cpu-stat-bar-track"><div class="cpu-stat-bar-fill" id="cpu-bar5"></div></div>
+              </div>
+              <div class="cpu-stat-chip">
+                <div class="cpu-stat-top">
+                  <span class="cpu-sec-lbl">15m</span>
+                  <span class="cpu-sec-val" id="cpu-load15">—</span>
+                </div>
+                <div class="cpu-stat-bar-track"><div class="cpu-stat-bar-fill" id="cpu-bar15"></div></div>
+              </div>
             </div>
           </div>
           <div id="vu-bottom">
@@ -1675,10 +1714,14 @@
       const badge = document.getElementById('cpu-cores-badge');
       if (badge) badge.textContent = cpuCount + ' core' + (cpuCount !== 1 ? 's' : '');
 
-      const el5  = document.getElementById('cpu-load5');
-      const el15 = document.getElementById('cpu-load15');
+      const el5   = document.getElementById('cpu-load5');
+      const el15  = document.getElementById('cpu-load15');
+      const bar5  = document.getElementById('cpu-bar5');
+      const bar15 = document.getElementById('cpu-bar15');
       if (el5)  { el5.textContent  = load5.toFixed(2);  el5.style.color  = _cpuColor(load5,  maxY); }
       if (el15) { el15.textContent = load15.toFixed(2); el15.style.color = _cpuColor(load15, maxY); }
+      if (bar5)  { bar5.style.width  = Math.min(100, load5  / maxY * 100).toFixed(1) + '%'; bar5.style.backgroundColor  = _cpuColor(load5,  maxY); }
+      if (bar15) { bar15.style.width = Math.min(100, load15 / maxY * 100).toFixed(1) + '%'; bar15.style.backgroundColor = _cpuColor(load15, maxY); }
     }
 
     // ── init ──────────────────────────────────────────────────────────────────
