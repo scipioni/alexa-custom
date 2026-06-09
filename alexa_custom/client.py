@@ -4,6 +4,7 @@ import logging
 import os
 import signal
 import threading
+from pathlib import Path
 from typing import Callable
 
 from livekit.api import AccessToken, VideoGrants
@@ -978,6 +979,7 @@ def main() -> None:
         stt_params=stt_params,
         port=web_port,
         hot_reload=args.hot_reload,
+        watch_paths=[Path("conf")],
         output_volume=output_volume,
         input_gain=input_gain,
         shutdown_callback=_web_shutdown_callback,

@@ -654,6 +654,7 @@
           break;
         }
         case 'error': setSt('Error: ' + (m.msg||'unknown'), null); break;
+        case 'reload': location.reload(); break;
       }
     }
 

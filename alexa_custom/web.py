@@ -17,9 +17,7 @@ from aiohttp import web, WSMsgType
 
 logger = logging.getLogger(__name__)
 
-# ── dashboard HTML (loaded from dashboard.html at import time) ────────────────
-
-_HTML = (Path(__file__).parent / "dashboard.html").read_text()
+_DASHBOARD_PATH = Path(__file__).parent / "dashboard.html"
 
 # ── log handler ────────────────────────────────────────────────────────────────
 
@@ -56,6 +54,7 @@ class WebServer:
         self._output_volume = output_volume
         self._input_gain = input_gain
         self._shutdown_callback = shutdown_callback
+        self._html = _DASHBOARD_PATH.read_text()
         self._clients: set[web.WebSocketResponse] = set()
         self._queue: asyncio.Queue = asyncio.Queue(maxsize=200)
         self._pending_vu: dict[str, float] = {}
@@ -203,7 +202,7 @@ class WebServer:
     # ── HTTP / WebSocket routes ───────────────────────────────────────────────
 
     async def _handle_index(self, request: web.Request) -> web.Response:
-        return web.Response(text=_HTML, content_type="text/html")
+        return web.Response(text=self._html, content_type="text/html")
 
     async def _handle_ws(self, request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse()
@@ -290,6 +289,49 @@ class WebServer:
         while True:
             await asyncio.sleep(30)
             self._clients = {ws for ws in self._clients if not ws.closed}
+
+    async def _asset_watcher_loop(
+        self, watch_paths: list[Path], interval: float = 1.0
+    ) -> None:
+        def _collect_mtimes() -> dict[str, float]:
+            mtimes: dict[str, float] = {}
+            for p in watch_paths:
+                candidates = (
+                    [f for f in p.glob("*.yaml") if f.name != "secrets.yaml"]
+                    + [f for f in p.glob("*.html")]
+                    if p.is_dir()
+                    else [p]
+                    if p.exists()
+                    else []
+                )
+                for f in candidates:
+                    try:
+                        mtimes[str(f)] = f.stat().st_mtime
+                    except OSError:
+                        pass
+            return mtimes
+
+        last_mtimes = await asyncio.to_thread(_collect_mtimes)
+        try:
+            while True:
+                await asyncio.sleep(interval)
+                mtimes = await asyncio.to_thread(_collect_mtimes)
+                if mtimes == last_mtimes:
+                    continue
+                changed = [k for k in mtimes if mtimes[k] != last_mtimes.get(k)]
+                last_mtimes = mtimes
+                for path_str in changed:
+                    if path_str.endswith(".html"):
+                        try:
+                            self._html = Path(path_str).read_text()
+                            logger.info("Reloaded HTML: %s", path_str)
+                        except OSError as e:
+                            logger.warning("Failed to reload HTML %s: %s", path_str, e)
+                    else:
+                        logger.info("Config changed: %s", path_str)
+                await self._broadcast({"type": "reload"})
+        except asyncio.CancelledError:
+            pass
 
     async def _stt_watchdog_loop(
         self, stt_thread_holder: list, stt_params: dict
@@ -439,6 +481,7 @@ class WebServer:
         room: str,
         stt_params: dict | None = None,
         hot_reload: bool = False,
+        watch_paths: list[Path] | None = None,
         output_volume: float = 0.5,
         input_gain: float = 1.0,
     ) -> None:
@@ -467,6 +510,9 @@ class WebServer:
         vu_task = asyncio.create_task(self._vu_flush_loop())
         prune_task = asyncio.create_task(self._prune_clients_loop())
         watchdog_task: asyncio.Task | None = None
+
+        all_watch = list(watch_paths or []) + [_DASHBOARD_PATH]
+        asyncio.create_task(self._asset_watcher_loop(all_watch))
 
         if stt_params and "config" in stt_params:
             self._state["actions_config"] = self._serialize_config(stt_params["config"])
@@ -548,6 +594,7 @@ def run_web(
     stt_params: dict | None = None,
     port: int = 8080,
     hot_reload: bool = False,
+    watch_paths: list[Path] | None = None,
     output_volume: float = 0.5,
     input_gain: float = 1.0,
     shutdown_callback: Callable | None = None,
@@ -567,6 +614,7 @@ def run_web(
                 room,
                 stt_params,
                 hot_reload=hot_reload,
+                watch_paths=watch_paths,
                 output_volume=output_volume,
                 input_gain=input_gain,
             )
