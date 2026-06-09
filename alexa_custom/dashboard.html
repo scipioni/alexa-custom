@@ -241,14 +241,14 @@
 
     .ww-panel-content {
       overflow-y: auto;
-      padding: 8px 12px;
+      padding: 6px 8px;
       flex: 1;
       min-height: 0;
     }
 
     #ww-content-globali {
       column-count: 2;
-      column-gap: 16px;
+      column-gap: 12px;
     }
 
     #ww-content-globali .atrig {
@@ -322,36 +322,88 @@
     .panel-hdr button:hover { border-color: var(--info); color: var(--text); }
 
     /* ── wake words panels ──────────────────────────────────────────────── */
-    .aalias { color: var(--muted); font-size: 11px; }
-    .aalias-inline { color: var(--muted); font-size: 11px; font-weight: 400; }
-.atrig { margin-top: 3px; color: var(--text); font-size: 12px; transition: opacity 0.2s; }
-    .atrig.trig-hit {
-      color: var(--match);
-      background: rgba(74,222,128,0.12);
-      border-radius: 4px;
+    .aalias { color: var(--muted); font-size: 10px; margin-bottom: 4px; }
+    .aalias-inline { color: var(--muted); font-size: 10px; font-weight: 400; }
+
+    /* trigger row */
+    .trig-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 3px 5px;
+      border-radius: 5px;
+      transition: background 0.15s, opacity 0.2s;
+      min-width: 0;
+    }
+    .trig-row:hover { background: rgba(255,255,255,0.04); }
+    .trig-phrase {
+      font-size: 11px;
+      color: var(--text);
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .trig-phrase::before { content: '›'; margin-right: 5px; color: var(--muted); }
+    .trig-reply-phrase {
+      font-size: 10px;
+      color: var(--reply-trig);
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .trig-else-phrase {
+      font-size: 10px;
+      color: var(--nomatch);
+      flex: 1;
+    }
+    .trig-badges { display: flex; gap: 3px; flex-shrink: 0; }
+    .abadge {
+      font-size: 8px;
+      font-weight: 700;
       padding: 1px 5px;
-      margin-left: -5px;
+      border-radius: 3px;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    .abadge-say      { background: rgba(96,165,250,0.13);  color: var(--info); }
+    .abadge-shell    { background: rgba(250,204,21,0.13);  color: var(--amber); }
+    .abadge-livekit  { background: rgba(74,222,128,0.13);  color: var(--match); }
+    .abadge-telegram { background: rgba(96,165,250,0.10);  color: #7dd3fc; }
+    .abadge-mqtt     { background: rgba(251,146,60,0.13);  color: var(--wake); }
+    .abadge-ask      { background: rgba(167,139,250,0.13); color: var(--llm); }
+    .abadge-tone     { background: rgba(100,116,139,0.13); color: var(--muted); }
+    .abadge-log      { background: rgba(100,116,139,0.10); color: var(--muted); }
+    .abadge-llm      { background: rgba(167,139,250,0.13); color: var(--llm); }
+    .abadge-other    { background: rgba(100,116,139,0.10); color: var(--muted); }
+
+    .trig-replies { border-left: 1px solid var(--border); margin-left: 10px; padding-left: 6px; margin-bottom: 2px; }
+
+    .atrig { transition: opacity 0.2s; }
+    .atrig.trig-hit .trig-row, .atrig.trig-hit {
+      background: rgba(74,222,128,0.10);
+      border-radius: 5px;
       animation: trig-flash 0.35s ease-out;
     }
-    .atrig.trig-reply-hit {
-      color: var(--match);
-      background: rgba(74,222,128,0.15);
-      border-radius: 4px;
-      padding: 1px 5px;
-      margin-left: -5px;
+    .atrig.trig-hit .trig-phrase { color: var(--match); }
+    .atrig.trig-reply-hit .trig-row, .atrig.trig-reply-hit {
+      background: rgba(74,222,128,0.12);
+      border-radius: 5px;
       font-weight: 600;
       animation: trig-reply-flash 0.5s ease-out;
     }
-    .atrig.trig-dim { opacity: 0.25; }
-    .aact { color: var(--muted); font-size: 11px; margin-left: 10px; display: block; }
-    .agt-header {
-      color: var(--muted); font-size: 10px; margin-top: 6px; letter-spacing: 0.06em;
-      border-bottom: 1px solid var(--border); padding-bottom: 3px; margin-bottom: 4px;
-    }
+    .atrig.trig-reply-hit .trig-phrase { color: var(--match); }
+    .atrig.trig-dim { opacity: 0.2; }
+
     .ainteract {
-      color: var(--info); font-size: 12px; margin-top: 4px;
-      padding: 2px 6px; background: rgba(96,165,250,0.08);
-      border-radius: 4px; min-height: 1.4em;
+      color: var(--info); font-size: 11px; margin: 3px 0 5px;
+      padding: 2px 7px; background: rgba(96,165,250,0.07);
+      border-radius: 4px; min-height: 1.3em;
+      border-left: 2px solid rgba(96,165,250,0.3);
     }
     .ainteract:empty { display: none; }
 
@@ -824,14 +876,12 @@
     /* ── glow and grow animations ─────────────────────────────────────────── */
     .ww-card {
       border: 1px solid transparent;
-      border-radius: 10px;
-      padding: 10px 12px;
-      margin-bottom: 8px;
-      background: var(--surface);
+      border-radius: 8px;
+      padding: 4px 2px;
       transition: background 0.25s, box-shadow 0.25s;
     }
     .ww-card.ww-active {
-      background: rgba(251,146,60,0.08);
+      background: rgba(251,146,60,0.06);
       box-shadow: inset 2px 0 0 var(--wake);
       animation: glow-pulse 1.2s ease-out;
     }
@@ -1336,27 +1386,51 @@
       return (list && list.length) ? ' <span class="aalias-inline">(' + esc(list.join(', ')) + ')</span>' : '';
     }
 
+    function _actionBadge(label) {
+      if (!label) return '';
+      const l = label.toLowerCase();
+      if (l.startsWith('say:'))          return '<span class="abadge abadge-say">say</span>';
+      if (l.startsWith('shell:'))        return '<span class="abadge abadge-shell">shell</span>';
+      if (l.startsWith('livekit'))       return '<span class="abadge abadge-livekit">livekit</span>';
+      if (l.startsWith('telegram'))      return '<span class="abadge abadge-telegram">tg</span>';
+      if (l.startsWith('mqtt:'))         return '<span class="abadge abadge-mqtt">mqtt</span>';
+      if (l.startsWith('ask:'))          return '<span class="abadge abadge-ask">ask</span>';
+      if (l.startsWith('tone'))          return '<span class="abadge abadge-tone">tone</span>';
+      if (l.startsWith('log:'))          return '<span class="abadge abadge-log">log</span>';
+      if (l.startsWith('llm'))           return '<span class="abadge abadge-llm">llm</span>';
+      const short = label.length > 9 ? label.slice(0, 9) + '…' : label;
+      return '<span class="abadge abadge-other">' + esc(short) + '</span>';
+    }
+
+    function _badges(actions) {
+      return (actions || []).map(a => _actionBadge(a.label)).join('');
+    }
+
+    function renderTrigTree(actions) {
+      let res = '';
+      (actions || []).forEach(a => {
+        if (a.type === 'ask' && (a.on_reply || a.on_else)) {
+          res += '<div class="trig-replies">';
+          (a.on_reply || []).forEach(r => {
+            res += '<div class="atrig"><div class="trig-row">'
+              + '<span class="trig-reply-phrase">⮑ ' + esc(r.phrase) + '</span>'
+              + '<span class="trig-badges">' + _badges(r.actions) + '</span>'
+              + '</div>' + renderTrigTree(r.actions) + '</div>';
+          });
+          if (a.on_else && a.on_else.length) {
+            res += '<div class="atrig"><div class="trig-row">'
+              + '<span class="trig-else-phrase">⮑ else</span>'
+              + '<span class="trig-badges">' + _badges(a.on_else) + '</span>'
+              + '</div></div>';
+          }
+          res += '</div>';
+        }
+      });
+      return res;
+    }
+
     function renderActions(cfg) {
       if (!cfg) return;
-
-      function renderList(actions, indent) {
-        indent = indent || 0;
-        let res = '';
-        (actions || []).forEach(a => {
-          res += '<div style="margin-left:' + (indent * 12) + 'px" class="aact">' + esc(a.label) + '</div>';
-          if (a.type === 'ask' && a.on_reply) {
-            a.on_reply.forEach(r => {
-              res += '<div style="margin-left:' + ((indent+1)*12) + 'px;color:var(--reply-trig)" class="atrig">⮑ ' + esc(r.phrase) + '</div>';
-              res += renderList(r.actions, indent + 2);
-            });
-            if (a.on_else && a.on_else.length) {
-              res += '<div style="margin-left:' + ((indent+1)*12) + 'px;color:var(--nomatch)" class="atrig">⮑ else</div>';
-              res += renderList(a.on_else, indent + 2);
-            }
-          }
-        });
-        return res;
-      }
 
       const wwContainer = document.getElementById('ww-panels-container');
       if (wwContainer) {
@@ -1370,21 +1444,22 @@
           hdr.textContent = w.word.toUpperCase();
           panel.appendChild(hdr);
 
-          let h = '';
-          h += '<div class="ww-card" data-word="' + esc(w.word) + '" data-aliases="' + esc((w.aliases||[]).join(',')) + '">';
-          h += '<div class="aalias">' + ((w.aliases && w.aliases.length) ? esc(w.aliases.join(', ')) : '—') + '</div>';
+          let h = '<div class="ww-card" data-word="' + esc(w.word) + '" data-aliases="' + esc((w.aliases||[]).join(',')) + '">';
+          if (w.aliases && w.aliases.length)
+            h += '<div class="aalias">' + esc(w.aliases.join(', ')) + '</div>';
           h += '<div class="ainteract"></div>';
           (w.triggers || []).forEach(t => {
-            h += '<div class="atrig">› ' + esc(t.phrase) + _aliases(t.aliases) + '</div>';
-            h += renderList(t.actions);
+            h += '<div class="atrig"><div class="trig-row">'
+              + '<span class="trig-phrase">' + esc(t.phrase) + _aliases(t.aliases) + '</span>'
+              + '<span class="trig-badges">' + _badges(t.actions) + '</span>'
+              + '</div>' + renderTrigTree(t.actions) + '</div>';
           });
           h += '</div>';
 
           const content = document.createElement('div');
           content.className = 'ww-panel-content';
-          content.innerHTML = h || '<span style="color:var(--muted)">Nessun trigger</span>';
+          content.innerHTML = h || '<span style="color:var(--muted);font-size:11px">—</span>';
           panel.appendChild(content);
-
           wwContainer.appendChild(panel);
         });
       }
@@ -1396,8 +1471,10 @@
         globaliPanel.style.display = 'flex';
         let gh = '';
         cfg.global_triggers.forEach(t => {
-          gh += '<div class="atrig">› ' + esc(t.phrase) + _aliases(t.aliases) + '</div>';
-          gh += renderList(t.actions);
+          gh += '<div class="atrig"><div class="trig-row">'
+            + '<span class="trig-phrase">' + esc(t.phrase) + _aliases(t.aliases) + '</span>'
+            + '<span class="trig-badges">' + _badges(t.actions) + '</span>'
+            + '</div>' + renderTrigTree(t.actions) + '</div>';
         });
         globaliContent.innerHTML = gh || '';
       }
