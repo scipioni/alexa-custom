@@ -10,7 +10,7 @@ Optimized for **PipeWire** and fully integrated with **Home Assistant**.
 
 ```bash
 # 1. Install system dependencies
-sudo apt install pulseaudio-utils pipewire
+sudo apt install -y pulseaudio-utils pipewire python3-venv
 
 # 2. Setup virtual environment
 python -m venv .venv
