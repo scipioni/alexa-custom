@@ -48,6 +48,10 @@ stt:
     vad_silence_ms: 500    # stage-1 force-finalize after this many ms of silence
     rms_threshold: 0.02    # stage-1 minimum RMS energy considered speech
     min_speech_ms: 200     # minimum sustained speech before silence timer starts
+    # vosk_grammar: false    # restrict Vosk to wake-word vocabulary (grammar mode)
+    #   false — free-vocabulary (default): full decoder; scores are absolute; unrelated speech genuinely rejected.
+    #           Trade-off: higher CPU than grammar mode.
+    #   true  — grammar mode: low CPU, but every segment is forced onto nearest phrase (no real reject path).
     # auto_confusers: true   # derive confusers automatically (sub-phrase + phonetic)
     # confuser_distance: 3   # IPA phoneme edit distance threshold (0 = phonetic off)
     # max_confusers: 30      # cap on total auto-generated confusers

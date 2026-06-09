@@ -364,7 +364,7 @@
     .vu-row { display: flex; align-items: center; gap: 8px; flex: 1; }
     .vu-lbl { width: 30px; color: var(--muted); font-weight: 700; font-size: 11px; flex-shrink: 0; }
     .vu-dev { width: 70px; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 0; }
-    .vu-segs { display: flex; gap: 2px; align-items: center; }
+    .vu-segs { display: flex; gap: 2px; align-items: center; position: relative; }
     .seg {
       width: 6px; height: 12px; border-radius: 2px;
       opacity: 0.12; transition: opacity 0.06s linear;
@@ -373,8 +373,7 @@
     .seg:nth-child(-n+14)                        { background: var(--match); }
     .seg:nth-child(n+15):nth-child(-n+17)        { background: var(--amber); }
     .seg:nth-child(n+18)                         { background: var(--nomatch); }
-    .vu-rms { width: 48px; height: 5px; border-radius: 3px; background: var(--border); flex-shrink: 0; overflow: hidden; }
-    .vu-rms-fill { height: 100%; border-radius: 3px; background: var(--match); width: 0%; transition: width 0.08s linear; }
+    .vu-rms-line { position: absolute; top: -2px; bottom: -2px; width: 2px; border-radius: 1px; background: var(--nomatch); pointer-events: none; left: 0; transition: left 0.08s linear; }
     .vu-db { width: 56px; text-align: right; color: var(--muted); font-size: 11px; flex-shrink: 0; }
     .footer-divider { width: 1px; height: 28px; background: var(--border); flex-shrink: 0; }
     #btn-restart {
@@ -506,7 +505,6 @@
       <span class="vu-lbl">MIC</span>
       <span class="vu-dev" id="mic-dev"></span>
       <div class="vu-segs" id="mic-segs"></div>
-      <div class="vu-rms" id="mic-rms"><div class="vu-rms-fill" id="mic-rms-fill"></div></div>
       <span class="vu-db" id="mic-db">-∞ dB</span>
     </div>
     <div class="footer-divider"></div>
@@ -530,6 +528,11 @@
         c.appendChild(s);
       }
     });
+    // RMS needle for mic bar
+    const _micRmsLine = document.createElement('div');
+    _micRmsLine.className = 'vu-rms-line';
+    _micRmsLine.id = 'mic-rms-line';
+    document.getElementById('mic-segs').appendChild(_micRmsLine);
 
     let ws = null, reconnTimer = null, _restarting = false, _reconnDelay = 1000;
     let _lastWakeWord = '', _cfg = null;
@@ -840,8 +843,11 @@
       const segs  = document.getElementById(ch + '-segs').children;
       for (let i = 0; i < segs.length; i++) segs[i].classList.toggle('on', i < count);
       document.getElementById(ch + '-db').textContent = dv ? dv + ' dB' : '-∞ dB';
-      const rmsFill = document.getElementById(ch + '-rms-fill');
-      if (rmsFill) rmsFill.style.width = Math.min(100, lvl * 100) + '%';
+      const rmsLine = document.getElementById(ch + '-rms-line');
+      if (rmsLine) {
+        const barW = rmsLine.parentElement.scrollWidth;
+        rmsLine.style.left = Math.min(barW - 2, lvl * barW) + 'px';
+      }
     }
 
     function setAudio(connected, connType) {
