@@ -717,7 +717,7 @@
       flex-shrink: 0;
     }
     #history-section.collapsed #hist-toggle-icon { transform: rotate(-90deg); }
-    #vu-bottom { margin-top: 8px; }
+    #vu-bottom { margin-top: 10px; }
 
     /* ── CPU monitor ────────────────────────────────────────────────────── */
     #cpu-widget { display: flex; flex-direction: column; gap: 5px; }
@@ -860,29 +860,30 @@
     /* vertical VU meters */
     .vu-block {
       display: flex;
-      gap: 16px;
+      gap: 24px;
       justify-content: center;
     }
     .vu-row-v {
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 4px;
+      gap: 5px;
     }
     .vu-lbl-v {
-      color: var(--muted);
+      color: var(--fg);
       font-weight: 700;
-      font-size: 10px;
+      font-size: 11px;
       text-transform: uppercase;
-      letter-spacing: 0.06em;
+      letter-spacing: 0.10em;
+      opacity: 0.75;
     }
     .vu-segs-v {
       position: relative;
       display: flex;
       flex-direction: column-reverse;
-      gap: 4px;
+      gap: 3px;
       height: 160px;
-      width: 32px;
+      width: 40px;
     }
     .rms-line {
       position: absolute;
@@ -897,15 +898,23 @@
     }
     .seg-v {
       width: 100%;
-      height: 8px;
-      border-radius: 2px;
-      background: rgba(128,128,128,0.15);
+      height: 7px;
+      border-radius: 3px;
+      background: rgba(128,128,128,0.14);
       transition: background-color 0.06s linear;
     }
     .seg-v.on:nth-child(-n+14)               { background: var(--match); }
     .seg-v.on:nth-child(n+15):nth-child(-n+17) { background: var(--amber); }
     .seg-v.on:nth-child(n+18)               { background: var(--nomatch); }
-    .vu-db { color: var(--muted); font-size: 10px; }
+    .vu-db {
+      color: var(--fg);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      opacity: 0.85;
+      min-width: 60px;
+      text-align: center;
+    }
     .vu-gain { color: var(--muted); font-size: 9px; opacity: 0.7; }
 
     /* ── room panel ──────────────────────────────────────────────────────── */
