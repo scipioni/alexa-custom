@@ -6,14 +6,14 @@ Provide a browser-based dashboard for monitoring and controlling the Alexa Custo
 ## Requirements
 
 ### Requirement: HTTP server with embedded dashboard
-The system SHALL serve a single-page HTML dashboard over HTTP when started with `--web`. The HTML, CSS, and JavaScript SHALL be stored in `alexa_custom/dashboard.html` and loaded into memory at module import time via `(Path(__file__).parent / "dashboard.html").read_text()`. The loaded content SHALL be served at `GET /`. The server SHALL bind to `0.0.0.0` on the configured port (default `8080`) to allow LAN access.
+The system SHALL serve a single-page HTML dashboard over HTTP. The HTML, CSS, and JavaScript SHALL be stored in `alexa_custom/dashboard.html` and loaded into memory at module import time via `(Path(__file__).parent / "dashboard.html").read_text()`. The loaded content SHALL be served at `GET /`. The server SHALL bind to `0.0.0.0` on the configured port (default `8080`) to allow LAN access.
 
 #### Scenario: Dashboard served on startup
-- **WHEN** `alexa-client --web` is started
+- **WHEN** `alexa-client` is started
 - **THEN** `GET http://<host>:8080/` returns HTTP 200 with `Content-Type: text/html`
 
 #### Scenario: Custom port via flag
-- **WHEN** `alexa-client --web --web-port 9090` is started
+- **WHEN** `alexa-client --web-port 9090` is started
 - **THEN** the server listens on port 9090
 
 ### Requirement: WebSocket real-time event stream
@@ -39,7 +39,7 @@ The system SHALL throttle `volume_update` WebSocket messages to a maximum of 4 p
 - **THEN** the WebSocket stream carries no more than 4 `volume_update` messages per second per client
 
 ### Requirement: Live log stream
-The system SHALL capture Python `logging` records at DEBUG level and above and broadcast them to all connected WebSocket clients as `{"type": "log", "level": "...", "ts": "HH:MM:SS", "msg": "..."}` messages. Log records SHALL NOT be written to stdout when `--web` is active (to avoid polluting a redirected log file with terminal escape codes).
+The system SHALL capture Python `logging` records at DEBUG level and above and broadcast them to all connected WebSocket clients as `{"type": "log", "level": "...", "ts": "HH:MM:SS", "msg": "..."}` messages. Log records SHALL NOT be written to stdout (to avoid polluting a redirected log file with terminal escape codes).
 
 #### Scenario: Log record broadcast to browser
 - **WHEN** any module calls `logging.info("connected")`
@@ -53,10 +53,10 @@ The system SHALL accept a WebSocket control message `{"type": "control", "action
 - **THEN** clients receive `{"type": "restarting"}` and the process restarts with the same arguments
 
 ### Requirement: Clean shutdown on Ctrl+C
-The system SHALL exit cleanly when `SIGINT` (Ctrl+C) is received. The aiohttp server SHALL stop accepting new connections, open WebSocket clients SHALL be closed, and the process SHALL exit with code 0. The LiveKit FFI thread SHALL be force-exited via `os._exit(0)` after a short grace period (same pattern as `--tui`).
+The system SHALL exit cleanly when `SIGINT` (Ctrl+C) is received. The aiohttp server SHALL stop accepting new connections, open WebSocket clients SHALL be closed, and the process SHALL exit with code 0. The LiveKit FFI thread SHALL be force-exited via `os._exit(0)` after a short grace period.
 
 #### Scenario: Ctrl+C exits without traceback
-- **WHEN** the user presses Ctrl+C while `--web` is running
+- **WHEN** the user presses Ctrl+C while the client is running
 - **THEN** the process exits cleanly with no unhandled exception printed to stderr
 
 ### Requirement: Auto-reconnecting browser client
