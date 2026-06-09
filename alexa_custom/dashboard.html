@@ -1681,7 +1681,7 @@
       }).join('');
 
       // 1-core load threshold dashed line
-      const threshY = toY(1);
+      const threshY = toY(2);
       const threshLine = threshY >= pad.t && threshY <= pad.t + ch
         ? '<line x1="' + pad.l + '" y1="' + threshY.toFixed(1) + '" x2="' + (w - pad.r) + '" y2="' + threshY.toFixed(1) + '" stroke="var(--info)" stroke-width="0.8" stroke-dasharray="4,4" opacity="0.55"/>'
         : '';
