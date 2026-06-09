@@ -445,6 +445,24 @@
     .atrig.trig-reply-hit .trig-phrase { color: var(--match); }
     .atrig.trig-dim { opacity: 0.2; }
 
+    /* global trigger hit — amber glow sweep */
+    .atrig-global.trig-hit .trig-row {
+      background: rgba(250,204,21,0.12);
+      border-radius: 5px;
+      animation: global-trig-flash 0.7s ease-out;
+    }
+    .atrig-global.trig-hit .trig-phrase { color: var(--amber); }
+    @keyframes global-trig-flash {
+      0%   { background: rgba(250,204,21,0.40);
+             box-shadow: 0 0 0 0 rgba(250,204,21,0.5), inset 0 0 12px rgba(250,204,21,0.25);
+             transform: scale(1.03); }
+      40%  { box-shadow: 0 0 0 6px rgba(250,204,21,0.0);
+             transform: scale(1.01); }
+      100% { background: rgba(250,204,21,0.12);
+             box-shadow: none;
+             transform: scale(1); }
+    }
+
     .ainteract {
       color: var(--info); font-size: 11px; margin: 3px 0 5px;
       padding: 2px 7px; background: rgba(96,165,250,0.07);
@@ -1476,9 +1494,10 @@
     function renderActions(cfg) {
       if (!cfg) return;
 
-      function trigRows(triggers) {
+      function trigRows(triggers, global) {
+        const extra = global ? ' atrig-global' : '';
         return (triggers || []).map(t =>
-          '<div class="atrig"><div class="trig-row">'
+          '<div class="atrig' + extra + '"><div class="trig-row">'
           + '<span class="trig-phrase">' + esc(t.phrase) + _aliases(t.aliases) + '</span>'
           + '<span class="trig-badges">' + _badges(t.actions) + '</span>'
           + '</div>' + renderTrigTree(t.actions) + '</div>'
@@ -1511,7 +1530,7 @@
         if (cfg.global_triggers && cfg.global_triggers.length) {
           h += '<div class="ww-global-sep">global</div>'
             + '<div class="ww-node-triggers" style="margin-left:0;border-left:none;padding-left:2px">'
-            + trigRows(cfg.global_triggers)
+            + trigRows(cfg.global_triggers, true)
             + '</div>';
         }
 
