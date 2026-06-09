@@ -33,6 +33,18 @@ alexa-devices                            # list audio devices
 alexa-setup                              # download/update STT models
 ```
 
+### Targeted Testing
+The full test suite can take up to 40+ seconds to run. During iterative development, **do not run the full test suite**. Run only the specific test files or test cases relevant to your changes:
+- Run a single test file:
+  ```bash
+  uv run pytest tests/test_wake_detection.py
+  ```
+- Run a specific test class or function:
+  ```bash
+  uv run pytest tests/test_wake_detection.py -k "TestVoskCheckResult"
+  ```
+Only use `task test` or `task fix` for final validation.
+
 ## Audio I/O constraints (Arduino Uno Q)
 
 PortAudio (used by `sounddevice` and `PyAudio`) has **no native PipeWire backend** on this board — it was compiled with ALSA only. The ALSA→PipeWire shim causes `sd.play()` + `sd.wait()` to **block forever**. Do not use PortAudio for any production I/O path.
