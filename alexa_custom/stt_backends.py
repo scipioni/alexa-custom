@@ -6,10 +6,8 @@ import os
 import numpy as np
 import vosk
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING
 
-if TYPE_CHECKING:
-    from alexa_custom.config import STTStage1Config, STTStage2Config, WakeWordGroup
+from alexa_custom.config import STTStage1Config, STTStage2Config, WakeWordGroup
 
 from alexa_custom.actions import normalize_text
 from alexa_custom.stt_gating import _rms_level
@@ -17,7 +15,7 @@ from alexa_custom.stt_gating import _rms_level
 logger = logging.getLogger(__name__)
 
 _MODEL_PATH = os.environ.get("VOSK_MODEL_PATH", "models/it")
-_SHERPA_MODEL_PATH = os.environ.get("SHERPA_ONNX_PATH", "models/sherpa-onnx")
+_SHERPA_MODEL_PATH = os.environ.get("SHERPA_ONNX_PATH", "models/it/kroko_128l")
 
 
 class STTBackend(ABC):
