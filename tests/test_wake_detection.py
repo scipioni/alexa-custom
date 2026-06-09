@@ -17,7 +17,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from alexa_custom.stt import _rms_level, _vosk_confidence, _vosk_check_result
-from alexa_custom.config import WakeWordGroup, STTStage1Config, _parse_stt_stage1_config
+from alexa_custom.config import WakeWordGroup, STTStage1Config, _parse_stt_stage1_config  # noqa: F401
 
 
 # ---------------------------------------------------------------------------
@@ -92,16 +92,6 @@ def alias_map():
     return _make_alias_map(["ehi galileo", "assistente"])
 
 
-@pytest.fixture()
-def confuser_set():
-    from alexa_custom.stt import _build_confuser_set
-    from alexa_custom.config import WakeWordGroup
-
-    wake_words = [WakeWordGroup(word="ehi galileo"), WakeWordGroup(word="assistente")]
-    cfg = STTStage1Config(auto_confusers=False)
-    return _build_confuser_set(wake_words, cfg)
-
-
 def _result(text: str, confs: list[float]) -> dict:
     words = [
         {"word": w, "conf": c, "start": i * 0.3, "end": (i + 1) * 0.3}
@@ -111,106 +101,71 @@ def _result(text: str, confs: list[float]) -> dict:
 
 
 class TestVoskCheckResult:
-    def test_basic_wake_detected(self, alias_map, confuser_set):
+    def test_basic_wake_detected(self, alias_map):
         chunk = _make_pcm(0.05)
         result = _result("ehi galileo", [0.9, 0.9])
-        match = _vosk_check_result(
-            chunk, result, alias_map, confuser_set, 0.65, "first", 0.02
-        )
+        match = _vosk_check_result(chunk, result, alias_map, 0.65, "first", 0.02)
         assert match is not None
         assert match.word == "ehi galileo"
 
-    def test_rms_gate_rejects_quiet_chunk(self, alias_map, confuser_set):
+    def test_rms_gate_rejects_quiet_chunk(self, alias_map):
         chunk = _make_pcm(0.005)  # below threshold 0.02
         result = _result("ehi galileo", [0.9, 0.9])
-        match = _vosk_check_result(
-            chunk, result, alias_map, confuser_set, 0.65, "first", 0.02
-        )
+        match = _vosk_check_result(chunk, result, alias_map, 0.65, "first", 0.02)
         assert match is None
 
-    def test_rms_gate_disabled_at_zero(self, alias_map, confuser_set):
+    def test_rms_gate_disabled_at_zero(self, alias_map):
         chunk = _make_pcm(0.0)  # zero RMS
         result = _result("ehi galileo", [0.9, 0.9])
-        match = _vosk_check_result(
-            chunk, result, alias_map, confuser_set, 0.65, "first", 0.0
-        )
+        match = _vosk_check_result(chunk, result, alias_map, 0.65, "first", 0.0)
         assert match is not None
 
-    def test_first_mode_ignores_weak_second_token(self, alias_map, confuser_set):
+    def test_first_mode_ignores_weak_second_token(self, alias_map):
         chunk = _make_pcm(0.05)
-        # galileo has conf=0.10 but first mode only checks "ehi" (0.90)
         result = _result("ehi galileo", [0.90, 0.10])
-        match = _vosk_check_result(
-            chunk, result, alias_map, confuser_set, 0.65, "first", 0.02
-        )
+        match = _vosk_check_result(chunk, result, alias_map, 0.65, "first", 0.02)
         assert match is not None  # first mode: 0.90 >= 0.65 → passes
 
-    def test_min_mode_rejects_weak_discriminative_token(self, alias_map, confuser_set):
+    def test_min_mode_rejects_weak_discriminative_token(self, alias_map):
         chunk = _make_pcm(0.05)
         result = _result("ehi galileo", [0.90, 0.10])
-        match = _vosk_check_result(
-            chunk, result, alias_map, confuser_set, 0.65, "min", 0.02
-        )
+        match = _vosk_check_result(chunk, result, alias_map, 0.65, "min", 0.02)
         assert match is None  # min mode: min(0.90, 0.10) = 0.10 < 0.65 → rejected
 
-    def test_mean_mode_rejects_average_below_threshold(self, alias_map, confuser_set):
+    def test_mean_mode_rejects_average_below_threshold(self, alias_map):
         chunk = _make_pcm(0.05)
         result = _result("ehi galileo", [0.90, 0.30])  # mean = 0.60 < 0.65
-        match = _vosk_check_result(
-            chunk, result, alias_map, confuser_set, 0.65, "mean", 0.02
-        )
+        match = _vosk_check_result(chunk, result, alias_map, 0.65, "mean", 0.02)
         assert match is None
 
-    def test_mean_mode_accepts_average_above_threshold(self, alias_map, confuser_set):
+    def test_mean_mode_accepts_average_above_threshold(self, alias_map):
         chunk = _make_pcm(0.05)
         result = _result("ehi galileo", [0.90, 0.50])  # mean = 0.70 >= 0.65
-        match = _vosk_check_result(
-            chunk, result, alias_map, confuser_set, 0.65, "mean", 0.02
-        )
+        match = _vosk_check_result(chunk, result, alias_map, 0.65, "mean", 0.02)
         assert match is not None
 
-    def test_confuser_is_rejected(self, alias_map, confuser_set):
-        chunk = _make_pcm(0.05)
-        # "galileo" alone is a sub-phrase confuser (added automatically by _build_confuser_set
-        # when auto_confusers=True). For this test we just check the rejection path.
-        # Build a confuser_set that explicitly contains "galileo".
-        explicit_confusers = {"galileo"}
-        result = _result("galileo", [0.99])
-        match = _vosk_check_result(
-            chunk, result, alias_map, explicit_confusers, 0.65, "first", 0.02
-        )
-        assert match is None
-
-    def test_non_wake_text_returns_none(self, alias_map, confuser_set):
+    def test_non_wake_text_returns_none(self, alias_map):
         chunk = _make_pcm(0.05)
         result = _result("buongiorno", [0.95])
-        match = _vosk_check_result(
-            chunk, result, alias_map, confuser_set, 0.65, "first", 0.02
-        )
+        match = _vosk_check_result(chunk, result, alias_map, 0.65, "first", 0.02)
         assert match is None
 
-    def test_empty_text_returns_none(self, alias_map, confuser_set):
+    def test_empty_text_returns_none(self, alias_map):
         chunk = _make_pcm(0.05)
         result = {"text": "", "result": []}
-        match = _vosk_check_result(
-            chunk, result, alias_map, confuser_set, 0.65, "first", 0.02
-        )
+        match = _vosk_check_result(chunk, result, alias_map, 0.65, "first", 0.02)
         assert match is None
 
-    def test_confidence_exactly_at_threshold_passes(self, alias_map, confuser_set):
+    def test_confidence_exactly_at_threshold_passes(self, alias_map):
         chunk = _make_pcm(0.05)
         result = _result("ehi galileo", [0.65, 0.65])
-        match = _vosk_check_result(
-            chunk, result, alias_map, confuser_set, 0.65, "min", 0.02
-        )
+        match = _vosk_check_result(chunk, result, alias_map, 0.65, "min", 0.02)
         assert match is not None
 
-    def test_confidence_just_below_threshold_rejected(self, alias_map, confuser_set):
+    def test_confidence_just_below_threshold_rejected(self, alias_map):
         chunk = _make_pcm(0.05)
         result = _result("ehi galileo", [0.64, 0.64])
-        match = _vosk_check_result(
-            chunk, result, alias_map, confuser_set, 0.65, "min", 0.02
-        )
+        match = _vosk_check_result(chunk, result, alias_map, 0.65, "min", 0.02)
         assert match is None
 
 

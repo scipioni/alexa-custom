@@ -72,7 +72,6 @@ class WebServer:
             "audio_conn_type": "",
             "stt_state": "idle",
             "stt_text": "",
-            "confusers": [],
             "actions_config": {},
             "llm_state": "idle",
         }
@@ -164,9 +163,6 @@ class WebServer:
         if event == "listening":
             self._state["stt_state"] = "listening"
             self._state["stt_text"] = ", ".join(data.get("wake_words", []))
-            if "confusers" in data:
-                self._state["confusers"] = data["confusers"]
-                self._state["actions_config"]["confusers"] = data["confusers"]
         elif event in (
             "transcribing",
             "wake",
@@ -440,7 +436,6 @@ class WebServer:
 
         return {
             "wake_words": ww,
-            "confusers": [],  # populated via on_stt_event("listening") once STT starts
             "global_triggers": gt,
             "llm": llm_info,
         }

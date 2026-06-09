@@ -352,12 +352,8 @@ def _phrases_to_grammar(phrases: list[str]) -> str:
     return json.dumps(phrases + ["[unk]"])
 
 
-def _grammar_json(
-    groups: list[WakeWordGroup], confuser_set: set[str] | None = None
-) -> str:
+def _grammar_json(groups: list[WakeWordGroup]) -> str:
     phrases = [p for g in groups for p in [g.word] + g.aliases]
-    if confuser_set:
-        phrases = phrases + [c for c in sorted(confuser_set) if c not in phrases]
     return _phrases_to_grammar(phrases)
 
 
@@ -399,7 +395,6 @@ def _vosk_check_result(
     trigger_chunk: bytes,
     result: dict,
     alias_map: dict,
-    confuser_set: set,
     confidence: float,
     confidence_mode: str,
     rms_threshold: float,
@@ -409,11 +404,7 @@ def _vosk_check_result(
     words = result.get("result", [])
     conf = _vosk_confidence(words, confidence_mode)
     logger.debug("Stage1 result: %r conf=%.2f (mode=%s)", text, conf, confidence_mode)
-    norm_text = normalize_text(text)
-    if norm_text in confuser_set:
-        logger.debug("Stage1 confuser rejected: %r", norm_text)
-        return None
-    wake_match = alias_map.get(norm_text)
+    wake_match = alias_map.get(normalize_text(text))
     if wake_match is None or conf < confidence:
         return None
     if _rms_level(trigger_chunk) < rms_threshold:

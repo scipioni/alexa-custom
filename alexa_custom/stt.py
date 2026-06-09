@@ -40,13 +40,8 @@ from alexa_custom.stt_backends import (
     _grammar_json,
 )
 from alexa_custom.stt_phonetics import (
-    _lev_distance,
-    _ipa,
-    _phonetic_confusers,
-    _build_confuser_set,
     _approx_wake_match,
     _resolve_triggers,
-    _subphrase_confusers,
     _build_alias_map,
 )
 from alexa_custom.stt_gating import (
@@ -72,13 +67,8 @@ __all__ = [
     "_vosk_check_result",
     "_phrases_to_grammar",
     "_grammar_json",
-    "_lev_distance",
-    "_ipa",
-    "_phonetic_confusers",
-    "_build_confuser_set",
     "_approx_wake_match",
     "_resolve_triggers",
-    "_subphrase_confusers",
     "_build_alias_map",
     "_CHUNK",
     "_rms_level",
@@ -601,7 +591,6 @@ def _recognition_loop(
     _eff_vad_ms = config.stt.vad_silence_ms
 
     alias_map = _build_alias_map(config.wake_words)
-    confuser_set = _build_confuser_set(config.wake_words, config.stt.stage1)
     is_vosk = isinstance(stage1_backend, VoskSTT)
     is_kws = isinstance(stage1_backend, SherpaKeywordSpotter)
     vosk_use_grammar = config.stt.stage1.vosk_grammar
@@ -609,7 +598,7 @@ def _recognition_loop(
     def _make_stage1_recognizer() -> "vosk.KaldiRecognizer":
         if vosk_use_grammar:
             rec = vosk.KaldiRecognizer(
-                vosk_model, 16000, _grammar_json(config.wake_words, confuser_set)
+                vosk_model, 16000, _grammar_json(config.wake_words)
             )
         else:
             rec = vosk.KaldiRecognizer(vosk_model, 16000)
@@ -629,10 +618,7 @@ def _recognition_loop(
     if on_stt_event:
         on_stt_event(
             "listening",
-            {
-                "wake_words": [g.word for g in config.wake_words],
-                "confusers": sorted(confuser_set),
-            },
+            {"wake_words": [g.word for g in config.wake_words]},
         )
 
     if mqtt_client:
@@ -784,7 +770,6 @@ def _recognition_loop(
                     data,
                     result,
                     alias_map,
-                    confuser_set,
                     config.stt.stage1.confidence,
                     config.stt.stage1.confidence_mode,
                     rms_gate,
@@ -792,7 +777,11 @@ def _recognition_loop(
             else:
                 text = result.get("text", "").strip()
                 logger.debug("Stage1 Vosk free-vocab result: %r", text)
-                wake_match = _approx_wake_match(text, alias_map) if text else None
+                wake_match, inline_cmd = (
+                    _extract_wake_command(text, alias_map, fuzzy=True)
+                    if text
+                    else (None, "")
+                )
 
             if wake_match is not None:
                 _wake_detected(
@@ -809,6 +798,7 @@ def _recognition_loop(
                     mqtt_client=mqtt_client,
                     loop=loop,
                     dispatch_loop=dispatch_loop,
+                    pre_transcript=inline_cmd,
                 )
                 logger.debug(
                     f"two-stage: dispatch returned — livekit_flag={livekit_connected_flag.is_set()} "
@@ -915,6 +905,7 @@ def _wake_detected(
     loop: asyncio.AbstractEventLoop | None = None,
     dispatch_loop: asyncio.AbstractEventLoop | None = None,
     vad_silence_ms: int | None = None,
+    pre_transcript: str = "",
 ) -> None:
     logger.info(f"Wake word detected: '{wake_group.word}'")
     if on_stt_event:
@@ -933,16 +924,20 @@ def _wake_detected(
     except Exception as e:
         logger.debug(f"Wake beep failed: {e}")
 
-    transcript = capture_transcript(
-        proc,
-        channels,
-        backend,
-        config.recognition.command_timeout,
-        stop_event,
-        on_stt_event,
-        flush_ms=300,
-        vad_silence_ms=vad_silence_ms,
-    )
+    if pre_transcript:
+        logger.info(f"Inline command from stage-1: '{pre_transcript}'")
+        transcript = pre_transcript
+    else:
+        transcript = capture_transcript(
+            proc,
+            channels,
+            backend,
+            config.recognition.command_timeout,
+            stop_event,
+            on_stt_event,
+            flush_ms=300,
+            vad_silence_ms=vad_silence_ms,
+        )
     logger.info(f"Command transcript: '{transcript}'")
 
     _listen_fn = _make_listen_fn(

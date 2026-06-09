@@ -79,20 +79,39 @@ The two-stage pipeline uses a lightweight stage 1 for always-on wake detection a
 
 ```yaml
 stt:
-  vad_silence_ms: 700       # idle ms before the command window closes
+  vad_silence_ms: 700       # idle ms before the command window closes (stage-2)
 
   stage1:                   # continuous wake-word detection (low CPU)
     backend: vosk           # vosk | sherpa-onnx
-    # model_path: models/it
-    confidence: 0.65        # minimum Vosk confidence to accept wake word (0–1)
+
+    # Vocabulary mode (Vosk only)
+    vosk_grammar: false     # false = free-vocabulary (default, recommended)
+                            #   Vosk decodes the full language; unrelated speech is
+                            #   genuinely rejected; confidence scores are absolute.
+                            # true = grammar mode: restricts decoder to wake-word
+                            #   vocabulary only; lower CPU but no real reject path —
+                            #   every segment is forced onto the nearest wake phrase.
+
+    # Confidence gating (grammar mode only — ignored in free-vocab mode)
+    confidence: 0.65        # minimum token confidence to accept wake word (0–1)
+    confidence_mode: first  # how to aggregate per-token confidence:
+                            #   first — only check first decoded token (fastest)
+                            #   min   — every token must clear the bar (strictest)
+                            #   mean  — average across tokens (moderate)
+
+    # Software VAD (stage-1 force-finalize)
     vad_silence_ms: 500     # force-finalize after this many ms of silence
-    rms_threshold: 0.02     # minimum RMS energy to count as speech
-    min_speech_ms: 300      # minimum sustained speech before silence timer starts
+    rms_threshold: 0.02     # minimum RMS energy level to count as speech
+    min_speech_ms: 200      # minimum sustained speech before silence timer starts
 
   stage2:                   # command recognition after wake word
     backend: vosk           # can use a higher-accuracy backend than stage1
     # model_path: models/it/kroko_128l
 ```
+
+#### Inline command pass-through
+
+In free-vocabulary mode (`vosk_grammar: false`), if the user speaks the wake word and a command in a single utterance — e.g. *"ehi galileo chiama mario"* — stage-1 extracts the trailing text and passes it directly to stage-2 dispatch, skipping the capture phase entirely. This eliminates one round-trip and makes same-breath commands instantaneous.
 
 ### TTS — Text-to-Speech
 
@@ -245,6 +264,7 @@ wake_triggers:               # triggers bound to a specific wake word
 - Changes apply within `system.config_poll_interval` seconds (default: 2).
 - **`conf/secrets.yaml` is never watched** — restart the daemon to apply credential changes.
 - If a file has a syntax error, the previous valid config is kept and the error is logged.
+- `alexa_custom/dashboard.html` is also watched — any edit triggers a browser reload within ~1 second (no daemon restart required).
 
 ---
 
