@@ -1234,6 +1234,13 @@
                 </div>
                 <div class="cpu-stat-bar-track"><div class="cpu-stat-bar-fill" id="cpu-bar15"></div></div>
               </div>
+              <div class="cpu-stat-chip">
+                <div class="cpu-stat-top">
+                  <span class="cpu-sec-lbl">RAM</span>
+                  <span class="cpu-sec-val" id="ram-free-pct">—</span>
+                </div>
+                <div class="cpu-stat-bar-track"><div class="cpu-stat-bar-fill" id="ram-free-bar"></div></div>
+              </div>
             </div>
           </div>
           <div id="vu-bottom">
@@ -2148,6 +2155,15 @@
       if (el15) { el15.textContent = load15.toFixed(2); el15.style.color = _cpuColor(load15, maxY); }
       if (bar5)  { bar5.style.width  = Math.min(100, load5  / maxY * 100).toFixed(1) + '%'; bar5.style.backgroundColor  = _cpuColor(load5,  maxY); }
       if (bar15) { bar15.style.width = Math.min(100, load15 / maxY * 100).toFixed(1) + '%'; bar15.style.backgroundColor = _cpuColor(load15, maxY); }
+
+      const ramPct = m.ram_free_pct != null ? m.ram_free_pct : null;
+      if (ramPct != null) {
+        const ramColor = ramPct < 10 ? '#f87171' : ramPct < 25 ? '#facc15' : '#4ade80';
+        const elRam = document.getElementById('ram-free-pct');
+        const barRam = document.getElementById('ram-free-bar');
+        if (elRam) { elRam.textContent = ramPct.toFixed(0) + '%'; elRam.style.color = ramColor; }
+        if (barRam) { barRam.style.width = ramPct.toFixed(1) + '%'; barRam.style.backgroundColor = ramColor; }
+      }
     }
 
     // ── init ──────────────────────────────────────────────────────────────────
