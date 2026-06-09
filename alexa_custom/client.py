@@ -1095,6 +1095,7 @@ def main() -> None:
         watch_paths=[Path("conf")],
         output_volume=output_volume,
         input_gain=input_gain,
+        cpu_limit=config.web.cpu_limit if config is not None else 4,
         shutdown_callback=_web_shutdown_callback,
     )
 
