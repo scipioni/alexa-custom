@@ -76,11 +76,25 @@ test set; once real ambient clips are added the number will be more meaningful.
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--confidence` | Vosk acceptance threshold | 0.65 |
-| `--confidence-mode` | `first` / `min` / `mean` | `first` |
+| `--confidence` | Vosk acceptance threshold (grammar mode only) | 0.65 |
+| `--confidence-mode` | `first` / `min` / `mean` (grammar mode only) | `first` |
 | `--rms-threshold` | Energy pre-gate threshold | 0.02 |
 | `--vosk-model` | Path to Vosk model directory | `models/it` |
 | `--wake-words` | Space-separated wake word phrases | `"ehi galileo" assistente` |
+
+### Vocabulary mode and the eval harness
+
+The harness scores clips against the same Vosk recognizer configuration used
+at runtime.  The `vosk_grammar` setting (default: `false`) affects how results
+are interpreted:
+
+- **`vosk_grammar: false` (free-vocabulary, default)**: Vosk decodes freely;
+  the harness uses `_approx_wake_match` (fuzzy word-overlap) to check whether
+  the transcript contains the wake phrase.  This is the live-session path and
+  the most representative eval mode.
+- **`vosk_grammar: true` (grammar mode)**: Vosk is restricted to the wake-word
+  vocabulary; the harness uses exact alias-map lookup and confidence gating.
+  Confidence and confidence-mode flags only have effect in this mode.
 
 ### Sweep findings (TTS corpus)
 
@@ -90,9 +104,10 @@ FP ("assistenza" at −18 dB) escapes via `FinalResult` (no endpoint fires on
 the very quiet clip), which uses `rms_threshold=0.0`.
 
 **Confidence mode** has no visible effect on clean TTS (Vosk returns conf=1.0
-for all tokens). Its value will be measurable once real ambient/room recordings
-are added to the negative corpus — that is where partial/noisy decodes produce
-mixed per-token confidences.
+for all tokens) and is irrelevant in free-vocabulary mode.  Its value will be
+measurable in grammar mode once real ambient/room recordings are added to the
+negative corpus — that is where partial/noisy decodes produce mixed per-token
+confidences.
 
 ## Regression guard
 

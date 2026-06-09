@@ -42,7 +42,6 @@ class WakeWordGroup:
     triggers: list[Trigger] = field(default_factory=list)
     lang: str = "it-IT"
     id: str = ""  # stable key for wake_triggers in action files; defaults to word
-    confusers: list[str] = field(default_factory=list)
 
     def __post_init__(self):
         if not self.id:
@@ -103,9 +102,6 @@ class STTStage1Config:
     vad_silence_ms: int = 500
     rms_threshold: float = 0.02
     min_speech_ms: int = 200
-    auto_confusers: bool = True
-    confuser_distance: int = 3
-    max_confusers: int = 30
     vosk_grammar: bool = False
     keyword_spotter: bool = False
     keywords_score: float = 1.0
@@ -359,10 +355,6 @@ def _parse_wake_word_groups(raw_groups: list[Any], source: str) -> list[WakeWord
         lang = str(entry.get("lang", "it-IT"))
         raw_id = entry.get("id")
         group_id = str(raw_id).strip() if raw_id else word
-        raw_confusers = entry.get("confusers", [])
-        if not isinstance(raw_confusers, list):
-            raise ConfigError(f"{source}: wake_words[{i}].confusers must be a list")
-        group_confusers = [str(c) for c in raw_confusers]
 
         groups.append(
             WakeWordGroup(
@@ -371,7 +363,6 @@ def _parse_wake_word_groups(raw_groups: list[Any], source: str) -> list[WakeWord
                 triggers=group_triggers,
                 lang=lang,
                 id=group_id,
-                confusers=group_confusers,
             )
         )
 
@@ -449,9 +440,6 @@ def _parse_stt_stage1_config(raw: dict) -> STTStage1Config:
         vad_silence_ms=int(raw.get("vad_silence_ms", 500)),
         rms_threshold=float(raw.get("rms_threshold", 0.02)),
         min_speech_ms=int(raw.get("min_speech_ms", 300)),
-        auto_confusers=bool(raw.get("auto_confusers", True)),
-        confuser_distance=int(raw.get("confuser_distance", 3)),
-        max_confusers=int(raw.get("max_confusers", 30)),
         vosk_grammar=bool(raw.get("vosk_grammar", False)),
         keyword_spotter=bool(raw.get("keyword_spotter", False)),
         keywords_score=float(raw.get("keywords_score", 1.0)),

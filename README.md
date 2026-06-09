@@ -68,14 +68,11 @@ llm_host: http://192.168.1.10:11434   # Ollama host
 wake_words:
   - word: galileo
     lang: it-IT
-    # confusers:            # extra words added to grammar and silently rejected
-    #   - arduino           # useful for phonetically similar domain-specific terms
 
   # For emergency-style wake words, prefer multi-word phrases so a single
   # utterance in conversation does not trigger the assistant:
   # - word: "aiuto aiuto"
   #   aliases: ["aiutami"]
-  #   # "aiuto" (single word) is added as a confuser automatically
 
 recognition:
   command_timeout: 3.0      # seconds to listen after wake word
@@ -83,10 +80,11 @@ recognition:
 stt:
   stage1:                   # continuous wake-word detection (low CPU)
     backend: vosk
-    confidence: 0.65
-    # auto_confusers: true  # derive confusers from wake phrases + phonetic distance
-    # confuser_distance: 3  # IPA phoneme edit distance threshold (0 = phonetic off)
-    # max_confusers: 30     # cap on auto-generated confusers
+    vosk_grammar: false     # false = free-vocabulary (recommended); true = grammar mode (lower CPU, no reject path)
+    confidence: 0.65        # minimum confidence threshold (grammar mode only)
+    confidence_mode: first  # first | min | mean (grammar mode only)
+    vad_silence_ms: 500     # force-finalize after N ms of silence
+    rms_threshold: 0.02     # minimum energy level to count as speech
   stage2:                   # command recognition after wake
     backend: vosk
 
@@ -127,12 +125,12 @@ See `conf.example/config.yaml` and `conf.example/secrets.yaml` for the full refe
 
 ## Key Features
 
-- **Two-stage STT**: Lightweight wake-word detection (stage 1) → full command recognition (stage 2). Backends configurable independently. Automatic confuser phrases reduce false positives for phonetically similar words and multi-word emergency wake phrases.
-- **Hot-reload**: Edit `conf/config.yaml` or any action file while the daemon is running — changes apply within ~2 seconds.
+- **Two-stage STT**: Lightweight wake-word detection (stage 1) → full command recognition (stage 2). Backends configurable independently. Free-vocabulary mode gives Vosk a genuine reject path so unrelated speech is not forced onto a wake phrase. Inline command pass-through: if the command follows the wake word in a single breath, stage-2 dispatch fires immediately without a second capture round-trip.
+- **Hot-reload**: Edit `conf/config.yaml`, any action file, or `dashboard.html` while the daemon is running — config changes apply within ~2 seconds, HTML changes reload the browser within ~1 second.
 - **Multi-file actions**: Drop `.yaml` files into `conf/actions/` for modular command sets; `system.yaml` always loads first.
 - **LLM learning**: Say "impara nuovo comando" to teach the assistant a new trigger via voice dialogue (stored in `conf/actions/learned.yaml`).
 - **Bidirectional MQTT**: Home Assistant Discovery support. Forward voice commands to HA and trigger local actions via MQTT.
-- **Web Dashboard**: Real-time browser UI — VU meters, STT status, live logs, restart button.
+- **Web Dashboard**: Real-time browser UI — VU meters with RMS needle, STT status with wake-word badge, live logs, restart button.
 - **PipeWire native**: Direct integration without PortAudio shims.
 
 ---

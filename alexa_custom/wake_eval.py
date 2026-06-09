@@ -44,7 +44,6 @@ from alexa_custom.config import STTStage1Config, WakeWordGroup
 from alexa_custom.stt import (
     _CHUNK,
     _build_alias_map,
-    _build_confuser_set,
     _grammar_json,
     _vosk_check_result,
 )
@@ -266,7 +265,6 @@ def _score_clip_vosk(
     pcm: bytes,
     recognizer: "vosk.KaldiRecognizer",
     alias_map: dict,
-    confuser_set: set,
     stage1_cfg: STTStage1Config,
 ) -> bool:
     """Feed ``pcm`` through ``recognizer`` in production chunk sizes and return True if a wake fires.
@@ -290,7 +288,6 @@ def _score_clip_vosk(
                 chunk,
                 result,
                 alias_map,
-                confuser_set,
                 stage1_cfg.confidence,
                 stage1_cfg.confidence_mode,
                 stage1_cfg.rms_threshold,
@@ -305,7 +302,6 @@ def _score_clip_vosk(
             last_chunk,
             final,
             alias_map,
-            confuser_set,
             stage1_cfg.confidence,
             stage1_cfg.confidence_mode,
             0.0,
@@ -377,7 +373,6 @@ def run_eval(
     wake_words = [WakeWordGroup(word=w) for w in ww_strs]
     stage1_cfg = _make_stage1_config(ec)
     alias_map = _build_alias_map(wake_words)
-    confuser_set = _build_confuser_set(wake_words, stage1_cfg)
 
     # Load Vosk model and build grammar recognizer
     model_path = ec.vosk_model_path
@@ -385,7 +380,7 @@ def run_eval(
         raise FileNotFoundError(f"Vosk model not found at {model_path}")
     vosk.SetLogLevel(-1)
     vosk_model = vosk.Model(model_path)
-    grammar = _grammar_json(wake_words, confuser_set)
+    grammar = _grammar_json(wake_words)
 
     manifest = load_manifest(corpus_dir)
     result = EvalResult()
@@ -408,9 +403,7 @@ def run_eval(
             recognizer = vosk.KaldiRecognizer(vosk_model, 16000, grammar)
             recognizer.SetWords(True)
 
-            woke = _score_clip_vosk(
-                pcm, recognizer, alias_map, confuser_set, stage1_cfg
-            )
+            woke = _score_clip_vosk(pcm, recognizer, alias_map, stage1_cfg)
 
             clip_result = ClipResult(
                 file=entry["file"],
