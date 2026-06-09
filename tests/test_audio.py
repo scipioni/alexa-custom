@@ -2,25 +2,26 @@ import numpy as np
 from unittest.mock import patch, MagicMock
 
 import alexa_custom.audio as audio
+import alexa_custom.audio_hw as audio_hw
 
 
 def test_play_array_scales_by_output_volume():
-    # Set a custom output volume
-    audio._OUTPUT_VOLUME = 0.5
+    # Set a custom output volume inside audio_hw
+    audio_hw._OUTPUT_VOLUME = 0.5
 
     test_audio = np.ones((100, 2), dtype=np.float32)
 
     with (
         patch("tempfile.mkstemp") as mock_mkstemp,
-        patch("alexa_custom.audio.subprocess.run"),
+        patch("alexa_custom.audio_ops.subprocess.run"),
     ):
         # Mock mkstemp to return a dummy file descriptor and path
         mock_mkstemp.return_value = (999, "dummy_temp_path.wav")
 
-        # Stub the os.close, wave.open and os.unlink
+        # Stub the os.close, wave.open and os.unlink in audio_ops
         with (
-            patch("alexa_custom.audio.os.close"),
-            patch("alexa_custom.audio.os.unlink"),
+            patch("alexa_custom.audio_ops.os.close"),
+            patch("alexa_custom.audio_ops.os.unlink"),
             patch("wave.open") as mock_wave_open,
         ):
             mock_wf = MagicMock()
@@ -40,10 +41,10 @@ def test_play_array_scales_by_output_volume():
 
 
 def test_play_wav_file_applies_volume():
-    audio._OUTPUT_VOLUME = 0.25
+    audio_hw._OUTPUT_VOLUME = 0.25
     audio._PW_PLAY = "/usr/bin/pw-play"
 
-    with patch("alexa_custom.audio.subprocess.run") as mock_run:
+    with patch("alexa_custom.audio_ops.subprocess.run") as mock_run:
         audio.play_wav_file("some_file.wav")
 
         # Verify pw-play is called with --volume=0.2500

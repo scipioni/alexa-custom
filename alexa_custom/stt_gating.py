@@ -1,0 +1,201 @@
+from __future__ import annotations
+
+import fcntl
+import logging
+import os
+import select
+import subprocess
+import threading
+import numpy as np
+from typing import Iterator, Callable
+
+from alexa_custom.audio import is_playback_active
+
+logger = logging.getLogger(__name__)
+
+_CHUNK = 4096
+
+
+def _rms_level(data: bytes) -> float:
+    samples = np.frombuffer(data, dtype=np.int16)
+    n = len(samples)
+    if n == 0:
+        return 0.0
+    return float(np.linalg.norm(samples)) / (32768.0 * n**0.5)
+
+
+def _read_with_timeout(stdout, nbytes: int, timeout: float) -> bytes:
+    """Best-effort read of up to ``nbytes`` from ``stdout`` within ``timeout`` seconds.
+
+    Returns b'' if nothing arrived in the window. Prevents the recognizer thread
+    from hanging forever when parec stalls (USB unplug, sink reset, etc.).
+    """
+    if stdout is None:
+        return b""
+    fd = stdout.fileno()
+    ready, _, _ = select.select([fd], [], [], timeout)
+    if not ready:
+        return b""
+    try:
+        return os.read(fd, nbytes)
+    except OSError:
+        return b""
+
+
+def _drain_pipe(proc: subprocess.Popen, max_bytes: int = 1 << 20) -> int:
+    """Non-blocking: discard any audio already buffered in the capture pipe.
+
+    Used to wipe acoustic echo / stale frames accumulated while playback was
+    holding STT gated, before we hand fresh audio to the recognizer.
+    """
+    if proc.stdout is None:
+        return 0
+    fd = proc.stdout.fileno()
+    flags = fcntl.fcntl(fd, fcntl.F_GETFL)
+    fcntl.fcntl(fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+    drained = 0
+    try:
+        while drained < max_bytes:
+            try:
+                chunk = os.read(fd, 8192)
+            except BlockingIOError:
+                break
+            if not chunk:
+                break
+            drained += len(chunk)
+    finally:
+        fcntl.fcntl(fd, fcntl.F_SETFL, flags)
+    return drained
+
+
+def _downmix_to_mono(data: bytes, channels: int) -> bytes:
+    """Take the loudest signal across all channels to ensure mono-downmix is high-gain."""
+    if channels <= 1:
+        return data
+    frame_bytes = channels * 2  # s16le: 2 bytes per sample
+    data = data[: len(data) // frame_bytes * frame_bytes]  # align to frame boundary
+    if not data:
+        return b""
+    samples = np.frombuffer(data, dtype=np.int16).reshape(-1, channels)
+    # Use max absolute value across channels to avoid diluting the signal with empty jacks.
+    idx = np.argmax(np.abs(samples), axis=1)
+    mono = samples[np.arange(len(samples)), idx]
+    return mono.tobytes()
+
+
+def resolve_capture_source(input_spec: str | None = None) -> tuple[str | None, int]:
+    """Map audio.input_device value to a PipeWire source name and channel count via pactl."""
+    if input_spec is None:
+        input_spec = os.environ.get("INPUT_DEVICE", "").strip() or None
+    channels = 1
+    if not input_spec:
+        return None, channels
+    try:
+        out = subprocess.check_output(
+            ["pactl", "list", "sources"], text=True, timeout=5
+        )
+        needle = input_spec.lower()
+        source_name = None
+        found = False
+        for line in out.splitlines():
+            if "Name: " in line:
+                name = line.split(": ", 1)[1].strip()
+                if needle in name.lower() and "monitor" not in name.lower():
+                    source_name = name
+                    found = True
+                elif found:
+                    # Moved past the matched source block without finding spec — return now.
+                    return source_name, channels
+            if found and "Sample Specification:" in line:
+                # e.g. "s16le 2ch 48000Hz"
+                for part in line.split():
+                    if part.endswith("ch"):
+                        try:
+                            channels = int(part[:-2])
+                        except ValueError:
+                            pass
+                return source_name, channels
+
+        logger.warning(f"No PipeWire source matching {input_spec!r} — using default")
+    except Exception as e:
+        logger.warning(f"resolve_capture_source failed: {e} — using default")
+    return None, channels
+
+
+def start_capture(source: str | None, channels: int = 1) -> subprocess.Popen:
+    """Start a low-latency recording process (parec)."""
+    import shutil
+
+    tool = shutil.which("parec")
+    if not tool:
+        tool = shutil.which("pw-record")
+        if not tool:
+            raise RuntimeError("Neither parec nor pw-record found on system")
+
+    is_pw = "pw-record" in tool
+    cmd = [
+        tool,
+        "--rate=16000",
+        f"--channels={channels}",
+        "--format=s16le" if not is_pw else "--format=s16",
+    ]
+
+    if is_pw:
+        if source:
+            cmd.append(f"--target={source}")
+    else:
+        # Crucial: very low latency helps 'parec' start flowing on PipeWire
+        cmd.append("--latency-msec=1")
+        if source:
+            cmd.append(f"--device={source}")
+
+    # bufsize=0 keeps proc.stdout as raw FileIO so os.read (used by _drain_pipe
+    # and _read_with_timeout) and the wake-loop's proc.stdout.read() see the
+    # same byte stream — no Python-side BufferedReader holding stale frames.
+    return subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0
+    )
+
+
+def _iter_gated_audio(
+    proc: subprocess.Popen,
+    channels: int,
+    stop_event: threading.Event,
+    on_playback_end: Callable[[], None] | None = None,
+    name: str = "stt",
+) -> Iterator[bytes | None]:
+    """Yield downmixed mono chunks; yield None once per playback-end drain.
+
+    Handles parec-exit (returns), read stalls, and playback-gate filtering.
+    After TTS ends, drains the pipe backlog, calls on_playback_end to reset
+    backend state, and yields None so the caller can issue a continue.
+    """
+    was_playing = False
+    _stall_logged = False
+    assert proc.stdout is not None
+    while not stop_event.is_set():
+        raw_data = _read_with_timeout(proc.stdout, _CHUNK * channels, 2.0)
+        if not raw_data:
+            if proc.poll() is not None:
+                logger.warning("%s: parec process exited — restarting capture", name)
+                return
+            if not _stall_logged:
+                logger.debug("%s: read timeout (parec stall?) — waiting", name)
+                _stall_logged = True
+            continue
+        _stall_logged = False
+
+        if is_playback_active():
+            was_playing = True
+            continue
+
+        if was_playing:
+            logger.debug("%s: playback ended — draining pipe and resetting", name)
+            _drain_pipe(proc)
+            was_playing = False
+            if on_playback_end is not None:
+                on_playback_end()
+            yield None
+            continue
+
+        yield _downmix_to_mono(raw_data, channels)
