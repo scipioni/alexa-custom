@@ -431,38 +431,30 @@
     .trig-replies { border-left: 1px solid var(--border); margin-left: 10px; padding-left: 6px; margin-bottom: 2px; }
 
     .atrig { transition: opacity 0.2s; }
-    .atrig.trig-hit .trig-row, .atrig.trig-hit {
-      background: rgba(74,222,128,0.10);
+
+    /* wake-word trigger hit — green left-sweep */
+    .atrig.trig-hit > .trig-row {
       border-radius: 5px;
-      animation: trig-flash 0.35s ease-out;
+      animation: trig-flash 1s ease-out forwards;
     }
-    .atrig.trig-hit .trig-phrase { color: var(--match); }
-    .atrig.trig-reply-hit .trig-row, .atrig.trig-reply-hit {
-      background: rgba(74,222,128,0.12);
+    .atrig.trig-hit > .trig-row .trig-phrase { color: var(--match); }
+
+    /* reply hit */
+    .atrig.trig-reply-hit > .trig-row {
       border-radius: 5px;
       font-weight: 600;
-      animation: trig-reply-flash 0.5s ease-out;
+      animation: trig-reply-flash 1s ease-out forwards;
     }
-    .atrig.trig-reply-hit .trig-phrase { color: var(--match); }
-    .atrig.trig-dim { opacity: 0.2; }
+    .atrig.trig-reply-hit > .trig-row .trig-reply-phrase { color: var(--match); }
 
-    /* global trigger hit — amber glow sweep */
-    .atrig-global.trig-hit .trig-row {
-      background: rgba(250,204,21,0.12);
+    .atrig.trig-dim { opacity: 0.15; }
+
+    /* global trigger hit — amber left-sweep */
+    .atrig-global.trig-hit > .trig-row {
       border-radius: 5px;
-      animation: global-trig-flash 0.7s ease-out;
+      animation: global-trig-flash 1s ease-out forwards;
     }
-    .atrig-global.trig-hit .trig-phrase { color: var(--amber); }
-    @keyframes global-trig-flash {
-      0%   { background: rgba(250,204,21,0.40);
-             box-shadow: 0 0 0 0 rgba(250,204,21,0.5), inset 0 0 12px rgba(250,204,21,0.25);
-             transform: scale(1.03); }
-      40%  { box-shadow: 0 0 0 6px rgba(250,204,21,0.0);
-             transform: scale(1.01); }
-      100% { background: rgba(250,204,21,0.12);
-             box-shadow: none;
-             transform: scale(1); }
-    }
+    .atrig-global.trig-hit > .trig-row .trig-phrase { color: var(--amber); }
 
     .ainteract {
       color: var(--info); font-size: 11px; margin: 3px 0 5px;
@@ -871,14 +863,25 @@
       to   { transform: translateY(0);     opacity: 1; }
     }
     @keyframes trig-flash {
-      0%   { background: rgba(74,222,128,0.45); transform: scale(1.04); }
-      50%  { transform: scale(1.02); }
-      100% { background: rgba(74,222,128,0.12); transform: scale(1); }
+      0%   { background: rgba(74,222,128,0.40);
+             box-shadow: inset 3px 0 0 var(--match), 0 0 10px rgba(74,222,128,0.25); }
+      40%  { box-shadow: inset 3px 0 0 var(--match), 0 0 4px rgba(74,222,128,0.10); }
+      100% { background: rgba(74,222,128,0.07);
+             box-shadow: inset 3px 0 0 rgba(74,222,128,0.35); }
     }
     @keyframes trig-reply-flash {
-      0%   { background: rgba(251,146,60,0.5); color: var(--wake); transform: scale(1.04); }
-      40%  { background: rgba(74,222,128,0.3);  color: var(--match); }
-      100% { background: rgba(74,222,128,0.15); color: var(--match); transform: scale(1); }
+      0%   { background: rgba(74,222,128,0.35);
+             box-shadow: inset 3px 0 0 var(--match), 0 0 8px rgba(74,222,128,0.2); }
+      40%  { box-shadow: inset 3px 0 0 var(--match); }
+      100% { background: rgba(74,222,128,0.06);
+             box-shadow: inset 3px 0 0 rgba(74,222,128,0.3); }
+    }
+    @keyframes global-trig-flash {
+      0%   { background: rgba(250,204,21,0.38);
+             box-shadow: inset 3px 0 0 var(--amber), 0 0 12px rgba(250,204,21,0.3); }
+      40%  { box-shadow: inset 3px 0 0 var(--amber), 0 0 4px rgba(250,204,21,0.10); }
+      100% { background: rgba(250,204,21,0.07);
+             box-shadow: inset 3px 0 0 rgba(250,204,21,0.4); }
     }
 
     /* LLM specific */
@@ -1357,12 +1360,16 @@
     }
 
     const _trigTimers = {};
+    function _trigPhrase(el) {
+      const p = el.querySelector('.trig-phrase, .trig-reply-phrase, .trig-else-phrase');
+      return p ? p.textContent.replace(/\(.*?\)/g, '').trim().toLowerCase() : '';
+    }
+
     function highlightTrigger(phrase, isReply) {
       if (!phrase) return;
       const norm = phrase.toLowerCase().trim();
       document.querySelectorAll('.atrig').forEach(el => {
-        const elText = el.textContent.replace(/^[›⮑\s]+/, '').replace(/\(.*?\)/g, '').trim().toLowerCase();
-        if (elText === norm) {
+        if (_trigPhrase(el) === norm) {
           const cls = isReply ? 'trig-reply-hit' : 'trig-hit';
           clearTimeout(_trigTimers[norm]);
           el.classList.remove('trig-hit', 'trig-reply-hit');
@@ -1376,9 +1383,10 @@
     function dimNonMatchingReplies(partial) {
       const norm = partial.toLowerCase().trim();
       document.querySelectorAll('.atrig').forEach(el => {
-        if (!el.textContent.startsWith('⮑')) return;
-        const phrase = el.textContent.replace(/^[⮑\s]+/, '').trim().toLowerCase();
-        if (norm && !phrase.includes(norm) && !norm.includes(phrase)) {
+        const isReply = !!el.querySelector('.trig-reply-phrase, .trig-else-phrase');
+        if (!isReply) return;
+        const p = _trigPhrase(el);
+        if (norm && !p.includes(norm) && !norm.includes(p)) {
           el.classList.add('trig-dim');
         } else {
           el.classList.remove('trig-dim');
