@@ -738,15 +738,38 @@ def _recognition_loop(
                     )
                     stage1_backend.reset()
         elif is_vosk:
+            chunk_ms = len(data) / (16000 * 2) * 1000
+            if rms > _eff_stage1_rms:
+                stage1_last_speech_t = time.monotonic()
+                stage1_speech_ms += chunk_ms
+
             if on_stt_event:
                 partial = json.loads(stage1.PartialResult()).get("partial", "").strip()
                 if partial:
                     on_stt_event("transcribing", {"text": partial})
 
-            if not stage1.AcceptWaveform(data):
+            vad_triggered = (
+                stage1_speech_ms >= _eff_stage1_min_speech_ms
+                and stage1_last_speech_t > 0
+                and (time.monotonic() - stage1_last_speech_t) * 1000
+                >= _eff_stage1_vad_ms
+            )
+            endpoint_fired = stage1.AcceptWaveform(data)
+
+            if not endpoint_fired and not vad_triggered:
                 continue
 
-            result = json.loads(stage1.Result())
+            if vad_triggered and not endpoint_fired:
+                result = json.loads(stage1.FinalResult())
+                rms_gate = 0.0  # speech already confirmed by software VAD
+                logger.debug("Stage1 Vosk force-finalized by software VAD")
+            else:
+                result = json.loads(stage1.Result())
+                rms_gate = config.stt.stage1.rms_threshold
+
+            stage1_last_speech_t = 0.0
+            stage1_speech_ms = 0.0
+
             wake_match = _vosk_check_result(
                 data,
                 result,
@@ -754,7 +777,7 @@ def _recognition_loop(
                 confuser_set,
                 config.stt.stage1.confidence,
                 config.stt.stage1.confidence_mode,
-                config.stt.stage1.rms_threshold,
+                rms_gate,
             )
             if wake_match is not None:
                 _wake_detected(
@@ -777,6 +800,8 @@ def _recognition_loop(
                     f"was_gated={was_gated}"
                 )
                 _drain_pipe(proc)
+                stage1_last_speech_t = 0.0
+                stage1_speech_ms = 0.0
                 vosk_model = stage1_backend.model
                 stage1 = vosk.KaldiRecognizer(
                     vosk_model,
