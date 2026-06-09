@@ -106,6 +106,7 @@ class STTStage1Config:
     auto_confusers: bool = True
     confuser_distance: int = 3
     max_confusers: int = 30
+    vosk_grammar: bool = False
     keyword_spotter: bool = False
     keywords_score: float = 1.0
     keywords_threshold: float = 0.25
@@ -451,6 +452,7 @@ def _parse_stt_stage1_config(raw: dict) -> STTStage1Config:
         auto_confusers=bool(raw.get("auto_confusers", True)),
         confuser_distance=int(raw.get("confuser_distance", 3)),
         max_confusers=int(raw.get("max_confusers", 30)),
+        vosk_grammar=bool(raw.get("vosk_grammar", False)),
         keyword_spotter=bool(raw.get("keyword_spotter", False)),
         keywords_score=float(raw.get("keywords_score", 1.0)),
         keywords_threshold=float(raw.get("keywords_threshold", 0.25)),

@@ -604,12 +604,21 @@ def _recognition_loop(
     confuser_set = _build_confuser_set(config.wake_words, config.stt.stage1)
     is_vosk = isinstance(stage1_backend, VoskSTT)
     is_kws = isinstance(stage1_backend, SherpaKeywordSpotter)
+    vosk_use_grammar = config.stt.stage1.vosk_grammar
+
+    def _make_stage1_recognizer() -> "vosk.KaldiRecognizer":
+        if vosk_use_grammar:
+            rec = vosk.KaldiRecognizer(
+                vosk_model, 16000, _grammar_json(config.wake_words, confuser_set)
+            )
+        else:
+            rec = vosk.KaldiRecognizer(vosk_model, 16000)
+        rec.SetWords(True)
+        return rec
+
     if is_vosk:
         vosk_model = stage1_backend.model
-        stage1 = vosk.KaldiRecognizer(
-            vosk_model, 16000, _grammar_json(config.wake_words, confuser_set)
-        )
-        stage1.SetWords(True)
+        stage1 = _make_stage1_recognizer()
     else:
         stage1 = None
     cooldown_until = 0.0
@@ -770,15 +779,21 @@ def _recognition_loop(
             stage1_last_speech_t = 0.0
             stage1_speech_ms = 0.0
 
-            wake_match = _vosk_check_result(
-                data,
-                result,
-                alias_map,
-                confuser_set,
-                config.stt.stage1.confidence,
-                config.stt.stage1.confidence_mode,
-                rms_gate,
-            )
+            if vosk_use_grammar:
+                wake_match = _vosk_check_result(
+                    data,
+                    result,
+                    alias_map,
+                    confuser_set,
+                    config.stt.stage1.confidence,
+                    config.stt.stage1.confidence_mode,
+                    rms_gate,
+                )
+            else:
+                text = result.get("text", "").strip()
+                logger.debug("Stage1 Vosk free-vocab result: %r", text)
+                wake_match = _approx_wake_match(text, alias_map) if text else None
+
             if wake_match is not None:
                 _wake_detected(
                     wake_group=wake_match,
@@ -802,13 +817,7 @@ def _recognition_loop(
                 _drain_pipe(proc)
                 stage1_last_speech_t = 0.0
                 stage1_speech_ms = 0.0
-                vosk_model = stage1_backend.model
-                stage1 = vosk.KaldiRecognizer(
-                    vosk_model,
-                    16000,
-                    _grammar_json(config.wake_words, confuser_set),
-                )
-                stage1.SetWords(True)
+                stage1 = _make_stage1_recognizer()
                 if on_stt_event:
                     on_stt_event(
                         "listening",
