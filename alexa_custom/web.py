@@ -329,14 +329,16 @@ class WebServer:
                 load1, load5, load15 = os.getloadavg()
             except OSError:
                 load1 = load5 = load15 = 0.0
-            await self._broadcast({
-                "type": "system_stats",
-                "load1": load1,
-                "load5": load5,
-                "load15": load15,
-                "cpu_count": cpu_count,
-                "ram_free_pct": self._ram_free_pct(),
-            })
+            await self._broadcast(
+                {
+                    "type": "system_stats",
+                    "load1": load1,
+                    "load5": load5,
+                    "load15": load15,
+                    "cpu_count": cpu_count,
+                    "ram_free_pct": self._ram_free_pct(),
+                }
+            )
 
     async def _asset_watcher_loop(
         self, watch_paths: list[Path], interval: float = 1.0
