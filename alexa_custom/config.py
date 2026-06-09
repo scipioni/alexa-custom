@@ -150,6 +150,7 @@ class MQTTConfig:
 @dataclass
 class WebConfig:
     port: int = 8080
+    cpu_limit: int = 4
 
 
 @dataclass
@@ -881,7 +882,10 @@ def _parse_actions_config(
     web_raw = raw.get("web") or {}
     if not isinstance(web_raw, dict):
         raise ConfigError(f"{source}: 'web' must be a mapping if present")
-    web = WebConfig(port=int(web_raw.get("port", 8080)))
+    web = WebConfig(
+        port=int(web_raw.get("port", 8080)),
+        cpu_limit=int(web_raw.get("cpu_limit", 4)),
+    )
 
     system_raw = raw.get("system") or {}
     if not isinstance(system_raw, dict):

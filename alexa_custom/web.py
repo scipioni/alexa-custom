@@ -48,11 +48,13 @@ class WebServer:
         port: int = 8080,
         output_volume: float = 0.5,
         input_gain: float = 1.0,
+        cpu_limit: int = 4,
         shutdown_callback: Callable | None = None,
     ) -> None:
         self._port = port
         self._output_volume = output_volume
         self._input_gain = input_gain
+        self._cpu_limit = cpu_limit
         self._shutdown_callback = shutdown_callback
         self._html = _DASHBOARD_PATH.read_text()
         self._clients: set[web.WebSocketResponse] = set()
@@ -240,6 +242,8 @@ class WebServer:
                     "llm_state": self._state["llm_state"],
                     "room_status": self._state["room_status"],
                     "room_answer_timeout": self._state["room_answer_timeout"],
+                    "input_gain": self._input_gain,
+                    "cpu_limit": self._cpu_limit,
                 }
             )
         )
@@ -651,12 +655,14 @@ def run_web(
     watch_paths: list[Path] | None = None,
     output_volume: float = 0.5,
     input_gain: float = 1.0,
+    cpu_limit: int = 4,
     shutdown_callback: Callable | None = None,
 ) -> None:
     server = WebServer(
         port=port,
         output_volume=output_volume,
         input_gain=input_gain,
+        cpu_limit=cpu_limit,
         shutdown_callback=shutdown_callback,
     )
     try:

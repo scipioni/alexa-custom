@@ -906,6 +906,7 @@
     .seg-v.on:nth-child(n+15):nth-child(-n+17) { background: var(--amber); }
     .seg-v.on:nth-child(n+18)               { background: var(--nomatch); }
     .vu-db { color: var(--muted); font-size: 10px; }
+    .vu-gain { color: var(--muted); font-size: 9px; opacity: 0.7; }
 
     /* ── room panel ──────────────────────────────────────────────────────── */
     #room-body {
@@ -1249,6 +1250,7 @@
                 <span class="vu-lbl-v">MIC</span>
                 <div class="vu-segs-v" id="mic-segs-v"><div class="rms-line" id="mic-rms-line"></div></div>
                 <span class="vu-db" id="mic-db">-∞ dB</span>
+                <span class="vu-gain" id="mic-gain"></span>
               </div>
               <div class="vu-row-v">
                 <span class="vu-lbl-v">SPK</span>
@@ -1342,6 +1344,11 @@
           setStatusListening(m.stt_state === 'wake' || m.stt_state === 'partial' || m.stt_state === 'transcribing');
           if (m.actions_config) { _cfg = m.actions_config; renderActions(_cfg); }
           setRoomStatus(m.room_status || 'closed', m.room_answer_timeout || 0);
+          if (m.input_gain != null) {
+            const el = document.getElementById('mic-gain');
+            if (el) el.textContent = '×' + m.input_gain.toFixed(1);
+          }
+          if (m.cpu_limit != null) _cpuLimit = m.cpu_limit;
           break;
         }
         case 'starting':           setSt('Starting…', null); break;
@@ -2058,6 +2065,7 @@
 
     // ── sparkline ────────────────────────────────────────────────────────────
     let _sparkData = [];
+    let _cpuLimit = 4;
 
     function _cpuColor(v, maxY) {
       const r = v / maxY;
@@ -2088,7 +2096,7 @@
 
       const w = 200, h = 76;
       const cpuCount = m.cpu_count || 1;
-      const maxY = Math.min(cpuCount, 4);
+      const maxY = _cpuLimit;
       const color = _cpuColor(load1, maxY);
       const n = _sparkData.length;
 
