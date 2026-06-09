@@ -783,7 +783,58 @@ def load_config(
             "move credentials to conf/secrets.yaml"
         )
 
-    return _parse_actions_config(raw, source=str(p), secrets=secrets)
+    cfg = _parse_actions_config(raw, source=str(p), secrets=secrets)
+
+    # Merge wake words from user.yaml (optional, sits next to config.yaml)
+    user_path = p.parent / "user.yaml"
+    if user_path.exists():
+        _merge_user_wake_words(cfg, user_path)
+
+    return cfg
+
+
+def _merge_user_wake_words(cfg: "ActionsConfig", user_path: Path) -> None:
+    """Append wake word groups from user.yaml that are not already in cfg."""
+    try:
+        with user_path.open() as f:
+            raw = yaml.safe_load(f)
+    except yaml.YAMLError as e:
+        logger.warning("user.yaml parse error, skipping: %s", e)
+        return
+
+    if not isinstance(raw, dict):
+        logger.warning("user.yaml must be a YAML mapping at the top level, skipping")
+        return
+
+    raw_wake_words = raw.get("wake_words")
+    if not raw_wake_words:
+        return
+    if not isinstance(raw_wake_words, list):
+        logger.warning("user.yaml: 'wake_words' must be a list, skipping")
+        return
+
+    try:
+        user_groups = _parse_wake_word_groups(raw_wake_words, str(user_path))
+    except ConfigError as e:
+        logger.warning("user.yaml wake_words error, skipping: %s", e)
+        return
+
+    existing_ids = {g.id for g in cfg.wake_words}
+    added = 0
+    for group in user_groups:
+        if group.id in existing_ids:
+            logger.debug(
+                "user.yaml: wake word %r (id=%r) already defined in config.yaml, skipping",
+                group.word,
+                group.id,
+            )
+        else:
+            cfg.wake_words.append(group)
+            existing_ids.add(group.id)
+            added += 1
+
+    if added:
+        logger.info("user.yaml: merged %d wake word group(s)", added)
 
 
 def _parse_actions_config(
