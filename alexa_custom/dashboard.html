@@ -686,16 +686,7 @@
         <span class="hero-text hero-muted">STT inactive</span>
       </div>
 
-      <div class="ww-row">
-        <div class="panel ww-panel" id="ww-panel-galileo">
-          <div class="panel-hdr">GALILEO</div>
-          <div class="ww-panel-content" id="ww-content-galileo"><span style="color:var(--muted)">Loading…</span></div>
-        </div>
-        <div class="panel ww-panel" id="ww-panel-assistente">
-          <div class="panel-hdr">ASSISTENTE</div>
-          <div class="ww-panel-content" id="ww-content-assistente"><span style="color:var(--muted)">Loading…</span></div>
-        </div>
-      </div>
+      <div class="ww-row" id="ww-panels-container"></div>
 
       <div class="panel ww-panel" id="ww-panel-globali" style="display:none">
         <div class="panel-hdr">GLOBALI</div>
@@ -1077,21 +1068,36 @@
         return res;
       }
 
-      (cfg.wake_words || []).forEach(w => {
-        const contentEl = document.getElementById('ww-content-' + esc(w.word));
-        if (!contentEl) return;
+      const wwContainer = document.getElementById('ww-panels-container');
+      if (wwContainer) {
+        wwContainer.innerHTML = '';
+        (cfg.wake_words || []).forEach(w => {
+          const panel = document.createElement('div');
+          panel.className = 'panel ww-panel';
 
-        let h = '';
-        h += '<div class="ww-card" data-word="' + esc(w.word) + '" data-aliases="' + esc((w.aliases||[]).join(',')) + '">';
-        h += '<div class="aalias">' + ((w.aliases && w.aliases.length) ? esc(w.aliases.join(', ')) : '—') + '</div>';
-        h += '<div class="ainteract"></div>';
-        (w.triggers || []).forEach(t => {
-          h += '<div class="atrig">› ' + esc(t.phrase) + _aliases(t.aliases) + '</div>';
-          h += renderList(t.actions);
+          const hdr = document.createElement('div');
+          hdr.className = 'panel-hdr';
+          hdr.textContent = w.word.toUpperCase();
+          panel.appendChild(hdr);
+
+          let h = '';
+          h += '<div class="ww-card" data-word="' + esc(w.word) + '" data-aliases="' + esc((w.aliases||[]).join(',')) + '">';
+          h += '<div class="aalias">' + ((w.aliases && w.aliases.length) ? esc(w.aliases.join(', ')) : '—') + '</div>';
+          h += '<div class="ainteract"></div>';
+          (w.triggers || []).forEach(t => {
+            h += '<div class="atrig">› ' + esc(t.phrase) + _aliases(t.aliases) + '</div>';
+            h += renderList(t.actions);
+          });
+          h += '</div>';
+
+          const content = document.createElement('div');
+          content.className = 'ww-panel-content';
+          content.innerHTML = h || '<span style="color:var(--muted)">Nessun trigger</span>';
+          panel.appendChild(content);
+
+          wwContainer.appendChild(panel);
         });
-        h += '</div>';
-        contentEl.innerHTML = h || '<span style="color:var(--muted)">Nessun trigger</span>';
-      });
+      }
 
       // Global triggers — single shared panel
       const globaliPanel = document.getElementById('ww-panel-globali');
