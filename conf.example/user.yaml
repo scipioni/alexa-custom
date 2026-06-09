@@ -1,0 +1,17 @@
+# conf/user.yaml — optional per-user overrides, not tracked by git
+#
+# Wake words defined here are merged with those in conf/config.yaml.
+# Groups whose 'id' (or 'word' if no id is set) already exists in config.yaml
+# are silently skipped — config.yaml always wins on conflicts.
+# This file is hot-reloaded alongside config.yaml.
+
+# ---------------------------------------------------------------------------
+# Extra wake words (optional)
+# ---------------------------------------------------------------------------
+# wake_words:
+#   - word: "hey computer"
+#     id: computer
+#     lang: "en-US"
+#   - word: "ciao galileo"
+#     id: ciao_galileo
+#     lang: "it-IT"
