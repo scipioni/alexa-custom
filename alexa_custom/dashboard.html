@@ -505,18 +505,72 @@
     /* ── history + participants panel (right) ───────────────────────────── */
     #right-panel { }
     #hist-wrap { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
-    #hl { flex: 1; overflow-y: auto; padding: 6px 10px; }
+    #hl { flex: 1; overflow-y: auto; padding: 6px 8px; display: flex; flex-direction: column; gap: 4px; }
     .he {
-      padding: 5px 0;
-      border-bottom: 1px solid var(--border);
-      animation: slide-in 0.2s ease-out;
+      background: rgba(255,255,255,0.025);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 7px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      animation: slide-in 0.25s ease-out;
     }
-    .he:last-child { border-bottom: none; }
-    .hts  { color: var(--muted); font-size: 11px; }
-    .hwk  { color: var(--wake); font-size: 11px; margin-left: 4px; font-weight: 600; }
-    .hcmd { color: var(--text); font-size: 12px; margin-top: 2px; }
-    .htrig{ color: var(--match); font-size: 11px; margin-top: 2px; }
-    .hllm-reply { color: var(--llm); font-size: 11px; margin-top: 2px; opacity: 0.9; }
+    [data-theme="light"] .he { background: rgba(0,0,0,0.025); }
+    .he-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+    }
+    .hts {
+      font-size: 9px;
+      color: var(--muted);
+      opacity: 0.55;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 0.03em;
+      flex-shrink: 0;
+    }
+    .hwk {
+      font-size: 9px; font-weight: 700; letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: var(--wake);
+      background: rgba(251,146,60,0.1);
+      border: 1px solid rgba(251,146,60,0.22);
+      border-radius: 3px;
+      padding: 1px 6px;
+    }
+    .hwk-llm {
+      font-size: 9px; font-weight: 700; letter-spacing: 0.07em;
+      text-transform: uppercase;
+      color: var(--llm);
+      background: rgba(167,139,250,0.1);
+      border: 1px solid rgba(167,139,250,0.22);
+      border-radius: 3px;
+      padding: 1px 6px;
+    }
+    .hcmd {
+      font-size: 12px;
+      color: var(--text);
+      line-height: 1.35;
+    }
+    .htrig {
+      display: inline-flex; align-items: center; gap: 4px;
+      align-self: flex-start;
+      font-size: 10px; font-weight: 600;
+      color: var(--match);
+      background: rgba(74,222,128,0.09);
+      border: 1px solid rgba(74,222,128,0.18);
+      border-radius: 4px;
+      padding: 1px 7px;
+    }
+    .htrig::before { content: '→'; opacity: 0.6; margin-right: 2px; }
+    .hllm-reply {
+      font-size: 11px;
+      color: var(--llm);
+      opacity: 0.85;
+      line-height: 1.35;
+    }
 
     #part-section {
       flex-shrink: 0;
@@ -1723,45 +1777,43 @@
     function clearHistory() { document.getElementById('hl').innerHTML = ''; }
 
     const MAX_HIST = 60;
-    function addHistoryWake(word) {
+    function _hePush(html) {
       const el = document.getElementById('hl');
       if (!el) return;
-      const ts = new Date().toTimeString().slice(0, 8);
       const d = document.createElement('div');
       d.className = 'he';
-      d.innerHTML = '<span class="hts">' + ts + '</span>'
-        + ' <span style="color:var(--wake)">◉ ' + esc(word) + '</span>';
+      d.innerHTML = html;
       el.insertBefore(d, el.firstChild);
       while (el.children.length > MAX_HIST) el.removeChild(el.lastChild);
+    }
+
+    function addHistoryWake(word) {
+      const ts = new Date().toTimeString().slice(0, 8);
+      _hePush('<div class="he-top">'
+        + '<span class="hwk">' + esc(word) + '</span>'
+        + '<span class="hts">' + ts + '</span>'
+        + '</div>');
     }
 
     function addHistory(wake, transcript, trigger) {
-      const el = document.getElementById('hl');
-      if (!el) return;
       const ts = new Date().toTimeString().slice(0, 8);
-      const d = document.createElement('div');
-      d.className = 'he';
-      d.innerHTML = '<div><span class="hts">' + ts + '</span>'
-        + (wake ? '<span class="hwk">' + esc(wake) + '</span>' : '') + '</div>'
-        + '<div class="hcmd">"' + esc(transcript) + '"</div>'
+      _hePush('<div class="he-top">'
+        + (wake ? '<span class="hwk">' + esc(wake) + '</span>' : '<span></span>')
+        + '<span class="hts">' + ts + '</span>'
+        + '</div>'
+        + (transcript ? '<div class="hcmd">"' + esc(transcript) + '"</div>' : '')
         + (trigger && trigger !== transcript
-            ? '<div class="htrig">→ ' + esc(trigger) + '</div>' : '');
-      el.insertBefore(d, el.firstChild);
-      while (el.children.length > MAX_HIST) el.removeChild(el.lastChild);
+            ? '<div class="htrig">' + esc(trigger) + '</div>' : ''));
     }
 
     function addHistoryLLM(transcript, reply) {
-      const el = document.getElementById('hl');
-      if (!el) return;
       const ts = new Date().toTimeString().slice(0, 8);
-      const d = document.createElement('div');
-      d.className = 'he';
-      d.innerHTML = '<div><span class="hts">' + ts + '</span>'
-        + ' <span style="color:var(--llm);font-weight:600">◈ AI</span></div>'
+      _hePush('<div class="he-top">'
+        + '<span class="hwk-llm">AI</span>'
+        + '<span class="hts">' + ts + '</span>'
+        + '</div>'
         + (transcript ? '<div class="hcmd">"' + esc(transcript) + '"</div>' : '')
-        + (reply ? '<div class="hllm-reply">' + esc(reply.length > 80 ? reply.slice(0,77)+'…' : reply) + '</div>' : '');
-      el.insertBefore(d, el.firstChild);
-      while (el.children.length > MAX_HIST) el.removeChild(el.lastChild);
+        + (reply ? '<div class="hllm-reply">' + esc(reply.length > 80 ? reply.slice(0,77)+'…' : reply) + '</div>' : ''));
     }
 
     function sendCtrl(action) {
