@@ -434,26 +434,75 @@
     }
     #vu-bottom { margin-top: auto; }
 
-    /* ── CPU bar in monitoring ──────────────────────────────────────────── */
-    #cpu-bar {
+    /* ── CPU monitor ────────────────────────────────────────────────────── */
+    #cpu-widget { display: flex; flex-direction: column; gap: 5px; }
+    #cpu-header {
       display: flex;
-      align-items: center;
-      gap: 6px;
+      align-items: baseline;
+      justify-content: space-between;
     }
+    #cpu-title {
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      color: var(--muted);
+      text-transform: uppercase;
+    }
+    #cpu-cores-badge {
+      font-size: 9px;
+      color: var(--muted);
+      letter-spacing: 0.05em;
+    }
+    #cpu-chart-wrap { position: relative; }
     #sparkline {
       display: block;
-      flex: 1;
-      height: 40px;
-      border-radius: 4px;
+      width: 100%;
+      height: 76px;
+      border-radius: 6px;
+      background: rgba(0,0,0,0.18);
+    }
+    #cpu-overlay {
+      position: absolute;
+      top: 6px;
+      right: 8px;
+      display: flex;
+      flex-direction: column;
+      align-items: flex-end;
+      pointer-events: none;
+      gap: 1px;
     }
     #cpu-load {
-      font-size: 11px;
-      font-weight: 700;
+      font-size: 26px;
+      font-weight: 800;
       font-variant-numeric: tabular-nums;
-      white-space: nowrap;
-      flex-shrink: 0;
-      min-width: 3em;
-      text-align: right;
+      line-height: 1;
+      letter-spacing: -0.03em;
+    }
+    #cpu-load-label {
+      font-size: 8px;
+      color: var(--muted);
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+    #cpu-secondary {
+      display: flex;
+      gap: 8px;
+      margin-top: 1px;
+    }
+    .cpu-sec-val {
+      font-size: 9px;
+      font-variant-numeric: tabular-nums;
+      color: var(--muted);
+    }
+    .cpu-sec-lbl {
+      font-size: 8px;
+      color: var(--muted);
+      opacity: 0.6;
+      letter-spacing: 0.06em;
+    }
+    @keyframes cpu-dot-pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
     }
 
     /* ── toggles panel ──────────────────────────────────────────────────── */
@@ -823,9 +872,22 @@
       <div class="panel" id="monitoring-section">
         <div class="panel-hdr">MONITORING</div>
         <div id="mon-content">
-          <div id="cpu-bar">
-            <svg id="sparkline" viewBox="0 0 120 48" preserveAspectRatio="none"></svg>
-            <span id="cpu-load">0.00</span>
+          <div id="cpu-widget">
+            <div id="cpu-header">
+              <span id="cpu-title">CPU Load Avg</span>
+              <span id="cpu-cores-badge"></span>
+            </div>
+            <div id="cpu-chart-wrap">
+              <svg id="sparkline" viewBox="0 0 200 76" preserveAspectRatio="none"></svg>
+              <div id="cpu-overlay">
+                <span id="cpu-load">0.00</span>
+                <span id="cpu-load-label">1 min avg</span>
+              </div>
+            </div>
+            <div id="cpu-secondary">
+              <span class="cpu-sec-lbl">5m</span><span class="cpu-sec-val" id="cpu-load5">—</span>
+              <span class="cpu-sec-lbl">15m</span><span class="cpu-sec-val" id="cpu-load15">—</span>
+            </div>
           </div>
           <div id="vu-bottom">
             <div class="vu-block">
@@ -1526,56 +1588,98 @@
     // ── sparkline ────────────────────────────────────────────────────────────
     let _sparkData = [];
 
-    function _cpuColor(v) {
-      if (v >= 1.8) return '#f87171';
-      if (v >= 1.2) return '#facc15';
+    function _cpuColor(v, maxY) {
+      const r = v / maxY;
+      if (r >= 0.9) return '#f87171';
+      if (r >= 0.6) return '#facc15';
       return '#4ade80';
     }
 
     function updateSparkline(m) {
-      const load1 = m.load1 || 0;
+      const load1  = m.load1  || 0;
+      const load5  = m.load5  || 0;
+      const load15 = m.load15 || 0;
       _sparkData.push(load1);
       if (_sparkData.length > 60) _sparkData.shift();
+
       const svg = document.getElementById('sparkline');
-      const cpuLoad = document.getElementById('cpu-load');
       if (!svg) return;
-      const w = 120, h = 48;
+
+      const w = 200, h = 76;
       const cpuCount = m.cpu_count || 1;
       const maxY = Math.min(cpuCount, 4);
-      const color = _cpuColor(load1);
+      const color = _cpuColor(load1, maxY);
       const n = _sparkData.length;
-      const pts = _sparkData.map((v, i) => {
-        const x = (i / (n - 1 || 1)) * w;
-        const y = h - 2 - Math.max(2, (v / maxY) * (h - 4));
-        return { x, y, c: _cpuColor(v) };
-      });
-      const d = pts.map((p, i) => {
-        if (i === 0) return 'M' + p.x.toFixed(1) + ',' + (h - 2);
-        const prev = pts[i - 1];
-        const cx1 = (prev.x + p.x) / 2;
-        return 'Q' + cx1.toFixed(1) + ',' + prev.y.toFixed(1) + ' ' + p.x.toFixed(1) + ',' + p.y.toFixed(1);
-      }).join(' ');
-      const fill = pts.map((p, i) => {
-        if (i === 0) return 'M' + p.x.toFixed(1) + ',' + (h - 2);
-        if (i === n - 1) return 'L' + p.x.toFixed(1) + ',' + (h - 2) + 'Z';
-        const prev = pts[i - 1];
-        const cx1 = (prev.x + p.x) / 2;
-        return 'Q' + cx1.toFixed(1) + ',' + prev.y.toFixed(1) + ' ' + p.x.toFixed(1) + ',' + p.y.toFixed(1);
-      }).join(' ');
-      const maxLoadY = h - 2 - Math.max(2, (1 / maxY) * (h - 4));
-      svg.innerHTML = ''
-        + '<defs><linearGradient id="cg" x1="0" y1="0" x2="1" y2="0">'
+
+      const pad = { t: 6, b: 6, l: 2, r: 2 };
+      const cw = w - pad.l - pad.r;
+      const ch = h - pad.t - pad.b;
+
+      const toX = i => pad.l + (i / (n - 1 || 1)) * cw;
+      const toY = v => pad.t + ch - Math.min(ch, Math.max(0, (v / maxY) * ch));
+
+      const pts = _sparkData.map((v, i) => ({ x: toX(i), y: toY(v), c: _cpuColor(v, maxY) }));
+
+      // smooth cubic bezier path
+      function smooth(points) {
+        if (points.length < 2) return '';
+        let d = 'M' + points[0].x.toFixed(1) + ',' + points[0].y.toFixed(1);
+        for (let i = 1; i < points.length; i++) {
+          const p0 = points[i - 1], p1 = points[i];
+          const cx = (p0.x + p1.x) / 2;
+          d += ' C' + cx.toFixed(1) + ',' + p0.y.toFixed(1) + ' ' + cx.toFixed(1) + ',' + p1.y.toFixed(1) + ' ' + p1.x.toFixed(1) + ',' + p1.y.toFixed(1);
+        }
+        return d;
+      }
+
+      const linePath = smooth(pts);
+      const last = pts[pts.length - 1] || { x: pad.l, y: pad.t + ch };
+      const fillPath = linePath + ' L' + last.x.toFixed(1) + ',' + (pad.t + ch) + ' L' + pad.l + ',' + (pad.t + ch) + 'Z';
+
+      // grid lines at 25 / 50 / 75 % of maxY
+      const gridLines = [0.25, 0.5, 0.75].map(f => {
+        const gy = toY(f * maxY);
+        return '<line x1="' + pad.l + '" y1="' + gy.toFixed(1) + '" x2="' + (w - pad.r) + '" y2="' + gy.toFixed(1) + '" stroke="rgba(255,255,255,0.05)" stroke-width="1"/>';
+      }).join('');
+
+      // 1-core load threshold dashed line
+      const threshY = toY(1);
+      const threshLine = threshY >= pad.t && threshY <= pad.t + ch
+        ? '<line x1="' + pad.l + '" y1="' + threshY.toFixed(1) + '" x2="' + (w - pad.r) + '" y2="' + threshY.toFixed(1) + '" stroke="var(--info)" stroke-width="0.8" stroke-dasharray="4,4" opacity="0.55"/>'
+        : '';
+
+      svg.innerHTML =
+        '<defs>'
+        + '<linearGradient id="cg" x1="0" y1="0" x2="1" y2="0">'
         + pts.map((p, i) => '<stop offset="' + (i / (n - 1 || 1) * 100).toFixed(0) + '%" stop-color="' + p.c + '"/>').join('')
         + '</linearGradient>'
-        + '<linearGradient id="fillGrad" x1="0" y1="1" x2="0" y2="0"><stop offset="0%" stop-color="' + color + '" stop-opacity="0.55"/><stop offset="50%" stop-color="' + color + '" stop-opacity="0.2"/><stop offset="100%" stop-color="' + color + '" stop-opacity="0.02"/></linearGradient>'
+        + '<linearGradient id="fg" x1="0" y1="0" x2="0" y2="1">'
+        + '<stop offset="0%" stop-color="' + color + '" stop-opacity="0.45"/>'
+        + '<stop offset="100%" stop-color="' + color + '" stop-opacity="0.02"/>'
+        + '</linearGradient>'
+        + '<filter id="glow" x="-20%" y="-60%" width="140%" height="220%">'
+        + '<feGaussianBlur in="SourceGraphic" stdDeviation="2.5" result="blur"/>'
+        + '<feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>'
+        + '</filter>'
         + '</defs>'
-        + '<path d="' + fill + '" fill="url(#fillGrad)"/>'
-        + '<path d="' + d + '" fill="none" stroke="' + color + '" stroke-width="1.5" stroke-linecap="round"/>'
-        + '<line x1="0" y1="' + maxLoadY + '" x2="' + w + '" y2="' + maxLoadY + '" stroke="var(--info)" stroke-width="1" stroke-dasharray="5,4" opacity="0.7"/>';
-      if (cpuLoad) {
-        cpuLoad.textContent = load1.toFixed(2);
-        cpuLoad.style.color = color;
-      }
+        + gridLines
+        + threshLine
+        + '<path d="' + fillPath + '" fill="url(#fg)"/>'
+        + '<path d="' + linePath + '" fill="none" stroke="url(#cg)" stroke-width="1.8" stroke-linecap="round" filter="url(#glow)"/>'
+        + '<circle cx="' + last.x.toFixed(1) + '" cy="' + last.y.toFixed(1) + '" r="3" fill="' + color + '" opacity="0.9" filter="url(#glow)">'
+        + '<animate attributeName="opacity" values="0.9;0.25;0.9" dur="1.8s" repeatCount="indefinite"/>'
+        + '</circle>';
+
+      const cpuLoad = document.getElementById('cpu-load');
+      if (cpuLoad) { cpuLoad.textContent = load1.toFixed(2); cpuLoad.style.color = color; }
+
+      const badge = document.getElementById('cpu-cores-badge');
+      if (badge) badge.textContent = cpuCount + ' core' + (cpuCount !== 1 ? 's' : '');
+
+      const el5  = document.getElementById('cpu-load5');
+      const el15 = document.getElementById('cpu-load15');
+      if (el5)  { el5.textContent  = load5.toFixed(2);  el5.style.color  = _cpuColor(load5,  maxY); }
+      if (el15) { el15.textContent = load15.toFixed(2); el15.style.color = _cpuColor(load15, maxY); }
     }
 
     // ── init ──────────────────────────────────────────────────────────────────
