@@ -600,13 +600,12 @@
       width: 100%;
       height: 8px;
       border-radius: 2px;
-      opacity: 0.12;
-      transition: opacity 0.06s linear;
+      background: rgba(255,255,255,0.07);
+      transition: background-color 0.06s linear;
     }
-    .seg-v.on { opacity: 1; }
-    .seg-v:nth-child(-n+14)                        { background: var(--match); }
-    .seg-v:nth-child(n+15):nth-child(-n+17)        { background: var(--amber); }
-    .seg-v:nth-child(n+18)                         { background: var(--nomatch); }
+    .seg-v.on:nth-child(-n+14)               { background: var(--match); }
+    .seg-v.on:nth-child(n+15):nth-child(-n+17) { background: var(--amber); }
+    .seg-v.on:nth-child(n+18)               { background: var(--nomatch); }
     .vu-db { color: var(--muted); font-size: 10px; }
 
     /* ── room panel ──────────────────────────────────────────────────────── */
