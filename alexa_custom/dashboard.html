@@ -592,11 +592,23 @@
       letter-spacing: 0.06em;
     }
     .vu-segs-v {
+      position: relative;
       display: flex;
       flex-direction: column-reverse;
       gap: 4px;
       height: 160px;
       width: 32px;
+    }
+    .rms-line {
+      position: absolute;
+      left: 0;
+      width: 100%;
+      height: 2px;
+      border-radius: 1px;
+      background: var(--nomatch);
+      box-shadow: 0 0 5px var(--nomatch);
+      pointer-events: none;
+      transition: bottom 0.3s ease;
     }
     .seg-v {
       width: 100%;
@@ -932,7 +944,7 @@
             <div class="vu-block">
               <div class="vu-row-v">
                 <span class="vu-lbl-v">MIC</span>
-                <div class="vu-segs-v" id="mic-segs-v"></div>
+                <div class="vu-segs-v" id="mic-segs-v"><div class="rms-line" id="mic-rms-line"></div></div>
                 <span class="vu-db" id="mic-db">-∞ dB</span>
               </div>
               <div class="vu-row-v">
@@ -1374,12 +1386,28 @@
       }
     }
 
+    const _micRmsBuf = [];
+    const _RMS_WIN = 40;
+
     function setVU(ch, lvl) {
       const count = Math.round(Math.sqrt(Math.max(0, Math.min(1, lvl))) * 20);
       const dv    = lvl > 1e-9 ? (20 * Math.log10(Math.max(lvl, 1e-9))).toFixed(1) : null;
       const segs  = document.getElementById(ch + '-segs-v').children;
-      for (let i = 0; i < segs.length; i++) segs[i].classList.toggle('on', i < count);
+      for (let i = 0; i < segs.length; i++) {
+        const el = segs[i];
+        if (el.classList.contains('rms-line')) continue;
+        el.classList.toggle('on', i < count);
+      }
       document.getElementById(ch + '-db').textContent = dv ? dv + ' dB' : '-∞ dB';
+
+      if (ch === 'mic') {
+        _micRmsBuf.push(lvl);
+        if (_micRmsBuf.length > _RMS_WIN) _micRmsBuf.shift();
+        const rms = _micRmsBuf.reduce((s, v) => s + v, 0) / _micRmsBuf.length;
+        const rmsCount = Math.sqrt(Math.max(0, Math.min(1, rms))) * 20;
+        const rmsLine = document.getElementById('mic-rms-line');
+        if (rmsLine) rmsLine.style.bottom = (rmsCount / 20 * 100).toFixed(1) + '%';
+      }
     }
 
     function setAudio(connected, connType) {
