@@ -29,6 +29,10 @@
       --bar-bg:      rgba(0,0,0,0.3);
       --transcribing: #94a3b8;
       --reply-trig:   #86efac;
+      --electric-yellow: #facc15;
+      --glow-green: #4ade80;
+      --pill-red: #f87171;
+      --glow-shadow: drop-shadow(0 0 8px rgba(250,204,21,0.5));
     }
 
     [data-theme="light"] {
@@ -50,7 +54,7 @@
       font-size: 13px;
       height: 100vh;
       display: grid;
-      grid-template-rows: auto auto 1fr auto;
+      grid-template-rows: auto 1fr;
       overflow: hidden;
     }
 
@@ -116,7 +120,6 @@
 
     /* ── hero STT card ──────────────────────────────────────────────────── */
     #hero {
-      margin: 10px 12px 0;
       padding: 14px 18px;
       background: var(--surface);
       border: 1px solid var(--border);
@@ -192,6 +195,33 @@
       gap: 8px;
       min-height: 0;
       margin: 8px 12px 0;
+      flex: 1;
+    }
+
+    .center-col {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .center-col > #hero {
+      flex-shrink: 0;
+    }
+
+    .center-col > #actions-section {
+      flex-shrink: 0;
+    }
+
+    .center-col > #log-panel {
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .center-col > #log-panel > #le {
+      height: 100%;
     }
 
     .panel {
@@ -364,44 +394,113 @@
     #room-status-panel.rs-waiting .rs-icon { animation: rs-pulse 1.2s ease-in-out infinite; }
     @keyframes rs-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
-    /* ── footer: VU meters + controls ──────────────────────────────────── */
-    #footer {
-      margin: 8px 12px 10px;
-      padding: 10px 16px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      backdrop-filter: blur(12px);
+    /* ── monitoring panel (right) ────────────────────────────────────────── */
+    #monitoring-section {
+      overflow-y: auto;
+    }
+    #mon-content {
+      padding: 10px 12px;
       display: flex;
+      flex-direction: column;
+      gap: 6px;
+      flex: 1;
+    }
+
+    /* vertical VU meters */
+    .vu-block {
+      display: flex;
+      gap: 16px;
+      justify-content: center;
+    }
+    .vu-row-v {
+      display: flex;
+      flex-direction: column;
       align-items: center;
-      gap: 20px;
+      gap: 4px;
     }
-    .vu-row { display: flex; align-items: center; gap: 8px; flex: 1; }
-    .vu-lbl { width: 30px; color: var(--muted); font-weight: 700; font-size: 11px; flex-shrink: 0; }
-    .vu-dev { width: 70px; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 0; }
-    .vu-segs { display: flex; gap: 2px; align-items: center; position: relative; }
-    .seg {
-      width: 6px; height: 12px; border-radius: 2px;
-      opacity: 0.12; transition: opacity 0.06s linear;
+    .vu-lbl-v {
+      color: var(--muted);
+      font-weight: 700;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
     }
-    .seg.on { opacity: 1; }
-    .seg:nth-child(-n+14)                        { background: var(--match); }
-    .seg:nth-child(n+15):nth-child(-n+17)        { background: var(--amber); }
-    .seg:nth-child(n+18)                         { background: var(--nomatch); }
-    .vu-rms-line { position: absolute; top: -2px; bottom: -2px; width: 2px; border-radius: 1px; background: var(--nomatch); pointer-events: none; left: 0; transition: left 0.08s linear; }
-    .vu-db { width: 56px; text-align: right; color: var(--muted); font-size: 11px; flex-shrink: 0; }
-    .footer-divider { width: 1px; height: 28px; background: var(--border); flex-shrink: 0; }
+    .vu-segs-v {
+      display: flex;
+      flex-direction: column-reverse;
+      gap: 2px;
+      height: 80px;
+      width: 16px;
+    }
+    .seg-v {
+      width: 100%;
+      height: 4px;
+      border-radius: 1px;
+      opacity: 0.12;
+      transition: opacity 0.06s linear;
+    }
+    .seg-v.on { opacity: 1; }
+    .seg-v:nth-child(-n+14)                        { background: var(--match); }
+    .seg-v:nth-child(n+15):nth-child(-n+17)        { background: var(--amber); }
+    .seg-v:nth-child(n+18)                         { background: var(--nomatch); }
+    .vu-db { color: var(--muted); font-size: 10px; }
+
+    /* grafico section */
+    #grafico-body {
+      padding: 4px 0;
+    }
+    #sparkline {
+      display: block;
+    }
+    .spark-bar {
+      fill: var(--info);
+      opacity: 0.6;
+      transition: opacity 0.2s;
+    }
+    .spark-bar:hover {
+      opacity: 1;
+    }
+
+    /* room status in monitoring */
+    #room-status-section {
+      margin-top: 2px;
+    }
+    #room-status-body {
+      padding: 6px 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.3s ease;
+    }
+    #room-status-body.rs-active {
+      background: rgba(74,222,128,0.06);
+      border-radius: 8px;
+      padding: 10px 6px;
+      box-shadow: 0 0 12px rgba(74,222,128,0.15);
+    }
+    .rs-icon { font-size: 22px; width: 30px; text-align: center; flex-shrink: 0; }
+    .rs-label { font-size: 12px; font-weight: 600; }
+    .rs-sub   { font-size: 10px; color: var(--muted); }
+    #room-status-panel.rs-waiting .rs-icon { animation: rs-pulse 1.2s ease-in-out infinite; }
+    @keyframes rs-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
+    /* restart button as red-bordered pill */
     #btn-restart {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      color: var(--text);
-      padding: 5px 14px;
+      display: block;
+      width: 100%;
+      margin-top: 8px;
+      background: transparent;
+      border: 1.5px solid var(--pill-red);
+      color: var(--pill-red);
+      padding: 6px 14px;
       cursor: pointer;
-      font-family: inherit; font-size: 12px;
-      border-radius: 6px;
-      transition: border-color 0.2s, color 0.2s;
+      font-family: inherit; font-size: 11px;
+      font-weight: 600;
+      border-radius: 20px;
+      transition: background 0.2s, color 0.2s;
     }
-    #btn-restart:hover    { border-color: var(--nomatch); color: var(--nomatch); }
+    #btn-restart:hover    { background: rgba(248,113,113,0.12); color: var(--nomatch); }
     #btn-restart:disabled { opacity: 0.4; cursor: not-allowed; }
 
     /* ── animations ─────────────────────────────────────────────────────── */
@@ -463,10 +562,67 @@
     #hero.llm-thinking  { animation: llm-think-glow 1.6s ease-in-out infinite; border-color: var(--llm-border); }
     #hero.anim-llm-reply { animation: llm-reply-flash 1.2s ease-out forwards; }
 
+    /* ── mode toggle ──────────────────────────────────────────────────────── */
+    #btn-mode {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      color: var(--text);
+      font-size: 14px; cursor: pointer;
+      padding: 2px 7px; border-radius: 5px;
+      line-height: 1.6; transition: border-color 0.2s, color 0.2s;
+      flex-shrink: 0;
+    }
+    #btn-mode:hover { border-color: var(--info); color: var(--info); }
+
+    /* ── dev mode visibility ──────────────────────────────────────────────── */
+    body.dev-mode #log-panel { display: flex; }
+    #log-panel { display: none; }
+
+    /* ── glow and grow animations ─────────────────────────────────────────── */
+    .ww-card {
+      transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+      background: var(--surface);
+    }
+    .ww-card.ww-active {
+      transform: scale(1.05);
+      border-color: var(--electric-yellow);
+      box-shadow: 0 0 14px rgba(250,204,21,0.3), 0 0 28px rgba(250,204,21,0.1);
+    }
+
+    .atrig.trig-glow {
+      transition: transform 0.2s ease, color 0.2s ease;
+    }
+    .atrig.trig-glow.trig-hit,
+    .atrig.trig-glow.trig-reply-hit {
+      transform: scale(1.04);
+      filter: drop-shadow(0 0 4px rgba(74,222,128,0.4));
+    }
+
     /* ── scrollbars ─────────────────────────────────────────────────────── */
     ::-webkit-scrollbar { width: 4px; }
     ::-webkit-scrollbar-track { background: transparent; }
     ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+    /* ── responsive: narrow screens ───────────────────────────────────────── */
+    @media (max-width: 800px) {
+      #main {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto 1fr auto;
+      }
+      #history-section { display: none; }
+      #monitoring-section { display: none; }
+    }
+
+    @media (min-width: 801px) and (max-width: 1100px) {
+      #main {
+        grid-template-columns: 1fr 200px;
+      }
+      #history-section { display: none; }
+    }
   </style>
 </head>
 <body>
@@ -476,6 +632,7 @@
     <span id="st">Connecting…</span>
     <span id="room"></span>
     <span id="ws-ind">WS disconnected</span>
+    <button id="btn-mode" aria-label="Toggle mode" onclick="toggleMode()">☀</button>
     <button id="btn-theme" aria-label="Toggle theme" onclick="toggleTheme()">☀</button>
     <div id="llm-badge">
       <span id="llm-badge-dots" style="display:none">
@@ -485,79 +642,78 @@
     </div>
   </div>
 
-  <div id="hero">
-    <span class="hero-icon hero-muted">○</span>
-    <span class="hero-text hero-muted">STT inactive</span>
-  </div>
-
   <div id="main">
 
-    <div class="panel" id="actions-section">
-      <div class="panel-hdr">WAKE WORDS &amp; ACTIONS</div>
-      <div id="al"><span style="color:var(--muted)">Loading…</span></div>
+    <div class="panel" id="history-section">
+      <div class="panel-hdr">HISTORY <button onclick="clearHistory()">clear</button></div>
+      <div id="hl"></div>
     </div>
 
-    <div class="panel" id="log-panel">
-      <div class="panel-hdr">LOGS <button onclick="clearLogs()">clear</button></div>
-      <div id="le"></div>
+    <div class="center-col">
+      <div id="hero">
+        <span class="hero-icon hero-muted">○</span>
+        <span class="hero-text hero-muted">STT inactive</span>
+      </div>
+
+      <div class="panel" id="actions-section">
+        <div class="panel-hdr">WAKE WORDS</div>
+        <div id="al"><span style="color:var(--muted)">Loading…</span></div>
+      </div>
+
+      <div class="panel" id="log-panel">
+        <div class="panel-hdr">LOGS <button onclick="clearLogs()">clear</button></div>
+        <div id="le"></div>
+      </div>
     </div>
 
-    <div class="panel" id="right-panel">
-      <div id="hist-wrap">
-        <div class="panel-hdr">HISTORY <button onclick="clearHistory()">clear</button></div>
-        <div id="hl"></div>
-      </div>
-      <div id="part-section">
-        <div id="ph">PARTICIPANTS (0)</div>
-        <div id="pl"><span style="color:var(--muted)">Waiting…</span></div>
-      </div>
-      <div id="room-status-panel">
-        <div class="panel-hdr">ROOM</div>
-        <div id="room-status-body">
-          <span class="rs-icon" id="rs-icon">📵</span>
-          <div>
-            <div class="rs-label" id="rs-label">Closed</div>
-            <div class="rs-sub"  id="rs-sub">No active call</div>
+    <div class="panel" id="monitoring-section">
+      <div class="panel-hdr">MONITORING</div>
+      <div id="mon-content">
+        <div class="vu-block">
+          <div class="vu-row-v">
+            <span class="vu-lbl-v">MIC</span>
+            <div class="vu-segs-v" id="mic-segs-v"></div>
+            <span class="vu-db" id="mic-db">-∞ dB</span>
+          </div>
+          <div class="vu-row-v">
+            <span class="vu-lbl-v">SPK</span>
+            <div class="vu-segs-v" id="spk-segs-v"></div>
+            <span class="vu-db" id="spk-db">-∞ dB</span>
           </div>
         </div>
+        <div id="grafico-section">
+          <div class="panel-hdr" style="border-top:1px solid var(--border);padding-top:8px;margin-top:4px">GRAFICO</div>
+          <div id="grafico-body">
+            <svg id="sparkline" viewBox="0 0 120 32" preserveAspectRatio="none" style="width:100%;height:32px"></svg>
+          </div>
+        </div>
+        <div id="room-status-section">
+          <div class="panel-hdr" style="border-top:1px solid var(--border);padding-top:8px;margin-top:4px">ROOM</div>
+          <div id="room-status-body">
+            <span class="rs-icon" id="rs-icon">📵</span>
+            <div>
+              <div class="rs-label" id="rs-label">Closed</div>
+              <div class="rs-sub"  id="rs-sub">No active call</div>
+            </div>
+            <div id="room-participants-list" style="display:none;margin-top:4px;font-size:11px;color:var(--muted)"></div>
+          </div>
+        </div>
+        <button id="btn-restart" onclick="sendCtrl('restart')">Restart</button>
       </div>
     </div>
 
-  </div>
-
-  <div id="footer">
-    <div class="vu-row">
-      <span class="vu-lbl">MIC</span>
-      <span class="vu-dev" id="mic-dev"></span>
-      <div class="vu-segs" id="mic-segs"></div>
-      <span class="vu-db" id="mic-db">-∞ dB</span>
-    </div>
-    <div class="footer-divider"></div>
-    <div class="vu-row">
-      <span class="vu-lbl">SPK</span>
-      <span class="vu-dev" id="spk-dev"></span>
-      <div class="vu-segs" id="spk-segs"></div>
-      <span class="vu-db" id="spk-db">-∞ dB</span>
-    </div>
-    <div class="footer-divider"></div>
-    <button id="btn-restart" onclick="sendCtrl('restart')">Restart</button>
   </div>
 
   <script>
-    // build segmented VU meters
-    ['mic-segs', 'spk-segs'].forEach(id => {
+    // build vertical segmented VU meters
+    ['mic-segs-v', 'spk-segs-v'].forEach(id => {
       const c = document.getElementById(id);
       for (let i = 0; i < 20; i++) {
         const s = document.createElement('span');
-        s.className = 'seg';
+        s.className = 'seg-v';
         c.appendChild(s);
       }
     });
-    // RMS needle for mic bar
-    const _micRmsLine = document.createElement('div');
-    _micRmsLine.className = 'vu-rms-line';
-    _micRmsLine.id = 'mic-rms-line';
-    document.getElementById('mic-segs').appendChild(_micRmsLine);
 
     let ws = null, reconnTimer = null, _restarting = false, _reconnDelay = 1000;
     let _lastWakeWord = '', _cfg = null;
@@ -607,6 +763,7 @@
           renderParts();
           setAudio(m.audio_connected, m.audio_conn_type);
           setStt(m.stt_state, m.stt_text, m);
+          setStatusListening(m.stt_state === 'wake' || m.stt_state === 'partial' || m.stt_state === 'transcribing');
           if (m.actions_config) { _cfg = m.actions_config; renderActions(_cfg); }
           setRoomStatus(m.room_status || 'closed', m.room_answer_timeout || 0);
           break;
@@ -631,6 +788,7 @@
         case 'audio_status':  setAudio(m.connected, m.conn_type); break;
         case 'stt': {
           const s = m.state;
+          setStatusListening(s === 'wake' || s === 'partial' || s === 'transcribing');
           if (s === 'wake' && m.word && m.word !== '(reply)') {
             _lastWakeWord = m.word;
             updateInteraction(m.word, '');
@@ -680,6 +838,7 @@
           break;
         }
         case 'room_status': setRoomStatus(m.status, m.timeout||0); break;
+        case 'system_stats': updateSparkline(m); break;
         case 'error': setSt('Error: ' + (m.msg||'unknown'), null); break;
         case 'reload': location.reload(); break;
       }
@@ -692,13 +851,21 @@
     };
     function setRoomStatus(status, timeout) {
       const cfg = _RS[status] || _RS.closed;
-      const panel = document.getElementById('room-status-panel');
-      panel.className = cfg.cls;
+      const body = document.getElementById('room-status-body');
+      body.className = status === 'in_call' ? 'rs-active' : '';
       document.getElementById('rs-icon').textContent  = cfg.icon;
       document.getElementById('rs-label').textContent = cfg.label;
       let sub = cfg.sub;
       if (status === 'waiting' && timeout > 0) sub += ' (' + timeout + 's)';
       document.getElementById('rs-sub').textContent = sub;
+      const pList = document.getElementById('room-participants-list');
+      if (status === 'in_call') {
+        const names = Object.keys(parts);
+        pList.textContent = names.length ? '● ' + names.join(', ') : '';
+        pList.style.display = names.length ? 'block' : 'none';
+      } else {
+        pList.style.display = 'none';
+      }
     }
 
     function setLlmBadgeThinking(on) {
@@ -766,7 +933,7 @@
     function updateInteraction(word, text, finish) {
       if (!word) return;
       const norm = word.toLowerCase().trim();
-      document.querySelectorAll('.awk-group').forEach(g => {
+      document.querySelectorAll('.ww-card').forEach(g => {
         const ww = g.getAttribute('data-word').toLowerCase();
         const aa = (g.getAttribute('data-aliases')||'').toLowerCase().split(',');
         if (ww === norm || aa.includes(norm)) {
@@ -787,7 +954,8 @@
     }
 
     function setSt(text, room) {
-      document.getElementById('st').textContent = text;
+      const st = document.getElementById('st');
+      st.textContent = text;
       const d = document.getElementById('cdot');
       d.className = (text.includes('Connected') || text === 'Ready') && !text.includes('Dis') ? 'sdot ok'
                   : (text.includes('Reconnect') || text.includes('Disconnect')) ? 'sdot warn'
@@ -796,16 +964,26 @@
         document.getElementById('room').textContent = room ? '│ ' + room : '';
     }
 
+    function setStatusListening(listening) {
+      const st = document.getElementById('st');
+      if (listening) {
+        st.style.color = 'var(--match)';
+      } else {
+        st.style.color = '';
+      }
+    }
+
     function renderParts() {
       const keys = Object.keys(parts);
-      document.getElementById('ph').textContent = 'PARTICIPANTS (' + keys.length + ')';
-      const pl = document.getElementById('pl');
-      if (!keys.length) { pl.innerHTML = '<span style="color:var(--muted)">Waiting…</span>'; return; }
-      pl.innerHTML = keys.map(id => {
-        const t = parts[id]||0;
-        return '<div class="pt"><span class="' + (t?'pdot':'pdot0') + '">' + (t?'●':'○') + '</span> '
-          + esc(id) + (t ? ' <span style="color:var(--muted)">'+t+'t</span>' : '') + '</div>';
-      }).join('');
+      const pList = document.getElementById('room-participants-list');
+      if (!pList) return;
+      if (keys.length) {
+        pList.textContent = '● ' + keys.join(', ');
+        pList.style.display = 'block';
+      } else {
+        pList.textContent = '';
+        pList.style.display = 'none';
+      }
     }
 
     function renderActions(cfg) {
@@ -833,12 +1011,12 @@
       }
 
       (cfg.wake_words || []).forEach(w => {
-        h += '<div class="awk-group" data-word="' + esc(w.word) + '" data-aliases="' + esc((w.aliases||[]).join(',')) + '">'
+        h += '<div class="ww-card" data-word="' + esc(w.word) + '" data-aliases="' + esc((w.aliases||[]).join(',')) + '">'
           + '<div class="awk">◉ ' + esc(w.word) + '</div>';
         if (w.aliases && w.aliases.length) h += '<div class="aalias">aka: ' + esc(w.aliases.join(', ')) + '</div>';
         h += '<div class="ainteract"></div>';
         (w.triggers || []).forEach(t => {
-          h += '<div class="atrig">› ' + esc(t.phrase) + '</div>';
+          h += '<div class="atrig trig-glow">› ' + esc(t.phrase) + '</div>';
           h += renderList(t.actions);
         });
         h += '</div>';
@@ -878,14 +1056,9 @@
     function setVU(ch, lvl) {
       const count = Math.round(Math.sqrt(Math.max(0, Math.min(1, lvl))) * 20);
       const dv    = lvl > 1e-9 ? (20 * Math.log10(Math.max(lvl, 1e-9))).toFixed(1) : null;
-      const segs  = document.getElementById(ch + '-segs').children;
+      const segs  = document.getElementById(ch + '-segs-v').children;
       for (let i = 0; i < segs.length; i++) segs[i].classList.toggle('on', i < count);
       document.getElementById(ch + '-db').textContent = dv ? dv + ' dB' : '-∞ dB';
-      const rmsLine = document.getElementById(ch + '-rms-line');
-      if (rmsLine) {
-        const barW = rmsLine.parentElement.scrollWidth;
-        rmsLine.style.left = Math.min(barW - 2, lvl * barW) + 'px';
-      }
     }
 
     function setAudio(connected, connType) {
@@ -1073,11 +1246,49 @@
       applyTheme(next);
     }
 
-    // Initialise button icon to match current theme (set by anti-flash script)
+    // ── mode toggle ──────────────────────────────────────────────────────────
+    function applyMode(mode) {
+      const body = document.body;
+      if (mode === 'dev') {
+        body.classList.add('dev-mode');
+      } else {
+        body.classList.remove('dev-mode');
+      }
+      const btn = document.getElementById('btn-mode');
+      if (btn) btn.textContent = mode === 'dev' ? '< />' : '☀';
+      localStorage.setItem('dashboard-mode', mode);
+    }
+
+    function toggleMode() {
+      const current = document.body.classList.contains('dev-mode') ? 'dev' : 'user';
+      applyMode(current === 'dev' ? 'user' : 'dev');
+    }
+
+    // ── sparkline ────────────────────────────────────────────────────────────
+    let _sparkData = [];
+    function updateSparkline(m) {
+      const load1 = m.load1 || 0;
+      _sparkData.push(load1);
+      if (_sparkData.length > 60) _sparkData.shift();
+      const svg = document.getElementById('sparkline');
+      if (!svg) return;
+      const w = 120, h = 32;
+      const max = Math.max(..._sparkData, 0.1);
+      const bars = _sparkData.map((v, i) => {
+        const x = (i / (_sparkData.length - 1 || 1)) * w;
+        const bh = (v / max) * (h - 2);
+        return '<rect class="spark-bar" x="' + (x - 1) + '" y="' + (h - 2 - bh) + '" width="2" height="' + bh + '"/>';
+      }).join('');
+      svg.innerHTML = bars;
+    }
+
+    // ── init ──────────────────────────────────────────────────────────────────
     (function() {
       const theme = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
       const btn = document.getElementById('btn-theme');
       if (btn) btn.textContent = theme === 'light' ? '🌙' : '☀';
+      const savedMode = localStorage.getItem('dashboard-mode');
+      if (savedMode) applyMode(savedMode);
     })();
 
     connect();
