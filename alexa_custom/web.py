@@ -74,6 +74,8 @@ class WebServer:
             "stt_text": "",
             "actions_config": {},
             "llm_state": "idle",
+            "room_status": "closed",
+            "room_answer_timeout": 0,
         }
 
     # ── thread-safe enqueue ───────────────────────────────────────────────────
@@ -102,9 +104,23 @@ class WebServer:
     # ── callbacks (same signatures as tui.py) ────────────────────────────────
 
     def on_event(self, event: str, data: dict) -> None:
+        if event == "room_status":
+            self._state["room_status"] = data.get("status", "closed")
+            if data.get("status") == "waiting":
+                self._state["room_answer_timeout"] = data.get("timeout", 0)
+            self._enqueue(
+                "room_status",
+                {
+                    "status": self._state["room_status"],
+                    "timeout": self._state["room_answer_timeout"],
+                },
+            )
+            return
         if event == "connected":
             self._state["status"] = "Connected"
             self._state["room"] = data.get("room", "")
+            self._state["room_status"] = "in_call"
+            self._enqueue("room_status", {"status": "in_call", "timeout": 0})
         elif event == "starting":
             self._state["status"] = "Starting…"
         elif event == "idle":
@@ -113,6 +129,7 @@ class WebServer:
             self._state["status"] = "Connecting…"
         elif event == "disconnected":
             self._state["status"] = "Disconnected — reconnecting…"
+            self._state["room_status"] = "closed"
         elif event == "reconnecting":
             self._state["status"] = "Reconnecting…"
         elif event == "empty_room_timeout":
@@ -221,6 +238,8 @@ class WebServer:
                     "stt_text": self._state["stt_text"],
                     "actions_config": self._state["actions_config"],
                     "llm_state": self._state["llm_state"],
+                    "room_status": self._state["room_status"],
+                    "room_answer_timeout": self._state["room_answer_timeout"],
                 }
             )
         )

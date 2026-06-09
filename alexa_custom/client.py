@@ -321,14 +321,19 @@ class LiveKitSessionManager:
         pw_device: int,
         on_event: Callable[[str, dict], None] | None = None,
         empty_room_timeout: int = 0,
+        wait_for_participant: bool = True,
+        answer_timeout: float = 60,
     ):
         self.mic = mic
         self.devices = devices
         self.pw_device = pw_device
         self.on_event = on_event
         self._empty_room_timeout = empty_room_timeout
+        self._wait_for_participant = wait_for_participant
+        self._answer_timeout = answer_timeout
         self.room = Room()
         self.disconnected = asyncio.Event()
+        self._participant_arrived = asyncio.Event()
         self.call_connected = False
         self.subscribed_tracks: dict[str, AudioStream] = {}
         self.player_tracks: set[str] = set()
@@ -374,6 +379,7 @@ class LiveKitSessionManager:
         @self.room.on("participant_connected")
         def on_participant_connected(participant):
             logger.info(f"Participant joined: {participant.identity}")
+            self._participant_arrived.set()
             self.emit("participant_joined", {"identity": participant.identity})
 
         @self.room.on("participant_disconnected")
@@ -466,10 +472,35 @@ class LiveKitSessionManager:
                 {"room": room_name, "identity": self.room.local_participant.identity},
             )
             self.call_connected = True
-            asyncio.create_task(asyncio.to_thread(play_call_start))
 
             for p in self.room.remote_participants.values():
+                self._participant_arrived.set()
                 self.emit("participant_joined", {"identity": p.identity})
+
+            if self._wait_for_participant and not self.room.remote_participants:
+                logger.info(
+                    f"Waiting for a participant to join (timeout {self._answer_timeout}s)…"
+                )
+                self.emit("waiting_for_participant", {"timeout": self._answer_timeout})
+                done, pending = await asyncio.wait(
+                    [
+                        asyncio.create_task(self._participant_arrived.wait()),
+                        asyncio.create_task(stop_event.wait()),
+                    ],
+                    timeout=self._answer_timeout,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for t in pending:
+                    t.cancel()
+                if stop_event.is_set() or not done:
+                    if not done:
+                        logger.info(
+                            "Answer timeout — no participant joined, disconnecting"
+                        )
+                        self.emit("answer_timeout", {})
+                    return
+
+            asyncio.create_task(asyncio.to_thread(play_call_start))
 
             track = LocalAudioTrack.create_audio_track("microphone", self.mic.source)
             opts = TrackPublishOptions()
@@ -518,6 +549,46 @@ class LiveKitSessionManager:
         logger.debug("Session cleanup complete")
 
 
+async def _poll_for_participant(
+    room_name: str,
+    timeout: float,
+    stop_event: asyncio.Event,
+    poll_interval: float = 2.0,
+) -> bool:
+    """Poll the LiveKit REST API until a remote participant appears or timeout/stop fires.
+
+    Returns True if a participant was found, False on timeout or stop.
+    """
+    from livekit import api as lkapi
+    from livekit.api import ListParticipantsRequest
+
+    deadline = asyncio.get_event_loop().time() + timeout
+    async with lkapi.LiveKitAPI() as svc:
+        while not stop_event.is_set():
+            remaining = deadline - asyncio.get_event_loop().time()
+            if remaining <= 0:
+                return False
+            try:
+                resp = await svc.room.list_participants(
+                    ListParticipantsRequest(room=room_name)
+                )
+                others = [
+                    p for p in resp.participants if p.identity != "headless-participant"
+                ]
+                if others:
+                    return True
+            except Exception as e:
+                logger.debug("Poll participants error: %s", e)
+            await asyncio.wait(
+                [
+                    asyncio.create_task(stop_event.wait()),
+                    asyncio.create_task(asyncio.sleep(min(poll_interval, remaining))),
+                ],
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+    return False
+
+
 async def run_session(
     mic,
     devices: MediaDevices,
@@ -525,10 +596,18 @@ async def run_session(
     stop_event: asyncio.Event,
     on_event: Callable[[str, dict], None] | None = None,
     empty_room_timeout: int = 0,
+    wait_for_participant: bool = True,
+    answer_timeout: float = 60,
 ):
     """Connect to one LiveKit session; return when disconnected or stop_event fires."""
     manager = LiveKitSessionManager(
-        mic, devices, pw_device, on_event, empty_room_timeout
+        mic,
+        devices,
+        pw_device,
+        on_event,
+        empty_room_timeout,
+        wait_for_participant,
+        answer_timeout,
     )
     await manager.run(stop_event)
 
@@ -715,10 +794,15 @@ async def _async_main(
                 if stop_event.is_set():
                     break
 
-            _wrapped_on_event("reconnecting" if _ever_connected else "connecting", {})
             connected_this_session = False
             _empty_room_timeout = (
                 actions_config.system.empty_room_timeout if actions_config else 0
+            )
+            _wait_for_participant = (
+                actions_config.system.wait_for_participant if actions_config else True
+            )
+            _answer_timeout = (
+                actions_config.system.answer_timeout if actions_config else 60.0
             )
 
             def _on_event_interceptor(event: str, data: dict):
@@ -727,6 +811,31 @@ async def _async_main(
                     connected_this_session = True
                     _ever_connected = True
                 _wrapped_on_event(event, data)
+
+            if _wait_for_participant:
+                room_name = require_env("LIVEKIT_ROOM")
+                logger.info(
+                    f"Waiting for a participant in room '{room_name}' "
+                    f"(polling, timeout {_answer_timeout}s)…"
+                )
+                _wrapped_on_event(
+                    "room_status",
+                    {"status": "waiting", "timeout": _answer_timeout},
+                )
+                found = await _poll_for_participant(
+                    room_name, _answer_timeout, stop_event
+                )
+                if not found:
+                    logger.info("Answer timeout — no participant appeared, closing")
+                    _wrapped_on_event("room_status", {"status": "closed"})
+                    _wrapped_on_event("answer_timeout", {})
+                    if connect_trigger is not None:
+                        continue
+                    break
+            else:
+                _wrapped_on_event(
+                    "reconnecting" if _ever_connected else "connecting", {}
+                )
 
             if pw_device is not None:
                 logger.info(
@@ -740,6 +849,7 @@ async def _async_main(
                 mic = await asyncio.wait_for(_open_mic_async(), timeout=15.0)
             except Exception as e:
                 logger.error(f"Failed to open microphone: {e} — skipping session")
+                _wrapped_on_event("room_status", {"status": "closed"})
                 if connect_trigger is not None:
                     continue
                 await asyncio.sleep(reconnect_delay)
@@ -753,11 +863,14 @@ async def _async_main(
                     stop_event,
                     on_event=_on_event_interceptor,
                     empty_room_timeout=_empty_room_timeout,
+                    wait_for_participant=False,
+                    answer_timeout=_answer_timeout,
                 )
             except Exception as e:
                 logger.error(f"Session error: {e}")
             finally:
                 await mic.aclose()
+                _wrapped_on_event("room_status", {"status": "closed"})
 
             if livekit_connected_flag is not None:
                 livekit_connected_flag.clear()

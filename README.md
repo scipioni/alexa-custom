@@ -96,6 +96,10 @@ audio:
 tts:
   backend: piper
   voice: it_IT-paola-medium
+
+system:
+  wait_for_participant: true  # poll room before joining; connect only when a caller appears
+  answer_timeout: 60          # seconds to poll before returning to idle
 ```
 
 ### conf/actions/
@@ -126,11 +130,12 @@ See `conf.example/config.yaml` and `conf.example/secrets.yaml` for the full refe
 ## Key Features
 
 - **Two-stage STT**: Lightweight wake-word detection (stage 1) → full command recognition (stage 2). Backends configurable independently. Free-vocabulary mode gives Vosk a genuine reject path so unrelated speech is not forced onto a wake phrase. Inline command pass-through: if the command follows the wake word in a single breath, stage-2 dispatch fires immediately without a second capture round-trip.
+- **Polite LiveKit join**: With `wait_for_participant: true` (default), saying the join trigger polls the LiveKit room via the REST API and only connects when a remote participant is actually present — STT stays active throughout. Disconnects cleanly if nobody joins within `answer_timeout` seconds.
 - **Hot-reload**: Edit `conf/config.yaml`, any action file, or `dashboard.html` while the daemon is running — config changes apply within ~2 seconds, HTML changes reload the browser within ~1 second.
 - **Multi-file actions**: Drop `.yaml` files into `conf/actions/` for modular command sets; `system.yaml` always loads first.
 - **LLM learning**: Say "impara nuovo comando" to teach the assistant a new trigger via voice dialogue (stored in `conf/actions/learned.yaml`).
 - **Bidirectional MQTT**: Home Assistant Discovery support. Forward voice commands to HA and trigger local actions via MQTT.
-- **Web Dashboard**: Real-time browser UI — VU meters with RMS needle, STT status with wake-word badge, live logs, restart button.
+- **Web Dashboard**: Real-time browser UI — VU meters with RMS needle, STT status with wake-word badge, room status panel (closed / waiting / in call), live logs, restart button.
 - **PipeWire native**: Direct integration without PortAudio shims.
 
 ---

@@ -346,6 +346,24 @@
     .pdot  { color: var(--match); }
     .pdot0 { color: var(--muted); }
 
+    /* ── room status panel ──────────────────────────────────────────────── */
+    #room-status-panel {
+      flex-shrink: 0;
+      border-top: 1px solid var(--border);
+    }
+    #room-status-panel .panel-hdr { border-bottom: none; padding-bottom: 0; }
+    #room-status-body {
+      padding: 8px 14px 12px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .rs-icon { font-size: 22px; width: 30px; text-align: center; flex-shrink: 0; }
+    .rs-label { font-size: 13px; font-weight: 600; }
+    .rs-sub   { font-size: 11px; color: var(--muted); margin-top: 2px; }
+    #room-status-panel.rs-waiting .rs-icon { animation: rs-pulse 1.2s ease-in-out infinite; }
+    @keyframes rs-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+
     /* ── footer: VU meters + controls ──────────────────────────────────── */
     #footer {
       margin: 8px 12px 10px;
@@ -493,6 +511,16 @@
         <div id="ph">PARTICIPANTS (0)</div>
         <div id="pl"><span style="color:var(--muted)">Waiting…</span></div>
       </div>
+      <div id="room-status-panel">
+        <div class="panel-hdr">ROOM</div>
+        <div id="room-status-body">
+          <span class="rs-icon" id="rs-icon">📵</span>
+          <div>
+            <div class="rs-label" id="rs-label">Closed</div>
+            <div class="rs-sub"  id="rs-sub">No active call</div>
+          </div>
+        </div>
+      </div>
     </div>
 
   </div>
@@ -580,13 +608,14 @@
           setAudio(m.audio_connected, m.audio_conn_type);
           setStt(m.stt_state, m.stt_text, m);
           if (m.actions_config) { _cfg = m.actions_config; renderActions(_cfg); }
+          setRoomStatus(m.room_status || 'closed', m.room_answer_timeout || 0);
           break;
         }
         case 'starting':           setSt('Starting…', null); break;
         case 'idle':               setSt('Ready', null); break;
         case 'connecting':         setSt('Connecting…', null); break;
-        case 'connected':          setSt('Connected', m.room); break;
-        case 'disconnected':       setSt('Disconnected — reconnecting…', null); break;
+        case 'connected':          setSt('Connected', m.room); setRoomStatus('in_call', 0); break;
+        case 'disconnected':       setSt('Disconnected — reconnecting…', null); setRoomStatus('closed', 0); break;
         case 'reconnecting':       setSt('Reconnecting…', null); break;
         case 'empty_room_timeout': setSt('Disconnected — empty room', null); break;
         case 'participant_joined':
@@ -650,9 +679,26 @@
           setSt('Restarting…', null);
           break;
         }
+        case 'room_status': setRoomStatus(m.status, m.timeout||0); break;
         case 'error': setSt('Error: ' + (m.msg||'unknown'), null); break;
         case 'reload': location.reload(); break;
       }
+    }
+
+    const _RS = {
+      closed:  { icon: '📵', label: 'Closed',   sub: 'No active call',        cls: '' },
+      waiting: { icon: '📞', label: 'Waiting…', sub: 'Polling for caller',     cls: 'rs-waiting' },
+      in_call: { icon: '🟢', label: 'In Call',  sub: 'Call active',            cls: '' },
+    };
+    function setRoomStatus(status, timeout) {
+      const cfg = _RS[status] || _RS.closed;
+      const panel = document.getElementById('room-status-panel');
+      panel.className = cfg.cls;
+      document.getElementById('rs-icon').textContent  = cfg.icon;
+      document.getElementById('rs-label').textContent = cfg.label;
+      let sub = cfg.sub;
+      if (status === 'waiting' && timeout > 0) sub += ' (' + timeout + 's)';
+      document.getElementById('rs-sub').textContent = sub;
     }
 
     function setLlmBadgeThinking(on) {
