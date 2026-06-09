@@ -129,11 +129,32 @@
       transition: border-color 0.4s;
     }
     .hero-icon { font-size: 20px; flex-shrink: 0; }
-    .hero-text { font-size: 15px; flex: 1; }
-    .hero-wake    { color: var(--wake); font-weight: 600; margin-right: 6px; }
-    .hero-trigger { color: var(--match); font-weight: 600; font-size: 14px; margin-left: 6px; }
+    .hero-text { font-size: 15px; flex: 1; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+    .hero-trigger { color: var(--match); font-weight: 600; font-size: 14px; }
     .hero-muted   { color: var(--muted); }
     .cursor { display: inline-block; animation: blink 1s step-end infinite; }
+
+    /* wake-word pill badge */
+    .wake-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      background: rgba(251,146,60,0.15);
+      border: 1px solid var(--wake);
+      border-radius: 6px;
+      padding: 2px 9px 2px 6px;
+      color: var(--wake);
+      font-weight: 700;
+      font-size: 15px;
+      flex-shrink: 0;
+      animation: wake-pop 0.18s ease-out;
+    }
+    .wake-chip-icon { font-size: 11px; opacity: 0.8; }
+    @keyframes wake-pop {
+      from { transform: scale(0.75); opacity: 0; }
+      to   { transform: scale(1);    opacity: 1; }
+    }
+    .hero-s2 { color: var(--transcribing); font-size: 15px; }
 
     /* thinking dots row inside hero */
     .hero-think-dots {
@@ -352,6 +373,8 @@
     .seg:nth-child(-n+14)                        { background: var(--match); }
     .seg:nth-child(n+15):nth-child(-n+17)        { background: var(--amber); }
     .seg:nth-child(n+18)                         { background: var(--nomatch); }
+    .vu-rms { width: 48px; height: 5px; border-radius: 3px; background: var(--border); flex-shrink: 0; overflow: hidden; }
+    .vu-rms-fill { height: 100%; border-radius: 3px; background: var(--match); width: 0%; transition: width 0.08s linear; }
     .vu-db { width: 56px; text-align: right; color: var(--muted); font-size: 11px; flex-shrink: 0; }
     .footer-divider { width: 1px; height: 28px; background: var(--border); flex-shrink: 0; }
     #btn-restart {
@@ -483,6 +506,7 @@
       <span class="vu-lbl">MIC</span>
       <span class="vu-dev" id="mic-dev"></span>
       <div class="vu-segs" id="mic-segs"></div>
+      <div class="vu-rms" id="mic-rms"><div class="vu-rms-fill" id="mic-rms-fill"></div></div>
       <span class="vu-db" id="mic-db">-∞ dB</span>
     </div>
     <div class="footer-divider"></div>
@@ -816,6 +840,8 @@
       const segs  = document.getElementById(ch + '-segs').children;
       for (let i = 0; i < segs.length; i++) segs[i].classList.toggle('on', i < count);
       document.getElementById(ch + '-db').textContent = dv ? dv + ' dB' : '-∞ dB';
+      const rmsFill = document.getElementById(ch + '-rms-fill');
+      if (rmsFill) rmsFill.style.width = Math.min(100, lvl * 100) + '%';
     }
 
     function setAudio(connected, connType) {
@@ -824,39 +850,63 @@
       document.getElementById('spk-dev').textContent = lbl;
     }
 
+    let _lastWake = '';
+
+    function _wakeChip(word) {
+      return '<span class="wake-chip"><span class="wake-chip-icon">◉</span>' + esc(word) + '</span>';
+    }
+
     function setStt(state, text, m) {
       const h = document.getElementById('hero');
       h.classList.remove('llm-thinking');
       switch (state) {
         case 'listening':
+          _lastWake = '';
           h.innerHTML = '<span class="hero-icon hero-muted">○</span>'
             + '<span class="hero-text hero-muted">wake: <em>' + esc(text) + '</em></span>';
           break;
         case 'transcribing':
           h.innerHTML = '<span class="hero-icon" style="color:var(--muted)">◌</span>'
-            + '<span class="hero-text" style="color:var(--transcribing)">' + esc(text) + ' …</span>';
+            + '<span class="hero-text">'
+            + '<span class="hero-muted" style="font-size:12px">s1</span>'
+            + '<span style="color:var(--transcribing)">' + esc(text) + '</span>'
+            + '<span class="hero-muted"> …</span>'
+            + '</span>';
           break;
         case 'wake':
+          _lastWake = text;
           h.innerHTML = '<span class="hero-icon" style="color:var(--wake)">◉</span>'
-            + '<span class="hero-text"><span class="hero-wake">"' + esc(text) + '"</span>'
-            + '<span class="hero-muted">listening…</span></span>';
+            + '<span class="hero-text">'
+            + _wakeChip(text)
+            + '<span class="hero-muted">listening…</span>'
+            + '</span>';
           break;
         case 'partial':
           h.innerHTML = '<span class="hero-icon" style="color:var(--wake)">◉</span>'
-            + '<span class="hero-text"><span class="hero-wake">' + esc(text) + '</span>'
-            + '<span class="cursor">▋</span></span>';
+            + '<span class="hero-text">'
+            + (_lastWake ? _wakeChip(_lastWake) : '')
+            + '<span class="hero-s2">' + esc(text) + '</span>'
+            + '<span class="cursor">▋</span>'
+            + '</span>';
           break;
-        case 'matched':
+        case 'matched': {
+          const transcript = m.transcript || text;
           h.innerHTML = '<span class="hero-icon" style="color:var(--match)">✓</span>'
-            + '<span class="hero-text"><span style="color:var(--match)">"' + esc(m.transcript||text) + '"</span>'
-            + '<span class="hero-muted"> → </span>'
-            + '<span class="hero-trigger">' + esc(m.trigger||'') + '</span></span>';
+            + '<span class="hero-text">'
+            + (_lastWake ? _wakeChip(_lastWake) : '')
+            + (transcript ? '<span style="color:var(--match)">' + esc(transcript) + '</span>' : '')
+            + (m.trigger ? '<span class="hero-muted">→</span><span class="hero-trigger">' + esc(m.trigger) + '</span>' : '')
+            + '</span>';
           heroAnim('anim-match', 700);
           break;
+        }
         case 'nomatch':
           h.innerHTML = '<span class="hero-icon" style="color:var(--nomatch)">✗</span>'
-            + '<span class="hero-text" style="color:var(--nomatch)">'
-            + (text ? '"' + esc(text) + '" ' : '') + 'no match</span>';
+            + '<span class="hero-text">'
+            + (_lastWake ? _wakeChip(_lastWake) : '')
+            + (text ? '<span style="color:var(--nomatch)">' + esc(text) + '</span>' : '')
+            + '<span style="color:var(--nomatch);margin-left:4px">no match</span>'
+            + '</span>';
           heroAnim('anim-nomatch', 500);
           break;
         case 'gated':
