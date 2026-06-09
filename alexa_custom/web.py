@@ -305,6 +305,18 @@ class WebServer:
             await asyncio.sleep(30)
             self._clients = {ws for ws in self._clients if not ws.closed}
 
+    @staticmethod
+    def _ram_free_pct() -> float:
+        try:
+            info: dict[str, int] = {}
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    k, v = line.split(":")
+                    info[k.strip()] = int(v.split()[0])
+            return info["MemAvailable"] / info["MemTotal"] * 100
+        except Exception:
+            return 0.0
+
     async def _system_stats_loop(self) -> None:
         cpu_count = os.cpu_count() or 1
         while True:
@@ -319,6 +331,7 @@ class WebServer:
                 "load5": load5,
                 "load15": load15,
                 "cpu_count": cpu_count,
+                "ram_free_pct": self._ram_free_pct(),
             })
 
     async def _asset_watcher_loop(
