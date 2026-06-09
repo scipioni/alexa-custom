@@ -442,7 +442,6 @@
     /* reply hit */
     .atrig.trig-reply-hit > .trig-row {
       border-radius: 5px;
-      font-weight: 600;
       animation: trig-reply-flash 1s ease-out forwards;
     }
     .atrig.trig-reply-hit > .trig-row .trig-reply-phrase { color: var(--match); }
@@ -461,8 +460,9 @@
       padding: 2px 7px; background: rgba(96,165,250,0.07);
       border-radius: 4px; min-height: 1.3em;
       border-left: 2px solid rgba(96,165,250,0.3);
+      transition: opacity 0.2s;
     }
-    .ainteract:empty { display: none; }
+    .ainteract:empty { visibility: hidden; }
 
     /* AI fallback section */
     .llm-section {
