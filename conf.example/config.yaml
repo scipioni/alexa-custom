@@ -2,6 +2,7 @@
 #
 # Copy to conf/config.yaml and edit as needed.
 # Credentials (LiveKit, Telegram, LLM, MQTT passwords) go in conf/secrets.yaml.
+# Per-user additions (extra wake words) go in conf/user.yaml (see user.yaml.example).
 # This file is hot-reloaded every ~system.config_poll_interval seconds.
 
 # ---------------------------------------------------------------------------
