@@ -305,6 +305,22 @@ class WebServer:
             await asyncio.sleep(30)
             self._clients = {ws for ws in self._clients if not ws.closed}
 
+    async def _system_stats_loop(self) -> None:
+        cpu_count = os.cpu_count() or 1
+        while True:
+            await asyncio.sleep(2)
+            try:
+                load1, load5, load15 = os.getloadavg()
+            except OSError:
+                load1 = load5 = load15 = 0.0
+            await self._broadcast({
+                "type": "system_stats",
+                "load1": load1,
+                "load5": load5,
+                "load15": load15,
+                "cpu_count": cpu_count,
+            })
+
     async def _asset_watcher_loop(
         self, watch_paths: list[Path], interval: float = 1.0
     ) -> None:
@@ -375,6 +391,7 @@ class WebServer:
 
     def _install_log_handler(self) -> None:
         root = logging.getLogger()
+        root.setLevel(logging.DEBUG)
         self._handler = _WebLogHandler(self)
         self._handler.setLevel(logging.DEBUG)
         root.addHandler(self._handler)
@@ -428,14 +445,22 @@ class WebServer:
                 "word": g.word,
                 "aliases": g.aliases,
                 "triggers": [
-                    {"phrase": t.phrase, "actions": summarize(t.actions)}
+                    {
+                        "phrase": t.phrase,
+                        "aliases": t.aliases,
+                        "actions": summarize(t.actions),
+                    }
                     for t in g.triggers
                 ],
             }
             ww.append(entry)
 
         gt = [
-            {"phrase": t.phrase, "actions": summarize(t.actions)}
+            {
+                "phrase": t.phrase,
+                "aliases": t.aliases,
+                "actions": summarize(t.actions),
+            }
             for t in config.triggers
         ]
 
@@ -523,6 +548,7 @@ class WebServer:
         broadcast_task = asyncio.create_task(self._broadcast_loop())
         vu_task = asyncio.create_task(self._vu_flush_loop())
         prune_task = asyncio.create_task(self._prune_clients_loop())
+        stats_task = asyncio.create_task(self._system_stats_loop())
         watchdog_task: asyncio.Task | None = None
 
         all_watch = list(watch_paths or []) + [_DASHBOARD_PATH]
@@ -592,6 +618,7 @@ class WebServer:
             broadcast_task.cancel()
             vu_task.cancel()
             prune_task.cancel()
+            stats_task.cancel()
             if watchdog_task is not None:
                 watchdog_task.cancel()
             await runner.cleanup()

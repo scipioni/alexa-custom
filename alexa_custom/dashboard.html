@@ -29,6 +29,10 @@
       --bar-bg:      rgba(0,0,0,0.3);
       --transcribing: #94a3b8;
       --reply-trig:   #86efac;
+      --electric-yellow: #facc15;
+      --glow-green: #4ade80;
+      --pill-red: #f87171;
+      --glow-shadow: drop-shadow(0 0 8px rgba(250,204,21,0.5));
     }
 
     [data-theme="light"] {
@@ -50,7 +54,7 @@
       font-size: 13px;
       height: 100vh;
       display: grid;
-      grid-template-rows: auto auto 1fr auto;
+      grid-template-rows: auto 1fr;
       overflow: hidden;
     }
 
@@ -71,25 +75,12 @@
     }
     .sdot.ok   { background: var(--match); box-shadow: 0 0 6px var(--match); }
     .sdot.warn { background: var(--wake); }
-    #st   { flex: 1; font-size: 12px; }
+    #st   { font-size: 12px; }
     #room { color: var(--muted); font-size: 12px; }
-    #ws-ind { font-size: 11px; color: var(--muted); }
-    #ws-ind.ok { color: var(--match); }
-    #btn-theme {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      color: var(--text);
-      font-size: 13px; cursor: pointer;
-      padding: 2px 7px; border-radius: 5px;
-      line-height: 1.6; transition: border-color 0.2s, color 0.2s;
-      flex-shrink: 0;
-    }
-    #btn-theme:hover { border-color: var(--info); color: var(--info); }
 
     /* LLM badge */
     #llm-badge {
       display: none;
-      margin-left: auto;
       padding: 2px 9px;
       border-radius: 10px;
       font-size: 10px;
@@ -116,7 +107,6 @@
 
     /* ── hero STT card ──────────────────────────────────────────────────── */
     #hero {
-      margin: 10px 12px 0;
       padding: 14px 18px;
       background: var(--surface);
       border: 1px solid var(--border);
@@ -192,6 +182,51 @@
       gap: 8px;
       min-height: 0;
       margin: 8px 12px 0;
+      flex: 1;
+    }
+
+    .center-col {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .center-col > #hero {
+      flex-shrink: 0;
+    }
+
+    .ww-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      flex-shrink: 0;
+    }
+
+    .center-col > .ww-panel {
+      flex-shrink: 0;
+    }
+
+    .ww-panel-content {
+      overflow-y: auto;
+      padding: 8px 12px;
+      flex: 1;
+      min-height: 0;
+    }
+
+    #ww-content-globali {
+      column-count: 2;
+      column-gap: 16px;
+    }
+
+    #ww-content-globali .atrig {
+      break-inside: avoid;
+    }
+
+    .center-col > #log-panel {
+      flex: 1;
+      min-height: 0;
     }
 
     .panel {
@@ -229,21 +264,9 @@
     }
     .panel-hdr button:hover { border-color: var(--info); color: var(--text); }
 
-    /* ── wake words panel (left) ────────────────────────────────────────── */
-    #al { flex: 1; overflow-y: auto; padding: 8px 12px; }
-    .awk-group {
-      margin-bottom: 10px;
-      border-radius: 8px;
-      padding: 6px 8px;
-      transition: background 0.2s, box-shadow 0.2s;
-    }
-    .awk-group.ww-active {
-      background: rgba(251,146,60,0.08);
-      box-shadow: inset 2px 0 0 var(--wake);
-      animation: glow-pulse 1.2s ease-out;
-    }
-    .awk { color: var(--wake); font-weight: 700; font-size: 12px; }
+    /* ── wake words panels ──────────────────────────────────────────────── */
     .aalias { color: var(--muted); font-size: 11px; }
+    .aalias-inline { color: var(--muted); font-size: 11px; font-weight: 400; }
 .atrig { margin-top: 3px; color: var(--text); font-size: 12px; transition: opacity 0.2s; }
     .atrig.trig-hit {
       color: var(--match);
@@ -364,45 +387,164 @@
     #room-status-panel.rs-waiting .rs-icon { animation: rs-pulse 1.2s ease-in-out infinite; }
     @keyframes rs-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
-    /* ── footer: VU meters + controls ──────────────────────────────────── */
-    #footer {
-      margin: 8px 12px 10px;
-      padding: 10px 16px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      backdrop-filter: blur(12px);
+    /* ── right column ────────────────────────────────────────────────────── */
+    .right-col {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      min-height: 0;
+    }
+    .right-col > .panel {
+      flex-shrink: 0;
+    }
+
+    /* ── monitoring panel ────────────────────────────────────────────────── */
+    #monitoring-section {
+      flex: 1;
+    }
+    #mon-content {
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      flex: 1;
+    }
+    #vu-bottom { margin-top: auto; }
+
+    /* ── CPU bar in monitoring ──────────────────────────────────────────── */
+    #cpu-bar {
       display: flex;
       align-items: center;
-      gap: 20px;
+      gap: 6px;
     }
-    .vu-row { display: flex; align-items: center; gap: 8px; flex: 1; }
-    .vu-lbl { width: 30px; color: var(--muted); font-weight: 700; font-size: 11px; flex-shrink: 0; }
-    .vu-dev { width: 70px; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 0; }
-    .vu-segs { display: flex; gap: 2px; align-items: center; position: relative; }
-    .seg {
-      width: 6px; height: 12px; border-radius: 2px;
-      opacity: 0.12; transition: opacity 0.06s linear;
+    #sparkline {
+      display: block;
+      flex: 1;
+      height: 16px;
+      border-radius: 3px;
     }
-    .seg.on { opacity: 1; }
-    .seg:nth-child(-n+14)                        { background: var(--match); }
-    .seg:nth-child(n+15):nth-child(-n+17)        { background: var(--amber); }
-    .seg:nth-child(n+18)                         { background: var(--nomatch); }
-    .vu-rms-line { position: absolute; top: -2px; bottom: -2px; width: 2px; border-radius: 1px; background: var(--nomatch); pointer-events: none; left: 0; transition: left 0.08s linear; }
-    .vu-db { width: 56px; text-align: right; color: var(--muted); font-size: 11px; flex-shrink: 0; }
-    .footer-divider { width: 1px; height: 28px; background: var(--border); flex-shrink: 0; }
-    #btn-restart {
+    #cpu-load {
+      font-size: 11px;
+      font-weight: 700;
+      font-variant-numeric: tabular-nums;
+      white-space: nowrap;
+      flex-shrink: 0;
+      min-width: 3em;
+      text-align: right;
+    }
+
+    /* ── toggles panel ──────────────────────────────────────────────────── */
+    #toggles-panel { flex: 0 0 auto; }
+    #toggles-body {
+      padding: 8px;
+      display: flex;
+      flex-direction: row;
+      justify-content: center;
+      gap: 8px;
+    }
+    #toggles-body button {
       background: var(--surface);
       border: 1px solid var(--border);
       color: var(--text);
-      padding: 5px 14px;
+      font-size: 14px;
       cursor: pointer;
-      font-family: inherit; font-size: 12px;
-      border-radius: 6px;
+      padding: 4px 10px;
+      border-radius: 5px;
+      line-height: 1.6;
       transition: border-color 0.2s, color 0.2s;
     }
-    #btn-restart:hover    { border-color: var(--nomatch); color: var(--nomatch); }
+    #toggles-body button:hover { border-color: var(--info); color: var(--info); }
+
+    /* ── restart card ───────────────────────────────────────────────────── */
+    #restart-card {
+      flex-shrink: 0;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      backdrop-filter: blur(12px);
+    }
+    #btn-restart {
+      display: block;
+      width: 100%;
+      background: transparent;
+      border: none;
+      color: var(--pill-red);
+      padding: 10px 14px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      transition: background 0.2s, color 0.2s;
+    }
+    #btn-restart:hover { background: rgba(248,113,113,0.15); color: #fca5a5; }
     #btn-restart:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* ── AI panel ───────────────────────────────────────────────────────── */
+    #ai-panel { flex-shrink: 0; }
+    #ws-ind { font-size: 11px; color: var(--muted); margin-left: auto; }
+    #ws-ind.ok { color: var(--match); }
+
+    /* vertical VU meters */
+    .vu-block {
+      display: flex;
+      gap: 16px;
+      justify-content: center;
+    }
+    .vu-row-v {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 4px;
+    }
+    .vu-lbl-v {
+      color: var(--muted);
+      font-weight: 700;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .vu-segs-v {
+      display: flex;
+      flex-direction: column-reverse;
+      gap: 4px;
+      height: 160px;
+      width: 32px;
+    }
+    .seg-v {
+      width: 100%;
+      height: 8px;
+      border-radius: 2px;
+      opacity: 0.12;
+      transition: opacity 0.06s linear;
+    }
+    .seg-v.on { opacity: 1; }
+    .seg-v:nth-child(-n+14)                        { background: var(--match); }
+    .seg-v:nth-child(n+15):nth-child(-n+17)        { background: var(--amber); }
+    .seg-v:nth-child(n+18)                         { background: var(--nomatch); }
+    .vu-db { color: var(--muted); font-size: 10px; }
+
+    /* ── room panel ──────────────────────────────────────────────────────── */
+    #room-body {
+      padding: 10px 14px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    #room-status-body {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    #room-status-body.rs-active .rs-icon { animation: rs-pulse 1.2s ease-in-out infinite; }
+    .rs-icon { font-size: 22px; width: 28px; text-align: center; flex-shrink: 0; }
+    .rs-label { font-size: 12px; font-weight: 600; }
+    .rs-sub   { font-size: 10px; color: var(--muted); }
+    #room-participants-list { font-size: 10px; color: var(--muted); }
+
+    @keyframes rs-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
 
     /* ── animations ─────────────────────────────────────────────────────── */
     @keyframes glow-pulse {
@@ -463,61 +605,163 @@
     #hero.llm-thinking  { animation: llm-think-glow 1.6s ease-in-out infinite; border-color: var(--llm-border); }
     #hero.anim-llm-reply { animation: llm-reply-flash 1.2s ease-out forwards; }
 
+    /* ── log panel — dev only ──────────────────────────────────────────────── */
+    body.dev-mode #log-panel { display: flex; }
+    #log-panel { display: none; }
+    body:not(.dev-mode) .center-col { justify-content: center; }
+
+    /* ── glow and grow animations ─────────────────────────────────────────── */
+    .ww-card {
+      border: 1px solid transparent;
+      border-radius: 10px;
+      padding: 10px 12px;
+      margin-bottom: 8px;
+      background: var(--surface);
+      transition: background 0.25s, box-shadow 0.25s;
+    }
+    .ww-card.ww-active {
+      background: rgba(251,146,60,0.08);
+      box-shadow: inset 2px 0 0 var(--wake);
+      animation: glow-pulse 1.2s ease-out;
+    }
+    @keyframes glow-pulse {
+      0%   { box-shadow: inset 2px 0 0 var(--wake), 0 0 0 0   rgba(251,146,60,0.5); }
+      40%  { box-shadow: inset 2px 0 0 var(--wake), 0 0 0 8px rgba(251,146,60,0.15); }
+      100% { box-shadow: inset 2px 0 0 var(--wake), 0 0 0 0   rgba(251,146,60,0); }
+    }
+
     /* ── scrollbars ─────────────────────────────────────────────────────── */
-    ::-webkit-scrollbar { width: 4px; }
+    ::-webkit-scrollbar { width: 8px; }
     ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 4px; border: 2px solid transparent; background-clip: content-box; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.25); background-clip: content-box; }
+    ::-webkit-scrollbar-corner { background: transparent; }
+
+    #hl, #le { scrollbar-width: thin; }
+
+    /* ── responsive: narrow screens ───────────────────────────────────────── */
+    @media (max-width: 800px) {
+      #main {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto 1fr auto;
+      }
+      #history-section { display: none; }
+      #monitoring-section { display: none; }
+    }
+
+    @media (min-width: 801px) and (max-width: 1100px) {
+      #main {
+        grid-template-columns: 1fr 200px;
+      }
+      #history-section { display: none; }
+    }
   </style>
 </head>
 <body>
 
-  <div id="status-bar">
-    <div class="sdot" id="cdot"></div>
-    <span id="st">Connecting…</span>
-    <span id="room"></span>
-    <span id="ws-ind">WS disconnected</span>
-    <button id="btn-theme" aria-label="Toggle theme" onclick="toggleTheme()">☀</button>
-    <div id="llm-badge">
-      <span id="llm-badge-dots" style="display:none">
-        <span class="llm-dot"></span><span class="llm-dot"></span><span class="llm-dot"></span>
-      </span>
-      <span id="llm-badge-text">AI</span>
-    </div>
-  </div>
+    <div id="status-bar">
+      <div class="sdot" id="cdot"></div>
+      <span id="st">Connecting…</span>
+      <span id="room"></span>
+      <span id="ws-ind">WS connecting…</span>
 
-  <div id="hero">
-    <span class="hero-icon hero-muted">○</span>
-    <span class="hero-text hero-muted">STT inactive</span>
-  </div>
+      <div id="llm-badge">
+        <span id="llm-badge-dots" style="display:none">
+          <span class="llm-dot"></span><span class="llm-dot"></span><span class="llm-dot"></span>
+        </span>
+        <span id="llm-badge-text">AI</span>
+      </div>
+    </div>
 
   <div id="main">
 
-    <div class="panel" id="actions-section">
-      <div class="panel-hdr">WAKE WORDS &amp; ACTIONS</div>
-      <div id="al"><span style="color:var(--muted)">Loading…</span></div>
+    <div class="panel" id="history-section">
+      <div class="panel-hdr">HISTORY <button onclick="clearHistory()">clear</button></div>
+      <div id="hl"></div>
     </div>
 
-    <div class="panel" id="log-panel">
-      <div class="panel-hdr">LOGS <button onclick="clearLogs()">clear</button></div>
-      <div id="le"></div>
+    <div class="center-col">
+      <div id="hero">
+        <span class="hero-icon hero-muted">○</span>
+        <span class="hero-text hero-muted">STT inactive</span>
+      </div>
+
+      <div class="ww-row">
+        <div class="panel ww-panel" id="ww-panel-galileo">
+          <div class="panel-hdr">GALILEO</div>
+          <div class="ww-panel-content" id="ww-content-galileo"><span style="color:var(--muted)">Loading…</span></div>
+        </div>
+        <div class="panel ww-panel" id="ww-panel-assistente">
+          <div class="panel-hdr">ASSISTENTE</div>
+          <div class="ww-panel-content" id="ww-content-assistente"><span style="color:var(--muted)">Loading…</span></div>
+        </div>
+      </div>
+
+      <div class="panel ww-panel" id="ww-panel-globali" style="display:none">
+        <div class="panel-hdr">GLOBALI</div>
+        <div class="ww-panel-content" id="ww-content-globali"></div>
+      </div>
+
+      <div class="panel" id="log-panel">
+        <div class="panel-hdr">LOGS <button onclick="clearLogs()">clear</button></div>
+        <div id="le"></div>
+      </div>
     </div>
 
-    <div class="panel" id="right-panel">
-      <div id="hist-wrap">
-        <div class="panel-hdr">HISTORY <button onclick="clearHistory()">clear</button></div>
-        <div id="hl"></div>
+    <div class="right-col">
+      <div class="panel" id="toggles-panel">
+        <div id="toggles-body">
+          <button id="btn-mode" aria-label="Toggle mode" onclick="toggleMode()">&lt;/&gt;</button>
+          <button id="btn-theme" aria-label="Toggle theme" onclick="toggleTheme()">☀</button>
+        </div>
       </div>
-      <div id="part-section">
-        <div id="ph">PARTICIPANTS (0)</div>
-        <div id="pl"><span style="color:var(--muted)">Waiting…</span></div>
-      </div>
-      <div id="room-status-panel">
+
+      <div class="panel" id="room-panel">
         <div class="panel-hdr">ROOM</div>
-        <div id="room-status-body">
-          <span class="rs-icon" id="rs-icon">📵</span>
-          <div>
-            <div class="rs-label" id="rs-label">Closed</div>
-            <div class="rs-sub"  id="rs-sub">No active call</div>
+        <div id="room-body">
+          <div id="room-status-body">
+            <span class="rs-icon" id="rs-icon">📵</span>
+            <div>
+              <div class="rs-label" id="rs-label">Closed</div>
+              <div class="rs-sub" id="rs-sub">No active call</div>
+              <div id="room-participants-list" style="display:none;margin-top:4px;font-size:11px"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" id="monitoring-section">
+        <div class="panel-hdr">MONITORING</div>
+        <div id="mon-content">
+          <div id="cpu-bar">
+            <svg id="sparkline" viewBox="0 0 120 20" preserveAspectRatio="none"></svg>
+            <span id="cpu-load">0.00</span>
+          </div>
+          <div id="vu-bottom">
+            <div class="vu-block">
+              <div class="vu-row-v">
+                <span class="vu-lbl-v">MIC</span>
+                <div class="vu-segs-v" id="mic-segs-v"></div>
+                <span class="vu-db" id="mic-db">-∞ dB</span>
+              </div>
+              <div class="vu-row-v">
+                <span class="vu-lbl-v">SPK</span>
+                <div class="vu-segs-v" id="spk-segs-v"></div>
+                <span class="vu-db" id="spk-db">-∞ dB</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div id="restart-card">
+        <button id="btn-restart" onclick="sendCtrl('restart')">Restart</button>
+      </div>
+      <div class="panel" id="ai-panel">
+        <div id="ai-section" style="display:none">
+          <div class="panel-hdr">AI FALLBACK</div>
+          <div id="ai-content" style="padding:8px 12px;font-size:12px">
+            <span id="llm-status-dot"></span> <span class="llm-model-tag">—</span>
           </div>
         </div>
       </div>
@@ -525,39 +769,16 @@
 
   </div>
 
-  <div id="footer">
-    <div class="vu-row">
-      <span class="vu-lbl">MIC</span>
-      <span class="vu-dev" id="mic-dev"></span>
-      <div class="vu-segs" id="mic-segs"></div>
-      <span class="vu-db" id="mic-db">-∞ dB</span>
-    </div>
-    <div class="footer-divider"></div>
-    <div class="vu-row">
-      <span class="vu-lbl">SPK</span>
-      <span class="vu-dev" id="spk-dev"></span>
-      <div class="vu-segs" id="spk-segs"></div>
-      <span class="vu-db" id="spk-db">-∞ dB</span>
-    </div>
-    <div class="footer-divider"></div>
-    <button id="btn-restart" onclick="sendCtrl('restart')">Restart</button>
-  </div>
-
   <script>
-    // build segmented VU meters
-    ['mic-segs', 'spk-segs'].forEach(id => {
+    // build vertical segmented VU meters
+    ['mic-segs-v', 'spk-segs-v'].forEach(id => {
       const c = document.getElementById(id);
       for (let i = 0; i < 20; i++) {
         const s = document.createElement('span');
-        s.className = 'seg';
+        s.className = 'seg-v';
         c.appendChild(s);
       }
     });
-    // RMS needle for mic bar
-    const _micRmsLine = document.createElement('div');
-    _micRmsLine.className = 'vu-rms-line';
-    _micRmsLine.id = 'mic-rms-line';
-    document.getElementById('mic-segs').appendChild(_micRmsLine);
 
     let ws = null, reconnTimer = null, _restarting = false, _reconnDelay = 1000;
     let _lastWakeWord = '', _cfg = null;
@@ -607,6 +828,7 @@
           renderParts();
           setAudio(m.audio_connected, m.audio_conn_type);
           setStt(m.stt_state, m.stt_text, m);
+          setStatusListening(m.stt_state === 'wake' || m.stt_state === 'partial' || m.stt_state === 'transcribing');
           if (m.actions_config) { _cfg = m.actions_config; renderActions(_cfg); }
           setRoomStatus(m.room_status || 'closed', m.room_answer_timeout || 0);
           break;
@@ -631,6 +853,7 @@
         case 'audio_status':  setAudio(m.connected, m.conn_type); break;
         case 'stt': {
           const s = m.state;
+          setStatusListening(s === 'wake' || s === 'partial' || s === 'transcribing');
           if (s === 'wake' && m.word && m.word !== '(reply)') {
             _lastWakeWord = m.word;
             updateInteraction(m.word, '');
@@ -680,6 +903,7 @@
           break;
         }
         case 'room_status': setRoomStatus(m.status, m.timeout||0); break;
+        case 'system_stats': updateSparkline(m); break;
         case 'error': setSt('Error: ' + (m.msg||'unknown'), null); break;
         case 'reload': location.reload(); break;
       }
@@ -692,13 +916,21 @@
     };
     function setRoomStatus(status, timeout) {
       const cfg = _RS[status] || _RS.closed;
-      const panel = document.getElementById('room-status-panel');
-      panel.className = cfg.cls;
+      const body = document.getElementById('room-status-body');
+      body.className = status === 'in_call' ? 'rs-active' : '';
       document.getElementById('rs-icon').textContent  = cfg.icon;
       document.getElementById('rs-label').textContent = cfg.label;
       let sub = cfg.sub;
       if (status === 'waiting' && timeout > 0) sub += ' (' + timeout + 's)';
       document.getElementById('rs-sub').textContent = sub;
+      const pList = document.getElementById('room-participants-list');
+      if (status === 'in_call') {
+        const names = Object.keys(parts);
+        pList.textContent = names.length ? '● ' + names.join(', ') : '';
+        pList.style.display = names.length ? 'block' : 'none';
+      } else {
+        pList.style.display = 'none';
+      }
     }
 
     function setLlmBadgeThinking(on) {
@@ -734,7 +966,7 @@
       if (!phrase) return;
       const norm = phrase.toLowerCase().trim();
       document.querySelectorAll('.atrig').forEach(el => {
-        const elText = el.textContent.replace(/^[›⮑\s]+/, '').trim().toLowerCase();
+        const elText = el.textContent.replace(/^[›⮑\s]+/, '').replace(/\(.*?\)/g, '').trim().toLowerCase();
         if (elText === norm) {
           const cls = isReply ? 'trig-reply-hit' : 'trig-hit';
           clearTimeout(_trigTimers[norm]);
@@ -766,7 +998,7 @@
     function updateInteraction(word, text, finish) {
       if (!word) return;
       const norm = word.toLowerCase().trim();
-      document.querySelectorAll('.awk-group').forEach(g => {
+      document.querySelectorAll('.ww-card').forEach(g => {
         const ww = g.getAttribute('data-word').toLowerCase();
         const aa = (g.getAttribute('data-aliases')||'').toLowerCase().split(',');
         if (ww === norm || aa.includes(norm)) {
@@ -787,7 +1019,8 @@
     }
 
     function setSt(text, room) {
-      document.getElementById('st').textContent = text;
+      const st = document.getElementById('st');
+      st.textContent = text;
       const d = document.getElementById('cdot');
       d.className = (text.includes('Connected') || text === 'Ready') && !text.includes('Dis') ? 'sdot ok'
                   : (text.includes('Reconnect') || text.includes('Disconnect')) ? 'sdot warn'
@@ -796,22 +1029,34 @@
         document.getElementById('room').textContent = room ? '│ ' + room : '';
     }
 
+    function setStatusListening(listening) {
+      const st = document.getElementById('st');
+      if (listening) {
+        st.style.color = 'var(--match)';
+      } else {
+        st.style.color = '';
+      }
+    }
+
     function renderParts() {
       const keys = Object.keys(parts);
-      document.getElementById('ph').textContent = 'PARTICIPANTS (' + keys.length + ')';
-      const pl = document.getElementById('pl');
-      if (!keys.length) { pl.innerHTML = '<span style="color:var(--muted)">Waiting…</span>'; return; }
-      pl.innerHTML = keys.map(id => {
-        const t = parts[id]||0;
-        return '<div class="pt"><span class="' + (t?'pdot':'pdot0') + '">' + (t?'●':'○') + '</span> '
-          + esc(id) + (t ? ' <span style="color:var(--muted)">'+t+'t</span>' : '') + '</div>';
-      }).join('');
+      const pList = document.getElementById('room-participants-list');
+      if (!pList) return;
+      if (keys.length) {
+        pList.textContent = '● ' + keys.join(', ');
+        pList.style.display = 'block';
+      } else {
+        pList.textContent = '';
+        pList.style.display = 'none';
+      }
+    }
+
+    function _aliases(list) {
+      return (list && list.length) ? ' <span class="aalias-inline">(' + esc(list.join(', ')) + ')</span>' : '';
     }
 
     function renderActions(cfg) {
-      const al = document.getElementById('al');
-      if (!cfg) { al.innerHTML = '<span style="color:var(--muted)">No config</span>'; return; }
-      let h = '';
+      if (!cfg) return;
 
       function renderList(actions, indent) {
         indent = indent || 0;
@@ -833,65 +1078,62 @@
       }
 
       (cfg.wake_words || []).forEach(w => {
-        h += '<div class="awk-group" data-word="' + esc(w.word) + '" data-aliases="' + esc((w.aliases||[]).join(',')) + '">'
-          + '<div class="awk">◉ ' + esc(w.word) + '</div>';
-        if (w.aliases && w.aliases.length) h += '<div class="aalias">aka: ' + esc(w.aliases.join(', ')) + '</div>';
+        const contentEl = document.getElementById('ww-content-' + esc(w.word));
+        if (!contentEl) return;
+
+        let h = '';
+        h += '<div class="ww-card" data-word="' + esc(w.word) + '" data-aliases="' + esc((w.aliases||[]).join(',')) + '">';
+        h += '<div class="aalias">' + ((w.aliases && w.aliases.length) ? esc(w.aliases.join(', ')) : '—') + '</div>';
         h += '<div class="ainteract"></div>';
         (w.triggers || []).forEach(t => {
-          h += '<div class="atrig">› ' + esc(t.phrase) + '</div>';
+          h += '<div class="atrig">› ' + esc(t.phrase) + _aliases(t.aliases) + '</div>';
           h += renderList(t.actions);
         });
         h += '</div>';
+        contentEl.innerHTML = h || '<span style="color:var(--muted)">Nessun trigger</span>';
       });
-      if (cfg.global_triggers && cfg.global_triggers.length) {
-        h += '<div class="agt-header">GLOBAL FALLBACKS</div>';
+
+      // Global triggers — single shared panel
+      const globaliPanel = document.getElementById('ww-panel-globali');
+      const globaliContent = document.getElementById('ww-content-globali');
+      if (cfg.global_triggers && cfg.global_triggers.length && globaliPanel && globaliContent) {
+        globaliPanel.style.display = 'flex';
+        let gh = '';
         cfg.global_triggers.forEach(t => {
-          h += '<div class="atrig">› ' + esc(t.phrase) + '</div>';
-          h += renderList(t.actions);
+          gh += '<div class="atrig">› ' + esc(t.phrase) + _aliases(t.aliases) + '</div>';
+          gh += renderList(t.actions);
         });
+        globaliContent.innerHTML = gh || '';
       }
 
-      // LLM section
+      // LLM section — render in monitoring column
       if (cfg.llm) {
         const llm = cfg.llm;
-        h += '<div class="llm-section">'
-          + '<div class="llm-section-hdr">'
-          + '<span id="llm-status-dot"></span>'
-          + ' ◈ AI FALLBACK'
-          + '</div>'
-          + '<div class="llm-model-tag">' + esc(llm.model) + '</div>'
-          + '<div class="llm-attr">@ ' + esc(llm.host) + '</div>';
-        if (llm.fallback) {
-          h += '<div class="llm-attr" style="color:var(--llm);opacity:0.7">⮑ on no match</div>';
+        const aiSection = document.getElementById('ai-section');
+        const aiContent = document.getElementById('ai-content');
+        if (aiSection && aiContent) {
+          aiSection.style.display = 'block';
+          aiContent.innerHTML = '<div><span id="llm-status-dot"></span> <span class="llm-model-tag">' + esc(llm.model) + '</span></div>'
+            + '<div class="llm-attr">@ ' + esc(llm.host) + '</div>'
+            + (llm.fallback ? '<div class="llm-attr" style="color:var(--llm);opacity:0.7">⮑ on no match</div>' : '');
         }
-        h += '</div>';
 
-        // Show LLM badge in status bar
         const badge = document.getElementById('llm-badge');
         document.getElementById('llm-badge-text').textContent = llm.model.split('/').pop();
         badge.classList.add('active');
       }
-
-      al.innerHTML = h || '<span style="color:var(--muted)">Empty</span>';
     }
 
     function setVU(ch, lvl) {
       const count = Math.round(Math.sqrt(Math.max(0, Math.min(1, lvl))) * 20);
       const dv    = lvl > 1e-9 ? (20 * Math.log10(Math.max(lvl, 1e-9))).toFixed(1) : null;
-      const segs  = document.getElementById(ch + '-segs').children;
+      const segs  = document.getElementById(ch + '-segs-v').children;
       for (let i = 0; i < segs.length; i++) segs[i].classList.toggle('on', i < count);
       document.getElementById(ch + '-db').textContent = dv ? dv + ' dB' : '-∞ dB';
-      const rmsLine = document.getElementById(ch + '-rms-line');
-      if (rmsLine) {
-        const barW = rmsLine.parentElement.scrollWidth;
-        rmsLine.style.left = Math.min(barW - 2, lvl * barW) + 'px';
-      }
     }
 
     function setAudio(connected, connType) {
-      const lbl = connected ? '[' + (connType||'').toUpperCase() + ']' : '[offline]';
-      document.getElementById('mic-dev').textContent = lbl;
-      document.getElementById('spk-dev').textContent = lbl;
+      // no-op: device labels removed in the panel restructure
     }
 
     let _lastWake = '';
@@ -1073,11 +1315,81 @@
       applyTheme(next);
     }
 
-    // Initialise button icon to match current theme (set by anti-flash script)
+    // ── mode toggle ──────────────────────────────────────────────────────────
+    function applyMode(mode) {
+      const body = document.body;
+      if (mode === 'dev') {
+        body.classList.add('dev-mode');
+      } else {
+        body.classList.remove('dev-mode');
+      }
+      const btn = document.getElementById('btn-mode');
+      if (btn) btn.textContent = mode === 'dev' ? '👤' : '< />';
+      localStorage.setItem('dashboard-mode', mode);
+    }
+
+    function toggleMode() {
+      const current = document.body.classList.contains('dev-mode') ? 'dev' : 'user';
+      applyMode(current === 'dev' ? 'user' : 'dev');
+    }
+
+    // ── sparkline ────────────────────────────────────────────────────────────
+    let _sparkData = [];
+
+    function _cpuColor(v) {
+      if (v >= 1.8) return '#f87171';
+      if (v >= 1.2) return '#facc15';
+      return '#4ade80';
+    }
+
+    function updateSparkline(m) {
+      const load1 = m.load1 || 0;
+      _sparkData.push(load1);
+      if (_sparkData.length > 60) _sparkData.shift();
+      const svg = document.getElementById('sparkline');
+      const cpuLoad = document.getElementById('cpu-load');
+      if (!svg) return;
+      const w = 120, h = 20;
+      const max = Math.max(..._sparkData, 0.1);
+      const color = _cpuColor(load1);
+      const n = _sparkData.length;
+      const pts = _sparkData.map((v, i) => {
+        const x = (i / (n - 1 || 1)) * w;
+        const y = h - 2 - Math.max(2, (v / max) * (h - 4));
+        return { x, y, c: _cpuColor(v) };
+      });
+      const d = pts.map((p, i) => {
+        if (i === 0) return 'M' + p.x.toFixed(1) + ',' + (h - 2);
+        const prev = pts[i - 1];
+        const cx1 = (prev.x + p.x) / 2;
+        return 'Q' + cx1.toFixed(1) + ',' + prev.y.toFixed(1) + ' ' + p.x.toFixed(1) + ',' + p.y.toFixed(1);
+      }).join(' ');
+      const fill = pts.map((p, i) => {
+        if (i === 0) return 'M' + p.x.toFixed(1) + ',' + (h - 2);
+        if (i === n - 1) return 'L' + p.x.toFixed(1) + ',' + (h - 2) + 'Z';
+        const prev = pts[i - 1];
+        const cx1 = (prev.x + p.x) / 2;
+        return 'Q' + cx1.toFixed(1) + ',' + prev.y.toFixed(1) + ' ' + p.x.toFixed(1) + ',' + p.y.toFixed(1);
+      }).join(' ');
+      svg.innerHTML = ''
+        + '<defs><linearGradient id="cg" x1="0" y1="0" x2="1" y2="0">'
+        + pts.map((p, i) => '<stop offset="' + (i / (n - 1 || 1) * 100).toFixed(0) + '%" stop-color="' + p.c + '"/>').join('')
+        + '</linearGradient></defs>'
+        + '<path d="' + fill + '" fill="url(#cg)" opacity="0.25"/>'
+        + '<path d="' + d + '" fill="none" stroke="' + color + '" stroke-width="1.5" stroke-linecap="round"/>';
+      if (cpuLoad) {
+        cpuLoad.textContent = load1.toFixed(2);
+        cpuLoad.style.color = color;
+      }
+    }
+
+    // ── init ──────────────────────────────────────────────────────────────────
     (function() {
       const theme = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark';
       const btn = document.getElementById('btn-theme');
       if (btn) btn.textContent = theme === 'light' ? '🌙' : '☀';
+      const savedMode = localStorage.getItem('dashboard-mode');
+      if (savedMode) applyMode(savedMode);
     })();
 
     connect();
