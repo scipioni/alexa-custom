@@ -141,6 +141,8 @@ class ConfigManager:
             return result
 
         last_mtime = _mtime(path)
+        user_path = path.parent / "user.yaml"
+        last_user_mtime = _mtime(user_path)
 
         # Resolve actions directory from current config, fall back to default
         actions_dir = self._resolve_actions_dir(path)
@@ -154,17 +156,22 @@ class ConfigManager:
                 actions_dir = self._resolve_actions_dir(path)
 
                 mtime = _mtime(path)
+                user_mtime = _mtime(user_path)
                 actions_mtimes = _dir_mtimes(actions_dir)
 
                 config_changed = mtime != last_mtime
+                user_changed = user_mtime != last_user_mtime
                 actions_changed = actions_mtimes != last_actions_mtimes
 
-                if config_changed or actions_changed:
+                if config_changed or user_changed or actions_changed:
                     last_mtime = mtime
+                    last_user_mtime = user_mtime
                     last_actions_mtimes = actions_mtimes
                     if mtime is not None:
-                        if actions_changed and not config_changed:
+                        if actions_changed and not config_changed and not user_changed:
                             logger.info("Action file changed, reloading config")
+                        elif user_changed and not config_changed:
+                            logger.info("user.yaml changed, reloading config")
                         else:
                             logger.info("Config file changed, reloading: %s", path)
                         self._reload(path)
