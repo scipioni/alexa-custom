@@ -18,6 +18,7 @@ from alexa_custom.audio_hw import (
     _pw_device_resolved,
     _pw_device_index,
     _UDEV_PATH,
+    _STATE_FILE,
     configure,
     get_output_volume,
     get_input_gain,
@@ -44,6 +45,8 @@ from alexa_custom.audio_hw import (
     _usb_ids_for_alsa_card,
     setup_audio,
     speakerphone,
+    save_volume_state,
+    load_volume_state,
 )
 from alexa_custom.audio_ops import (
     _PW_PLAY,
@@ -77,6 +80,7 @@ __all__ = [
     "_pw_device_resolved",
     "_pw_device_index",
     "_UDEV_PATH",
+    "_STATE_FILE",
     "configure",
     "get_output_volume",
     "get_input_gain",
@@ -103,6 +107,8 @@ __all__ = [
     "_usb_ids_for_alsa_card",
     "setup_audio",
     "speakerphone",
+    "save_volume_state",
+    "load_volume_state",
     "_PW_PLAY",
     "_playback_active",
     "_audio_lock",

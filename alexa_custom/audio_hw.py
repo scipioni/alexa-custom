@@ -6,8 +6,11 @@ import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
+
 import numpy as np
 import pulsectl
+import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +27,32 @@ _INPUT_GAIN = 1.0
 _pw_device_resolved = False
 _pw_device_index: int | None = None
 _UDEV_PATH = "/etc/udev/rules.d/89-alsa-usb-volume.rules"
+_STATE_FILE = "conf/state.yaml"
+
+
+def save_volume_state(volume: float) -> None:
+    p = Path(_STATE_FILE)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        p.write_text(yaml.safe_dump({"output_volume": volume}))
+    except OSError as e:
+        logger.warning("Failed to save volume state: %s", e)
+
+
+def load_volume_state() -> float | None:
+    p = Path(_STATE_FILE)
+    if not p.exists():
+        return None
+    try:
+        data = yaml.safe_load(p.read_text())
+        if isinstance(data, dict) and "output_volume" in data:
+            vol = float(data["output_volume"])
+            global _OUTPUT_VOLUME
+            _OUTPUT_VOLUME = vol
+            return vol
+    except Exception as e:
+        logger.warning("Failed to load volume state: %s", e)
+    return None
 
 
 def configure(cfg) -> None:
