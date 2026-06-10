@@ -18,9 +18,20 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from alexa_custom.stt import _rms_level, _vosk_confidence, _vosk_check_result, _match_full_intent, _extract_wake_command
+from alexa_custom.stt import (
+    _rms_level,
+    _vosk_confidence,
+    _vosk_check_result,
+    _match_full_intent,
+    _extract_wake_command,
+)
 from alexa_custom.stt_phonetics import build_intent_map, _build_alias_map
-from alexa_custom.config import WakeWordGroup, Trigger, STTStage1Config, _parse_stt_stage1_config  # noqa: F401
+from alexa_custom.config import (
+    WakeWordGroup,
+    Trigger,
+    STTStage1Config,
+    _parse_stt_stage1_config,
+)  # noqa: F401
 
 
 # ---------------------------------------------------------------------------
@@ -229,17 +240,19 @@ class TestConfidenceModeConfig:
 
 
 def _make_trigger(phrase: str, aliases: list[str] | None = None) -> Trigger:
-    from alexa_custom.config import ActionEntry
     return Trigger(phrase=phrase, actions=[], aliases=aliases or [])
 
 
-def _make_group_with_triggers(word: str, triggers: list[Trigger], aliases: list[str] | None = None) -> WakeWordGroup:
+def _make_group_with_triggers(
+    word: str, triggers: list[Trigger], aliases: list[str] | None = None
+) -> WakeWordGroup:
     return WakeWordGroup(word=word, aliases=aliases or [], triggers=triggers)
 
 
 class TestBuildIntentMap:
     def _alias_map(self, groups):
         from alexa_custom.stt_phonetics import _build_alias_map
+
         return _build_alias_map(groups)
 
     def test_basic_combo(self):
@@ -299,8 +312,11 @@ class TestMatchFullIntent:
     def _setup(self):
         chiama = _make_trigger("chiama stefano")
         accendi = _make_trigger("accendi le luci", aliases=["illumina"])
-        group = _make_group_with_triggers("ehi galileo", [chiama, accendi], aliases=["galileo"])
+        group = _make_group_with_triggers(
+            "ehi galileo", [chiama, accendi], aliases=["galileo"]
+        )
         from alexa_custom.stt_phonetics import _build_alias_map
+
         am = _build_alias_map([group])
         intent_map = build_intent_map(am, [])
         return am, intent_map, group, chiama, accendi
@@ -390,6 +406,7 @@ class TestExtractWakeCommand:
         # "ascolta assistente" shares a content word with "ascoltami assistente"
         # but must NOT match — Vosk transcribes accurately so fuzzy is wrong here.
         from alexa_custom.stt_phonetics import _build_alias_map as bam
+
         group = WakeWordGroup(word="ascoltami assistente")
         am = bam([group])
         matched, cmd = _extract_wake_command("ascolta assistente", am, fuzzy=False)

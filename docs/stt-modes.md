@@ -41,9 +41,11 @@ flowchart TD
 3. The wake beep plays (`pw-play`), blocking until done.
 4. **Stage-2** (`capture_transcript`) starts:
    - `_drain_pipe()` flushes all audio that accumulated in the pipe during the beep.
-   - An additional `flush_ms` (hardcoded 300 ms) of fresh audio is discarded to let
+   - An additional `stt.flush_ms` (default 300 ms) of fresh audio is discarded to let
      speaker echo and reverberation decay.
-   - Vosk listens until `stt.vad_silence_ms` of silence or `command_timeout` expires.
+   - Vosk listens until `stt.vad_silence_ms` of silence ends the command. The
+     `command_timeout` window slides forward while the user keeps speaking,
+     bounded by `command_max_timeout`, so long commands are not cut off.
    - The final transcript is matched against triggers.
 
 ### Tuning
@@ -53,8 +55,9 @@ flowchart TD
 | `stage1.vad_silence_ms` | `conf/config.yaml` `stt.stage1` | How long after the wake word before stage-1 fires. Lower = snappier; the user can start speaking sooner. |
 | `stage1.min_speech_ms` | `conf/config.yaml` `stt.stage1` | Minimum speech before the VAD timer starts. Prevents noise from triggering early finalization. |
 | `stt.vad_silence_ms` | `conf/config.yaml` `stt` | Silence that ends the command window in stage-2. Lower = snappier end detection; raise if commands get cut off mid-sentence. |
-| `recognition.command_timeout` | `conf/config.yaml` `recognition` | Hard deadline for stage-2 capture in seconds. |
-| `flush_ms` | hardcoded 300 ms in `stt.py:_wake_detected` | Audio discarded after the beep to absorb echo. Reducing this can help if the user speaks immediately after the beep, but risks picking up speaker echo. |
+| `recognition.command_timeout` | `conf/config.yaml` `recognition` | Inactivity window for stage-2 capture in seconds: bounds the wait for speech to start, then slides forward while the user keeps speaking. |
+| `recognition.command_max_timeout` | `conf/config.yaml` `recognition` | Absolute cap on stage-2 capture (default 8 s). Set to 0 to disable sliding and make `command_timeout` a hard deadline. |
+| `stt.flush_ms` | `conf/config.yaml` `stt` | Audio discarded after the beep to absorb echo (default 300 ms). Reducing this can help if the user speaks immediately after the beep, but risks picking up speaker echo. |
 
 ---
 
@@ -77,9 +80,9 @@ flowchart TD
     SK -->|yes| SIL[silent skip]
     SIL --> A
     SK -->|no| WD["_wake_detected\npre_transcript = inline_cmd"]
-    WD --> TM{"match_trigger()"}
-    TM -->|match| BEEP[beep plays]
-    BEEP --> D([dispatch action])
+    WD --> BEEP[beep plays]
+    BEEP --> TM{"match_trigger()"}
+    TM -->|match| D([dispatch action])
     TM -->|"no match + LLM"| LLM([LLM fallback])
     TM -->|"no match"| ERR([error tone])
 ```
@@ -93,8 +96,9 @@ flowchart TD
    remainder as `inline_cmd` (e.g. `"chiama stefano"`).
 3. `_wake_detected` is called with `pre_transcript=inline_cmd` — it **skips**
    `capture_transcript` entirely and goes straight to trigger matching.
-4. The beep plays after the match, so the user hears confirmation but does not need
-   to speak again.
+4. The beep plays as soon as the wake word is confirmed (before trigger matching),
+   so the user hears confirmation but does not need to speak again. An unknown
+   inline command therefore produces wake beep followed by error tone / LLM fallback.
 
 ### Why it can fail
 
@@ -136,9 +140,9 @@ flowchart TD
     MFI -->|match| ST{"same intent\nstable ≥ N reads\n& ≥ 150ms?"}
     ST -->|no, reset clock| A
     ST -->|yes| WD["_wake_detected\npre_transcript = inline_cmd"]
-    WD --> TM{"match_trigger()"}
-    TM -->|match| BEEP[beep plays]
-    BEEP --> D([dispatch action])
+    WD --> BEEP[beep plays]
+    BEEP --> TM{"match_trigger()"}
+    TM -->|match| D([dispatch action])
     TM -->|"no match + LLM"| LLM([LLM fallback])
     TM -->|"no match"| ERR([error tone])
 ```
@@ -186,7 +190,7 @@ If the Vosk partial never stabilises at exactly the full phrase (e.g. the user's
 | Stage-2 capture | Yes — full `capture_transcript` | No — `inline_cmd` from stage-1 | No — `inline_cmd` from partial match |
 | Latency after last word | `stage1.vad_silence_ms` (500–900ms) | `stage1.vad_silence_ms` (500–900ms) | `partial_stability_ms` (≈150ms) |
 | Requires known trigger phrase | No | No (opt-in via `skip_unmatched_inline`) | Yes — always |
-| Fuzzy matching | No (exact + alias) | Yes (`_approx_wake_match` on final) | No (exact only on partials) |
+| Fuzzy matching | No (exact + alias) | No (exact + alias) | No (exact only on partials) |
 | Sensitivity to `stage1.vad_silence_ms` | Low | High — must exceed pause between wake word and command | None |
 | Risk of losing command audio | None | Yes, if pause > `stage1.vad_silence_ms` | None |
 | LLM fallback for unknown commands | Yes | Yes (unless `skip_unmatched_inline`) | Falls back to mode 1/2 + LLM |
@@ -202,14 +206,16 @@ wake_words:
 
 stt:
   vad_silence_ms: 500      # stage-2 command-end silence (mode 1)
+  # flush_ms: 300          # audio discarded after the wake beep (echo absorption)
 
   stage1:
     backend: vosk
     vad_silence_ms: 900    # bridges wake word + command pause (mode 2)
-    min_speech_ms: 300
+    min_speech_ms: 200
 
 recognition:
   command_timeout: 2.5
+  # command_max_timeout: 8.0    # cap on stage-2 capture while speech continues
   partial_matching: true        # mode 3 enabled by default
   partial_stability_ms: 150     # min ms before firing on stable partial match
   partial_stability_reads: 3    # min consecutive matching reads
