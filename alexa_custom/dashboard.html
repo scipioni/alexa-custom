@@ -20,6 +20,7 @@
       --wake:    #fb923c;
       --match:   #4ade80;
       --nomatch: #f87171;
+      --skipped: #64748b;
       --info:    #60a5fa;
       --text:    #e2e8f0;
       --muted:   #64748b;
@@ -1424,6 +1425,11 @@
               _lastWakeWord = '';
             }
           }
+          if (s === 'skipped') {
+            clearReplyDim();
+            updateInteraction(m.word||'', (m.text ? '"'+m.text+'" ' : '') + '⊘ ignored', true);
+            _lastWakeWord = '';
+          }
           if (s === 'llm_thinking') {
             setLlmBadgeThinking(true);
             setLlmStatusDot(true);
@@ -1792,8 +1798,9 @@
       _partialClearTimer = null;
     }
 
-    function _wakeChip(word) {
-      return '<span class="wake-chip"><span class="wake-chip-icon">◉</span>' + esc(word) + '</span>';
+    function _wakeChip(word, muted) {
+      const style = muted ? ' style="opacity:0.45;border-color:var(--skipped);color:var(--skipped)"' : '';
+      return '<span class="wake-chip"' + style + '><span class="wake-chip-icon">◉</span>' + esc(word) + '</span>';
     }
 
     let _heroFadeTimer = null;
@@ -1891,6 +1898,16 @@
             + '<span style="color:var(--nomatch);margin-left:4px">no match</span>'
             + '</span>');
           heroAnim('anim-nomatch', 500);
+          break;
+        case 'skipped':
+          _cancelPartialClear();
+          _setHeroContent('<span class="hero-icon" style="color:var(--skipped)">⊘</span>'
+            + '<span class="hero-text">'
+            + (m.word ? _wakeChip(m.word, true) : '')
+            + (text ? '<span style="color:var(--skipped)">' + esc(text) + '</span>' : '')
+            + '<span style="color:var(--skipped);margin-left:4px">ignored</span>'
+            + '</span>');
+          _lastWake = '';
           break;
         case 'gated':
           _cancelPartialClear();

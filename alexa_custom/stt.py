@@ -884,6 +884,11 @@ def _recognition_loop(
                             inline_cmd,
                             wake_match.word,
                         )
+                        if on_stt_event:
+                            on_stt_event(
+                                "skipped",
+                                {"word": wake_match.word, "text": inline_cmd},
+                            )
                         _reset_stage1_state()
                         stage1.Reset()
                         continue

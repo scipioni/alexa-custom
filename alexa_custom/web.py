@@ -188,6 +188,7 @@ class WebServer:
             "partial",
             "matched",
             "nomatch",
+            "skipped",
             "gated",
         ):
             self._state["stt_state"] = event
