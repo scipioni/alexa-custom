@@ -244,6 +244,7 @@ class WebServer:
                     "room_status": self._state["room_status"],
                     "room_answer_timeout": self._state["room_answer_timeout"],
                     "input_gain": self._input_gain,
+                    "output_volume": self._output_volume,
                     "cpu_limit": self._cpu_limit,
                 }
             )
@@ -257,7 +258,7 @@ class WebServer:
                     except json.JSONDecodeError:
                         continue
                     if payload.get("type") == "control":
-                        await self._handle_control(payload.get("action", ""))
+                        await self._handle_control(payload.get("action", ""), payload)
                 elif msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
                     break
         finally:
@@ -265,7 +266,7 @@ class WebServer:
 
         return ws
 
-    async def _handle_control(self, action: str) -> None:
+    async def _handle_control(self, action: str, payload: dict = None) -> None:
         if action == "restart":
             logger.info("Restart requested via web dashboard")
             await self._broadcast({"type": "restarting"})
@@ -274,6 +275,15 @@ class WebServer:
                 asyncio.create_task(self._shutdown_callback())
             else:
                 os.execv(sys.executable, [sys.executable] + sys.argv)
+        elif action == "set_volume" and payload:
+            volume = payload.get("volume", 0.5)
+            from alexa_custom.audio_ops import set_output_volume_direct
+            set_output_volume_direct(volume)
+        elif action == "beep" and payload:
+            frequency = payload.get("frequency", 440)
+            duration = payload.get("duration", 100)
+            from alexa_custom.audio_ops import play_beep
+            play_beep(frequency, duration)
 
     # ── broadcast helpers ─────────────────────────────────────────────────────
 
