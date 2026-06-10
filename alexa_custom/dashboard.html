@@ -1583,7 +1583,7 @@
     const _trigTimers = {};
     function _trigPhrase(el) {
       const p = el.querySelector('.trig-phrase, .trig-reply-phrase, .trig-else-phrase');
-      return p ? p.textContent.replace(/\(.*?\)/g, '').trim().toLowerCase() : '';
+      return p ? p.textContent.replace('⮑', '').replace(/\(.*?\)/g, '').trim().toLowerCase() : '';
     }
 
     function highlightTrigger(phrase, isReply) {
