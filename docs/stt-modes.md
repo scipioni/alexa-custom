@@ -4,52 +4,28 @@ alexa-custom supports three speech interaction patterns in two-stage mode.
 
 ---
 
-## Overview
-
-```mermaid
-flowchart TD
-    A([continuous audio]) --> P
-
-    P["PartialResult() — every chunk"]
-    P --> M3{"_match_full_intent()\nstable ≥150ms / 3 reads?"}
-
-    M3 -->|"yes — Mode 3"| B3["_wake_detected\npre_transcript = inline_cmd"]
-    M3 -->|no| VAD
-
-    VAD{"VAD / endpoint fires?"}
-    VAD -->|no| A
-    VAD -->|yes| EWC{"_extract_wake_command()\nfuzzy=True"}
-
-    EWC -->|"no wake word"| R1[reset → continue]
-    R1 --> A
-
-    EWC -->|"wake word\ninline_cmd = ''"| B1["Mode 1\n_wake_detected\npre_transcript = ''"]
-    EWC -->|"wake word\ninline_cmd ≠ ''"| SK
-
-    SK{"skip_unmatched_inline = true\n& no trigger match?"}
-    SK -->|yes| R2[silent skip]
-    R2 --> A
-    SK -->|"no — Mode 2"| B2["Mode 2\n_wake_detected\npre_transcript = inline_cmd"]
-
-    B1 --> CT["capture_transcript\nstage-2"]
-    CT --> TM
-    B2 --> TM
-    B3 --> TM
-
-    TM{"match_trigger()"}
-    TM -->|match| D([dispatch action])
-    TM -->|"no match + LLM fallback"| LLM([LLM])
-    TM -->|"no match"| ERR([error tone])
-```
-
----
-
 ## Mode 1 — wake word → beep → command
 
 The user speaks the wake word, pauses, waits for the beep, then speaks the command as a separate utterance.
 
 ```
 [user: "arduino"]  →  stage-1 fires  →  beep plays  →  [user: "chiama stefano"]  →  stage-2 captures
+```
+
+```mermaid
+flowchart TD
+    A([audio chunk]) --> VAD{"VAD / endpoint fires?"}
+    VAD -->|no| A
+    VAD -->|yes| EWC{"_extract_wake_command()\nfuzzy=True"}
+    EWC -->|"no wake word"| RST[reset → continue]
+    RST --> A
+    EWC -->|"wake word\ninline_cmd = ''"| WD["_wake_detected\npre_transcript = ''"]
+    WD --> BEEP[beep plays]
+    BEEP --> CT["capture_transcript\nstage-2\n(listens until silence / timeout)"]
+    CT --> TM{"match_trigger()"}
+    TM -->|match| D([dispatch action])
+    TM -->|"no match + LLM"| LLM([LLM fallback])
+    TM -->|"no match"| ERR([error tone])
 ```
 
 ### Flow
@@ -85,6 +61,24 @@ The user speaks wake word and command in a single continuous utterance without w
 
 ```
 [user: "arduino chiama stefano"]  →  stage-1 fires  →  inline_cmd extracted  →  beep plays  →  stage-2 skipped
+```
+
+```mermaid
+flowchart TD
+    A([audio chunk]) --> VAD{"VAD / endpoint fires?"}
+    VAD -->|no| A
+    VAD -->|yes| EWC{"_extract_wake_command()\nfuzzy=True"}
+    EWC -->|"no wake word"| RST[reset → continue]
+    RST --> A
+    EWC -->|"wake word\ninline_cmd ≠ ''"| SK{"skip_unmatched_inline = true\n& no trigger match?"}
+    SK -->|yes| SIL[silent skip]
+    SIL --> A
+    SK -->|no| WD["_wake_detected\npre_transcript = inline_cmd"]
+    WD --> TM{"match_trigger()"}
+    TM -->|match| BEEP[beep plays]
+    BEEP --> D([dispatch action])
+    TM -->|"no match + LLM"| LLM([LLM fallback])
+    TM -->|"no match"| ERR([error tone])
 ```
 
 ### Flow
@@ -126,6 +120,24 @@ The system fires the moment a complete (wake word + trigger phrase) combination 
 
 ```
 [user: "arduino chiama stefano"]  →  partial stable for 150ms  →  fires immediately  →  beep plays  →  stage-2 skipped
+```
+
+```mermaid
+flowchart TD
+    A([audio chunk]) --> PR["PartialResult() — every chunk"]
+    PR --> MFI{"_match_full_intent()\nexact match in intent_map?"}
+    MFI -->|no match| VAD{"VAD / endpoint fires?"}
+    VAD -->|no| A
+    VAD -->|yes| FB["fallback to mode 1 / 2\n(see those diagrams)"]
+
+    MFI -->|match| ST{"same intent\nstable ≥ N reads\n& ≥ 150ms?"}
+    ST -->|no, reset clock| A
+    ST -->|yes| WD["_wake_detected\npre_transcript = inline_cmd"]
+    WD --> TM{"match_trigger()"}
+    TM -->|match| BEEP[beep plays]
+    BEEP --> D([dispatch action])
+    TM -->|"no match + LLM"| LLM([LLM fallback])
+    TM -->|"no match"| ERR([error tone])
 ```
 
 ### Flow
