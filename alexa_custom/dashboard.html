@@ -293,6 +293,17 @@
       line-height: 1;
       opacity: 0.85;
     }
+    .ww-global-badge {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+      border: 1px solid rgba(100,116,139,0.3);
+      border-radius: 999px;
+      padding: 1px 7px;
+      opacity: 0.6;
+      flex-shrink: 0;
+    }
     .ww-node-triggers {
       margin-left: 12px;
       margin-top: 2px;
@@ -1716,6 +1727,7 @@
         function wwCard(w) {
           const aliases = (w.aliases || []).join(', ');
           const hasTriggers = w.triggers && w.triggers.length;
+          const hasGlobals = cfg.global_triggers && cfg.global_triggers.length;
           return '<div class="ww-group">'
             + '<div class="ww-card" data-word="' + esc(w.word) + '" data-aliases="' + esc((w.aliases||[]).join(',')) + '">'
             + '<div class="ww-node-hdr">'
@@ -1724,6 +1736,7 @@
             + '<span class="ww-node-word">' + esc(w.word) + '</span>'
             + (aliases ? '<span class="ww-node-alias">· ' + esc(aliases) + '</span>' : '')
             + (w.skip_unmatched_inline ? '<span class="ww-skip-badge" title="skip_unmatched_inline: unrecognised inline commands are silently ignored"><span class="ww-skip-badge-icon">⊘</span>strict</span>' : '')
+            + (!hasTriggers && hasGlobals ? '<span class="ww-global-badge" title="uses global triggers">↓ global</span>' : '')
             + '</div>'
             + '<div class="ainteract"></div>'
             + '</div>'
@@ -1734,18 +1747,10 @@
             + '</div>';
         }
 
-        const withTriggers    = (cfg.wake_words || []).filter(w => w.triggers && w.triggers.length);
-        const withoutTriggers = (cfg.wake_words || []).filter(w => !w.triggers || !w.triggers.length);
-
-        withTriggers.forEach(w => { h += wwCard(w); });
-
-        if (withoutTriggers.length || (cfg.global_triggers && cfg.global_triggers.length)) {
-          h += '<div class="ww-global-sep">global</div>';
-        }
-
-        withoutTriggers.forEach(w => { h += wwCard(w); });
+        (cfg.wake_words || []).forEach(w => { h += wwCard(w); });
 
         if (cfg.global_triggers && cfg.global_triggers.length) {
+          h += '<div class="ww-global-sep">global triggers</div>';
           h += '<div class="ww-node-triggers" style="margin-left:0;border-left:none;padding-left:2px">'
             + trigRows(cfg.global_triggers, true)
             + '</div>';
