@@ -1812,10 +1812,15 @@
       _partialClearTimer = setTimeout(() => {
         const wave = document.querySelector('#hero .stt-wave');
         if (wave && wave.classList.contains('wv-active')) {
-          _lastWake = '';
-          setStatusListening(false);
-          _setHeroContent(_sttWave('wv-idle')
-            + '<span class="hero-text hero-muted">…</span>');
+          if (_lastWake === '(reply)') {
+            _setHeroContent(_sttWave('wv-listen')
+              + '<span class="hero-text"><span class="hero-muted">speak now…</span></span>');
+          } else {
+            _lastWake = '';
+            setStatusListening(false);
+            _setHeroContent(_sttWave('wv-idle')
+              + '<span class="hero-text hero-muted">…</span>');
+          }
         }
       }, 2500);
     }
@@ -1878,6 +1883,7 @@
       switch (state) {
         case 'listening':
           _cancelPartialClear();
+          clearReplyDim();
           _lastWake = '';
           _setHeroContent(_sttWave('wv-idle')
             + '<span class="hero-text hero-muted"><em>' + (text || 'waiting…') + '</em></span>');
@@ -1891,15 +1897,20 @@
         case 'wake':
           _cancelPartialClear();
           _lastWake = text;
-          _setHeroContent(_sttWave('wv-listen')
-            + '<span class="hero-text">'
-            + _wakeChip(text)
-            + '<span class="hero-muted">listening…</span>'
-            + '</span>');
+          if (text === '(reply)') {
+            _setHeroContent(_sttWave('wv-listen')
+              + '<span class="hero-text"><span class="hero-muted">speak now…</span></span>');
+          } else {
+            _setHeroContent(_sttWave('wv-listen')
+              + '<span class="hero-text">'
+              + _wakeChip(text)
+              + '<span class="hero-muted">listening…</span>'
+              + '</span>');
+          }
           break;
         case 'partial':
           _updateHeroText('wv-active',
-            (_lastWake ? _wakeChip(_lastWake) : '')
+            (_lastWake && _lastWake !== '(reply)' ? _wakeChip(_lastWake) : '')
             + '<span class="hero-s2">' + esc(text) + '</span>'
             + '<span class="cursor">▋</span>');
           _armPartialClear();
@@ -1907,25 +1918,28 @@
         case 'matched': {
           _cancelPartialClear();
           const transcript = m.transcript || text;
+          const _mWake = (_lastWake && _lastWake !== '(reply)') ? _lastWake : null;
           _setHeroContent('<span class="hero-icon" style="color:var(--match)">✓</span>'
             + '<span class="hero-text">'
-            + (_lastWake ? _wakeChip(_lastWake) : '')
+            + (_mWake ? _wakeChip(_mWake) : '')
             + (transcript ? '<span style="color:var(--match)">' + esc(transcript) + '</span>' : '')
             + (m.trigger ? '<span class="hero-muted">→</span><span class="hero-trigger">' + esc(m.trigger) + '</span>' : '')
             + '</span>');
           heroAnim('anim-match', 700);
           break;
         }
-        case 'nomatch':
+        case 'nomatch': {
           _cancelPartialClear();
+          const _nmWake = (_lastWake && _lastWake !== '(reply)') ? _lastWake : null;
           _setHeroContent('<span class="hero-icon" style="color:var(--nomatch)">✗</span>'
             + '<span class="hero-text">'
-            + (_lastWake ? _wakeChip(_lastWake) : '')
+            + (_nmWake ? _wakeChip(_nmWake) : '')
             + (text ? '<span style="color:var(--nomatch)">' + esc(text) + '</span>' : '')
             + '<span style="color:var(--nomatch);margin-left:4px">no match</span>'
             + '</span>');
           heroAnim('anim-nomatch', 500);
           break;
+        }
         case 'skipped':
           _cancelPartialClear();
           _setHeroContent('<span class="hero-icon" style="color:var(--skipped)">⊘</span>'
