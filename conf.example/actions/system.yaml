@@ -38,3 +38,7 @@ triggers:
   - phrase: "impara nuovo comando"
     actions:
       - type: llm_learn
+
+  - phrase: "volume al"
+    actions:
+      - type: set_volume_from_transcript
