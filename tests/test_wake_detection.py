@@ -384,3 +384,13 @@ class TestExtractWakeCommand:
         matched, cmd = _extract_wake_command("ciao mondo", am, fuzzy=False)
         assert matched is None
         assert cmd == ""
+
+    def test_vosk_path_uses_exact_matching(self):
+        # Vosk stage-1 calls _extract_wake_command with fuzzy=False.
+        # "ascolta assistente" shares a content word with "ascoltami assistente"
+        # but must NOT match — Vosk transcribes accurately so fuzzy is wrong here.
+        from alexa_custom.stt_phonetics import _build_alias_map as bam
+        group = WakeWordGroup(word="ascoltami assistente")
+        am = bam([group])
+        matched, cmd = _extract_wake_command("ascolta assistente", am, fuzzy=False)
+        assert matched is None

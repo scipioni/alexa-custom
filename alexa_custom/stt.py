@@ -873,7 +873,7 @@ def _recognition_loop(
                 text = result.get("text", "").strip()
                 logger.debug("Stage1 Vosk free-vocab result: %r", text)
                 wake_match, inline_cmd = (
-                    _extract_wake_command(text, alias_map, fuzzy=True)
+                    _extract_wake_command(text, alias_map, fuzzy=False)
                     if text
                     else (None, "")
                 )

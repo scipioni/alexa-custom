@@ -204,6 +204,14 @@ class TestApproxWakeMatch:
         # single-char tokens should not trigger a match
         assert _approx_wake_match("e il la le un", self.alias_map) is None
 
+    def test_prefix_of_phrase_word_matches_by_content_word(self):
+        # _approx_wake_match alone scores 0.5 on "ascolta assistente" vs "ascoltami assistente"
+        # because "assistente" matches — the Vosk path avoids this by using fuzzy=False
+        am = _make_alias_map(["ascoltami assistente"])
+        result = _approx_wake_match("ascolta assistente", am)
+        # The function itself returns a match; protection is at the call-site (fuzzy=False for Vosk)
+        assert result is not None
+
 
 # ---------------------------------------------------------------------------
 # Confuser tests
