@@ -30,29 +30,31 @@ _UDEV_PATH = "/etc/udev/rules.d/89-alsa-usb-volume.rules"
 _STATE_FILE = "conf/state.yaml"
 
 
-def save_volume_state(volume: float) -> None:
-    p = Path(_STATE_FILE)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        p.write_text(yaml.safe_dump({"output_volume": volume}))
-    except OSError as e:
-        logger.warning("Failed to save volume state: %s", e)
+def save_volume_config(volume: float) -> None:
+    """Save volume to config.yaml for persistence."""
+    config_file = Path("conf/config.yaml")
+    if not config_file.exists():
+        logger.warning("config.yaml not found, cannot persist volume state")
+        return
 
-
-def load_volume_state() -> float | None:
-    p = Path(_STATE_FILE)
-    if not p.exists():
-        return None
     try:
-        data = yaml.safe_load(p.read_text())
-        if isinstance(data, dict) and "output_volume" in data:
-            vol = float(data["output_volume"])
-            global _OUTPUT_VOLUME
-            _OUTPUT_VOLUME = vol
-            return vol
+        import yaml
+        with open(config_file, "r") as f:
+            config = yaml.safe_load(f) or {}
+
+        if not isinstance(config, dict):
+            logger.warning("config.yaml has invalid structure, cannot persist volume state")
+            return
+
+        config.setdefault("audio", {})
+        config["audio"]["output_volume"] = volume
+
+        with open(config_file, "w") as f:
+            yaml.safe_dump(config, f)
+        logger.info(f"Updated config.yaml with volume: {volume:.0%}")
+
     except Exception as e:
-        logger.warning("Failed to load volume state: %s", e)
-    return None
+        logger.warning("Failed to save volume to config.yaml: %s", e)
 
 
 def configure(cfg) -> None:
