@@ -51,18 +51,19 @@ triggers:
 # Per-wake-word triggers
 # ---------------------------------------------------------------------------
 wake_triggers:
-  galileo:
-    - phrase: "chiama stefano"
+  help:
+    - phrase: "chiama assistenza"
+      aliases: ["chiama","aiuto"]
       actions:
         - type: ask
-          text: "Vuoi chiamare Stefano?"
+          text: "Vuoi chiamare assistenza ?"
           lang: "it-IT"
           timeout: 5.0
           on_reply:
             - phrase: "si"
               actions:
                 - type: say
-                  text: "Sto chiamando Stefano"
+                  text: "Sto chiamando l'assitenza"
                 - type: livekit_join
                 - type: telegram
                   text: "Collegati con casa <room>"

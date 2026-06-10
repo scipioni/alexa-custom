@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Italian speech-to-text on the Arduino UNO Q with sherpa-onnx (Whisper base int8)."""
+
 import sys
 import wave
 import numpy as np
@@ -11,9 +12,9 @@ recognizer = sherpa_onnx.OfflineRecognizer.from_whisper(
     encoder=f"{MODEL_DIR}/base-encoder.int8.onnx",
     decoder=f"{MODEL_DIR}/base-decoder.int8.onnx",
     tokens=f"{MODEL_DIR}/base-tokens.txt",
-    language="it",          # force Italian
+    language="it",  # force Italian
     task="transcribe",
-    num_threads=4,          # all four Cortex-A53 cores
+    num_threads=4,  # all four Cortex-A53 cores
 )
 
 with wave.open(sys.argv[1]) as f:

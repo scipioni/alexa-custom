@@ -8,10 +8,10 @@
 # ---------------------------------------------------------------------------
 # Extra wake words (optional)
 # ---------------------------------------------------------------------------
-# wake_words:
-#   - word: "hey computer"
-#     id: computer
-#     lang: "en-US"
-#   - word: "ciao galileo"
-#     id: ciao_galileo
-#     lang: "it-IT"
+
+wake_words:
+  - word: "aiuto"
+    id: help          # stable key used in wake_triggers (defaults to word)
+    aliases:
+      - "aiutami"   # alternative phrase that maps to the same group
+    skip_unmatched_inline: true   # if true, silently ignore when wake+command fires but command matches no trigger
