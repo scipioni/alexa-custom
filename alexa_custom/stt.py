@@ -51,6 +51,7 @@ from alexa_custom.stt_gating import (
     _read_with_timeout,
     _drain_pipe,
     _downmix_to_mono,
+    _apply_input_gain,
     resolve_capture_source,
     start_capture,
     _iter_gated_audio,
@@ -76,6 +77,7 @@ __all__ = [
     "_read_with_timeout",
     "_drain_pipe",
     "_downmix_to_mono",
+    "_apply_input_gain",
     "resolve_capture_source",
     "start_capture",
     "_iter_gated_audio",
@@ -413,7 +415,7 @@ def capture_transcript(
             got_speech = False
             continue
 
-        data = _downmix_to_mono(raw_data, channels)
+        data = _apply_input_gain(_downmix_to_mono(raw_data, channels))
 
         if on_stt_event:
             on_stt_event("level", {"mic": _rms_level(data)})
