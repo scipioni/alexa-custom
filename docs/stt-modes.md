@@ -1,4 +1,4 @@
-# STT Recognition Modes
+# STT Recognition Modes and Wake Behaviour
 
 alexa-custom supports three speech interaction patterns in two-stage mode.
 
@@ -76,6 +76,7 @@ which bridges most natural micro-pauses after the wake word.
 |-----------|----------|--------|
 | `stage1.vad_silence_ms` | `conf/config.yaml` `stt.stage1` | **Primary knob for mode 2.** Must be wider than the longest pause the user makes between wake word and command. Raise if mode 2 keeps falling back to mode 1; lower if mode 1 latency is too high. |
 | `stage1.min_speech_ms` | `conf/config.yaml` `stt.stage1` | Minimum speech before the VAD timer starts. Prevents the VAD from triggering on a brief syllable. |
+| `skip_unmatched_inline` | `conf/config.yaml` `wake_words[*]` | Per-group. If `true`, silently ignore when stage-1 fires with an inline command that matches no trigger (no beep, no stage-2, no LLM). Wake-only detection (mode 1) is unaffected. |
 
 ---
 
@@ -129,17 +130,21 @@ If the Vosk partial never stabilises at exactly the full phrase (e.g. the user's
 | Beep timing | Before command | After command | After command |
 | Stage-2 capture | Yes — full `capture_transcript` | No — `inline_cmd` from stage-1 | No — `inline_cmd` from partial match |
 | Latency after last word | `stage1.vad_silence_ms` (500–900ms) | `stage1.vad_silence_ms` (500–900ms) | `partial_stability_ms` (≈150ms) |
-| Requires known trigger phrase | No | No | Yes — only fires for configured triggers |
+| Requires known trigger phrase | No | No (opt-in via `skip_unmatched_inline`) | Yes — always |
 | Fuzzy matching | No (exact + alias) | Yes (`_approx_wake_match` on final) | No (exact only on partials) |
 | Sensitivity to `stage1.vad_silence_ms` | Low | High — must exceed pause between wake word and command | None |
 | Risk of losing command audio | None | Yes, if pause > `stage1.vad_silence_ms` | None |
-| LLM fallback for unknown commands | Yes | Yes | Falls back to mode 1/2 + LLM |
+| LLM fallback for unknown commands | Yes | Yes (unless `skip_unmatched_inline`) | Falls back to mode 1/2 + LLM |
 
 ---
 
 ## Current configuration
 
 ```yaml
+wake_words:
+  - word: "ehi galileo"
+    # skip_unmatched_inline: false   # set true to ignore unrecognised inline commands
+
 stt:
   vad_silence_ms: 500      # stage-2 command-end silence (mode 1)
 
