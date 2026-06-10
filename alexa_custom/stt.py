@@ -43,6 +43,7 @@ from alexa_custom.stt_phonetics import (
     _approx_wake_match,
     _resolve_triggers,
     _build_alias_map,
+    build_intent_map,
 )
 from alexa_custom.stt_gating import (
     _CHUNK,
@@ -80,6 +81,7 @@ __all__ = [
     "_iter_gated_audio",
     "run_stt_worker",
     "_extract_wake_command",
+    "_match_full_intent",
     "capture_transcript",
     "start_stt_thread",
 ]
@@ -300,6 +302,30 @@ def _extract_wake_command(
                 command = command.replace(w, "", 1).strip()
             return group, command
     return None, ""
+
+
+def _match_full_intent(
+    partial: str,
+    alias_map: dict[str, WakeWordGroup],
+    intent_map: dict[str, tuple[WakeWordGroup, Trigger]],
+) -> tuple[WakeWordGroup, Trigger, str] | None:
+    """Return (group, trigger, inline_cmd) if partial matches a complete (wake + trigger) intent.
+
+    Uses exact matching only — fuzzy is never applied on partial transcripts.
+    Returns None if only a wake word is present or the command is not a known trigger.
+    """
+    wake_group, inline_cmd = _extract_wake_command(partial, alias_map, fuzzy=False)
+    if wake_group is None or not inline_cmd:
+        return None
+    norm_cmd = normalize_text(inline_cmd)
+    for norm_wake, group in alias_map.items():
+        if group is not wake_group:
+            continue
+        key = normalize_text(f"{norm_wake} {norm_cmd}")
+        if key in intent_map:
+            matched_group, trigger = intent_map[key]
+            return matched_group, trigger, inline_cmd
+    return None
 
 
 def capture_transcript(
@@ -591,6 +617,7 @@ def _recognition_loop(
     _eff_vad_ms = config.stt.vad_silence_ms
 
     alias_map = _build_alias_map(config.wake_words)
+    intent_map = build_intent_map(alias_map, config.triggers)
     is_vosk = isinstance(stage1_backend, VoskSTT)
     is_kws = isinstance(stage1_backend, SherpaKeywordSpotter)
     vosk_use_grammar = config.stt.stage1.vosk_grammar
@@ -614,6 +641,9 @@ def _recognition_loop(
     was_gated = False
     stage1_last_speech_t = 0.0
     stage1_speech_ms = 0.0
+    _partial_stable_key: tuple | None = None
+    _partial_stable_reads: int = 0
+    _partial_stable_since: float = 0.0
 
     if on_stt_event:
         on_stt_event(
@@ -626,10 +656,20 @@ def _recognition_loop(
             f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "idle", loop=loop
         )
 
+    def _reset_stage1_state() -> None:
+        nonlocal stage1_last_speech_t, stage1_speech_ms
+        nonlocal _partial_stable_key, _partial_stable_reads, _partial_stable_since
+        stage1_last_speech_t = 0.0
+        stage1_speech_ms = 0.0
+        _partial_stable_key = None
+        _partial_stable_reads = 0
+        _partial_stable_since = 0.0
+
     if is_vosk:
 
         def _on_playback_end() -> None:
             stage1.Reset()
+            _reset_stage1_state()
     elif is_kws:
 
         def _on_playback_end() -> None:
@@ -637,10 +677,8 @@ def _recognition_loop(
     else:
 
         def _on_playback_end() -> None:
-            nonlocal stage1_last_speech_t, stage1_speech_ms
             stage1_backend.reset()
-            stage1_last_speech_t = 0.0
-            stage1_speech_ms = 0.0
+            _reset_stage1_state()
 
     for data in _iter_gated_audio(
         proc, channels, stop_event, on_playback_end=_on_playback_end, name="two-stage"
@@ -684,12 +722,12 @@ def _recognition_loop(
         if time.monotonic() < cooldown_until:
             if is_vosk:
                 stage1.Reset()
+                _reset_stage1_state()
             elif is_kws:
                 stage1_backend.reset()
             else:
                 stage1_backend.reset()
-                stage1_last_speech_t = 0.0
-                stage1_speech_ms = 0.0
+                _reset_stage1_state()
             continue
 
         if is_kws:
@@ -738,10 +776,63 @@ def _recognition_loop(
                 stage1_last_speech_t = time.monotonic()
                 stage1_speech_ms += chunk_ms
 
-            if on_stt_event:
-                partial = json.loads(stage1.PartialResult()).get("partial", "").strip()
-                if partial:
-                    on_stt_event("transcribing", {"text": partial})
+            partial = json.loads(stage1.PartialResult()).get("partial", "").strip()
+            if on_stt_event and partial:
+                on_stt_event("transcribing", {"text": partial})
+
+            if partial and config.recognition.partial_matching and not vosk_use_grammar:
+                intent_result = _match_full_intent(partial, alias_map, intent_map)
+                if intent_result is not None:
+                    intent_key = (intent_result[0].word, intent_result[1].phrase)
+                    if intent_key == _partial_stable_key:
+                        _partial_stable_reads += 1
+                        elapsed_ms = (time.monotonic() - _partial_stable_since) * 1000
+                        if (
+                            _partial_stable_reads >= config.recognition.partial_stability_reads
+                            and elapsed_ms >= config.recognition.partial_stability_ms
+                        ):
+                            wake_group, trigger, inline_cmd = intent_result
+                            logger.debug("Streaming intent fired: %r", partial)
+                            _reset_stage1_state()
+                            stage1.Reset()
+                            _wake_detected(
+                                wake_group=wake_group,
+                                proc=proc,
+                                channels=channels,
+                                pre_transcript=inline_cmd,
+                                backend=stage2_backend,
+                                config=config,
+                                stop_event=stop_event,
+                                telegram_client=telegram_client,
+                                livekit_connect_fn=livekit_connect_fn,
+                                livekit_connected_flag=livekit_connected_flag,
+                                on_stt_event=on_stt_event,
+                                mqtt_client=mqtt_client,
+                                loop=loop,
+                                dispatch_loop=dispatch_loop,
+                                vad_silence_ms=_eff_vad_ms,
+                            )
+                            _drain_pipe(proc)
+                            if on_stt_event:
+                                on_stt_event(
+                                    "listening",
+                                    {"wake_words": [g.word for g in config.wake_words]},
+                                )
+                            if mqtt_client:
+                                mqtt_client.publish_threadsafe(
+                                    f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
+                                    "idle",
+                                    loop=loop,
+                                )
+                            continue
+                    else:
+                        _partial_stable_key = intent_key
+                        _partial_stable_reads = 1
+                        _partial_stable_since = time.monotonic()
+                else:
+                    _partial_stable_key = None
+                    _partial_stable_reads = 0
+                    _partial_stable_since = 0.0
 
             vad_triggered = (
                 stage1_speech_ms >= _eff_stage1_min_speech_ms
@@ -785,6 +876,17 @@ def _recognition_loop(
                 )
 
             if wake_match is not None:
+                if inline_cmd and wake_match.skip_unmatched_inline:
+                    triggers = _resolve_triggers(wake_match, config.triggers)
+                    if not match_trigger(inline_cmd, triggers):
+                        logger.debug(
+                            "skip_unmatched_inline: inline %r didn't match any trigger for %r",
+                            inline_cmd,
+                            wake_match.word,
+                        )
+                        _reset_stage1_state()
+                        stage1.Reset()
+                        continue
                 _wake_detected(
                     wake_group=wake_match,
                     proc=proc,

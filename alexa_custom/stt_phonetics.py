@@ -60,3 +60,25 @@ def _resolve_triggers(group: WakeWordGroup, fallback: list[Trigger]) -> list[Tri
     # Per-group triggers take priority (listed first for scoring), global triggers
     # are always appended so they work regardless of which wake word is active.
     return group.triggers + fallback
+
+
+def build_intent_map(
+    alias_map: dict[str, "WakeWordGroup"],
+    global_triggers: list["Trigger"],
+) -> dict[str, tuple["WakeWordGroup", "Trigger"]]:
+    """Build a flat map of normalized (wake + trigger) strings → (group, trigger).
+
+    Used by the streaming intent detector to match full intents in Vosk partials
+    without waiting for VAD silence.
+    """
+    intent_map: dict[str, tuple[WakeWordGroup, Trigger]] = {}
+    seen_groups: set[int] = set()
+    for norm_wake, group in alias_map.items():
+        group_id = id(group)
+        triggers = _resolve_triggers(group, global_triggers)
+        for trigger in triggers:
+            for phrase in [trigger.phrase] + trigger.aliases:
+                key = normalize_text(f"{norm_wake} {phrase}")
+                intent_map[key] = (group, trigger)
+        seen_groups.add(group_id)
+    return intent_map

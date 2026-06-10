@@ -4,6 +4,8 @@ Tests cover:
 - _vosk_confidence: per-token confidence aggregation modes
 - _vosk_check_result: RMS pre-gate and multi-token confidence gating
 - Config parsing: confidence_mode validation
+- build_intent_map: intent map construction from wake phrases × triggers
+- _match_full_intent: exact partial-transcript intent matching
 """
 
 from __future__ import annotations
@@ -16,8 +18,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from alexa_custom.stt import _rms_level, _vosk_confidence, _vosk_check_result
-from alexa_custom.config import WakeWordGroup, STTStage1Config, _parse_stt_stage1_config  # noqa: F401
+from alexa_custom.stt import _rms_level, _vosk_confidence, _vosk_check_result, _match_full_intent
+from alexa_custom.stt_phonetics import build_intent_map
+from alexa_custom.config import WakeWordGroup, Trigger, STTStage1Config, _parse_stt_stage1_config  # noqa: F401
 
 
 # ---------------------------------------------------------------------------
@@ -218,3 +221,123 @@ class TestConfidenceModeConfig:
 
         with pytest.raises(ConfigError, match="confidence_mode"):
             _parse_stt_stage1_config(self._base(confidence_mode="max"))
+
+
+# ---------------------------------------------------------------------------
+# build_intent_map
+# ---------------------------------------------------------------------------
+
+
+def _make_trigger(phrase: str, aliases: list[str] | None = None) -> Trigger:
+    from alexa_custom.config import ActionEntry
+    return Trigger(phrase=phrase, actions=[], aliases=aliases or [])
+
+
+def _make_group_with_triggers(word: str, triggers: list[Trigger], aliases: list[str] | None = None) -> WakeWordGroup:
+    return WakeWordGroup(word=word, aliases=aliases or [], triggers=triggers)
+
+
+class TestBuildIntentMap:
+    def _alias_map(self, groups):
+        from alexa_custom.stt_phonetics import _build_alias_map
+        return _build_alias_map(groups)
+
+    def test_basic_combo(self):
+        t = _make_trigger("chiama stefano")
+        group = _make_group_with_triggers("ehi galileo", [t])
+        am = self._alias_map([group])
+        intent_map = build_intent_map(am, [])
+        assert "ehi galileo chiama stefano" in intent_map
+        assert intent_map["ehi galileo chiama stefano"] == (group, t)
+
+    def test_wake_alias_included(self):
+        t = _make_trigger("accendi")
+        group = _make_group_with_triggers("ehi galileo", [t], aliases=["galileo"])
+        am = self._alias_map([group])
+        intent_map = build_intent_map(am, [])
+        assert "galileo accendi" in intent_map
+        assert "ehi galileo accendi" in intent_map
+
+    def test_trigger_alias_included(self):
+        t = _make_trigger("chiama stefano", aliases=["telefona stefano"])
+        group = _make_group_with_triggers("galileo", [t])
+        am = self._alias_map([group])
+        intent_map = build_intent_map(am, [])
+        assert "galileo chiama stefano" in intent_map
+        assert "galileo telefona stefano" in intent_map
+
+    def test_per_group_triggers_shadow_globals(self):
+        local_t = _make_trigger("comando locale")
+        global_t = _make_trigger("comando globale")
+        group = _make_group_with_triggers("galileo", [local_t])
+        am = self._alias_map([group])
+        intent_map = build_intent_map(am, [global_t])
+        # Both per-group and global appear (resolve_triggers appends global)
+        assert "galileo comando locale" in intent_map
+        assert "galileo comando globale" in intent_map
+
+    def test_global_triggers_used_when_no_per_group(self):
+        global_t = _make_trigger("chiama")
+        group = WakeWordGroup(word="galileo")
+        am = self._alias_map([group])
+        intent_map = build_intent_map(am, [global_t])
+        assert "galileo chiama" in intent_map
+
+    def test_empty_triggers_returns_empty(self):
+        group = WakeWordGroup(word="galileo")
+        am = self._alias_map([group])
+        intent_map = build_intent_map(am, [])
+        assert intent_map == {}
+
+
+# ---------------------------------------------------------------------------
+# _match_full_intent
+# ---------------------------------------------------------------------------
+
+
+class TestMatchFullIntent:
+    def _setup(self):
+        chiama = _make_trigger("chiama stefano")
+        accendi = _make_trigger("accendi le luci", aliases=["illumina"])
+        group = _make_group_with_triggers("ehi galileo", [chiama, accendi], aliases=["galileo"])
+        from alexa_custom.stt_phonetics import _build_alias_map
+        am = _build_alias_map([group])
+        intent_map = build_intent_map(am, [])
+        return am, intent_map, group, chiama, accendi
+
+    def test_full_match_returns_tuple(self):
+        am, intent_map, group, chiama, _ = self._setup()
+        result = _match_full_intent("ehi galileo chiama stefano", am, intent_map)
+        assert result is not None
+        assert result[0] is group
+        assert result[1] is chiama
+        assert result[2] == "chiama stefano"
+
+    def test_wake_only_returns_none(self):
+        am, intent_map, _, _, _ = self._setup()
+        assert _match_full_intent("ehi galileo", am, intent_map) is None
+
+    def test_unknown_command_returns_none(self):
+        am, intent_map, _, _, _ = self._setup()
+        assert _match_full_intent("ehi galileo dimmi il meteo", am, intent_map) is None
+
+    def test_trigger_alias_matched(self):
+        am, intent_map, group, _, accendi = self._setup()
+        result = _match_full_intent("ehi galileo illumina", am, intent_map)
+        assert result is not None
+        assert result[1] is accendi
+
+    def test_wake_alias_matched(self):
+        am, intent_map, group, chiama, _ = self._setup()
+        result = _match_full_intent("galileo chiama stefano", am, intent_map)
+        assert result is not None
+        assert result[1] is chiama
+
+    def test_fuzzy_not_applied(self):
+        am, intent_map, _, _, _ = self._setup()
+        # "ei galileo" is not in alias_map (fuzzy would catch it, exact doesn't)
+        assert _match_full_intent("ei galileo chiama stefano", am, intent_map) is None
+
+    def test_empty_partial_returns_none(self):
+        am, intent_map, _, _, _ = self._setup()
+        assert _match_full_intent("", am, intent_map) is None

@@ -1,6 +1,6 @@
 # STT Recognition Modes
 
-alexa-custom supports two speech interaction patterns in two-stage mode.
+alexa-custom supports three speech interaction patterns in two-stage mode.
 
 ---
 
@@ -79,16 +79,61 @@ which bridges most natural micro-pauses after the wake word.
 
 ---
 
+## Mode 3 — streaming intent (wake word + command, no silence wait)
+
+The system fires the moment a complete (wake word + trigger phrase) combination is stably recognised in the Vosk partial transcript — before any VAD silence occurs.
+
+```
+[user: "arduino chiama stefano"]  →  partial stable for 150ms  →  fires immediately  →  beep plays  →  stage-2 skipped
+```
+
+### Flow
+
+1. **Stage-1** runs continuously. On every audio chunk Vosk emits a partial transcript.
+2. `_match_full_intent()` checks if the partial exactly matches any `(wake phrase + trigger phrase)` combo from the pre-built `intent_map`. Exact matching only — fuzzy is never applied to partials.
+3. When the same full-intent match appears for at least `partial_stability_reads` consecutive reads AND `partial_stability_ms` of wall-clock time, `_wake_detected` is called immediately with `pre_transcript=inline_cmd`.
+4. Stage-2 is skipped (same as mode 2). The beep plays as confirmation.
+5. If no intent match is found (wake only, or unknown command), the loop falls through to the existing VAD path — modes 1, 2, and LLM fallback all work unchanged.
+
+### When mode 3 fires vs. falls back
+
+```
+partial matches (wake + known trigger)?
+        YES → stable for 150ms / 3 reads? → FIRE immediately (mode 3)
+        NO  → VAD fires on finalized transcript
+                 ├─ wake only        → beep + stage-2 capture (mode 1)
+                 ├─ wake + inline    → inline_cmd extracted (mode 2)
+                 └─ wake + unknown   → LLM fallback
+```
+
+### Why it can fail
+
+If the Vosk partial never stabilises at exactly the full phrase (e.g. the user's accent causes consistent mistranscription of a wake word alias), mode 3 silently falls back to mode 1/2. Adding the mistranscribed form as an alias in `config.yaml` is the fix — fuzzy matching is intentionally not used on partials.
+
+### Tuning
+
+| Parameter | Location | Effect |
+|-----------|----------|--------|
+| `recognition.partial_matching` | `conf/config.yaml` | Enable/disable mode 3 (default `true`). |
+| `recognition.partial_stability_ms` | `conf/config.yaml` | Minimum wall-clock ms the partial match must be stable before firing (default 150ms). Lower = faster response; raise if false fires occur. |
+| `recognition.partial_stability_reads` | `conf/config.yaml` | Minimum consecutive matching partial reads (default 3). Protects against single-frame Vosk flickers. |
+
+---
+
 ## Comparison
 
-| | Mode 1 | Mode 2 |
-|-|--------|--------|
-| Speaking pattern | Wake word → pause → beep → command | Wake word + command in one breath |
-| Beep timing | Before command | After command |
-| Stage-2 capture | Yes — full `capture_transcript` | No — `inline_cmd` from stage-1 |
-| Sensitivity to `stage1.vad_silence_ms` | Low (Vosk endpoint usually fires first) | High — must exceed pause between wake word and command |
-| Sensitivity to `stt.vad_silence_ms` | High — controls command end detection | None |
-| Risk of losing command audio | None | Yes, if pause > `stage1.vad_silence_ms` |
+| | Mode 1 | Mode 2 | Mode 3 |
+|-|--------|--------|--------|
+| Speaking pattern | Wake word → pause → beep → command | Wake word + command in one breath | Wake word + command in one breath |
+| Trigger | VAD silence / Vosk endpoint | VAD silence / Vosk endpoint | Partial transcript stability |
+| Beep timing | Before command | After command | After command |
+| Stage-2 capture | Yes — full `capture_transcript` | No — `inline_cmd` from stage-1 | No — `inline_cmd` from partial match |
+| Latency after last word | `stage1.vad_silence_ms` (500–900ms) | `stage1.vad_silence_ms` (500–900ms) | `partial_stability_ms` (≈150ms) |
+| Requires known trigger phrase | No | No | Yes — only fires for configured triggers |
+| Fuzzy matching | No (exact + alias) | Yes (`_approx_wake_match` on final) | No (exact only on partials) |
+| Sensitivity to `stage1.vad_silence_ms` | Low | High — must exceed pause between wake word and command | None |
+| Risk of losing command audio | None | Yes, if pause > `stage1.vad_silence_ms` | None |
+| LLM fallback for unknown commands | Yes | Yes | Falls back to mode 1/2 + LLM |
 
 ---
 
@@ -102,6 +147,12 @@ stt:
     backend: vosk
     vad_silence_ms: 900    # bridges wake word + command pause (mode 2)
     min_speech_ms: 300
+
+recognition:
+  command_timeout: 2.5
+  partial_matching: true        # mode 3 enabled by default
+  partial_stability_ms: 150     # min ms before firing on stable partial match
+  partial_stability_reads: 3    # min consecutive matching reads
 ```
 
-`recognition.command_timeout: 3.0` (in `conf/config.yaml` under `recognition`).
+`recognition.command_timeout: 2.5` (in `conf/config.yaml` under `recognition`).
