@@ -765,6 +765,7 @@ def _recognition_loop(
             stage1_last_speech_t = 0.0
             stage1_speech_ms = 0.0
 
+            inline_cmd = ""
             if vosk_use_grammar:
                 wake_match = _vosk_check_result(
                     data,
