@@ -290,6 +290,9 @@ def _extract_wake_command(
     norm_text = normalize_text(text)
     for norm_phrase, group in alias_map.items():
         if norm_text.startswith(norm_phrase):
+            rest = norm_text[len(norm_phrase):]
+            if rest and not rest.startswith(" "):
+                continue  # prefix of a longer word — not a valid wake boundary
             command = text.lower().replace(norm_phrase, "", 1).strip()
             return group, command
     if fuzzy:
@@ -876,7 +879,20 @@ def _recognition_loop(
                 )
 
             if wake_match is not None:
-                if inline_cmd and wake_match.skip_unmatched_inline:
+                if wake_match.skip_unmatched_inline:
+                    if not inline_cmd:
+                        logger.debug(
+                            "skip_unmatched_inline: standalone wake %r with no command — skipping",
+                            wake_match.word,
+                        )
+                        if on_stt_event:
+                            on_stt_event(
+                                "skipped",
+                                {"word": wake_match.word, "text": ""},
+                            )
+                        _reset_stage1_state()
+                        stage1.Reset()
+                        continue
                     triggers = _resolve_triggers(wake_match, config.triggers)
                     if not match_trigger(inline_cmd, triggers):
                         logger.debug(

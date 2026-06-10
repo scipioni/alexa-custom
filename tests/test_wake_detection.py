@@ -18,8 +18,8 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from alexa_custom.stt import _rms_level, _vosk_confidence, _vosk_check_result, _match_full_intent
-from alexa_custom.stt_phonetics import build_intent_map
+from alexa_custom.stt import _rms_level, _vosk_confidence, _vosk_check_result, _match_full_intent, _extract_wake_command
+from alexa_custom.stt_phonetics import build_intent_map, _build_alias_map
 from alexa_custom.config import WakeWordGroup, Trigger, STTStage1Config, _parse_stt_stage1_config  # noqa: F401
 
 
@@ -341,3 +341,46 @@ class TestMatchFullIntent:
     def test_empty_partial_returns_none(self):
         am, intent_map, _, _, _ = self._setup()
         assert _match_full_intent("", am, intent_map) is None
+
+
+# ---------------------------------------------------------------------------
+# _extract_wake_command
+# ---------------------------------------------------------------------------
+
+
+class TestExtractWakeCommand:
+    def _alias_map(self):
+        group = WakeWordGroup(word="aiuto", aliases=["aiutami"])
+        return _build_alias_map([group]), group
+
+    def test_alias_prefix_of_word_not_consumed(self):
+        # "aiutami" starts with "aiuto" but must match the alias exactly,
+        # not yield "mi" as an inline command.
+        am, group = self._alias_map()
+        matched, cmd = _extract_wake_command("aiutami", am, fuzzy=False)
+        assert matched is group
+        assert cmd == ""
+
+    def test_wake_word_alone(self):
+        am, group = self._alias_map()
+        matched, cmd = _extract_wake_command("aiuto", am, fuzzy=False)
+        assert matched is group
+        assert cmd == ""
+
+    def test_wake_word_with_command(self):
+        am, group = self._alias_map()
+        matched, cmd = _extract_wake_command("aiuto fermati", am, fuzzy=False)
+        assert matched is group
+        assert cmd == "fermati"
+
+    def test_alias_with_command(self):
+        am, group = self._alias_map()
+        matched, cmd = _extract_wake_command("aiutami fermati", am, fuzzy=False)
+        assert matched is group
+        assert cmd == "fermati"
+
+    def test_no_match_returns_none(self):
+        am, _ = self._alias_map()
+        matched, cmd = _extract_wake_command("ciao mondo", am, fuzzy=False)
+        assert matched is None
+        assert cmd == ""
