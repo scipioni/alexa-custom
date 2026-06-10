@@ -4,6 +4,46 @@ alexa-custom supports three speech interaction patterns in two-stage mode.
 
 ---
 
+## Overview
+
+```mermaid
+flowchart TD
+    A([continuous audio]) --> P
+
+    P["PartialResult() — every chunk"]
+    P --> M3{"_match_full_intent()\nstable ≥150ms / 3 reads?"}
+
+    M3 -->|"yes — Mode 3"| B3["_wake_detected\npre_transcript = inline_cmd"]
+    M3 -->|no| VAD
+
+    VAD{"VAD / endpoint fires?"}
+    VAD -->|no| A
+    VAD -->|yes| EWC{"_extract_wake_command()\nfuzzy=True"}
+
+    EWC -->|"no wake word"| R1[reset → continue]
+    R1 --> A
+
+    EWC -->|"wake word\ninline_cmd = ''"| B1["Mode 1\n_wake_detected\npre_transcript = ''"]
+    EWC -->|"wake word\ninline_cmd ≠ ''"| SK
+
+    SK{"skip_unmatched_inline = true\n& no trigger match?"}
+    SK -->|yes| R2[silent skip]
+    R2 --> A
+    SK -->|"no — Mode 2"| B2["Mode 2\n_wake_detected\npre_transcript = inline_cmd"]
+
+    B1 --> CT["capture_transcript\nstage-2"]
+    CT --> TM
+    B2 --> TM
+    B3 --> TM
+
+    TM{"match_trigger()"}
+    TM -->|match| D([dispatch action])
+    TM -->|"no match + LLM fallback"| LLM([LLM])
+    TM -->|"no match"| ERR([error tone])
+```
+
+---
+
 ## Mode 1 — wake word → beep → command
 
 The user speaks the wake word, pauses, waits for the beep, then speaks the command as a separate utterance.
