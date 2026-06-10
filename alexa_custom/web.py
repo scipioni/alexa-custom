@@ -464,6 +464,7 @@ class WebServer:
             entry = {
                 "word": g.word,
                 "aliases": g.aliases,
+                "skip_unmatched_inline": g.skip_unmatched_inline,
                 "triggers": [
                     {
                         "phrase": t.phrase,
