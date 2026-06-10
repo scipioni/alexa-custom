@@ -677,6 +677,14 @@ async def _async_main(
             break
         await asyncio.sleep(0.5)
 
+    # Restore persisted volume to the PipeWire hardware sink
+    from alexa_custom.audio_hw import get_output_volume, set_output_volume
+
+    import pulsectl
+
+    with pulsectl.Pulse("alexa-startup") as _pulse:
+        set_output_volume(_pulse, None, get_output_volume())
+
     # Wait for STT backend to finish loading so "Sistema pronto" plays only
     # when the system is actually ready to hear the first wake word.
     if stt_ready_event is not None and not stt_ready_event.is_set():
@@ -982,6 +990,7 @@ def main() -> None:
     import argparse
     import threading
 
+    from alexa_custom.audio_hw import load_volume_state
     from alexa_custom.config import load_config
 
     from alexa_custom.config import load_secrets
@@ -1013,6 +1022,9 @@ def main() -> None:
     input_spec = config.audio.input_device if config is not None else None
     output_spec = config.audio.output_device if config is not None else None
     output_volume = config.audio.output_volume if config is not None else 0.5
+    saved_vol = load_volume_state()
+    if saved_vol is not None:
+        output_volume = saved_vol
     input_gain = config.audio.input_gain if config is not None else 1.0
     room = os.environ.get("LIVEKIT_ROOM", "")
 

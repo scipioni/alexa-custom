@@ -448,6 +448,65 @@ async def handle_tone(action: ActionEntry, **_):
     await asyncio.to_thread(play_tone, name)
 
 
+@registry.register("set_volume")
+async def handle_set_volume(action: ActionEntry, **_):
+    import pulsectl
+
+    from alexa_custom.audio import play_tone
+    from alexa_custom.audio_hw import (
+        get_output_volume,
+        save_volume_state,
+        set_output_volume,
+    )
+
+    mode = action.params.get("mode", "absolute")
+    step = float(action.params.get("step", 0.1))
+    value = float(action.params.get("value", 0.5))
+
+    current = get_output_volume()
+    if mode == "up":
+        new_vol = min(1.0, current + step)
+    elif mode == "down":
+        new_vol = max(0.0, current - step)
+    else:
+        new_vol = max(0.0, min(1.0, value))
+
+    if abs(new_vol - current) < 0.001:
+        return
+
+    with pulsectl.Pulse("alexa-volume") as pulse:
+        set_output_volume(pulse, None, new_vol)
+    save_volume_state(new_vol)
+    await asyncio.to_thread(play_tone, "info")
+
+
+@registry.register("set_volume_from_transcript")
+async def handle_set_volume_from_transcript(transcript: str | None = None, **_):
+    from alexa_custom.audio import play_tone
+    from alexa_custom.audio_hw import save_volume_state, set_output_volume
+    from alexa_custom.number_parser import parse_percentage
+
+    if not transcript:
+        logger.debug("set_volume_from_transcript: no transcript, skipping")
+        return
+
+    value = parse_percentage(transcript)
+    if value is None:
+        logger.debug(
+            "set_volume_from_transcript: no percentage found in '%s', skipping",
+            transcript,
+        )
+        return
+
+    import pulsectl
+
+    with pulsectl.Pulse("alexa-volume") as pulse:
+        set_output_volume(pulse, None, value)
+    save_volume_state(value)
+    logger.info("Set volume to %.0f%% via '%s'", value * 100, transcript)
+    await asyncio.to_thread(play_tone, "info")
+
+
 @registry.register("shell")
 async def handle_shell(action: ActionEntry, **_):
     command = action.params.get("command", "")
