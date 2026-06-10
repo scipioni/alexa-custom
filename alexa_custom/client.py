@@ -870,6 +870,15 @@ def main() -> None:
     import argparse
     import threading
 
+    from alexa_custom.audio_hw import load_volume_state
+    from alexa_custom.config import load_config
+
+    from alexa_custom.config import load_secrets
+
+    secrets = load_secrets("conf/secrets.yaml")
+    config = load_config("conf/config.yaml", secrets=secrets)
+
+    ensure_setup()
     from alexa_custom import __version__
 
     parser = argparse.ArgumentParser(description="alexa-custom LiveKit client")
@@ -907,6 +916,9 @@ def main() -> None:
     input_spec = config.audio.input_device if config is not None else None
     output_spec = config.audio.output_device if config is not None else None
     output_volume = config.audio.output_volume if config is not None else 0.5
+    saved_vol = load_volume_state()
+    if saved_vol is not None:
+        output_volume = saved_vol
     input_gain = config.audio.input_gain if config is not None else 1.0
     from alexa_custom.audio_hw import load_input_gain_state, load_volume_state
 

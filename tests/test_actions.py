@@ -151,55 +151,26 @@ class TestConfigurableMatching:
 
     def test_get_similarity_score_all_algorithms(self):
         from alexa_custom.actions import get_similarity_score
-
-        # 1. levenshtein similarity
-        assert (
-            get_similarity_score("ciao", "miao", "levenshtein") == 75.0
-        )  # (1 - 1/4) * 100
+        assert get_similarity_score("ciao", "miao", "levenshtein") == 75.0
         assert get_similarity_score("si", "si", "levenshtein") == 100.0
-
-        # 2. ratio similarity
         assert get_similarity_score("si", "si", "ratio") == 100.0
-
-        # 3. token_set_ratio similarity
         assert get_similarity_score("si", "si", "token_set_ratio") == 100.0
 
     def test_match_trigger_with_custom_algorithms_and_thresholds(self):
         triggers = [_trigger("accendi la luce")]
-
-        # token_set_ratio is tolerant to word ordering & extra words
-        assert (
-            match_trigger(
-                "luce accendi la", triggers, threshold=80, algorithm="token_set_ratio"
-            )
-            is not None
-        )
-
-        # levenshtein is strict about character alignment and sequence
-        assert (
-            match_trigger(
-                "luce accendi la", triggers, threshold=80, algorithm="levenshtein"
-            )
-            is None
-        )
+        assert match_trigger("luce accendi la", triggers, threshold=80, algorithm="token_set_ratio") is not None
+        assert match_trigger("luce accendi la", triggers, threshold=80, algorithm="levenshtein") is None
 
     def test_short_phrase_exact_match_guard(self):
-        # Trigger phrase "si" has length 2 (< 4)
         triggers = [_trigger("si")]
-
         for algo in ["token_set_ratio", "levenshtein", "ratio"]:
-            # Exact match must succeed
             assert match_trigger("si", triggers, algorithm=algo) is not None
-            # Inflected or different words must fail
             assert match_trigger("se", triggers, algorithm=algo) is None
-            # Extra words must fail even for token_set_ratio!
             assert match_trigger("si grazie", triggers, algorithm=algo) is None
 
     @pytest.mark.asyncio
     async def test_reply_matching_independence(self):
         from alexa_custom.config import RecognitionConfig
-
-        # Mock ActionsConfig
         config = MagicMock()
         config.recognition = RecognitionConfig(
             matching_algorithm="token_set_ratio",
@@ -207,7 +178,6 @@ class TestConfigurableMatching:
             reply_matching_algorithm="levenshtein",
             reply_matching_threshold=90.0,
         )
-
         from alexa_custom.actions import handle_ask
 
         action = ActionEntry(
@@ -215,10 +185,6 @@ class TestConfigurableMatching:
             params={"text": "vuoi?", "timeout": 1.0},
         )
         action.on_reply = [Trigger(phrase="chiama", actions=[])]
-
-        # Mock listen_fn to return a partial match "chiamare" (dist = 2, max_len = 8)
-        # score = (1 - 2/8) * 100 = 75.0%
-        # Under levenshtein threshold of 90.0, "chiamare" should fail to match "chiama"!
         mock_listen_fn = AsyncMock(return_value="chiamare")
 
         _ctx = ActionContext(
@@ -227,9 +193,7 @@ class TestConfigurableMatching:
             listen_fn=mock_listen_fn,
             actions_config=config,
         )
-        with patch(
-            "alexa_custom.actions.dispatch", new_callable=AsyncMock
-        ) as mock_dispatch:
+        with patch("alexa_custom.actions.dispatch", new_callable=AsyncMock) as mock_dispatch:
             with patch("alexa_custom.tts.get_engine"):
                 await handle_ask(
                     action,
@@ -240,8 +204,6 @@ class TestConfigurableMatching:
                     actions_config=config,
                 )
                 mock_dispatch.assert_not_called()
-
-        # Let's verify that with an exact match "chiama" -> 100% -> should match!
         mock_listen_fn_exact = AsyncMock(return_value="chiama")
         _ctx_exact = ActionContext(
             telegram_client=MagicMock(),
@@ -388,6 +350,42 @@ class TestSetVolume:
             await registry.execute("set_volume", action=action)
             mock_set.assert_not_called()
             mock_tone.assert_not_called()
+
+
+# ── save/load volume state ────────────────────────────────────────────────────────
+
+
+class TestVolumeState:
+    def test_save_and_load_roundtrip(self, tmp_path):
+        from alexa_custom import audio_hw
+
+        state_file = tmp_path / "state.yaml"
+        with patch.object(audio_hw, "_STATE_FILE", str(state_file)):
+            audio_hw.save_volume_state(0.7)
+            assert state_file.read_text().strip() == "output_volume: 0.7"
+
+            audio_hw._OUTPUT_VOLUME = 0.0
+            loaded = audio_hw.load_volume_state()
+            assert loaded is not None
+            assert abs(loaded - 0.7) < 0.001
+            assert abs(audio_hw._OUTPUT_VOLUME - 0.7) < 0.001
+
+    def test_missing_file_returns_none(self):
+        from alexa_custom import audio_hw
+
+        with patch.object(audio_hw, "_STATE_FILE", "/nonexistent/state.yaml"):
+            assert audio_hw.load_volume_state() is None
+
+    def test_malformed_file_returns_none(self, tmp_path):
+        from alexa_custom import audio_hw
+
+        state_file = tmp_path / "state.yaml"
+        state_file.write_text("not: valid: yaml: [")
+        with patch.object(audio_hw, "_STATE_FILE", str(state_file)):
+            assert audio_hw.load_volume_state() is None
+
+
+# ── set_volume_from_transcript action handler ───────────────────────────────────
 
 
 class TestSetVolumeFromTranscript:
