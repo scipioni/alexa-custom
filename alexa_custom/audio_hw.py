@@ -16,6 +16,7 @@ _TONE_PREROLL_MS = int(os.environ.get("AUDIO_TONE_PREROLL_MS", "300"))
 _SAMPLERATE = {"usb": 48000, "bluetooth": 16000}
 _DEFAULT_CARD_NAME = "NewPie"
 _OUTPUT_VOLUME = 0.5
+_INPUT_GAIN = 1.0
 
 _pw_device_resolved = False
 _pw_device_index: int | None = None
@@ -29,16 +30,22 @@ def configure(cfg) -> None:
         _TONE_PREROLL_MS, \
         _SAMPLERATE, \
         _DEFAULT_CARD_NAME, \
-        _OUTPUT_VOLUME
+        _OUTPUT_VOLUME, \
+        _INPUT_GAIN
     _POST_PLAYBACK_MS = int(cfg.audio.post_playback_ms)
     _TONE_PREROLL_MS = int(cfg.audio.tone_preroll_ms)
     _SAMPLERATE = dict(cfg.audio.sample_rates)
     _DEFAULT_CARD_NAME = cfg.audio.card_name
     _OUTPUT_VOLUME = cfg.audio.output_volume
+    _INPUT_GAIN = cfg.audio.input_gain
 
 
 def get_output_volume() -> float:
     return _OUTPUT_VOLUME
+
+
+def get_input_gain() -> float:
+    return _INPUT_GAIN
 
 
 def get_post_playback_ms() -> int:
@@ -206,29 +213,13 @@ def set_output_volume(
     _restore_hw_pcm()
 
 
-def set_input_gain(pulse: pulsectl.Pulse, input_spec: str | None, gain: float) -> None:
-    """Set PulseAudio volume on the configured input source (input gain boost)."""
-    if gain <= 0:
-        return
-    needle = (input_spec or _DEFAULT_CARD_NAME).lower()
-    source = next(
-        (
-            s
-            for s in pulse.source_list()
-            if "monitor" not in s.name
-            and (needle in s.description.lower() or needle in s.name.lower())
-        ),
-        None,
-    )
-    if not source:
-        logger.warning(
-            f"Cannot set input gain: source matching {input_spec!r} not found"
-        )
-        return
-    from pulsectl import PulseVolumeInfo
-
-    pulse.volume_set(source, PulseVolumeInfo(gain, channels=2))
-    logger.info(f"Set input gain to {gain:.0%} on {source.description}")
+def set_input_gain(
+    pulse: pulsectl.Pulse | None, input_spec: str | None, gain: float
+) -> None:
+    """Store the input gain for software scaling in the capture pipeline."""
+    global _INPUT_GAIN
+    _INPUT_GAIN = max(0.0, gain)
+    logger.info(f"Input gain set to {gain:.0%} (applied as software scaling)")
 
 
 def enforce_audio_state(
