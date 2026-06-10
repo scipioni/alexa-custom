@@ -72,35 +72,82 @@ class TelegramClient:
     # Future: async def start_polling(self, handler) -> None: ...
 
 
-try:
-    from rapidfuzz import fuzz as _fuzz
+_TRIGGER_THRESHOLD = 70.0
 
-    def _trigger_score(a: str, b: str) -> float:
-        return _fuzz.token_set_ratio(a, b)
 
-    _TRIGGER_THRESHOLD = 70.0
-except ImportError:
-    logger.warning(
-        "rapidfuzz not installed; falling back to difflib for trigger matching"
-    )
+def levenshtein_distance(s1: str, s2: str) -> int:
+    """Calculate the Levenshtein distance between two strings using dynamic programming."""
+    if len(s1) < len(s2):
+        return levenshtein_distance(s2, s1)
+    if len(s2) == 0:
+        return len(s1)
 
-    def _trigger_score(a: str, b: str) -> float:  # type: ignore[misc]
-        return difflib.SequenceMatcher(None, a, b).ratio() * 100
+    previous_row = list(range(len(s2) + 1))
+    for i, c1 in enumerate(s1):
+        current_row = [i + 1]
+        for j, c2 in enumerate(s2):
+            insertions = previous_row[j + 1] + 1
+            deletions = current_row[j] + 1
+            substitutions = previous_row[j] + (0 if c1 == c2 else 1)
+            current_row.append(min(insertions, deletions, substitutions))
+        previous_row = current_row
+    return previous_row[-1]
 
-    _TRIGGER_THRESHOLD = 70.0
+
+def get_similarity_score(a: str, b: str, algorithm: str) -> float:
+    """Calculate a similarity score (0.0 - 100.0) between two strings based on algorithm."""
+    if not a or not b:
+        return 0.0
+
+    # 1. Try using rapidfuzz
+    try:
+        from rapidfuzz import fuzz as _fuzz
+        from rapidfuzz.distance import Levenshtein as _lev
+
+        if algorithm == "levenshtein":
+            max_len = max(len(a), len(b))
+            if max_len == 0:
+                return 100.0
+            dist = _lev.distance(a, b)
+            return (1.0 - (dist / max_len)) * 100.0
+        elif algorithm == "ratio":
+            return _fuzz.ratio(a, b)
+        else: # "token_set_ratio"
+            return _fuzz.token_set_ratio(a, b)
+
+    # 2. Fall back if rapidfuzz is not installed
+    except ImportError:
+        if algorithm == "levenshtein":
+            max_len = max(len(a), len(b))
+            if max_len == 0:
+                return 100.0
+            dist = levenshtein_distance(a, b)
+            return (1.0 - (dist / max_len)) * 100.0
+        else: # "ratio" or "token_set_ratio" fallback
+            import difflib
+            return difflib.SequenceMatcher(None, a, b).ratio() * 100.0
 
 
 def match_trigger(
     transcript: str,
     triggers: list[Trigger],
     threshold: float = _TRIGGER_THRESHOLD,
+    algorithm: str = "token_set_ratio",
 ) -> Trigger | None:
     best: Trigger | None = None
     best_score = 0.0
     t_phon = italian_phonetic(transcript)
     for trigger in triggers:
         phrases = [trigger.phrase] + trigger.aliases
-        score = max(_trigger_score(t_phon, italian_phonetic(p)) for p in phrases)
+        scores = []
+        for p in phrases:
+            p_phon = italian_phonetic(p)
+            if len(p_phon) < 4:
+                score = 100.0 if t_phon == p_phon else 0.0
+            else:
+                score = get_similarity_score(t_phon, p_phon, algorithm)
+            scores.append(score)
+        score = max(scores)
         if score > best_score:
             best_score = score
             best = trigger
@@ -311,7 +358,18 @@ async def handle_ask(
 
     transcript = await listen_task
     if transcript:
-        reply_trigger = match_trigger(transcript, action.on_reply)
+        algo = "levenshtein"
+        threshold = 80.0
+        if actions_config is not None:
+            algo = actions_config.recognition.reply_matching_algorithm
+            threshold = actions_config.recognition.reply_matching_threshold
+
+        reply_trigger = match_trigger(
+            transcript,
+            action.on_reply,
+            threshold=threshold,
+            algorithm=algo,
+        )
         if reply_trigger:
             logger.info(f"Matched reply trigger: '{reply_trigger.phrase}'")
             if on_stt_event:

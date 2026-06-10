@@ -42,7 +42,9 @@ class WakeWordGroup:
     triggers: list[Trigger] = field(default_factory=list)
     lang: str = "it-IT"
     id: str = ""  # stable key for wake_triggers in action files; defaults to word
-    skip_unmatched_inline: bool = False  # if True, silently skip when inline_cmd doesn't match any trigger
+    skip_unmatched_inline: bool = (
+        False  # if True, silently skip when inline_cmd doesn't match any trigger
+    )
 
     def __post_init__(self):
         if not self.id:
@@ -118,6 +120,7 @@ class STTStage2Config:
 @dataclass
 class STTConfig:
     vad_silence_ms: int = 500
+    flush_ms: int = 300
     stage1: STTStage1Config = field(default_factory=STTStage1Config)
     stage2: STTStage2Config = field(default_factory=STTStage2Config)
 
@@ -130,16 +133,24 @@ class TTSConfig:
 
 
 _VALID_MODES = {"two-stage", "single-stage"}
+_VALID_ALGORITHMS = {"token_set_ratio", "levenshtein", "ratio"}
 
 
 @dataclass
 class RecognitionConfig:
     mode: str = "two-stage"
     command_timeout: float = 2.5
+    # Absolute cap on stage-2 capture once speech has started; the window
+    # slides while the user keeps speaking, bounded by this. 0 disables sliding.
+    command_max_timeout: float = 8.0
     wake_tone: str = "wake"
     partial_matching: bool = True
     partial_stability_ms: int = 150
     partial_stability_reads: int = 3
+    matching_algorithm: str = "token_set_ratio"
+    matching_threshold: float = 70.0
+    reply_matching_algorithm: str = "levenshtein"
+    reply_matching_threshold: float = 80.0
 
 
 @dataclass
@@ -478,6 +489,7 @@ def _parse_stt_config(raw: dict) -> STTConfig:
         raise ConfigError("'stt.stage2' must be a mapping if present")
     return STTConfig(
         vad_silence_ms=int(raw.get("vad_silence_ms", 700)),
+        flush_ms=int(raw.get("flush_ms", 300)),
         stage1=_parse_stt_stage1_config(stage1_raw),
         stage2=_parse_stt_stage2_config(stage2_raw),
     )
@@ -498,13 +510,28 @@ def _parse_recognition_config(raw: dict) -> RecognitionConfig:
         raise ConfigError(
             f"'recognition.mode' must be one of {sorted(_VALID_MODES)}, got {mode!r}"
         )
+    algo = str(raw.get("matching_algorithm", "token_set_ratio"))
+    if algo not in _VALID_ALGORITHMS:
+        raise ConfigError(
+            f"'recognition.matching_algorithm' must be one of {sorted(_VALID_ALGORITHMS)}, got {algo!r}"
+        )
+    reply_algo = str(raw.get("reply_matching_algorithm", "levenshtein"))
+    if reply_algo not in _VALID_ALGORITHMS:
+        raise ConfigError(
+            f"'recognition.reply_matching_algorithm' must be one of {sorted(_VALID_ALGORITHMS)}, got {reply_algo!r}"
+        )
     return RecognitionConfig(
         mode=mode,
         command_timeout=float(raw.get("command_timeout", 3.0)),
+        command_max_timeout=float(raw.get("command_max_timeout", 8.0)),
         wake_tone=str(raw.get("wake_tone", "wake")),
         partial_matching=bool(raw.get("partial_matching", True)),
         partial_stability_ms=int(raw.get("partial_stability_ms", 150)),
         partial_stability_reads=int(raw.get("partial_stability_reads", 3)),
+        matching_algorithm=algo,
+        matching_threshold=float(raw.get("matching_threshold", 70.0)),
+        reply_matching_algorithm=reply_algo,
+        reply_matching_threshold=float(raw.get("reply_matching_threshold", 80.0)),
     )
 
 
@@ -795,16 +822,11 @@ def load_config(
 
     cfg = _parse_actions_config(raw, source=str(p), secrets=secrets)
 
-    # Merge wake words from user.yaml (optional, sits next to config.yaml)
-    user_path = p.parent / "user.yaml"
-    if user_path.exists():
-        _merge_user_wake_words(cfg, user_path)
-
     return cfg
 
 
-def _merge_user_wake_words(cfg: "ActionsConfig", user_path: Path) -> None:
-    """Append wake word groups from user.yaml that are not already in cfg."""
+def _merge_user_wake_words(wake_words: list[WakeWordGroup], user_path: Path) -> None:
+    """Append wake word groups from user.yaml that are not already in wake_words."""
     try:
         with user_path.open() as f:
             raw = yaml.safe_load(f)
@@ -829,7 +851,7 @@ def _merge_user_wake_words(cfg: "ActionsConfig", user_path: Path) -> None:
         logger.warning("user.yaml wake_words error, skipping: %s", e)
         return
 
-    existing_ids = {g.id for g in cfg.wake_words}
+    existing_ids = {g.id for g in wake_words}
     added = 0
     for group in user_groups:
         if group.id in existing_ids:
@@ -839,7 +861,7 @@ def _merge_user_wake_words(cfg: "ActionsConfig", user_path: Path) -> None:
                 group.id,
             )
         else:
-            cfg.wake_words.append(group)
+            wake_words.append(group)
             existing_ids.add(group.id)
             added += 1
 
@@ -862,6 +884,12 @@ def _parse_actions_config(
         raise ConfigError(f"{source}: 'wake_words' must be a non-empty list")
 
     wake_words = _parse_wake_word_groups(raw_wake_words, source)
+
+    # Merge wake words from user.yaml (optional, sits next to config.yaml)
+    config_dir = Path(source).parent if source != "config" else Path(".")
+    user_path = config_dir / "user.yaml"
+    if user_path.exists():
+        _merge_user_wake_words(wake_words, user_path)
 
     audio_raw = raw.get("audio") or {}
     if not isinstance(audio_raw, dict):

@@ -741,3 +741,25 @@ class TestActionsDirectoryIntegration:
         await asyncio.sleep(0.05)
 
         assert received and "new_cmd" in received[-1]
+
+    def test_user_yaml_wake_triggers_linked(self, tmp_path):
+        conf_dir = tmp_path / "conf"
+        actions_dir = conf_dir / "actions"
+        actions_dir.mkdir(parents=True)
+        (conf_dir / "config.yaml").write_text(
+            "wake_words:\n  - word: alexa\nactions:\n  dir: conf/actions\n"
+        )
+        (conf_dir / "user.yaml").write_text(
+            "wake_words:\n  - word: aiuto\n    id: help\n"
+        )
+        (actions_dir / "system.yaml").write_text(
+            "wake_triggers:\n  help:\n    - phrase: chiama assistenza\n      actions:\n        - type: log\n          message: calling\n"
+        )
+        from alexa_custom.config import load_config
+
+        cfg = load_config(conf_dir / "config.yaml")
+        wake_word_ids = {g.id for g in cfg.wake_words}
+        assert "help" in wake_word_ids
+
+        help_group = next(g for g in cfg.wake_words if g.id == "help")
+        assert any(t.phrase == "chiama assistenza" for t in help_group.triggers)
