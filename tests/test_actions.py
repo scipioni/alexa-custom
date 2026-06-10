@@ -129,7 +129,7 @@ class TestSetVolume:
         with (
             patch("alexa_custom.audio_hw.get_output_volume", return_value=0.5),
             patch("alexa_custom.audio_hw.set_output_volume") as mock_set,
-            patch("alexa_custom.audio_hw.save_volume_state"),
+            patch("alexa_custom.audio_hw.save_volume_config"),
             patch("pulsectl.Pulse"),
             patch("alexa_custom.audio.play_tone") as mock_tone,
         ):
@@ -147,7 +147,7 @@ class TestSetVolume:
         with (
             patch("alexa_custom.audio_hw.get_output_volume", return_value=0.5),
             patch("alexa_custom.audio_hw.set_output_volume") as mock_set,
-            patch("alexa_custom.audio_hw.save_volume_state"),
+            patch("alexa_custom.audio_hw.save_volume_config"),
             patch("pulsectl.Pulse"),
             patch("alexa_custom.audio.play_tone") as mock_tone,
         ):
@@ -167,7 +167,7 @@ class TestSetVolume:
         with (
             patch("alexa_custom.audio_hw.get_output_volume", return_value=0.5),
             patch("alexa_custom.audio_hw.set_output_volume") as mock_set,
-            patch("alexa_custom.audio_hw.save_volume_state"),
+            patch("alexa_custom.audio_hw.save_volume_config"),
             patch("pulsectl.Pulse"),
             patch("alexa_custom.audio.play_tone"),
         ):
@@ -184,7 +184,7 @@ class TestSetVolume:
         with (
             patch("alexa_custom.audio_hw.get_output_volume", return_value=0.5),
             patch("alexa_custom.audio_hw.set_output_volume") as mock_set,
-            patch("alexa_custom.audio_hw.save_volume_state"),
+            patch("alexa_custom.audio_hw.save_volume_config"),
             patch("pulsectl.Pulse"),
             patch("alexa_custom.audio.play_tone"),
         ):
@@ -201,7 +201,7 @@ class TestSetVolume:
         with (
             patch("alexa_custom.audio_hw.get_output_volume", return_value=0.5),
             patch("alexa_custom.audio_hw.set_output_volume") as mock_set,
-            patch("alexa_custom.audio_hw.save_volume_state"),
+            patch("alexa_custom.audio_hw.save_volume_config"),
             patch("pulsectl.Pulse"),
             patch("alexa_custom.audio.play_tone"),
         ):
@@ -218,7 +218,7 @@ class TestSetVolume:
         with (
             patch("alexa_custom.audio_hw.get_output_volume", return_value=1.0),
             patch("alexa_custom.audio_hw.set_output_volume") as mock_set,
-            patch("alexa_custom.audio_hw.save_volume_state"),
+            patch("alexa_custom.audio_hw.save_volume_config"),
             patch("pulsectl.Pulse"),
             patch("alexa_custom.audio.play_tone") as mock_tone,
         ):
@@ -234,7 +234,7 @@ class TestSetVolume:
         with (
             patch("alexa_custom.audio_hw.get_output_volume", return_value=0.0),
             patch("alexa_custom.audio_hw.set_output_volume") as mock_set,
-            patch("alexa_custom.audio_hw.save_volume_state"),
+            patch("alexa_custom.audio_hw.save_volume_config"),
             patch("pulsectl.Pulse"),
             patch("alexa_custom.audio.play_tone") as mock_tone,
         ):
@@ -245,49 +245,13 @@ class TestSetVolume:
             mock_tone.assert_not_called()
 
 
-# ── save/load volume state ────────────────────────────────────────────────────────
-
-
-class TestVolumeState:
-    def test_save_and_load_roundtrip(self, tmp_path):
-        from alexa_custom import audio_hw
-
-        state_file = tmp_path / "state.yaml"
-        with patch.object(audio_hw, "_STATE_FILE", str(state_file)):
-            audio_hw.save_volume_state(0.7)
-            assert state_file.read_text().strip() == "output_volume: 0.7"
-
-            audio_hw._OUTPUT_VOLUME = 0.0
-            loaded = audio_hw.load_volume_state()
-            assert loaded is not None
-            assert abs(loaded - 0.7) < 0.001
-            assert abs(audio_hw._OUTPUT_VOLUME - 0.7) < 0.001
-
-    def test_missing_file_returns_none(self):
-        from alexa_custom import audio_hw
-
-        with patch.object(audio_hw, "_STATE_FILE", "/nonexistent/state.yaml"):
-            assert audio_hw.load_volume_state() is None
-
-    def test_malformed_file_returns_none(self, tmp_path):
-        from alexa_custom import audio_hw
-
-        state_file = tmp_path / "state.yaml"
-        state_file.write_text("not: valid: yaml: [")
-        with patch.object(audio_hw, "_STATE_FILE", str(state_file)):
-            assert audio_hw.load_volume_state() is None
-
-
-# ── set_volume_from_transcript action handler ───────────────────────────────────
-
-
 class TestSetVolumeFromTranscript:
     @pytest.mark.asyncio
     async def test_sets_volume_from_digit_percentage(self):
         action = ActionEntry(type="set_volume_from_transcript")
         with (
             patch("alexa_custom.audio_hw.set_output_volume") as mock_set,
-            patch("alexa_custom.audio_hw.save_volume_state") as mock_save,
+            patch("alexa_custom.audio_hw.save_volume_config") as mock_save,
             patch("pulsectl.Pulse"),
             patch("alexa_custom.audio.play_tone") as mock_tone,
         ):
@@ -309,7 +273,7 @@ class TestSetVolumeFromTranscript:
         action = ActionEntry(type="set_volume_from_transcript")
         with (
             patch("alexa_custom.audio_hw.set_output_volume") as mock_set,
-            patch("alexa_custom.audio_hw.save_volume_state"),
+            patch("alexa_custom.audio_hw.save_volume_config"),
             patch("pulsectl.Pulse"),
             patch("alexa_custom.audio.play_tone"),
         ):
@@ -363,7 +327,7 @@ class TestSetVolumeFromTranscript:
         action = ActionEntry(type="set_volume_from_transcript")
         with (
             patch("alexa_custom.audio_hw.set_output_volume") as mock_set,
-            patch("alexa_custom.audio_hw.save_volume_state"),
+            patch("alexa_custom.audio_hw.save_volume_config"),
             patch("pulsectl.Pulse"),
             patch("alexa_custom.audio.play_tone"),
         ):
