@@ -19,7 +19,10 @@ flowchart TD
     VAD -->|yes| EWC{"_extract_wake_command()\nfuzzy=True"}
     EWC -->|"no wake word"| RST[reset → continue]
     RST --> A
-    EWC -->|"wake word\ninline_cmd = ''"| WD["_wake_detected\npre_transcript = ''"]
+    EWC -->|"wake word\ninline_cmd = ''"| SKW{"skip_unmatched_inline\n= true?"}
+    SKW -->|yes| SIL2[silent skip]
+    SIL2 --> A
+    SKW -->|no| WD["_wake_detected\npre_transcript = ''"]
     WD --> BEEP[beep plays]
     BEEP --> CT["capture_transcript\nstage-2\n(listens until silence / timeout)"]
     CT --> TM{"match_trigger()"}
@@ -110,7 +113,7 @@ which bridges most natural micro-pauses after the wake word.
 |-----------|----------|--------|
 | `stage1.vad_silence_ms` | `conf/config.yaml` `stt.stage1` | **Primary knob for mode 2.** Must be wider than the longest pause the user makes between wake word and command. Raise if mode 2 keeps falling back to mode 1; lower if mode 1 latency is too high. |
 | `stage1.min_speech_ms` | `conf/config.yaml` `stt.stage1` | Minimum speech before the VAD timer starts. Prevents the VAD from triggering on a brief syllable. |
-| `skip_unmatched_inline` | `conf/config.yaml` `wake_words[*]` | Per-group. If `true`, silently ignore when stage-1 fires with an inline command that matches no trigger (no beep, no stage-2, no LLM). Wake-only detection (mode 1) is unaffected. |
+| `skip_unmatched_inline` | `conf/config.yaml` `wake_words[*]` | Per-group. If `true`, silently skip when stage-1 fires with no inline command (standalone wake word) or with an inline command that matches no trigger — no beep, no stage-2, no LLM. |
 
 ---
 
