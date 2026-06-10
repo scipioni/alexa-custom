@@ -13,7 +13,9 @@
 wake_words:
   - word: "ehi galileo"
     id: galileo          # stable key used in wake_triggers (defaults to word)
-    aliases: ["aiuto aiuto"]
+    aliases:
+      - "aiuto aiuto"   # alternative phrase that maps to the same group
+      - "e galileo"     # model misrecognition variant — tune via LOG_LEVEL=DEBUG
     lang: "it-IT"
   - word: "assistente"
 
@@ -44,7 +46,9 @@ stt:
     #   first — gate on the first decoded token only (original behaviour, safe default)
     #   min   — every token must clear the bar; strictest, best against partial matches
     #   mean  — average across all tokens; moderate trade-off
-    vad_silence_ms: 500    # stage-1 force-finalize after this many ms of silence
+    vad_silence_ms: 900    # stage-1 force-finalize after this many ms of silence
+    #   Raise this value if you speak wake word + command in one breath (mode 2):
+    #   the window must be wide enough to bridge the natural pause between them.
     rms_threshold: 0.02    # stage-1 minimum RMS energy considered speech
     min_speech_ms: 200     # minimum sustained speech before silence timer starts
     # vosk_grammar: false    # restrict Vosk to wake-word vocabulary (grammar mode)
