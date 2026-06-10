@@ -99,6 +99,8 @@ __all__ = [
     "setup_audio",
     "audio_doctor",
     "speakerphone",
+    "save_volume_state",
+    "load_volume_state",
     "_PW_PLAY",
     "_playback_active",
     "_audio_lock",
