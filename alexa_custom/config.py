@@ -42,6 +42,7 @@ class WakeWordGroup:
     triggers: list[Trigger] = field(default_factory=list)
     lang: str = "it-IT"
     id: str = ""  # stable key for wake_triggers in action files; defaults to word
+    skip_unmatched_inline: bool = False  # if True, silently skip when inline_cmd doesn't match any trigger
 
     def __post_init__(self):
         if not self.id:
@@ -136,6 +137,9 @@ class RecognitionConfig:
     mode: str = "two-stage"
     command_timeout: float = 2.5
     wake_tone: str = "wake"
+    partial_matching: bool = True
+    partial_stability_ms: int = 150
+    partial_stability_reads: int = 3
 
 
 @dataclass
@@ -358,6 +362,7 @@ def _parse_wake_word_groups(raw_groups: list[Any], source: str) -> list[WakeWord
         lang = str(entry.get("lang", "it-IT"))
         raw_id = entry.get("id")
         group_id = str(raw_id).strip() if raw_id else word
+        skip_unmatched_inline = bool(entry.get("skip_unmatched_inline", False))
 
         groups.append(
             WakeWordGroup(
@@ -366,6 +371,7 @@ def _parse_wake_word_groups(raw_groups: list[Any], source: str) -> list[WakeWord
                 triggers=group_triggers,
                 lang=lang,
                 id=group_id,
+                skip_unmatched_inline=skip_unmatched_inline,
             )
         )
 
@@ -496,6 +502,9 @@ def _parse_recognition_config(raw: dict) -> RecognitionConfig:
         mode=mode,
         command_timeout=float(raw.get("command_timeout", 3.0)),
         wake_tone=str(raw.get("wake_tone", "wake")),
+        partial_matching=bool(raw.get("partial_matching", True)),
+        partial_stability_ms=int(raw.get("partial_stability_ms", 150)),
+        partial_stability_reads=int(raw.get("partial_stability_reads", 3)),
     )
 
 
