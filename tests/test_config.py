@@ -763,3 +763,110 @@ class TestActionsDirectoryIntegration:
 
         help_group = next(g for g in cfg.wake_words if g.id == "help")
         assert any(t.phrase == "chiama assistenza" for t in help_group.triggers)
+
+
+# ---------------------------------------------------------------------------
+# Concurrent file locking tests (web-config-panel task 4.13)
+# ---------------------------------------------------------------------------
+
+
+class TestConcurrentFileLocking:
+    def test_exclusive_lock_prevents_simultaneous_writes(self, tmp_path):
+        from alexa_custom.web import _file_lock
+        import threading
+
+        f = tmp_path / "test.yaml"
+        f.write_text("initial\n")
+
+        results = []
+        errors = []
+
+        def writer(name: str, content: str):
+            try:
+                with _file_lock(f, exclusive=True):
+                    data = f.read_text()
+                    import time
+
+                    time.sleep(0.05)
+                    f.write_text(data + content)
+                results.append(name)
+            except Exception as e:
+                errors.append((name, e))
+
+        t1 = threading.Thread(target=writer, args=("A", "write_a\n"))
+        t2 = threading.Thread(target=writer, args=("B", "write_b\n"))
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        assert not errors, f"Unexpected errors: {errors}"
+        content = f.read_text()
+        assert content.count("write_a") == 1
+        assert content.count("write_b") == 1
+        assert "write_a" in content
+        assert "write_b" in content
+
+    def test_shared_lock_allows_concurrent_reads(self, tmp_path):
+        from alexa_custom.web import _file_lock
+        import threading
+
+        f = tmp_path / "test.yaml"
+        f.write_text("data\n")
+
+        results = []
+
+        def reader(name: str):
+            try:
+                with _file_lock(f, exclusive=False):
+                    _ = f.read_text()
+                results.append(name)
+            except Exception:
+                pass
+
+        threads = [threading.Thread(target=reader, args=(str(i),)) for i in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(results) == 5
+        assert all(r in results for r in ("0", "1", "2", "3", "4"))
+
+    def test_exclusive_lock_blocks_shared_lock(self, tmp_path):
+        from alexa_custom.web import _file_lock
+        import threading
+
+        f = tmp_path / "test.yaml"
+        f.write_text("data\n")
+        started = threading.Event()
+        proceed = threading.Event()
+
+        exclusive_acquired = threading.Event()
+        shared_acquired = threading.Event()
+        shared_timed_out = threading.Event()
+
+        def exclusive_holder():
+            with _file_lock(f, exclusive=True):
+                exclusive_acquired.set()
+                proceed.wait(timeout=2)
+                started.set()
+
+        def shared_attempt():
+            started.wait(timeout=2)
+            try:
+                with _file_lock(f, exclusive=False):
+                    shared_acquired.set()
+            except Exception:
+                shared_timed_out.set()
+
+        t_ex = threading.Thread(target=exclusive_holder)
+        t_sh = threading.Thread(target=shared_attempt)
+        t_ex.start()
+        exclusive_acquired.wait(timeout=2)
+        proceed.set()
+        t_sh.start()
+        t_sh.join(timeout=1.5)
+        t_ex.join()
+
+        assert shared_acquired.is_set()
