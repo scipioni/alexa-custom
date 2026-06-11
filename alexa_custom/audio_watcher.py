@@ -38,8 +38,6 @@ class AudioWatcher(threading.Thread):
         self._stop = threading.Event()
         self.connected = False
         self.conn_type = "unknown"
-        self._volume_set = False
-        self._gain_set = False
 
     def stop(self):
         self._stop.set()
@@ -74,12 +72,10 @@ class AudioWatcher(threading.Thread):
             if ok and not self.connected:
                 logger.info(f"Audio device {conn} connected and configured")
                 _restore_hw_pcm()
-                if self.output_volume > 0 and not self._volume_set:
+                if self.output_volume > 0:
                     set_output_volume(pulse, self.output_spec, self.output_volume)
-                    self._volume_set = True
-                if self.input_gain > 0 and not self._gain_set:
+                if self.input_gain > 0:
                     set_input_gain(pulse, self.input_spec, self.input_gain)
-                    self._gain_set = True
 
             self.connected = ok
             self.conn_type = conn

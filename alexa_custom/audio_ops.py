@@ -150,11 +150,13 @@ def _play_raw(data: bytes, samplerate: int, channels: int) -> None:
 
 
 def play_wav_file(file_path: str) -> None:
-    """Play a WAV file via pw-play (native PipeWire) or aplay (ALSA fallback)."""
-    if _PW_PLAY:
-        cmd = [_PW_PLAY, f"--volume={get_output_volume():.4f}", file_path]
-    else:
-        cmd = ["aplay", "-D", "pipewire", "-q", file_path]
+    """Play a WAV file via pw-play (native PipeWire) or aplay (ALSA fallback).
+
+    Volume attenuation is applied digitally via ``get_output_volume()`` in
+    ``_play_array`` — that is the single source of output-volume control.
+    The system mixer is intentionally not driven by ``output_volume``.
+    """
+    cmd = [_PW_PLAY, file_path] if _PW_PLAY else ["aplay", "-D", "pipewire", "-q", file_path]
 
     with _audio_lock:
         _playback_active.set()
