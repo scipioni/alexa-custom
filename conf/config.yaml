@@ -1,0 +1,148 @@
+# conf/config.yaml.example — all supported configuration keys with comments
+#
+# Copy to conf/config.yaml and edit as needed.
+# Credentials (LiveKit, Telegram, LLM, MQTT passwords) go in conf/secrets.yaml.
+# Per-user additions (extra wake words) go in conf/user.yaml (see user.yaml.example).
+# This file is hot-reloaded every ~system.config_poll_interval seconds.
+
+# ---------------------------------------------------------------------------
+# Wake words (required)
+# Each group listens for its 'word' and optional 'aliases'.
+# Per-group triggers (wake_triggers in action files) override the global list.
+# ---------------------------------------------------------------------------
+wake_words:
+  - word: "ehi galileo"
+    id: galileo          # stable key used in wake_triggers (defaults to word)
+    aliases:
+      - "aiuto aiuto"   # alternative phrase that maps to the same group
+      - "e galileo"     # model misrecognition variant — tune via LOG_LEVEL=DEBUG
+    lang: "it-IT"
+    # skip_unmatched_inline: false   # if true, silently ignore when wake+command fires but command matches no trigger
+  - word: "assistente"
+
+  # For emergency-style wake words prefer multi-word phrases so a single
+  # utterance in normal conversation does not trigger the assistant.
+  # - word: "aiuto aiuto"
+  #   aliases: ["aiutami", "mi serve aiuto"]
+
+# ---------------------------------------------------------------------------
+# Recognition
+# ---------------------------------------------------------------------------
+recognition:
+  mode: two-stage         # two-stage | single-stage
+  command_timeout: 2.5    # seconds to listen after wake word (two-stage only)
+  wake_tone: wake         # tone on wake: wake | startup | success | error | info | warning | none
+  # partial_matching: true        # scan Vosk partials for (wake+trigger) combos; fires immediately on stable match (default true)
+  # partial_stability_ms: 150     # min ms a partial match must be stable before firing
+  # partial_stability_reads: 3    # min consecutive matching partial reads before firing
+
+# ---------------------------------------------------------------------------
+# STT — speech-to-text
+# ---------------------------------------------------------------------------
+stt:
+  vad_silence_ms: 500     # idle ms after last speech before command window closes
+
+  stage1:                  # continuous wake-word detection (low CPU)
+    backend: vosk          # vosk | sherpa-onnx
+    # model_path: models/it
+    confidence: 0.65       # Vosk minimum confidence (0.0–1.0) to accept wake word
+    # confidence_mode: first  # how to aggregate per-token confidence: first | min | mean
+    #   first — gate on the first decoded token only (original behaviour, safe default)
+    #   min   — every token must clear the bar; strictest, best against partial matches
+    #   mean  — average across all tokens; moderate trade-off
+    vad_silence_ms: 900    # stage-1 force-finalize after this many ms of silence
+    #   Raise this value if you speak wake word + command in one breath (mode 2):
+    #   the window must be wide enough to bridge the natural pause between them.
+    rms_threshold: 0.02    # stage-1 minimum RMS energy considered speech
+    min_speech_ms: 200     # minimum sustained speech before silence timer starts
+    # vosk_grammar: false    # restrict Vosk to wake-word vocabulary (grammar mode)
+    #   false — free-vocabulary (default): full decoder; scores are absolute; unrelated speech genuinely rejected.
+    #           Trade-off: higher CPU than grammar mode.
+    #   true  — grammar mode: low CPU, but every segment is forced onto nearest phrase (no real reject path).
+
+  stage2:                  # command recognition after wake
+    backend: vosk          # can differ from stage1 for higher accuracy
+    # backend: sherpa-onnx
+    # model_path: models/it/kroko_128l
+
+# ---------------------------------------------------------------------------
+# TTS — text-to-speech
+# ---------------------------------------------------------------------------
+tts:
+  backend: piper           # piper | pico
+  voice: it_IT-paola-medium  # Piper voice name (run 'alexa-setup --piper-voice <name>')
+  preroll_ms: 300          # silence prepended to TTS audio (covers PipeWire cold-start)
+
+# ---------------------------------------------------------------------------
+# Audio hardware
+# ---------------------------------------------------------------------------
+audio:
+  #card_name: NewPie        # substring to identify audio card in PipeWire/ALSA
+  input_device: pipewire   # PipeWire source name substring, or 'pipewire' for default
+  output_device: pipewire  # PipeWire sink name substring, or 'pipewire' for default
+  output_volume: 0.5       # speaker volume 0.0–1.0 (set via wpctl, persisted by WirePlumber)
+  input_gain: 3.0          # microphone gain multiplier (values > 1.0 boost mic, e.g. 3.0 = 300%)
+  post_playback_ms: 100    # STT gate hold after playback ends (lets echo decay)
+  tone_preroll_ms: 300     # silence before tones/beeps (covers PipeWire cold-start)
+  sample_rates:
+    usb: 48000
+    bluetooth: 16000
+    internal: 48000
+  webrtc:                  # LiveKit WebRTC microphone processing (all default to true)
+    agc: true              # Automatic Gain Control
+    aec: true              # Acoustic Echo Cancellation
+    noise_suppression: true
+    high_pass_filter: true
+
+# ---------------------------------------------------------------------------
+# LLM (Ollama)
+# ---------------------------------------------------------------------------
+llm:
+  backend: ollama
+  # host is set in conf/secrets.yaml as 'llm_host'
+  model: ssfdre38/gemma4-nano   # model name as shown by 'ollama list'
+  context_turns: 10             # conversation pairs kept in history
+  context_window_secs: 60       # inactivity seconds before history resets
+  fallback_on_no_match: false   # route unmatched commands to LLM
+  learn_commands: true          # enable llm_learn action type
+  request_timeout: 60.0         # HTTP request timeout
+  # system_prompt: null         # optional override for the default system prompt
+
+# ---------------------------------------------------------------------------
+# MQTT / Home Assistant
+# ---------------------------------------------------------------------------
+# Omit this section to disable MQTT entirely.
+# mqtt:
+#   host: 127.0.0.1        # broker hostname; required to enable MQTT
+#   port: 1883
+#   topic_prefix: alexa
+#   node_id: living_room   # defaults to system hostname
+#   queue_max: 200         # max queued outgoing messages while broker is unreachable
+
+# ---------------------------------------------------------------------------
+# Web dashboard
+# ---------------------------------------------------------------------------
+# web:
+#   port: 8080
+
+# ---------------------------------------------------------------------------
+# Action files
+# ---------------------------------------------------------------------------
+actions:
+  dir: conf/actions                         # directory auto-discovered for .yaml files
+  learn_file: conf/actions/learned.yaml    # file the llm_learn action appends to
+
+# ---------------------------------------------------------------------------
+# System tuning
+# ---------------------------------------------------------------------------
+# system:
+#   reconnect_delay: 5         # seconds between LiveKit reconnect attempts
+#   config_poll_interval: 2    # hot-reload polling interval in seconds
+#   empty_room_timeout: 0      # disconnect after N seconds with no participants (0 = never)
+#   wait_for_participant: true  # join room silently and wait for a remote participant before going live
+#   answer_timeout: 60         # seconds to wait for a participant before disconnecting (wait_for_participant only)
+display:
+  enabled: true
+  backend: auto        # auto | bridge | gpio | mock
+  matrix_brightness: 50
+  led_brightness: 50
