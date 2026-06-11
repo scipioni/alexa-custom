@@ -236,6 +236,7 @@ def set_input_gain(
     global _INPUT_GAIN
 
     with _input_gain_lock:
+        hw_ok = False
         source_name = _find_pipewire_source(input_spec)
         if source_name is not None:
             _restore_hw_pcm()
@@ -246,20 +247,24 @@ def set_input_gain(
                 check=False,
             )
             if result.returncode == 0:
-                logger.info(f"Mic gain set to {pct}% on {source_name}")
+                logger.info(f"Mic gain set to {pct}% on {source_name} (OS level)")
+                hw_ok = True
             else:
                 logger.warning(
                     f"pactl set-source-volume failed: "
-                    f"{result.stderr.decode(errors='replace').strip()}"
+                    f"{result.stderr.decode(errors='replace').strip()} — "
+                    f"falling back to software scaling"
                 )
         else:
+            label = f"'{input_spec}'" if input_spec else "default source"
             logger.warning(
-                "NewPie source not found; input gain applies as "
-                "software scaling only"
+                f"PipeWire source {label} not found; "
+                f"falling back to software scaling for input gain"
             )
 
-        _INPUT_GAIN = max(0.0, gain)
-        logger.info(f"Input gain set to {gain:.0%}")
+        _INPUT_GAIN = 1.0 if hw_ok else max(0.0, gain)
+        if not hw_ok:
+            logger.warning(f"Input gain {gain:.0%} applied in software (CPU overhead, clipping risk)")
 
 
 def enforce_audio_state(
@@ -535,11 +540,13 @@ def _find_pipewire_source(input_spec: str | None) -> str | None:
 
     Matches against both source description and source name.
     Excludes monitor sources (they represent playback outputs, not mic inputs).
+    When input_spec is None, returns the server default source.
     """
-    if input_spec is None:
-        return None
-    needle = input_spec.lower()
     with pulsectl.Pulse("alexa-source-lookup") as pulse:
+        if input_spec is None:
+            info = pulse.server_info()
+            return info.default_source_name or None
+        needle = input_spec.lower()
         for s in pulse.source_list():
             if "monitor" in s.name:
                 continue
