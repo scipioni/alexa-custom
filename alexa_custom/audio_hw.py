@@ -36,6 +36,7 @@ def save_volume_config(volume: float) -> None:
 
     try:
         import yaml
+
         state = {"output_volume": volume}
         with open(state_file, "w") as f:
             yaml.safe_dump(state, f)
@@ -52,6 +53,7 @@ def load_volume_state() -> float | None:
         return None
     try:
         import yaml
+
         with open(state_file) as f:
             state = yaml.safe_load(f) or {}
         volume = state.get("output_volume")
@@ -304,7 +306,9 @@ def set_input_gain(
 
         _INPUT_GAIN = max(0.0, gain)
         if not hw_ok:
-            logger.warning(f"Input gain {gain:.0%} applied in software (CPU overhead, clipping risk)")
+            logger.warning(
+                f"Input gain {gain:.0%} applied in software (CPU overhead, clipping risk)"
+            )
 
 
 def enforce_audio_state(

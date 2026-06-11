@@ -130,6 +130,18 @@ triggers:
 
 See `conf.example/config.yaml` and `conf.example/secrets.yaml` for the full reference.
 
+### Web Configuration Panel
+
+Access the configuration panel at `http://<host>:8080/config` (requires dev-mode toggle in the dashboard sidebar). From the panel you can:
+
+- **Wake Words**: Add or remove wake words individually with delete buttons
+- **Recognition**: Adjust `command_timeout`, `matching_threshold`, and `partial_matching`
+- **Speech-to-Text**: Switch between Vosk and sherpa-onnx backends, adjust confidence and RMS thresholds
+- **Audio**: Set output volume (0–1) and input gain
+- **Text-to-Speech**: Choose backend (piper/pico) and voice
+
+Changes are validated client-side and server-side before saving, preserve YAML comments and formatting via `ruamel.yaml`, and trigger hot-reload immediately. A file-locking mechanism prevents concurrent edit conflicts.
+
 ---
 
 ## Key Features
@@ -140,7 +152,7 @@ See `conf.example/config.yaml` and `conf.example/secrets.yaml` for the full refe
 - **Multi-file actions**: Drop `.yaml` files into `conf/actions/` for modular command sets; `system.yaml` always loads first.
 - **LLM learning**: Say "impara nuovo comando" to teach the assistant a new trigger via voice dialogue (stored in `conf/actions/learned.yaml`).
 - **Bidirectional MQTT**: Home Assistant Discovery support. Forward voice commands to HA and trigger local actions via MQTT.
-- **Web Dashboard**: Real-time browser UI — VU meters with RMS needle, STT status with wake-word badge, room status panel (closed / waiting / in call), live logs, restart button.
+- **Web Dashboard**: Real-time browser UI — VU meters with RMS needle, STT status with wake-word badge, room status panel (closed / waiting / in call), live logs, restart button. **Configuration panel** at `/config` for editing wake words, recognition thresholds, STT/TTS backends, and audio settings without SSH.
 - **PipeWire native**: Direct integration without PortAudio shims.
 
 ---

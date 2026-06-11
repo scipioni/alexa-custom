@@ -158,7 +158,11 @@ def play_wav_file(file_path: str) -> None:
     ``_play_array`` — that is the single source of output-volume control.
     The system mixer is intentionally not driven by ``output_volume``.
     """
-    cmd = [_PW_PLAY, file_path] if _PW_PLAY else ["aplay", "-D", "pipewire", "-q", file_path]
+    cmd = (
+        [_PW_PLAY, file_path]
+        if _PW_PLAY
+        else ["aplay", "-D", "pipewire", "-q", file_path]
+    )
 
     with _audio_lock:
         _playback_active.set()

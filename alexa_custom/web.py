@@ -28,9 +28,7 @@ _BOOLISH = frozenset({"true", "false", "yes", "no", "on", "off"})
 
 def _quote_boolish_str(dumper, data: str):
     if data.lower() in _BOOLISH:
-        return dumper.represent_scalar(
-            "tag:yaml.org,2002:str", data, style='"'
-        )
+        return dumper.represent_scalar("tag:yaml.org,2002:str", data, style='"')
     return dumper.represent_str(data)
 
 
@@ -51,7 +49,7 @@ def _file_lock(filepath: Path, exclusive: bool = True) -> None:
     Raises:
         IOError: If lock cannot be acquired
     """
-    with open(filepath, 'a+') as f:
+    with open(filepath, "a+") as f:
         try:
             if exclusive:
                 fcntl.flock(f, fcntl.LOCK_EX)
@@ -335,12 +333,14 @@ class WebServer:
         elif action == "set_volume" and payload:
             volume = payload.get("volume", 0.5)
             from alexa_custom.audio_ops import set_output_volume_direct
+
             set_output_volume_direct(volume)
             self._output_volume = volume
         elif action == "beep" and payload:
             frequency = payload.get("frequency", 440)
             duration = payload.get("duration", 100)
             from alexa_custom.audio_ops import play_beep
+
             play_beep(frequency, duration)
 
     # ── config API endpoints ───────────────────────────────────────────────────────
@@ -349,6 +349,7 @@ class WebServer:
         """Return current configuration as JSON"""
         try:
             from alexa_custom.config import load_config
+
             config_obj = load_config("conf/config.yaml")
             config_dict = self._serialize_config(config_obj)
             return web.json_response(config_dict)
@@ -367,6 +368,7 @@ class WebServer:
                 return web.json_response({"error": error_msg}, status=400)
 
             from alexa_custom.config import load_config
+
             current_config = load_config("conf/config.yaml")
             current_dict = self._serialize_config(current_config)
             merged_config = self._merge_configs(current_dict, data)
@@ -375,7 +377,11 @@ class WebServer:
             if raw is None:
                 raw = {}
             for key, value in merged_config.items():
-                if key in raw and isinstance(raw[key], dict) and isinstance(value, dict):
+                if (
+                    key in raw
+                    and isinstance(raw[key], dict)
+                    and isinstance(value, dict)
+                ):
                     raw[key].update(value)
                 else:
                     raw[key] = value
@@ -386,7 +392,10 @@ class WebServer:
                     temp_path.replace(Path("conf/config.yaml"))
             except IOError as e:
                 logger.error("Failed to acquire config file lock: %s", e)
-                return web.json_response({"error": "Configuration file is locked by another process"}, status=423)
+                return web.json_response(
+                    {"error": "Configuration file is locked by another process"},
+                    status=423,
+                )
 
             if self._config_manager:
                 self._config_manager._reload(Path("conf/config.yaml"))
@@ -413,7 +422,11 @@ class WebServer:
             if raw is None:
                 raw = {}
             for key, value in data.items():
-                if key in raw and isinstance(raw[key], dict) and isinstance(value, dict):
+                if (
+                    key in raw
+                    and isinstance(raw[key], dict)
+                    and isinstance(value, dict)
+                ):
                     raw[key].update(value)
                 else:
                     raw[key] = value
@@ -424,7 +437,10 @@ class WebServer:
                     temp_path.replace(Path("conf/config.yaml"))
             except IOError as e:
                 logger.error("Failed to acquire config file lock: %s", e)
-                return web.json_response({"error": "Configuration file is locked by another process"}, status=423)
+                return web.json_response(
+                    {"error": "Configuration file is locked by another process"},
+                    status=423,
+                )
 
             if self._config_manager:
                 self._config_manager._reload(Path("conf/config.yaml"))
@@ -441,6 +457,7 @@ class WebServer:
         """Return factory default configuration from conf.example/config.yaml"""
         try:
             from alexa_custom.config import load_config
+
             defaults = load_config("conf.example/config.yaml")
             result = self._serialize_config(defaults)
             return web.json_response(result)
@@ -511,9 +528,13 @@ class WebServer:
         result = copy.deepcopy(current)
 
         for key, value in updates.items():
-            if key == 'wake_words' and isinstance(value, list) and key in result:
+            if key == "wake_words" and isinstance(value, list) and key in result:
                 result[key] = self._merge_wake_words(result[key], value)
-            elif key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            elif (
+                key in result
+                and isinstance(result[key], dict)
+                and isinstance(value, dict)
+            ):
                 result[key] = self._merge_configs(result[key], value)
             else:
                 result[key] = value
@@ -530,12 +551,12 @@ class WebServer:
         """
         existing = {}
         for e in current:
-            if isinstance(e, dict) and 'word' in e:
-                existing[e['word']] = e
+            if isinstance(e, dict) and "word" in e:
+                existing[e["word"]] = e
 
         result = []
         for u in updates:
-            word = u.get('word')
+            word = u.get("word")
             if word and word in existing:
                 merged = copy.deepcopy(existing[word])
                 merged.update(u)
@@ -618,7 +639,11 @@ class WebServer:
             mtimes: dict[str, float] = {}
             for p in watch_paths:
                 candidates = (
-                    [f for f in p.glob("*.yaml") if f.name not in ("secrets.yaml", "state.yaml")]
+                    [
+                        f
+                        for f in p.glob("*.yaml")
+                        if f.name not in ("secrets.yaml", "state.yaml")
+                    ]
                     + [f for f in p.glob("*.html")]
                     if p.is_dir()
                     else [p]
@@ -667,7 +692,12 @@ class WebServer:
                 new_stop = threading.Event()
                 stt_params["stop_event"] = new_stop
                 new_thread = start_stt_thread(
-                    config=lambda: self._config_manager.config if self._config_manager and self._config_manager.config is not None else stt_params["config"],
+                    config=lambda: (
+                        self._config_manager.config
+                        if self._config_manager
+                        and self._config_manager.config is not None
+                        else stt_params["config"]
+                    ),
                     stop_event=new_stop,
                     telegram_client=stt_params["telegram_client"],
                     livekit_connect_fn=stt_params["connect_fn"],
@@ -707,7 +737,9 @@ class WebServer:
                 "params": a.params,
             }
             if a.on_reply:
-                entry["on_reply"] = [WebServer._serialize_trigger(t) for t in a.on_reply]
+                entry["on_reply"] = [
+                    WebServer._serialize_trigger(t) for t in a.on_reply
+                ]
             if a.on_else:
                 entry["on_else"] = WebServer._serialize_action_list(a.on_else)
             result.append(entry)
@@ -840,7 +872,9 @@ class WebServer:
                 audio_hw.configure(new_config)
                 with pulsectl.Pulse("alexa-reload"):
                     audio_hw.set_output_volume(
-                        None, new_config.audio.output_device, new_config.audio.output_volume
+                        None,
+                        new_config.audio.output_device,
+                        new_config.audio.output_volume,
                     )
                     audio_hw.set_input_gain(
                         None, new_config.audio.input_device, new_config.audio.input_gain
@@ -904,7 +938,11 @@ class WebServer:
             from alexa_custom.stt import start_stt_thread
 
             stt_thread = start_stt_thread(
-                config=lambda: self._config_manager.config if self._config_manager and self._config_manager.config is not None else stt_params["config"],
+                config=lambda: (
+                    self._config_manager.config
+                    if self._config_manager and self._config_manager.config is not None
+                    else stt_params["config"]
+                ),
                 stop_event=stt_params["stop_event"],
                 telegram_client=stt_params["telegram_client"],
                 livekit_connect_fn=stt_params["connect_fn"],
