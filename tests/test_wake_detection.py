@@ -29,7 +29,6 @@ from alexa_custom.stt_phonetics import build_intent_map, _build_alias_map
 from alexa_custom.config import (
     WakeWordGroup,
     Trigger,
-    STTStage1Config,
     _parse_stt_stage1_config,
 )  # noqa: F401
 

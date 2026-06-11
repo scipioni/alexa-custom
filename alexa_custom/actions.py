@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import difflib
 import logging
 import os
 import re
@@ -112,7 +111,7 @@ def get_similarity_score(a: str, b: str, algorithm: str) -> float:
             return (1.0 - (dist / max_len)) * 100.0
         elif algorithm == "ratio":
             return _fuzz.ratio(a, b)
-        else: # "token_set_ratio"
+        else:  # "token_set_ratio"
             return _fuzz.token_set_ratio(a, b)
 
     # 2. Fall back if rapidfuzz is not installed
@@ -123,8 +122,9 @@ def get_similarity_score(a: str, b: str, algorithm: str) -> float:
                 return 100.0
             dist = levenshtein_distance(a, b)
             return (1.0 - (dist / max_len)) * 100.0
-        else: # "ratio" or "token_set_ratio" fallback
+        else:  # "ratio" or "token_set_ratio" fallback
             import difflib
+
             return difflib.SequenceMatcher(None, a, b).ratio() * 100.0
 
 

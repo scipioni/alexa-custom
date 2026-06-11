@@ -76,10 +76,7 @@ def test_set_input_gain_calls_pactl_when_source_found():
     ):
         audio_hw.set_input_gain(None, "NewPie", 1.5)
 
-        pactl_calls = [
-            c for c in mock_run.call_args_list
-            if c[0][0][0] == "pactl"
-        ]
+        pactl_calls = [c for c in mock_run.call_args_list if c[0][0][0] == "pactl"]
         assert len(pactl_calls) == 1, f"Expected 1 pactl call, got {len(pactl_calls)}"
         pactl_cmd = pactl_calls[0][0][0]
         assert "set-source-volume" in pactl_cmd
@@ -102,10 +99,7 @@ def test_set_input_gain_noop_when_source_not_found():
     ):
         audio_hw.set_input_gain(None, "NonExistentDevice", 2.0)
 
-        pactl_calls = [
-            c for c in mock_run.call_args_list
-            if c[0][0][0] == "pactl"
-        ]
+        pactl_calls = [c for c in mock_run.call_args_list if c[0][0][0] == "pactl"]
         assert len(pactl_calls) == 0, f"Expected 0 pactl calls, got {pactl_calls}"
         assert audio_hw._INPUT_GAIN == 2.0
 
@@ -116,10 +110,11 @@ def test_restore_hw_pcm_noop_without_newpie():
             audio_hw._restore_hw_pcm()
 
             amixer_calls = [
-                c for c in mock_run.call_args_list
-                if c[0][0][0] == "amixer"
+                c for c in mock_run.call_args_list if c[0][0][0] == "amixer"
             ]
-            assert len(amixer_calls) == 0, f"Expected 0 amixer calls, got {amixer_calls}"
+            assert len(amixer_calls) == 0, (
+                f"Expected 0 amixer calls, got {amixer_calls}"
+            )
 
 
 def test_restore_hw_pcm_calls_amixer_when_newpie_found():
@@ -128,8 +123,7 @@ def test_restore_hw_pcm_calls_amixer_when_newpie_found():
             audio_hw._restore_hw_pcm()
 
             amixer_calls = [
-                c for c in mock_run.call_args_list
-                if c[0][0][0] == "amixer"
+                c for c in mock_run.call_args_list if c[0][0][0] == "amixer"
             ]
             assert len(amixer_calls) == 1
             amixer_cmd = amixer_calls[0][0][0]
