@@ -137,7 +137,7 @@ class GpioLedDisplay(DisplayBackend):
 # Response: [4, 1, msg_id, [nil_or_err, result_or_nil]]
 
 
-class _RpcRouter:
+class _BridgeClient:
 
     _PORT = "/dev/ttyHS1"
     _BAUD = 115200
@@ -250,15 +250,15 @@ class _RpcRouter:
 class BridgeDisplay(DisplayBackend):
 
     def __init__(self) -> None:
-        self._router = _RpcRouter()
-        self._router.ping()
+        self._client = _BridgeClient()
+        self._client.ping()
 
     def show(self, state: str) -> None:
         icon_id = STATE_ICONS.get(state, 8)
         color = STATE_COLORS.get(state, (0, 0, 0))
         try:
-            self._router.set_matrix_icon(icon_id)
-            self._router.set_leds(
+            self._client.set_matrix_icon(icon_id)
+            self._client.set_leds(
                 color[0], color[1], color[2],
                 color[0], color[1], color[2],
             )
@@ -267,7 +267,7 @@ class BridgeDisplay(DisplayBackend):
 
     def clear(self) -> None:
         try:
-            self._router.clear()
+            self._client.clear()
         except Exception:
             pass
 
