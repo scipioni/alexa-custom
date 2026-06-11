@@ -159,7 +159,7 @@ void rpc_clear() {
 
 // ── RPC transport & server ──────────────────────────────────────────
 
-SerialTransport rpc_transport(Serial1);
+SerialTransport rpc_transport(Serial2);
 RPCServer rpc_server(rpc_transport);
 
 // ── Setup ───────────────────────────────────────────────────────────
@@ -172,8 +172,8 @@ void setup() {
 
   matrix.begin();
 
-  Serial1.begin(115200);
-  while (!Serial1) {
+  Serial2.begin(115200);
+  while (!Serial2) {
     delay(10);
   }
 
