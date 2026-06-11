@@ -27,7 +27,7 @@ task setup         # install systemd user service
 
 Manual entry points:
 ```bash
-alexa-client [--web-port PORT]             # main daemon
+alexa-client [--web-port PORT]             # main daemon (web dashboard with config panel)
 alexa-audio                              # mic→speaker loopback test
 alexa-devices                            # list audio devices
 alexa-setup                              # download/update STT models
@@ -150,6 +150,23 @@ triggers:
     actions:
       - type: livekit_join
 ```
+
+### Web Configuration Panel
+
+Access via the web dashboard (http://localhost:8080/config):
+- **Wake Words**: Add/remove wake words individually with delete buttons
+- **Recognition**: Adjust command timeout, matching thresholds, and partial matching
+- **Speech-to-Text**: Change STT backend and confidence thresholds
+- **Audio**: Set output volume and input gain
+- **Text-to-Speech**: Configure TTS backend and voice
+
+**Features**:
+- Developer-only feature (controlled by dev-mode toggle)
+- Real-time validation before saving
+- Hot-reload on save (restarts daemon)
+- Reset button to restore original values
+- Preserves YAML formatting and comments
+- File locking prevents concurrent edits
 
 ## Key dependencies
 
