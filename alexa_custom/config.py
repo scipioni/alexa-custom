@@ -170,9 +170,13 @@ class ActionsDirectoryConfig:
 @dataclass
 class DisplayConfig:
     enabled: bool = True
-    backend: str = "auto"  # auto | bridge | gpio | mock
+    backend: str = "auto"  # auto | bridge | gpio | mock | i2c
     matrix_brightness: int = 50
     led_brightness: int = 50
+    i2c_bus: int = 1
+    i2c_address: int = 0x3C
+    i2c_width: int = 128
+    i2c_height: int = 64
 
 
 @dataclass
@@ -884,6 +888,12 @@ def _parse_actions_config(
             backend=str(raw_display.get("backend", "auto")),
             matrix_brightness=int(raw_display.get("matrix_brightness", 50)),
             led_brightness=int(raw_display.get("led_brightness", 50)),
+            i2c_bus=int(raw_display.get("i2c_bus", 1)),
+            i2c_address=int(raw_display.get("i2c_address", "0x3C"), 16)
+            if isinstance(raw_display.get("i2c_address"), str)
+            else int(raw_display.get("i2c_address", 0x3C)),
+            i2c_width=int(raw_display.get("i2c_width", 128)),
+            i2c_height=int(raw_display.get("i2c_height", 64)),
         )
 
     # Set audio WebRTC env vars from config
