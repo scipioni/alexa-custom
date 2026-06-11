@@ -30,7 +30,12 @@ cp conf.example/secrets.yaml conf/secrets.yaml
 # Edit conf/secrets.yaml — add LiveKit, Telegram, LLM credentials
 # Edit conf/config.yaml  — set wake words, audio device, STT backend
 
-# 6. Run
+# 6. Install as a systemd service (recommended for headless use)
+task setup
+sudo loginctl enable-linger arduino   # keep service alive when SSH disconnects
+systemctl --user start alexa-custom
+
+# 7. Or run manually
 alexa-client                # web dashboard at http://<host>:8080
 ```
 
