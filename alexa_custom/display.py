@@ -128,90 +128,119 @@ class GpioLedDisplay(DisplayBackend):
 
 
 # ── Bridge RPC backend (matrix + MCU LEDs) ────────────────────────────
-# Implements the Arduino RPClite protocol over serial (/dev/ttyHS1).
+# Implements the Arduino Router + RPClite protocol over serial (/dev/ttyHS1).
+# Acts as the Router that the STM32 firmware expects — handles $/reset,
+# $/register from the STM32, and forwards our own RPC calls.
+#
 # Protocol: raw MsgPack, no framing, 115200 baud.
 # Request:  [4, 0, msg_id, "method", [args...]]
 # Response: [4, 1, msg_id, [nil_or_err, result_or_nil]]
 
 
-class _BridgeClient:
+class _RpcRouter:
 
     _PORT = "/dev/ttyHS1"
     _BAUD = 115200
-    _TIMEOUT = 2.0
 
     def __init__(self) -> None:
         import serial as _serial
-        self._ser = _serial.Serial(self._PORT, self._BAUD, timeout=self._TIMEOUT)
+        self._ser = _serial.Serial(self._PORT, self._BAUD, timeout=0.05)
         self._lock = threading.Lock()
-        self._msg_id = 0
-        self._handshake()
+        self._pending: dict[int, threading.Event] = {}
+        self._responses: dict[int, object] = {}
+        self._next_id = 0
+        self._stop = threading.Event()
+        self._reader = threading.Thread(target=self._reader_loop, daemon=True)
+        self._reader.start()
 
-    def _handshake(self) -> None:
-        ok = self._call_raw("$/reset")
-        if not ok:
-            raise RuntimeError("Bridge handshake failed")
-
-    def _call_raw(self, method: str, *args: int) -> bool:
+    def _send_response(self, msg_id: int, result: object = None) -> None:
         import msgpack
-        mid = self._msg_id
-        self._msg_id += 1
+        body = msgpack.packb([4, 1, msg_id, [None, result]])
+        self._ser.write(body)
+        self._ser.flush()
+
+    def _handle_call(self, obj: list) -> None:
+        _typ, _call_type, msg_id, method = obj[:4]
+        if method in ("$/reset", "$/register", "$/setMaxMsgSize"):
+            self._send_response(msg_id, True)
+
+    def _handle_response(self, obj: list) -> None:
+        _typ, _resp_type, msg_id = obj[:3]
+        inner = obj[3] if len(obj) > 3 else [None, None]
+        err, result = inner if isinstance(inner, list) and len(inner) == 2 else (None, None)
+        if msg_id in self._pending:
+            self._responses[msg_id] = (err, result)
+            self._pending[msg_id].set()
+
+    def _reader_loop(self) -> None:
+        import msgpack
+        buf = bytearray()
+        while not self._stop.is_set():
+            try:
+                chunk = self._ser.read(256)
+            except Exception:
+                break
+            if chunk:
+                buf.extend(chunk)
+            self._try_parse(buf)
+
+    def _try_parse(self, buf: bytearray) -> None:
+        import msgpack as _mp
+        offset = 0
+        while offset < len(buf):
+            try:
+                obj, used = _mp.unpackb(
+                    bytes(buf[offset:]), raw=False, strict_map_key=False
+                )
+            except (_mp.UnpackValueError, _mp.ExtraData):
+                offset += 1
+                continue
+            except Exception:
+                break
+            if (
+                isinstance(obj, list)
+                and len(obj) >= 3
+                and obj[0] == 4
+            ):
+                if obj[1] == 0:
+                    self._handle_call(obj)
+                elif obj[1] == 1:
+                    self._handle_response(obj)
+            offset += used
+        if offset > 0:
+            del buf[:offset]
+
+    def call(self, method: str, *args: int) -> bool:
+        import msgpack
+        mid = self._next_id
+        self._next_id += 1
+        ev = threading.Event()
+        self._pending[mid] = ev
         body = msgpack.packb([4, 0, mid, method, list(args)])
         with self._lock:
             self._ser.write(body)
             self._ser.flush()
-            resp = self._read_response(mid)
-        return resp
-
-    def _read_response(self, expected_id: int) -> bool:
-        import msgpack
-        buf = bytearray()
-        deadline = time.monotonic() + self._TIMEOUT
-        while time.monotonic() < deadline:
-            chunk = self._ser.read(256)
-            if not chunk:
-                continue
-            buf.extend(chunk)
-            offset = 0
-            while offset < len(buf):
-                try:
-                    obj, used = msgpack.unpackb(
-                        bytes(buf[offset:]), raw=False, strict_map_key=False
-                    )
-                except (msgpack.UnpackValueError, msgpack.ExtraData):
-                    offset += 1
-                    continue
-                except Exception:
-                    break
-                if (
-                    isinstance(obj, list)
-                    and len(obj) == 4
-                    and obj[0] == 4
-                    and obj[1] == 1
-                    and obj[2] == expected_id
-                ):
-                    inner = obj[3]
-                    if isinstance(inner, list) and len(inner) == 2:
-                        return inner[0] is None
-                buf = bytearray(buf[offset + used:])
-                break
-            else:
-                buf = bytearray()
-        return False
+        ev.wait(timeout=5.0)
+        self._pending.pop(mid, None)
+        err, result = self._responses.pop(mid, (None, None))
+        return err is None and result is not False
 
     def ping(self) -> bool:
-        return self._call_raw("ping")
+        return self.call("ping")
 
     def set_matrix_icon(self, icon_id: int) -> bool:
-        return self._call_raw("set_matrix_icon", icon_id)
+        return self.call("set_matrix_icon", icon_id)
 
-    def set_leds(self, r: int, g: int, b: int, r1: int, g1: int, b1: int) -> bool:
-        return self._call_raw("set_leds", r, g, b, r1, g1, b1)
+    def set_leds(self,
+                 r: int, g: int, b: int,
+                 r1: int, g1: int, b1: int) -> bool:
+        return self.call("set_leds", r, g, b, r1, g1, b1)
 
     def clear(self) -> bool:
-        return self._call_raw("clear")
+        return self.call("clear")
 
     def close(self) -> None:
+        self._stop.set()
         try:
             self._ser.close()
         except Exception:
@@ -221,15 +250,15 @@ class _BridgeClient:
 class BridgeDisplay(DisplayBackend):
 
     def __init__(self) -> None:
-        self._client = _BridgeClient()
-        self._client.ping()
+        self._router = _RpcRouter()
+        self._router.ping()
 
     def show(self, state: str) -> None:
         icon_id = STATE_ICONS.get(state, 8)
         color = STATE_COLORS.get(state, (0, 0, 0))
         try:
-            self._client.set_matrix_icon(icon_id)
-            self._client.set_leds(
+            self._router.set_matrix_icon(icon_id)
+            self._router.set_leds(
                 color[0], color[1], color[2],
                 color[0], color[1], color[2],
             )
@@ -238,7 +267,7 @@ class BridgeDisplay(DisplayBackend):
 
     def clear(self) -> None:
         try:
-            self._client.clear()
+            self._router.clear()
         except Exception:
             pass
 
