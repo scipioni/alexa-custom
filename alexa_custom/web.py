@@ -277,11 +277,13 @@ class WebServer:
         elif action == "set_volume" and payload:
             volume = payload.get("volume", 0.5)
             from alexa_custom.audio_ops import set_output_volume_direct
+
             set_output_volume_direct(volume)
         elif action == "beep" and payload:
             frequency = payload.get("frequency", 440)
             duration = payload.get("duration", 100)
             from alexa_custom.audio_ops import play_beep
+
             play_beep(frequency, duration)
 
     # ── broadcast helpers ─────────────────────────────────────────────────────
@@ -389,7 +391,6 @@ class WebServer:
                             logger.warning("Failed to reload HTML %s: %s", path_str, e)
                     else:
                         logger.info("Config changed: %s", path_str)
-                await self._broadcast({"type": "reload"})
         except asyncio.CancelledError:
             pass
 

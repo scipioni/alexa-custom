@@ -1,12 +1,10 @@
 # Capability: Action Dispatch
 
-## Purpose
-Map recognized trigger phrases to a sequence of actions.
-
-## ADDED Requirements
+## REMOVED Requirements
 
 ### Requirement: set_volume_from_transcript action type
-The system SHALL support a `set_volume_from_transcript` action type that receives the raw STT transcript, extracts a volume percentage, and sets the system output volume. This SHALL use the existing `set_output_volume()` function and `save_volume_state()` for persistence.
+**Reason**: Replaced by three fixed preset triggers (`Volume basso`, `Volume medio`, `Volume alto`) that use the existing `set_volume` action type with absolute values. The transcript-parsing approach added unnecessary complexity (`number_parser` module, separate action handler) with no advantage over simple YAML-configured presets.
+**Migration**: Any existing usage of `type: set_volume_from_transcript` in YAML action files must be replaced with `type: set_volume` entries using `mode: absolute` and a fixed `value`. The `set_volume_from_transcript` handler and `number_parser` module are removed.
 
 #### Scenario: Action dispatched with transcript
 - **WHEN** a `set_volume_from_transcript` action is dispatched with transcript "volume al 80%"
