@@ -42,19 +42,18 @@ STATE_ICONS: dict[str, int] = {
 }
 
 _MATRIX_CHARS: dict[int, str] = {
-    0: "◎",
-    1: "🎤",
-    2: "📝",
-    3: "⏳",
-    4: "🔊",
-    5: "📞",
-    6: "✕",
-    7: "🔗",
-    8: "⬛",
+    0: "\u25ce",
+    1: "\U0001f3a4",
+    2: "\U0001f4dd",
+    3: "\u23f3",
+    4: "\U0001f50a",
+    5: "\U0001f4de",
+    6: "\u2715",
+    7: "\U0001f517",
+    8: "\u2b1b",
 }
 
 _LED_BASE = "/sys/class/leds"
-_LED_NAMES = ("red", "green", "blue")
 
 _MPU_LED_MAP = {
     "red":   ("red", "user"),
@@ -129,28 +128,117 @@ class GpioLedDisplay(DisplayBackend):
 
 
 # ── Bridge RPC backend (matrix + MCU LEDs) ────────────────────────────
+# Implements the Arduino RPClite protocol over serial (/dev/ttyHS1).
+# Protocol: raw MsgPack, no framing, 115200 baud.
+# Request:  [4, 0, msg_id, "method", [args...]]
+# Response: [4, 1, msg_id, [nil_or_err, result_or_nil]]
+
+
+class _BridgeClient:
+
+    _PORT = "/dev/ttyHS1"
+    _BAUD = 115200
+    _TIMEOUT = 2.0
+
+    def __init__(self) -> None:
+        import serial as _serial
+        self._ser = _serial.Serial(self._PORT, self._BAUD, timeout=self._TIMEOUT)
+        self._lock = threading.Lock()
+        self._msg_id = 0
+        self._handshake()
+
+    def _handshake(self) -> None:
+        ok = self._call_raw("$/reset")
+        if not ok:
+            raise RuntimeError("Bridge handshake failed")
+
+    def _call_raw(self, method: str, *args: int) -> bool:
+        import msgpack
+        mid = self._msg_id
+        self._msg_id += 1
+        body = msgpack.packb([4, 0, mid, method, list(args)])
+        with self._lock:
+            self._ser.write(body)
+            self._ser.flush()
+            resp = self._read_response(mid)
+        return resp
+
+    def _read_response(self, expected_id: int) -> bool:
+        import msgpack
+        buf = bytearray()
+        deadline = time.monotonic() + self._TIMEOUT
+        while time.monotonic() < deadline:
+            chunk = self._ser.read(256)
+            if not chunk:
+                continue
+            buf.extend(chunk)
+            offset = 0
+            while offset < len(buf):
+                try:
+                    obj, used = msgpack.unpackb(
+                        bytes(buf[offset:]), raw=False, strict_map_key=False
+                    )
+                except (msgpack.UnpackValueError, msgpack.ExtraData):
+                    offset += 1
+                    continue
+                except Exception:
+                    break
+                if (
+                    isinstance(obj, list)
+                    and len(obj) == 4
+                    and obj[0] == 4
+                    and obj[1] == 1
+                    and obj[2] == expected_id
+                ):
+                    inner = obj[3]
+                    if isinstance(inner, list) and len(inner) == 2:
+                        return inner[0] is None
+                buf = bytearray(buf[offset + used:])
+                break
+            else:
+                buf = bytearray()
+        return False
+
+    def ping(self) -> bool:
+        return self._call_raw("ping")
+
+    def set_matrix_icon(self, icon_id: int) -> bool:
+        return self._call_raw("set_matrix_icon", icon_id)
+
+    def set_leds(self, r: int, g: int, b: int, r1: int, g1: int, b1: int) -> bool:
+        return self._call_raw("set_leds", r, g, b, r1, g1, b1)
+
+    def clear(self) -> bool:
+        return self._call_raw("clear")
+
+    def close(self) -> None:
+        try:
+            self._ser.close()
+        except Exception:
+            pass
 
 
 class BridgeDisplay(DisplayBackend):
 
     def __init__(self) -> None:
-        from arduino.app_utils import Bridge
-        self._bridge = Bridge
-        self._bridge.call("ping")
+        self._client = _BridgeClient()
+        self._client.ping()
 
     def show(self, state: str) -> None:
         icon_id = STATE_ICONS.get(state, 8)
         color = STATE_COLORS.get(state, (0, 0, 0))
         try:
-            self._bridge.call("set_matrix_icon", icon_id)
-            self._bridge.call("set_leds", color[0], color[1], color[2],
-                              color[0], color[1], color[2])
+            self._client.set_matrix_icon(icon_id)
+            self._client.set_leds(
+                color[0], color[1], color[2],
+                color[0], color[1], color[2],
+            )
         except Exception:
             logger.warning("[display] Bridge call failed", exc_info=True)
 
     def clear(self) -> None:
         try:
-            self._bridge.call("clear")
+            self._client.clear()
         except Exception:
             pass
 
