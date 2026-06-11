@@ -47,17 +47,6 @@ triggers:
         topic: "home/light/set"
         payload: "ON"
 
-  - phrase: "alza il volume"
-    actions:
-      - type: set_volume
-        mode: up
-        step: 0.1
-
-  - phrase: "abbassa il volume"
-    actions:
-      - type: set_volume
-        mode: down
-        step: 0.1
 
 # ---------------------------------------------------------------------------
 # Per-wake-word triggers

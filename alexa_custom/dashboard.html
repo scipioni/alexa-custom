@@ -1534,7 +1534,6 @@
         case 'room_status': setRoomStatus(m.status, m.timeout||0); break;
         case 'system_stats': updateSparkline(m); break;
         case 'error': setSt('Error: ' + (m.msg||'unknown'), null); break;
-        case 'reload': location.reload(); break;
       }
     }
 

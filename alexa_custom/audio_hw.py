@@ -9,7 +9,6 @@ from pathlib import Path
 
 import numpy as np
 import pulsectl
-import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -35,11 +34,14 @@ def save_volume_config(volume: float) -> None:
 
     try:
         import yaml
+
         with open(config_file, "r") as f:
             config = yaml.safe_load(f) or {}
 
         if not isinstance(config, dict):
-            logger.warning("config.yaml has invalid structure, cannot persist volume state")
+            logger.warning(
+                "config.yaml has invalid structure, cannot persist volume state"
+            )
             return
 
         config.setdefault("audio", {})

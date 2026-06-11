@@ -422,33 +422,6 @@ async def handle_set_volume(action: ActionEntry, **_):
     await asyncio.to_thread(play_tone, "info")
 
 
-@registry.register("set_volume_from_transcript")
-async def handle_set_volume_from_transcript(transcript: str | None = None, **_):
-    from alexa_custom.audio import play_tone
-    from alexa_custom.audio_hw import save_volume_config, set_output_volume
-    from alexa_custom.number_parser import parse_percentage
-
-    if not transcript:
-        logger.debug("set_volume_from_transcript: no transcript, skipping")
-        return
-
-    value = parse_percentage(transcript)
-    if value is None:
-        logger.debug(
-            "set_volume_from_transcript: no percentage found in '%s', skipping",
-            transcript,
-        )
-        return
-
-    import pulsectl
-
-    with pulsectl.Pulse("alexa-volume") as pulse:
-        set_output_volume(pulse, None, value)
-    save_volume_config(value)
-    logger.info("Set volume to %.0f%% via '%s'", value * 100, transcript)
-    await asyncio.to_thread(play_tone, "info")
-
-
 @registry.register("shell")
 async def handle_shell(action: ActionEntry, **_):
     command = action.params.get("command", "")

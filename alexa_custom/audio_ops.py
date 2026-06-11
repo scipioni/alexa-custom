@@ -361,7 +361,7 @@ def play_call_end() -> None:
 
 def set_output_volume_direct(volume: float) -> None:
     """Set output volume without requiring pulsectl connection.
-    
+
     This function directly calls wpctl to set the volume and persists
     the setting to config.yaml. It does not require a pulsectl.Pulse()
     connection, avoiding ALSA hardware PCM reset.
