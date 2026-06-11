@@ -280,7 +280,7 @@ def set_output_volume(
     _OUTPUT_VOLUME = volume
     if volume <= 0:
         return
-    logger.info(f"Output volume set to {volume:.0%} (digital scaling)")
+    logger.info("Output volume set to %.0f%% (digital scaling)", volume * 100)
     _restore_hw_pcm()
 
 
