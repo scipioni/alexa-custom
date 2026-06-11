@@ -921,14 +921,14 @@
         case 'hello': {
           _restarting = false;
           const rb = document.getElementById('btn-restart');
-          rb.disabled = false; rb.textContent = 'Restart';
+          rb.disabled = false; rb.classList.remove('spinning');
           setSt(m.status, m.room);
           (m.participants || []).forEach(p => parts[p.identity] = p.tracks);
           renderParts();
           setAudio(m.audio_connected, m.audio_conn_type);
           setStt(m.stt_state, m.stt_text, m);
           setStatusListening(m.stt_state === 'wake' || m.stt_state === 'partial' || m.stt_state === 'transcribing');
-          if (m.actions_config) { _cfg = m.actions_config; renderActions(_cfg); }
+          if (m.actions_config && Object.keys(m.actions_config).length) { _cfg = m.actions_config; renderActions(_cfg); }
           setRoomStatus(m.room_status || 'closed', m.room_answer_timeout || 0);
           break;
         }

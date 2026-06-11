@@ -1016,6 +1016,17 @@ def main() -> None:
     input_gain = config.audio.input_gain if config is not None else 1.0
     room = os.environ.get("LIVEKIT_ROOM", "")
 
+    # Optional display controller
+    display_controller = None
+    if config is not None and config.display is not None and config.display.enabled:
+        from alexa_custom.display import DisplayController, get_display_backend
+        backend = get_display_backend(config.display.backend)
+        display_controller = DisplayController(backend)
+        logger.info(
+            "Display feedback enabled (backend=%s)",
+            type(backend).__name__,
+        )
+
     # Port: CLI flag > config.web.port > default 8080
     web_port = args.web_port or (config.web.port if config is not None else 8080)
 
@@ -1096,6 +1107,8 @@ def main() -> None:
         output_volume=output_volume,
         input_gain=input_gain,
         shutdown_callback=_web_shutdown_callback,
+        extra_event_cb=display_controller.on_event if display_controller else None,
+        extra_stt_event_cb=display_controller.on_stt_event if display_controller else None,
     )
 
     import time as _time

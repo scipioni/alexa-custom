@@ -168,6 +168,14 @@ class ActionsDirectoryConfig:
 
 
 @dataclass
+class DisplayConfig:
+    enabled: bool = True
+    backend: str = "auto"  # auto | bridge | gpio | mock
+    matrix_brightness: int = 50
+    led_brightness: int = 50
+
+
+@dataclass
 class LLMConfig:
     backend: str
     host: str
@@ -240,6 +248,7 @@ class ActionsConfig:
     system: SystemConfig = field(default_factory=SystemConfig)
     actions: ActionsDirectoryConfig = field(default_factory=ActionsDirectoryConfig)
     llm: LLMConfig | None = None
+    display: DisplayConfig | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -864,6 +873,19 @@ def _parse_actions_config(
             except ConfigError as e:
                 logger.warning("LLM config error — LLM disabled: %s", e)
 
+    # Display: optional section, None when absent
+    display: DisplayConfig | None = None
+    raw_display = raw.get("display")
+    if raw_display is not None:
+        if not isinstance(raw_display, dict):
+            raise ConfigError(f"{source}: 'display' must be a mapping if present")
+        display = DisplayConfig(
+            enabled=bool(raw_display.get("enabled", True)),
+            backend=str(raw_display.get("backend", "auto")),
+            matrix_brightness=int(raw_display.get("matrix_brightness", 50)),
+            led_brightness=int(raw_display.get("led_brightness", 50)),
+        )
+
     # Set audio WebRTC env vars from config
     webrtc = audio.webrtc
     os.environ.setdefault("MIC_AGC", "1" if webrtc.agc else "0")
@@ -902,4 +924,5 @@ def _parse_actions_config(
         system=system,
         actions=actions_dir_cfg,
         llm=llm,
+        display=display,
     )
