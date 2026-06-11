@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from alexa_custom.audio_hw import get_output_volume, get_post_playback_ms
+from alexa_custom.audio_hw import _POST_PLAYBACK_MS, get_output_volume
 from alexa_custom.audio_ops import (
     _audio_lock,
     _play_array,
@@ -192,17 +192,10 @@ class PiperTTS(TTSBackend):
                         proc.stdin.write(bytes(n_preroll * 2))  # type: ignore[union-attr]
 
                 assert proc.stdin is not None
-                # Digitally scale the audio chunk by the global output volume
-                volume = get_output_volume()
-                scaled_arr = (np.asarray(arr, dtype=np.int16) * volume).astype(np.int16)
-                proc.stdin.write(scaled_arr.tobytes())
-                n = len(scaled_arr)
+                proc.stdin.write(arr.tobytes())
+                n = len(arr)
                 if n:
-                    # Compute in float64: norm() on int16 squares samples in
-                    # int16 and overflows (e.g. 32000² wraps), giving garbage.
-                    rms = float(np.linalg.norm(scaled_arr.astype(np.float64))) / (
-                        32768.0 * n**0.5
-                    )
+                    rms = float(np.linalg.norm(arr)) / (32768.0 * n**0.5) * get_output_volume()
                     set_playback_level(rms)
 
             if proc is None:
@@ -217,9 +210,8 @@ class PiperTTS(TTSBackend):
                 )
                 proc.kill()
                 proc.wait()
-            post_ms = get_post_playback_ms()
-            if post_ms > 0:
-                time.sleep(post_ms / 1000.0)
+            if _POST_PLAYBACK_MS > 0:
+                time.sleep(_POST_PLAYBACK_MS / 1000.0)
 
         except Exception as e:
             logger.error(f"Piper TTS (streaming) failed: {e}")

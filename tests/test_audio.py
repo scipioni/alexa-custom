@@ -1,13 +1,12 @@
 import numpy as np
-import pytest
 from unittest.mock import patch, MagicMock
 
 import alexa_custom.audio as audio
 import alexa_custom.audio_hw as audio_hw
 
 
-def test_play_array_scales_by_output_volume():
-    audio_hw._state.output_volume = 0.5
+def test_play_array_does_not_scale_by_output_volume():
+    audio_hw._OUTPUT_VOLUME = 0.5
 
     test_audio = np.ones((100, 2), dtype=np.float32)
 
@@ -31,42 +30,11 @@ def test_play_array_scales_by_output_volume():
             written_bytes = mock_wf.writeframes.call_args[0][0]
             written_samples = np.frombuffer(written_bytes, dtype=np.int16)
 
-            # Digital gain is applied at the application layer — samples
-            # are scaled by the output volume before writing the WAV
-            assert np.all(written_samples == 16383)
-
-
-def test_play_array_full_volume_passthrough():
-    audio_hw._state.output_volume = 1.0
-
-    test_audio = np.ones((100, 2), dtype=np.float32)
-
-    with (
-        patch("tempfile.mkstemp") as mock_mkstemp,
-        patch("alexa_custom.audio_ops.subprocess.run"),
-    ):
-        mock_mkstemp.return_value = (999, "dummy_temp_path.wav")
-
-        with (
-            patch("alexa_custom.audio_ops.os.close"),
-            patch("alexa_custom.audio_ops.os.unlink"),
-            patch("wave.open") as mock_wave_open,
-        ):
-            mock_wf = MagicMock()
-            mock_wave_open.return_value.__enter__.return_value = mock_wf
-
-            audio._play_array(test_audio, 16000)
-
-            mock_wf.writeframes.assert_called_once()
-            written_bytes = mock_wf.writeframes.call_args[0][0]
-            written_samples = np.frombuffer(written_bytes, dtype=np.int16)
-
-            # At full volume, samples pass through unattenuated
             assert np.all(written_samples == 32767)
 
 
 def test_play_wav_file_no_volume_flag():
-    audio_hw._state.output_volume = 0.25
+    audio_hw._OUTPUT_VOLUME = 0.25
     audio._PW_PLAY = "/usr/bin/pw-play"
 
     with patch("alexa_custom.audio_ops.subprocess.run") as mock_run:
@@ -79,7 +47,7 @@ def test_play_wav_file_no_volume_flag():
 
 
 def test_set_output_volume_no_longer_calls_wpctl():
-    audio_hw._state.output_volume = 0.5
+    audio_hw._OUTPUT_VOLUME = 0.5
 
     with patch("subprocess.run") as mock_run:
         audio_hw.set_output_volume(None, "pipewire", 0.3)
@@ -90,7 +58,7 @@ def test_set_output_volume_no_longer_calls_wpctl():
 
 
 def test_set_input_gain_calls_pactl_when_source_found():
-    audio_hw._state.input_gain = 1.0
+    audio_hw._INPUT_GAIN = 1.0
 
     mock_source = MagicMock()
     mock_source.name = "alsa_input.usb-0a12_NewPie_SABINESMICDFU-00.analog-stereo"
@@ -108,16 +76,19 @@ def test_set_input_gain_calls_pactl_when_source_found():
     ):
         audio_hw.set_input_gain(None, "NewPie", 1.5)
 
-        pactl_calls = [c for c in mock_run.call_args_list if c[0][0][0] == "pactl"]
+        pactl_calls = [
+            c for c in mock_run.call_args_list
+            if c[0][0][0] == "pactl"
+        ]
         assert len(pactl_calls) == 1, f"Expected 1 pactl call, got {len(pactl_calls)}"
         pactl_cmd = pactl_calls[0][0][0]
         assert "set-source-volume" in pactl_cmd
         assert "150%" in pactl_cmd
-        assert audio_hw.get_input_gain() == 1.5
+        assert audio_hw._INPUT_GAIN == 1.5
 
 
 def test_set_input_gain_noop_when_source_not_found():
-    audio_hw._state.input_gain = 1.0
+    audio_hw._INPUT_GAIN = 1.0
 
     mock_pulse_instance = MagicMock()
     mock_pulse_instance.source_list.return_value = []
@@ -131,9 +102,12 @@ def test_set_input_gain_noop_when_source_not_found():
     ):
         audio_hw.set_input_gain(None, "NonExistentDevice", 2.0)
 
-        pactl_calls = [c for c in mock_run.call_args_list if c[0][0][0] == "pactl"]
+        pactl_calls = [
+            c for c in mock_run.call_args_list
+            if c[0][0][0] == "pactl"
+        ]
         assert len(pactl_calls) == 0, f"Expected 0 pactl calls, got {pactl_calls}"
-        assert audio_hw.get_input_gain() == 2.0
+        assert audio_hw._INPUT_GAIN == 2.0
 
 
 def test_restore_hw_pcm_noop_without_newpie():
@@ -142,33 +116,31 @@ def test_restore_hw_pcm_noop_without_newpie():
             audio_hw._restore_hw_pcm()
 
             amixer_calls = [
-                c for c in mock_run.call_args_list if c[0][0][0] == "amixer"
+                c for c in mock_run.call_args_list
+                if c[0][0][0] == "amixer"
             ]
-            assert len(amixer_calls) == 0, (
-                f"Expected 0 amixer calls, got {amixer_calls}"
-            )
+            assert len(amixer_calls) == 0, f"Expected 0 amixer calls, got {amixer_calls}"
 
 
 def test_restore_hw_pcm_calls_amixer_when_newpie_found():
-    with (
-        patch.object(audio_hw, "get_default_card_name", return_value="NewPie"),
-        patch.object(audio_hw, "_find_alsa_card", return_value=(2, "NewPie")),
-        patch("subprocess.run") as mock_run,
-    ):
-        audio_hw._restore_hw_pcm()
+    with patch.object(audio_hw, "_find_alsa_card", return_value=(2, "NewPie")):
+        with patch("subprocess.run") as mock_run:
+            audio_hw._restore_hw_pcm()
 
-        amixer_calls = [c for c in mock_run.call_args_list if c[0][0][0] == "amixer"]
-        assert len(amixer_calls) == 1
-        amixer_cmd = amixer_calls[0][0][0]
-        assert "amixer" in amixer_cmd
-        assert "-c" in amixer_cmd
-        assert "2" in amixer_cmd
-        assert "PCM" in amixer_cmd
-        assert "100%" in amixer_cmd
+            amixer_calls = [
+                c for c in mock_run.call_args_list
+                if c[0][0][0] == "amixer"
+            ]
+            assert len(amixer_calls) == 1
+            amixer_cmd = amixer_calls[0][0][0]
+            assert "amixer" in amixer_cmd
+            assert "-c" in amixer_cmd
+            assert "2" in amixer_cmd
+            assert "PCM" in amixer_cmd
+            assert "100%" in amixer_cmd
 
 
-def test_configure_propagates_to_globals(monkeypatch):
-    monkeypatch.setattr("alexa_custom.audio_hw.load_volume_state", lambda: None)
+def test_configure_propagates_to_globals():
     fake_audio = MagicMock()
     fake_audio.post_playback_ms = 200
     fake_audio.tone_preroll_ms = 400
@@ -182,35 +154,9 @@ def test_configure_propagates_to_globals(monkeypatch):
 
     audio_hw.configure(fake_cfg)
 
-    assert audio_hw.get_output_volume() == 0.35
-    assert audio_hw.get_input_gain() == 1.8
-    assert audio_hw.get_post_playback_ms() == 200
-    assert audio_hw.get_tone_preroll_ms() == 400
-    assert audio_hw.get_default_card_name() == "ConferenceCam"
-    assert audio_hw.get_sample_rates() == {"usb": 44100, "bluetooth": 16000}
-
-
-def test_pulse_session_restores_pcm_on_success():
-    fake_pulse = MagicMock()
-    with (
-        patch("alexa_custom.audio_hw.pulsectl.Pulse", return_value=fake_pulse),
-        patch("alexa_custom.audio_hw._restore_hw_pcm") as mock_restore,
-    ):
-        with audio_hw.pulse_session("test") as p:
-            assert p is fake_pulse
-    fake_pulse.close.assert_called_once()
-    mock_restore.assert_called_once()
-
-
-def test_pulse_session_restores_pcm_on_exception():
-    fake_pulse = MagicMock()
-    with (
-        patch("alexa_custom.audio_hw.pulsectl.Pulse", return_value=fake_pulse),
-        patch("alexa_custom.audio_hw._restore_hw_pcm") as mock_restore,
-    ):
-        with pytest.raises(RuntimeError):
-            with audio_hw.pulse_session("test"):
-                raise RuntimeError("boom")
-    # PCM must be restored even when the body raises.
-    fake_pulse.close.assert_called_once()
-    mock_restore.assert_called_once()
+    assert audio_hw._OUTPUT_VOLUME == 0.35
+    assert audio_hw._INPUT_GAIN == 1.8
+    assert audio_hw._POST_PLAYBACK_MS == 200
+    assert audio_hw._TONE_PREROLL_MS == 400
+    assert audio_hw._DEFAULT_CARD_NAME == "ConferenceCam"
+    assert audio_hw._SAMPLERATE == {"usb": 44100, "bluetooth": 16000}
