@@ -129,6 +129,7 @@ class TestDisplayControllerEventMapping:
     def test_stt_level_is_ignored(self):
         backend = MagicMock()
         ctrl = DisplayController(backend)
+        backend.show.reset_mock()
         ctrl.on_stt_event("level", {"mic": 0.5})
         time.sleep(0.1)
         ctrl.stop()
