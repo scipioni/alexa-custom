@@ -139,7 +139,7 @@ class GpioLedDisplay(DisplayBackend):
 
 class _BridgeClient:
 
-    _PORT = "/dev/ttyHS1"
+    _PORT = "/dev/ttyMSM0"
     _BAUD = 115200
 
     def __init__(self) -> None:
