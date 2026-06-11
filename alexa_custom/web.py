@@ -49,11 +49,15 @@ class WebServer:
         output_volume: float = 0.5,
         input_gain: float = 1.0,
         shutdown_callback: Callable | None = None,
+        extra_event_cb: Callable | None = None,
+        extra_stt_event_cb: Callable | None = None,
     ) -> None:
         self._port = port
         self._output_volume = output_volume
         self._input_gain = input_gain
         self._shutdown_callback = shutdown_callback
+        self._extra_event_cb = extra_event_cb
+        self._extra_stt_event_cb = extra_stt_event_cb
         self._html = _DASHBOARD_PATH.read_text()
         self._clients: set[web.WebSocketResponse] = set()
         self._queue: asyncio.Queue = asyncio.Queue(maxsize=200)
@@ -490,6 +494,7 @@ class WebServer:
         self,
         run_fn: Callable,
         stop_threading: threading.Event,
+        on_event_cb: Callable | None = None,
     ) -> None:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -504,7 +509,7 @@ class WebServer:
 
         loop.set_exception_handler(_exc_handler)
         try:
-            loop.run_until_complete(run_fn(stop_threading, self.on_event, livekit_stop))
+            loop.run_until_complete(run_fn(stop_threading, on_event_cb or self.on_event, livekit_stop))
         except Exception as e:
             self._enqueue("error", {"msg": str(e)})
         finally:
@@ -557,10 +562,27 @@ class WebServer:
         if stt_params and "config" in stt_params:
             self._state["actions_config"] = self._serialize_config(stt_params["config"])
 
+        # Chain extra event callbacks if provided
+        _on_event = self.on_event
+        if self._extra_event_cb:
+            _cb = self._extra_event_cb
+            def _chained_event(event, data):
+                _on_event(event, data)
+                _cb(event, data)
+            _on_event = _chained_event
+
+        _on_stt_event = self.on_stt_event
+        if self._extra_stt_event_cb:
+            _cb_stt = self._extra_stt_event_cb
+            def _chained_stt(event, data):
+                _on_stt_event(event, data)
+                _cb_stt(event, data)
+            _on_stt_event = _chained_stt
+
         stop_threading = threading.Event()
         livekit_thread = threading.Thread(
             target=self._livekit_worker,
-            args=(run_fn, stop_threading),
+            args=(run_fn, stop_threading, _on_event),
             daemon=True,
             name="livekit-web",
         )
@@ -586,7 +608,7 @@ class WebServer:
                 telegram_client=stt_params["telegram_client"],
                 livekit_connect_fn=stt_params["connect_fn"],
                 livekit_connected_flag=stt_params["connected_flag"],
-                on_stt_event=self.on_stt_event,
+                on_stt_event=_on_stt_event,
                 stt_ready_event=stt_params.get("stt_ready_event"),
             )
             stt_thread_holder = [stt_thread]
@@ -639,12 +661,16 @@ def run_web(
     output_volume: float = 0.5,
     input_gain: float = 1.0,
     shutdown_callback: Callable | None = None,
+    extra_event_cb: Callable | None = None,
+    extra_stt_event_cb: Callable | None = None,
 ) -> None:
     server = WebServer(
         port=port,
         output_volume=output_volume,
         input_gain=input_gain,
         shutdown_callback=shutdown_callback,
+        extra_event_cb=extra_event_cb,
+        extra_stt_event_cb=extra_stt_event_cb,
     )
     try:
         asyncio.run(
