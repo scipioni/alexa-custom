@@ -56,9 +56,6 @@ def _play_array(audio: np.ndarray, samplerate: int) -> None:
     import tempfile
     import wave as _wave
 
-    # Digitally scale the audio by the global output volume
-    audio = audio * get_output_volume()
-
     channels = audio.shape[1] if audio.ndim > 1 else 1
     frames = audio.shape[0]
     duration_s = frames / samplerate

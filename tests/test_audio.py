@@ -5,8 +5,7 @@ import alexa_custom.audio as audio
 import alexa_custom.audio_hw as audio_hw
 
 
-def test_play_array_scales_by_output_volume():
-    # Set a custom output volume inside audio_hw
+def test_play_array_does_not_scale_by_output_volume():
     audio_hw._OUTPUT_VOLUME = 0.5
 
     test_audio = np.ones((100, 2), dtype=np.float32)
@@ -15,10 +14,8 @@ def test_play_array_scales_by_output_volume():
         patch("tempfile.mkstemp") as mock_mkstemp,
         patch("alexa_custom.audio_ops.subprocess.run"),
     ):
-        # Mock mkstemp to return a dummy file descriptor and path
         mock_mkstemp.return_value = (999, "dummy_temp_path.wav")
 
-        # Stub the os.close, wave.open and os.unlink in audio_ops
         with (
             patch("alexa_custom.audio_ops.os.close"),
             patch("alexa_custom.audio_ops.os.unlink"),
@@ -29,15 +26,13 @@ def test_play_array_scales_by_output_volume():
 
             audio._play_array(test_audio, 16000)
 
-            # Verify that wave.open's writeframes was called with the scaled array
-            # Original test_audio was np.ones, so after scaling by 0.5, it becomes np.ones * 0.5
-            # When converted to pcm16, 0.5 * 32767 = 16383 (rounded down)
             mock_wf.writeframes.assert_called_once()
             written_bytes = mock_wf.writeframes.call_args[0][0]
             written_samples = np.frombuffer(written_bytes, dtype=np.int16)
 
-            # Every sample should be exactly 16383 (due to 0.5 volume scaling)
-            assert np.all(written_samples == 16383)
+            # Software scaling is removed — pipewire sink volume is the sole mechanism
+            # Samples should pass through as full-scale: 32767 (not 16383)
+            assert np.all(written_samples == 32767)
 
 
 def test_play_wav_file_applies_volume():
