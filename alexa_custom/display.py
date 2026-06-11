@@ -127,24 +127,24 @@ class GpioLedDisplay(DisplayBackend):
         self._set_color(0, 0, 0)
 
 
-# ── Bridge RPC backend (matrix + MCU LEDs) ────────────────────────────
-# Implements the Arduino Router + RPClite protocol over serial (/dev/ttyHS1).
-# Acts as the Router that the STM32 firmware expects — handles $/reset,
-# $/register from the STM32, and forwards our own RPC calls.
-#
-# Protocol: raw MsgPack, no framing, 115200 baud.
-# Request:  [4, 0, msg_id, "method", [args...]]
-# Response: [4, 1, msg_id, [nil_or_err, result_or_nil]]
+# ── Bridge RPC backend ────────────────────────────────────────────────
+# Connects to the arduino-router on the UNO Q via TCP (port 7501).
+# Router protocol: [0, msg_id, "method", [args]] / [1, msg_id, err, result]
+# The STM32 firmware uses Arduino_RouterBridge to register methods.
+
+import os
+
+_ROUTER_HOST = os.environ.get("ALEXA_DISPLAY_HOST", "192.168.9.43")
+_ROUTER_PORT = int(os.environ.get("ALEXA_DISPLAY_PORT", "7501"))
 
 
 class _BridgeClient:
 
-    _PORT = "/dev/ttyMSM0"
-    _BAUD = 115200
-
-    def __init__(self) -> None:
-        import serial as _serial
-        self._ser = _serial.Serial(self._PORT, self._BAUD, timeout=0.05)
+    def __init__(self, host: str = _ROUTER_HOST, port: int = _ROUTER_PORT) -> None:
+        import msgpack as _mp
+        self._host = host
+        self._port = port
+        self._sock = self._connect()
         self._lock = threading.Lock()
         self._pending: dict[int, threading.Event] = {}
         self._responses: dict[int, object] = {}
@@ -153,33 +153,31 @@ class _BridgeClient:
         self._reader = threading.Thread(target=self._reader_loop, daemon=True)
         self._reader.start()
 
-    def _send_response(self, msg_id: int, result: object = None) -> None:
-        import msgpack
-        body = msgpack.packb([4, 1, msg_id, [None, result]])
-        self._ser.write(body)
-        self._ser.flush()
-
-    def _handle_call(self, obj: list) -> None:
-        _typ, _call_type, msg_id, method = obj[:4]
-        if method in ("$/reset", "$/register", "$/setMaxMsgSize"):
-            self._send_response(msg_id, True)
+    def _connect(self):
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(5.0)
+        s.connect((self._host, self._port))
+        s.settimeout(0.05)
+        return s
 
     def _handle_response(self, obj: list) -> None:
-        _typ, _resp_type, msg_id = obj[:3]
-        inner = obj[3] if len(obj) > 3 else [None, None]
-        err, result = inner if isinstance(inner, list) and len(inner) == 2 else (None, None)
+        _typ, msg_id, err, result = (obj + [None, None, None])[:4]
         if msg_id in self._pending:
             self._responses[msg_id] = (err, result)
             self._pending[msg_id].set()
 
     def _reader_loop(self) -> None:
-        import msgpack
+        import msgpack as _mp
         buf = bytearray()
         while not self._stop.is_set():
             try:
-                chunk = self._ser.read(256)
+                chunk = self._sock.recv(4096)
+            except (BlockingIOError, ConnectionError, OSError):
+                time.sleep(0.05)
+                continue
             except Exception as e:
-                logger.warning("[display] Serial read error: %s", e)
+                logger.debug("[display] Socket read error: %s", e)
                 time.sleep(0.1)
                 continue
             if chunk:
@@ -199,15 +197,8 @@ class _BridgeClient:
                 continue
             except Exception:
                 break
-            if (
-                isinstance(obj, list)
-                and len(obj) >= 3
-                and obj[0] == 4
-            ):
-                if obj[1] == 0:
-                    self._handle_call(obj)
-                elif obj[1] == 1:
-                    self._handle_response(obj)
+            if isinstance(obj, list) and len(obj) >= 3 and obj[0] == 1:
+                self._handle_response(obj)
             offset += used
         if offset > 0:
             del buf[:offset]
@@ -218,10 +209,13 @@ class _BridgeClient:
         self._next_id += 1
         ev = threading.Event()
         self._pending[mid] = ev
-        body = msgpack.packb([4, 0, mid, method, list(args)])
+        body = msgpack.packb([0, mid, method, list(args)])
         with self._lock:
-            self._ser.write(body)
-            self._ser.flush()
+            try:
+                self._sock.sendall(body)
+            except Exception:
+                self._sock = self._connect()
+                self._sock.sendall(body)
         got = ev.wait(timeout=5.0)
         self._pending.pop(mid, None)
         if not got:
@@ -233,8 +227,8 @@ class _BridgeClient:
     def ping(self) -> bool:
         return self.call("ping")
 
-    def set_matrix_icon(self, icon_id: int) -> bool:
-        return self.call("set_matrix_icon", icon_id)
+    def set_text(self, text: str) -> bool:
+        return self.call("set_text", text)
 
     def set_leds(self,
                  r: int, g: int, b: int,
@@ -247,22 +241,22 @@ class _BridgeClient:
     def close(self) -> None:
         self._stop.set()
         try:
-            self._ser.close()
+            self._sock.close()
         except Exception:
             pass
 
 
 class BridgeDisplay(DisplayBackend):
 
-    def __init__(self) -> None:
-        self._client = _BridgeClient()
+    def __init__(self, host: str = _ROUTER_HOST, port: int = _ROUTER_PORT) -> None:
+        self._client = _BridgeClient(host, port)
         self._client.ping()
 
     def show(self, state: str) -> None:
-        icon_id = STATE_ICONS.get(state, 8)
         color = STATE_COLORS.get(state, (0, 0, 0))
+        text = state.upper()
         try:
-            ok1 = self._client.set_matrix_icon(icon_id)
+            ok1 = self._client.set_text(text)
             ok2 = self._client.set_leds(
                 color[0], color[1], color[2],
                 color[0], color[1], color[2],
@@ -289,7 +283,9 @@ def get_display_backend(backend: str = "auto") -> DisplayBackend:
 
     if backend in ("bridge", "auto"):
         try:
-            return BridgeDisplay()
+            host = os.environ.get("ALEXA_DISPLAY_HOST", _ROUTER_HOST)
+            port = int(os.environ.get("ALEXA_DISPLAY_PORT", str(_ROUTER_PORT)))
+            return BridgeDisplay(host, port)
         except Exception:
             if backend == "bridge":
                 logger.warning(

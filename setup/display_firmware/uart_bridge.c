@@ -7,10 +7,12 @@
 #include <sys/select.h>
 
 #define UART_BASE 0x4a88000
-#define TX_FIFO     0x700
-#define RX_FIFO     0x780
-#define TX_FIFO_ST  0x800
-#define RX_FIFO_ST  0x804
+/* MSM UART registers (Snapdragon 801 / APQ8074) */
+#define TX_FIFO     0x070
+#define RX_FIFO     0x074
+#define SR          0x0A0   /* Status: bit0=TX_READY, bit1=RX_READY */
+#define TX_FIFO_ST  SR
+#define RX_FIFO_ST  SR
 
 volatile uint32_t *r;
 static inline uint32_t rd(int o) { return r[o / 4]; }
@@ -39,7 +41,7 @@ int main(void) {
                 wr(TX_FIFO, buf[i]);
             }
         }
-        while (rd(RX_FIFO_ST) & 1) {
+        while (rd(RX_FIFO_ST) & 2) {
             uint8_t ch = rd(RX_FIFO) & 0xFF;
             write(1, &ch, 1);
         }
