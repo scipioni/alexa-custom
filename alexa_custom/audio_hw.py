@@ -226,7 +226,7 @@ def set_output_volume(
     if volume <= 0:
         return
     result = subprocess.run(
-        ["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", f"{volume:.4f}"],
+        ["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", "1.0"],
         capture_output=True,
         check=False,
     )
@@ -235,7 +235,7 @@ def set_output_volume(
             f"wpctl set-volume failed: {result.stderr.decode(errors='replace').strip()}"
         )
     else:
-        logger.info(f"Set output volume to {volume:.0%} via wpctl")
+        logger.info("Set PipeWire sink to unity (1.0)")
     _restore_hw_pcm()
 
 

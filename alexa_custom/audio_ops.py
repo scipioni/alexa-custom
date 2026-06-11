@@ -61,7 +61,10 @@ def _play_array(audio: np.ndarray, samplerate: int) -> None:
     duration_s = frames / samplerate
     play_timeout = min(max(duration_s * 3 + 5, 8), 30)
 
-    pcm16 = np.clip(np.ascontiguousarray(audio) * 32767, -32768, 32767).astype(np.int16)
+    volume = get_output_volume()
+    pcm16 = np.clip(np.ascontiguousarray(audio) * volume * 32767, -32768, 32767).astype(
+        np.int16
+    )
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=".wav")
     try:
         os.close(tmp_fd)
@@ -110,9 +113,9 @@ def _play_raw(data: bytes, samplerate: int, channels: int) -> None:
     duration_s = frames / samplerate
     play_timeout = min(max(duration_s * 3 + 5, 8), 30)
 
-    pcm16 = np.clip(
-        np.frombuffer(data, dtype=np.float32) * 32767, -32768, 32767
-    ).astype(np.int16)
+    volume = get_output_volume()
+    samples = np.frombuffer(data, dtype=np.float32)
+    pcm16 = np.clip(samples * volume * 32767, -32768, 32767).astype(np.int16)
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=".wav")
     try:
         os.close(tmp_fd)

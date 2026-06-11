@@ -192,10 +192,13 @@ class PiperTTS(TTSBackend):
                         proc.stdin.write(bytes(n_preroll * 2))  # type: ignore[union-attr]
 
                 assert proc.stdin is not None
+                volume = get_output_volume()
+                if volume < 1.0:
+                    arr = (arr.astype(np.float32) * volume).astype(np.int16)
                 proc.stdin.write(arr.tobytes())
                 n = len(arr)
                 if n:
-                    rms = float(np.linalg.norm(arr)) / (32768.0 * n**0.5) * get_output_volume()
+                    rms = float(np.linalg.norm(arr)) / (32768.0 * n**0.5) * volume
                     set_playback_level(rms)
 
             if proc is None:
