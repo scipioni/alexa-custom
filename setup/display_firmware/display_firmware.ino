@@ -4,9 +4,8 @@
  * Standalone RPC server (no Router dependency). Communicates directly
  * over Serial1 using the Arduino_RPClite protocol.
  *
- * Frame format: uint32_t[4], each uint32_t holds two rows:
- *   frame[i] = (row_{2i} << 16) | row_{2i+1}
- * Each row is a 13-bit mask (bit 0 = column 0, bit 12 = column 12).
+ * Icons are defined as row-major byte arrays (8 rows × 13 cols = 104 bytes).
+ * Each byte is 0 (off) or 1 (on).
  */
 
 #include "Arduino_LED_Matrix.h"
@@ -14,68 +13,108 @@
 
 ArduinoLEDMatrix matrix;
 
-// ── 8×13 icon library ─────────────────────────────────────────────────
-#define ROW(a, b) (((uint32_t)(a) << 16) | (uint32_t)(b))
+// ── 8×13 row-major icons (104 bytes each: 13 cols × 8 rows) ─────────
 
-static const uint32_t ICON_IDLE[4] = {
-  ROW(0b0000000000000, 0b0001111000000),
-  ROW(0b0011111100000, 0b0111111110000),
-  ROW(0b0111111110000, 0b0011111100000),
-  ROW(0b0001111000000, 0b0000000000000),
+// ICON_IDLE (0): filled rectangle centre
+static const uint8_t ICON_IDLE[104] = {
+  0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,1,1,1,1,0,0,0,0,0,
+  0,0,0,1,1,1,1,1,1,0,0,0,0,
+  0,0,1,1,1,1,1,1,1,1,0,0,0,
+  0,0,1,1,1,1,1,1,1,1,0,0,0,
+  0,0,0,1,1,1,1,1,1,0,0,0,0,
+  0,0,0,0,1,1,1,1,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,
 };
 
-static const uint32_t ICON_LISTEN[4] = {
-  ROW(0b0000110000000, 0b0001111000000),
-  ROW(0b0001111000000, 0b0001111000000),
-  ROW(0b0001111000000, 0b0001111000000),
-  ROW(0b0000110000000, 0b0001111000000),
+// ICON_LISTEN (1): microphone
+static const uint8_t ICON_LISTEN[104] = {
+  0,0,0,0,0,1,1,0,0,0,0,0,0,
+  0,0,0,0,1,1,1,1,0,0,0,0,0,
+  0,0,0,0,1,1,1,1,0,0,0,0,0,
+  0,0,0,0,1,1,1,1,0,0,0,0,0,
+  0,0,0,0,1,1,1,1,0,0,0,0,0,
+  0,0,0,0,0,1,1,0,0,0,0,0,0,
+  0,0,0,0,0,1,1,0,0,0,0,0,0,
+  0,0,0,0,1,1,1,1,0,0,0,0,0,
 };
 
-static const uint32_t ICON_TRANSCRIBE[4] = {
-  ROW(0b0010001000100, 0b0010001000100),
-  ROW(0b0111011101110, 0b0111011101110),
-  ROW(0b0010001000100, 0b0010001000100),
-  ROW(0b0000000000000, 0b0000000000000),
+// ICON_TRANSCRIBE (2): equaliser bars
+static const uint8_t ICON_TRANSCRIBE[104] = {
+  0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,1,0,0,0,1,0,0,0,1,0,0,
+  0,0,1,0,0,0,1,0,0,0,1,0,0,
+  0,0,1,1,1,0,1,1,1,0,1,1,1,
+  0,0,1,1,1,0,1,1,1,0,1,1,1,
+  0,0,1,0,0,0,1,0,0,0,1,0,0,
+  0,0,1,0,0,0,1,0,0,0,1,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,
 };
 
-static const uint32_t ICON_THINK[4] = {
-  ROW(0b0000100000000, 0b0001100000000),
-  ROW(0b0011111111110, 0b0011111111110),
-  ROW(0b0001100000000, 0b0000100000000),
-  ROW(0b0000000000000, 0b0000000000000),
+// ICON_THINK (3): right arrow
+static const uint8_t ICON_THINK[104] = {
+  0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,1,0,0,0,0,0,0,0,
+  0,0,0,0,0,1,1,0,0,0,0,0,0,
+  0,0,0,1,1,1,1,1,1,1,1,1,0,
+  0,0,0,1,1,1,1,1,1,1,1,1,0,
+  0,0,0,0,0,1,1,0,0,0,0,0,0,
+  0,0,0,0,0,1,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,
 };
 
-static const uint32_t ICON_SPEAK[4] = {
-  ROW(0b0001000000000, 0b0011000100000),
-  ROW(0b0111001010000, 0b0111001010000),
-  ROW(0b0011000100000, 0b0001000000000),
-  ROW(0b0000000000000, 0b0000000000000),
+// ICON_SPEAK (4): sound waves
+static const uint8_t ICON_SPEAK[104] = {
+  0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,1,0,0,0,0,0,0,0,0,
+  0,0,0,1,1,0,0,0,1,0,0,0,0,
+  0,0,1,1,1,0,0,1,0,1,0,0,0,
+  0,0,1,1,1,0,0,1,0,1,0,0,0,
+  0,0,0,1,1,0,0,0,1,0,0,0,0,
+  0,0,0,0,1,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,
 };
 
-static const uint32_t ICON_CALL[4] = {
-  ROW(0b0111111111110, 0b0100000000010),
-  ROW(0b0101111111010, 0b0100000000010),
-  ROW(0b0111111111110, 0b0000000000000),
-  ROW(0b0000000000000, 0b0000000000000),
+// ICON_CALL (5): phone handset
+static const uint8_t ICON_CALL[104] = {
+  0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,1,1,1,1,1,1,1,1,1,1,0,
+  0,0,1,0,0,0,0,0,0,0,0,1,0,
+  0,0,1,0,1,1,1,1,1,0,0,1,0,
+  0,0,1,0,0,0,0,0,0,0,0,1,0,
+  0,0,1,1,1,1,1,1,1,1,1,1,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,
 };
 
-static const uint32_t ICON_ERROR[4] = {
-  ROW(0b1000000000001, 0b0100000000010),
-  ROW(0b0010000000100, 0b0001000001000),
-  ROW(0b0000100010000, 0b0000010100000),
-  ROW(0b0000001000000, 0b0000000000000),
+// ICON_ERROR (6): X mark
+static const uint8_t ICON_ERROR[104] = {
+  0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,1,1,0,0,0,0,0,0,
+  0,0,0,0,0,1,1,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,
 };
 
-static const uint32_t ICON_CONNECT[4] = {
-  ROW(0b0000000000000, 0b0111111111110),
-  ROW(0b1000000000001, 0b0000000000000),
-  ROW(0b0001111111000, 0b0000000000000),
-  ROW(0b0000111110000, 0b0000000000000),
+// ICON_CONNECT (7): Wi‑Fi arc (simple bar)
+static const uint8_t ICON_CONNECT[104] = {
+  0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,1,1,1,1,1,0,0,0,0,
+  0,0,0,1,0,0,0,0,0,1,0,0,0,
+  0,0,0,0,0,1,1,1,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,1,1,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,
+  0,0,0,0,0,0,0,0,0,0,0,0,0,
 };
 
-static const uint32_t ICON_OFF[4] = { 0, 0, 0, 0 };
+// ICON_OFF (8): all off
+static const uint8_t ICON_OFF[104] = {0};
 
-static const uint32_t *ICONS[] = {
+static const uint8_t *ICONS[] = {
   ICON_IDLE, ICON_LISTEN, ICON_TRANSCRIBE, ICON_THINK,
   ICON_SPEAK, ICON_CALL, ICON_ERROR, ICON_CONNECT, ICON_OFF,
 };
@@ -96,7 +135,7 @@ static void _set_both_leds(uint8_t r, uint8_t g, uint8_t b) {
   _set_led(LED_PINS[3], LED_PINS[4], LED_PINS[5], r, g, b);
 }
 
-// ── RPC functions (bound directly to RPCServer) ─────────────────────
+// ── RPC functions ───────────────────────────────────────────────────
 
 bool rpc_ping() {
   return true;
@@ -104,7 +143,7 @@ bool rpc_ping() {
 
 void rpc_set_matrix_icon(uint8_t icon_id) {
   if (icon_id >= ICON_COUNT) icon_id = ICON_COUNT - 1;
-  matrix.loadFrame(ICONS[icon_id]);
+  matrix.loadPixels((uint8_t *)ICONS[icon_id], 104);
 }
 
 void rpc_set_leds(uint8_t r, uint8_t g, uint8_t b,
@@ -114,7 +153,7 @@ void rpc_set_leds(uint8_t r, uint8_t g, uint8_t b,
 }
 
 void rpc_clear() {
-  matrix.loadFrame(ICON_OFF);
+  matrix.loadPixels((uint8_t *)ICON_OFF, 104);
   _set_both_leds(0, 0, 0);
 }
 
@@ -147,7 +186,7 @@ void setup() {
   delay(200);
   _set_both_leds(0, 0, 0);
   delay(100);
-  matrix.loadFrame(ICON_IDLE);
+  matrix.loadPixels((uint8_t *)ICON_IDLE, 104);
 }
 
 void loop() {
