@@ -135,6 +135,17 @@ actions:
   learn_file: conf/actions/learned.yaml    # file the llm_learn action appends to
 
 # ---------------------------------------------------------------------------
+# Visual display feedback (Arduino UNO Q only)
+# ---------------------------------------------------------------------------
+# Uses the board's built-in LED matrix (8×13) and RGB LEDs.
+# Omit this section to disable visual feedback entirely.
+# display:
+#   enabled: true
+#   backend: auto           # auto | bridge | gpio | mock
+#   matrix_brightness: 50   # 0-100
+#   led_brightness: 50      # 0-100
+
+# ---------------------------------------------------------------------------
 # System tuning
 # ---------------------------------------------------------------------------
 # system:
