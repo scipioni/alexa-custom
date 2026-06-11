@@ -279,6 +279,7 @@ class WebServer:
             from alexa_custom.audio_ops import set_output_volume_direct
 
             set_output_volume_direct(volume)
+            self._output_volume = volume
         elif action == "beep" and payload:
             frequency = payload.get("frequency", 440)
             duration = payload.get("duration", 100)
@@ -334,6 +335,8 @@ class WebServer:
             return 0.0
 
     async def _system_stats_loop(self) -> None:
+        from alexa_custom.audio_hw import get_output_volume
+
         cpu_count = os.cpu_count() or 1
         while True:
             await asyncio.sleep(2)
@@ -349,6 +352,7 @@ class WebServer:
                     "load15": load15,
                     "cpu_count": cpu_count,
                     "ram_free_pct": self._ram_free_pct(),
+                    "output_volume": get_output_volume(),
                 }
             )
 
