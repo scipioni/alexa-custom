@@ -10,7 +10,6 @@ from pathlib import Path
 
 import numpy as np
 import pulsectl
-import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -31,30 +30,36 @@ _STATE_FILE = "conf/state.yaml"
 
 
 def save_volume_config(volume: float) -> None:
-    """Save volume to config.yaml for persistence."""
-    config_file = Path("conf/config.yaml")
-    if not config_file.exists():
-        logger.warning("config.yaml not found, cannot persist volume state")
-        return
+    """Save volume to state.yaml for persistence across restarts."""
+    state_file = Path(_STATE_FILE)
+    state_file.parent.mkdir(parents=True, exist_ok=True)
 
     try:
         import yaml
-        with open(config_file, "r") as f:
-            config = yaml.safe_load(f) or {}
-
-        if not isinstance(config, dict):
-            logger.warning("config.yaml has invalid structure, cannot persist volume state")
-            return
-
-        config.setdefault("audio", {})
-        config["audio"]["output_volume"] = volume
-
-        with open(config_file, "w") as f:
-            yaml.safe_dump(config, f)
-        logger.info(f"Updated config.yaml with volume: {volume:.0%}")
+        state = {"output_volume": volume}
+        with open(state_file, "w") as f:
+            yaml.safe_dump(state, f)
+        logger.info(f"Saved volume to {_STATE_FILE}: {volume:.0%}")
 
     except Exception as e:
-        logger.warning("Failed to save volume to config.yaml: %s", e)
+        logger.warning("Failed to save volume to %s: %s", _STATE_FILE, e)
+
+
+def load_volume_state() -> float | None:
+    """Load persisted volume from state.yaml, returns None if no state file."""
+    state_file = Path(_STATE_FILE)
+    if not state_file.exists():
+        return None
+    try:
+        import yaml
+        with open(state_file) as f:
+            state = yaml.safe_load(f) or {}
+        volume = state.get("output_volume")
+        if volume is not None and 0.0 <= volume <= 1.0:
+            return volume
+    except Exception as e:
+        logger.warning("Failed to load volume from %s: %s", _STATE_FILE, e)
+    return None
 
 
 def configure(cfg) -> None:
@@ -72,6 +77,10 @@ def configure(cfg) -> None:
     _DEFAULT_CARD_NAME = cfg.audio.card_name
     _OUTPUT_VOLUME = cfg.audio.output_volume
     _INPUT_GAIN = cfg.audio.input_gain
+
+    state_vol = load_volume_state()
+    if state_vol is not None:
+        _OUTPUT_VOLUME = state_vol
 
 
 def get_output_volume() -> float:
@@ -293,7 +302,7 @@ def set_input_gain(
                 f"falling back to software scaling for input gain"
             )
 
-        _INPUT_GAIN = 1.0 if hw_ok else max(0.0, gain)
+        _INPUT_GAIN = max(0.0, gain)
         if not hw_ok:
             logger.warning(f"Input gain {gain:.0%} applied in software (CPU overhead, clipping risk)")
 

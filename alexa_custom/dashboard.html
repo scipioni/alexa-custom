@@ -893,6 +893,64 @@
     #btn-restart svg { display: block; width: 16px; height: 16px; }
     @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
 
+    body:not(.dev-mode) #btn-config { display: none; }
+    body.dev-mode #btn-config { display: flex; }
+
+    /* ── config modal ───────────────────────────────────────────────────────── */
+    #config-modal {
+      position: fixed; inset: 0; z-index: 1000;
+      display: flex; align-items: center; justify-content: center;
+    }
+    #config-modal.hidden { display: none; }
+    .modal-overlay {
+      position: absolute; inset: 0;
+      background: rgba(0,0,0,0.7);
+      backdrop-filter: blur(4px);
+    }
+    .modal-content {
+      position: relative;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      width: 90%; max-width: 700px;
+      max-height: 85vh;
+      overflow: hidden;
+      display: flex; flex-direction: column;
+    }
+    .modal-header {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .modal-header h2 { margin: 0; font-size: 16px; }
+    .modal-body {
+      flex: 1; overflow-y: auto;
+      padding: 20px;
+    }
+    .modal-footer {
+      padding: 16px 20px;
+      border-top: 1px solid var(--border);
+      display: flex; justify-content: flex-end; gap: 10px;
+    }
+    .form-group { margin-bottom: 16px; }
+    .form-group label { display: block; margin-bottom: 6px; font-size: 13px; color: var(--muted); }
+    .form-group input,
+    .form-group textarea,
+    .form-group select {
+      width: 100%; padding: 8px 12px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text); font-size: 14px;
+    }
+    .form-section {
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border);
+    }
+    .form-section h3 { margin: 0 0 12px 0; font-size: 14px; color: var(--info); }
+    .form-hint { display: block; font-size: 11px; color: var(--muted); margin-top: 2px; }
+
     /* ── AI panel ───────────────────────────────────────────────────────── */
     #ai-panel { flex-shrink: 0; }
     #ws-ind { font-size: 12px; color: var(--muted); font-weight: 600; }
@@ -1215,6 +1273,45 @@
       100% { box-shadow: inset 2px 0 0 var(--wake), 0 0 0 0   rgba(251,146,60,0); }
     }
 
+    @keyframes slideUp {
+      from { transform: translate(-50%, 20px); opacity: 0; }
+      to { transform: translate(-50%, 0); opacity: 1; }
+    }
+
+    @keyframes slideDown {
+      from { transform: translate(-50%, 0); opacity: 1; }
+      to { transform: translate(-50%, 20px); opacity: 0; }
+    }
+
+    .toast {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      z-index: 2000;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      animation: slideUp 0.3s ease-out;
+      max-width: 90%;
+      text-align: center;
+      color: #000;
+    }
+
+    .toast-success {
+      background: rgba(74,222,128,0.95);
+    }
+
+    .toast-error {
+      background: rgba(248,113,113,0.95);
+    }
+
+    .toast-info {
+      background: rgba(96,165,250,0.95);
+    }
+
     /* ── scrollbars ─────────────────────────────────────────────────────── */
     ::-webkit-scrollbar { width: 8px; }
     ::-webkit-scrollbar-track { background: transparent; }
@@ -1281,6 +1378,7 @@
           <button id="btn-mode" aria-label="Toggle mode" onclick="toggleMode()">&lt;/&gt;</button>
           <button id="btn-theme" aria-label="Toggle theme" onclick="toggleTheme()">☀</button>
           <button id="btn-restart" aria-label="Restart" onclick="sendCtrl('restart')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>
+          <button id="btn-config" aria-label="Edit configuration" onclick="openConfigModal()">⚙️</button>
         </div>
       </div>
       <div id="morph-overlay"></div>
@@ -2362,6 +2460,310 @@
     matchMedia('(prefers-color-scheme: light)').addEventListener('change', function(e) {
       if (!localStorage.getItem('theme')) applyTheme(e.matches ? 'light' : 'dark');
     });
+
+
+    function showToast(message, type = 'info') {
+      const toast = document.createElement('div');
+      toast.className = `toast toast-${type}`;
+      toast.textContent = message;
+      toast.style.cssText = `
+        position: fixed;
+        bottom: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: ${type === 'error' ? 'rgba(248,113,113,0.95)' : type === 'success' ? 'rgba(74,222,128,0.95)' : 'rgba(96,165,250,0.95)'};
+        color: #000;
+        padding: 12px 24px;
+        border-radius: 8px;
+        font-size: 14px;
+        font-weight: 500;
+        z-index: 2000;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        animation: slideUp 0.3s ease-out;
+        max-width: 90%;
+        text-align: center;
+      `;
+      document.body.appendChild(toast);
+      setTimeout(() => {
+        toast.style.animation = 'slideDown 0.3s ease-in';
+        setTimeout(() => toast.remove(), 300);
+      }, 3000);
+    }
+
+    let currentConfig = null;
+    let originalConfig = null;
+
+    function openConfigModal() {
+      const modal = document.getElementById('config-modal');
+      modal.classList.remove('hidden');
+
+      fetch('/api/config')
+        .then(response => response.json())
+        .then(config => {
+          currentConfig = config;
+          originalConfig = JSON.parse(JSON.stringify(config));
+          renderConfigForm(config);
+        })
+        .catch(() => {
+          showToast('Failed to load configuration', 'error');
+        });
+    }
+
+    function closeConfigModal() {
+      const modal = document.getElementById('config-modal');
+      modal.classList.add('hidden');
+      currentConfig = null;
+      originalConfig = null;
+    }
+
+    function resetConfigForm() {
+      if (!confirm('Reset alla configurazione predefinita? I valori correnti verranno persi.')) return;
+      fetch('/api/config/defaults')
+        .then(response => response.json())
+        .then(config => {
+          currentConfig = config;
+          renderConfigForm(currentConfig);
+          showToast('Moduli reimpostati ai valori predefiniti', 'info');
+        })
+        .catch(() => {
+          showToast('Errore nel caricamento dei valori predefiniti', 'error');
+        });
+    }
+
+    function removeWakeWord(index) {
+      if (!currentConfig.wake_words) return;
+      currentConfig.wake_words.splice(index, 1);
+      renderConfigForm(currentConfig);
+    }
+
+    async function saveConfig() {
+      if (!currentConfig) return;
+
+      const saveBtn = document.querySelector('#config-modal .modal-footer button:last-child');
+      const originalText = saveBtn.textContent;
+      saveBtn.disabled = true;
+      saveBtn.textContent = 'Saving...';
+
+      const formData = collectFormData();
+      const response = await fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(formData)
+      });
+
+      const data = await response.json();
+      saveBtn.disabled = false;
+      saveBtn.textContent = originalText;
+
+      if (response.ok) {
+        showToast('Configuration saved! Restarting...', 'success');
+        closeConfigModal();
+        sendCtrl('restart');
+      } else {
+        showToast('Failed: ' + (data.error || 'Unknown error'), 'error');
+      }
+    }
+
+    function renderWakeWordsList() {
+      if (!currentConfig.wake_words || currentConfig.wake_words.length === 0) {
+        return '<p style="color: var(--muted); font-size: 13px;">No wake words configured</p>';
+      }
+
+      let html = '<div style="display: flex; flex-direction: column; gap: 8px;">';
+      currentConfig.wake_words.forEach((ww, index) => {
+        html += `
+          <div style="display: flex; align-items: center; gap: 8px; background: var(--surface); padding: 8px; border-radius: 6px; border: 1px solid var(--border);">
+            <span style="color: var(--info); font-weight: 500;">${ww.word}</span>
+            ${ww.aliases && ww.aliases.length > 0 ? `<span style="font-size: 12px; color: var(--muted);">(${ww.aliases.join(', ')})</span>` : ''}
+            <button onclick="removeWakeWord(${index})" style="margin-left: auto; background: rgba(248,113,113,0.2); border: none; color: #f87171; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">✕</button>
+          </div>
+        `;
+      });
+      html += '</div>';
+      return html;
+    }
+
+    function renderConfigForm(config) {
+      const container = document.getElementById('config-form');
+      container.innerHTML = '';
+
+      container.innerHTML += `
+        <div class="form-section">
+          <h3>Wake Words</h3>
+          <div class="form-group">
+            <label>Wake Word Groups</label>
+            <div id="wake-words-list" style="margin-bottom: 12px;"></div>
+            <div style="display: flex; gap: 8px;">
+              <input type="text" id="new-wake-word" placeholder="Add new wake word..." style="flex: 1; padding: 8px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 14px;">
+              <button onclick="addWakeWord()" style="background: var(--info); border: none; color: #000; padding: 8px 16px; border-radius: 6px; cursor: pointer;">Add</button>
+            </div>
+          </div>
+        </div>
+      `;
+
+      document.getElementById('wake-words-list').innerHTML = renderWakeWordsList();
+
+      container.innerHTML += `
+        <div class="form-section">
+          <h3>Recognition</h3>
+          <div class="form-group">
+            <label>Command Timeout (seconds)</label>
+            <input type="number" id="input-command-timeout" step="0.1" min="0.1">
+          </div>
+          <div class="form-group">
+            <label>Matching Threshold (%)</label>
+            <input type="number" id="input-matching-threshold" step="1" min="0" max="100">
+          </div>
+          <div class="form-group">
+            <label>Partial Matching</label>
+            <select id="input-partial-matching">
+              <option value="true">Enabled</option>
+              <option value="false">Disabled</option>
+            </select>
+          </div>
+        </div>
+      `;
+
+      container.innerHTML += `
+        <div class="form-section">
+          <h3>Speech-to-Text</h3>
+          <div class="form-group">
+            <label>Backend</label>
+            <select id="input-stt-backend">
+              <option value="vosk">vosk</option>
+              <option value="sherpa-onnx">sherpa-onnx</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Stage 1 Confidence</label>
+            <input type="number" id="input-stt-confidence" step="0.01" min="0" max="1">
+          </div>
+        </div>
+      `;
+
+      container.innerHTML += `
+        <div class="form-section">
+          <h3>Microfono</h3>
+          <div class="form-group">
+            <label>Input Gain (× moltiplicatore)</label>
+            <input type="number" id="input-input-gain" step="0.1" min="0" max="10" value="1.0">
+            <span class="form-hint">1.0 = normale, 2.0 = doppio volume</span>
+          </div>
+          <div class="form-group">
+            <label>Soglia Silenzio (RMS)</label>
+            <input type="number" id="input-rms-threshold" step="0.01" min="0" max="1" value="0.02">
+            <span class="form-hint">Più basso = più sensibile (0.02 default)</span>
+          </div>
+        </div>
+      `;
+
+      container.innerHTML += `
+        <div class="form-section">
+          <h3>Text-to-Speech</h3>
+          <div class="form-group">
+            <label>Backend</label>
+            <select id="input-tts-backend">
+              <option value="piper">piper</option>
+              <option value="pico">pico</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Voice</label>
+            <select id="input-tts-voice">
+              <option value="it_IT-paola-medium">Paola (donna)</option>
+              <option value="it_IT-riccardo-x_low">Riccardo (uomo)</option>
+            </select>
+          </div>
+        </div>
+      `;
+
+      document.getElementById('input-command-timeout').value = config.recognition?.command_timeout || '';
+      document.getElementById('input-matching-threshold').value = config.recognition?.matching_threshold || '';
+      document.getElementById('input-partial-matching').value = config.recognition?.partial_matching ? 'true' : 'false';
+      document.getElementById('input-stt-backend').value = config.stt?.stage1?.backend || 'vosk';
+      document.getElementById('input-stt-confidence').value = config.stt?.stage1?.confidence || '';
+      document.getElementById('input-input-gain').value = config.audio?.input_gain != null ? config.audio.input_gain : '';
+      document.getElementById('input-rms-threshold').value = config.stt?.stage1?.rms_threshold != null ? config.stt.stage1.rms_threshold : '';
+      document.getElementById('input-tts-backend').value = config.tts?.backend || 'piper';
+      document.getElementById('input-tts-voice').value = config.tts?.voice || '';
+    }
+
+    function addWakeWord() {
+      const input = document.getElementById('new-wake-word');
+      const word = input.value.trim();
+      if (!word) return;
+
+      if (!currentConfig.wake_words) {
+        currentConfig.wake_words = [];
+      }
+
+      currentConfig.wake_words.push({
+        word: word,
+        aliases: []
+      });
+
+      input.value = '';
+      renderConfigForm(currentConfig);
+    }
+
+    function collectFormData() {
+      const result = { wake_words: (currentConfig.wake_words || []).map(w => ({ word: w.word, aliases: w.aliases || [] })) };
+
+      const commandTimeout = parseFloat(document.getElementById('input-command-timeout').value);
+      if (!isNaN(commandTimeout)) {
+        result.recognition = {
+          command_timeout: commandTimeout,
+          matching_threshold: parseFloat(document.getElementById('input-matching-threshold').value),
+          partial_matching: document.getElementById('input-partial-matching').value === 'true'
+        };
+      }
+
+      const confidence = parseFloat(document.getElementById('input-stt-confidence').value);
+      if (!isNaN(confidence)) {
+        result.stt = {
+          stage1: {
+            backend: document.getElementById('input-stt-backend').value,
+            confidence: confidence,
+            rms_threshold: parseFloat(document.getElementById('input-rms-threshold').value)
+          }
+        };
+      }
+
+      const inputGain = parseFloat(document.getElementById('input-input-gain').value);
+      if (!isNaN(inputGain)) {
+        result.audio = {
+          input_gain: inputGain
+        };
+      }
+
+      const ttsBackend = document.getElementById('input-tts-backend').value;
+      if (ttsBackend) {
+        result.tts = {
+          backend: ttsBackend,
+          voice: document.getElementById('input-tts-voice').value
+        };
+      }
+
+      return result;
+    }
   </script>
+
+      <div id="config-modal" class="hidden">
+        <div class="modal-overlay" onclick="closeConfigModal()"></div>
+        <div class="modal-content">
+          <div class="modal-header">
+            <h2>⚙️ Configuration</h2>
+            <button onclick="closeConfigModal()" style="background:none;border:none;color:var(--text);font-size:18px;cursor:pointer;">✕</button>
+          </div>
+          <div class="modal-body" id="config-form">
+            <!-- Form fields will be rendered here -->
+          </div>
+<div class="modal-footer">
+          <button onclick="resetConfigForm()" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:8px 16px;border-radius:6px;cursor:pointer;">Reset</button>
+          <button onclick="closeConfigModal()" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:8px 16px;border-radius:6px;cursor:pointer;">Cancel</button>
+          <button onclick="saveConfig()" style="background:var(--info);border:none;color:#000;padding:8px 16px;border-radius:6px;cursor:pointer;">Save Changes</button>
+        </div>
+        </div>
+      </div>
 </body>
 </html>

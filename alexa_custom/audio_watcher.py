@@ -74,8 +74,7 @@ class AudioWatcher(threading.Thread):
                 _restore_hw_pcm()
                 if self.output_volume > 0:
                     set_output_volume(pulse, self.output_spec, self.output_volume)
-                if self.input_gain > 0:
-                    set_input_gain(pulse, self.input_spec, self.input_gain)
+                set_input_gain(pulse, self.input_spec, self.input_gain)
 
             self.connected = ok
             self.conn_type = conn
