@@ -555,7 +555,31 @@ class WebServer:
                 await self._broadcast({"type": "restarting"})
 
             cm = ConfigManager(None)
+
+            def _on_audio_config_reload(new_config):
+                import pulsectl
+                from alexa_custom import audio_hw
+
+                audio_cfg = new_config.audio if new_config else None
+                if audio_cfg is None:
+                    return
+                audio_hw.configure(new_config)
+                with pulsectl.Pulse("alexa-reload"):
+                    audio_hw.set_output_volume(
+                        None, new_config.audio.output_device, new_config.audio.output_volume
+                    )
+                    audio_hw.set_input_gain(
+                        None, new_config.audio.input_device, new_config.audio.input_gain
+                    )
+                audio_hw._restore_hw_pcm()
+                logger.info(
+                    f"Audio config reloaded: output_volume={new_config.audio.output_volume:.2f}, "
+                    f"input_gain={new_config.audio.input_gain:.2f}"
+                )
+
+            cm.register_reload_callback(_on_audio_config_reload)
             cm.start_source_watcher("alexa_custom", on_restart=_on_source_restart)
+            cm.start_watcher("conf")
 
         app = web.Application()
         app.router.add_get("/", self._handle_index)
