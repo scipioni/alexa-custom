@@ -178,8 +178,10 @@ class _BridgeClient:
         while not self._stop.is_set():
             try:
                 chunk = self._ser.read(256)
-            except Exception:
-                break
+            except Exception as e:
+                logger.warning("[display] Serial read error: %s", e)
+                time.sleep(0.1)
+                continue
             if chunk:
                 buf.extend(chunk)
             self._try_parse(buf)
@@ -220,8 +222,11 @@ class _BridgeClient:
         with self._lock:
             self._ser.write(body)
             self._ser.flush()
-        ev.wait(timeout=5.0)
+        got = ev.wait(timeout=5.0)
         self._pending.pop(mid, None)
+        if not got:
+            logger.warning("[display] RPC timeout: %s (msg_id=%d)", method, mid)
+            return False
         err, result = self._responses.pop(mid, (None, None))
         return err is None and result is not False
 
@@ -257,11 +262,13 @@ class BridgeDisplay(DisplayBackend):
         icon_id = STATE_ICONS.get(state, 8)
         color = STATE_COLORS.get(state, (0, 0, 0))
         try:
-            self._client.set_matrix_icon(icon_id)
-            self._client.set_leds(
+            ok1 = self._client.set_matrix_icon(icon_id)
+            ok2 = self._client.set_leds(
                 color[0], color[1], color[2],
                 color[0], color[1], color[2],
             )
+            if not ok1 or not ok2:
+                logger.warning("[display] RPC call returned False")
         except Exception:
             logger.warning("[display] Bridge call failed", exc_info=True)
 
