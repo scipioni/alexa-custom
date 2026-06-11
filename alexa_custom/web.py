@@ -3,16 +3,65 @@
 from __future__ import annotations
 
 import asyncio
+import copy
+import fcntl
 import json
 import logging
 import os
 import sys
 import threading
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
 from aiohttp import web, WSMsgType
+
+from ruamel.yaml import YAML
+
+yaml = YAML()
+yaml.preserve_quotes = True
+yaml.default_flow_style = False
+
+_BOOLISH = frozenset({"true", "false", "yes", "no", "on", "off"})
+
+
+def _quote_boolish_str(dumper, data: str):
+    if data.lower() in _BOOLISH:
+        return dumper.represent_scalar(
+            "tag:yaml.org,2002:str", data, style='"'
+        )
+    return dumper.represent_str(data)
+
+
+yaml.representer.add_representer(str, _quote_boolish_str)
+
+
+@contextmanager
+def _file_lock(filepath: Path, exclusive: bool = True) -> None:
+    """Acquire file lock for concurrent access protection.
+
+    Args:
+        filepath: Path to file to lock
+        exclusive: True for write lock, False for shared read lock
+
+    Yields:
+        None
+
+    Raises:
+        IOError: If lock cannot be acquired
+    """
+    with open(filepath, 'a+') as f:
+        try:
+            if exclusive:
+                fcntl.flock(f, fcntl.LOCK_EX)
+            else:
+                fcntl.flock(f, fcntl.LOCK_SH)
+            yield
+            fcntl.flock(f, fcntl.LOCK_UN)
+        except (IOError, BlockingIOError) as e:
+            fcntl.flock(f, fcntl.LOCK_UN)
+            raise IOError(f"Failed to acquire file lock for {filepath}: {e}")
 
 
 logger = logging.getLogger(__name__)
@@ -50,12 +99,14 @@ class WebServer:
         input_gain: float = 1.0,
         cpu_limit: int = 4,
         shutdown_callback: Callable | None = None,
+        hot_reload: bool = False,
     ) -> None:
         self._port = port
         self._output_volume = output_volume
         self._input_gain = input_gain
         self._cpu_limit = cpu_limit
         self._shutdown_callback = shutdown_callback
+        self._config_manager: Any = None
         self._html = _DASHBOARD_PATH.read_text()
         self._clients: set[web.WebSocketResponse] = set()
         self._queue: asyncio.Queue = asyncio.Queue(maxsize=200)
@@ -65,6 +116,12 @@ class WebServer:
         self._livekit_stop_event: asyncio.Event | None = None
         self._handler: _WebLogHandler | None = None
         self._shutting_down = False
+
+        if hot_reload:
+            from alexa_custom.config_manager import ConfigManager
+
+            cm = ConfigManager(None)
+            self._config_manager = cm
         # snapshot for hello message on new WS connects
         self._state: dict[str, Any] = {
             "status": "Starting…",
@@ -279,11 +336,214 @@ class WebServer:
             volume = payload.get("volume", 0.5)
             from alexa_custom.audio_ops import set_output_volume_direct
             set_output_volume_direct(volume)
+            self._output_volume = volume
         elif action == "beep" and payload:
             frequency = payload.get("frequency", 440)
             duration = payload.get("duration", 100)
             from alexa_custom.audio_ops import play_beep
             play_beep(frequency, duration)
+
+    # ── config API endpoints ───────────────────────────────────────────────────────
+
+    async def _handle_config_get(self, request: web.Request) -> web.Response:
+        """Return current configuration as JSON"""
+        try:
+            from alexa_custom.config import load_config
+            config_obj = load_config("conf/config.yaml")
+            config_dict = self._serialize_config(config_obj)
+            return web.json_response(config_dict)
+        except Exception as e:
+            logger.error("Failed to load config: %s", e)
+            return web.json_response({"error": str(e)}, status=500)
+
+    async def _handle_config_update(self, request: web.Request) -> web.Response:
+        """Update configuration via POST with partial updates"""
+        temp_path = Path("conf/config.yaml.tmp")
+        try:
+            data = await request.json()
+
+            is_valid, error_msg = self._validate_config(data)
+            if not is_valid:
+                return web.json_response({"error": error_msg}, status=400)
+
+            from alexa_custom.config import load_config
+            current_config = load_config("conf/config.yaml")
+            current_dict = self._serialize_config(current_config)
+            merged_config = self._merge_configs(current_dict, data)
+
+            raw = yaml.load(Path("conf/config.yaml"))
+            if raw is None:
+                raw = {}
+            for key, value in merged_config.items():
+                if key in raw and isinstance(raw[key], dict) and isinstance(value, dict):
+                    raw[key].update(value)
+                else:
+                    raw[key] = value
+
+            try:
+                with _file_lock(Path("conf/config.yaml"), exclusive=True):
+                    yaml.dump(raw, temp_path)
+                    temp_path.replace(Path("conf/config.yaml"))
+            except IOError as e:
+                logger.error("Failed to acquire config file lock: %s", e)
+                return web.json_response({"error": "Configuration file is locked by another process"}, status=423)
+
+            if self._config_manager:
+                self._config_manager._reload(Path("conf/config.yaml"))
+
+            return web.json_response({"status": "ok"})
+
+        except Exception as e:
+            logger.error("Failed to update config: %s", e)
+            if temp_path.exists():
+                temp_path.unlink()
+            return web.json_response({"error": str(e)}, status=500)
+
+    async def _handle_config_replace(self, request: web.Request) -> web.Response:
+        """Replace entire configuration via PUT"""
+        temp_path = Path("conf/config.yaml.tmp")
+        try:
+            data = await request.json()
+
+            is_valid, error_msg = self._validate_config(data)
+            if not is_valid:
+                return web.json_response({"error": error_msg}, status=400)
+
+            raw = yaml.load(Path("conf/config.yaml"))
+            if raw is None:
+                raw = {}
+            for key, value in data.items():
+                if key in raw and isinstance(raw[key], dict) and isinstance(value, dict):
+                    raw[key].update(value)
+                else:
+                    raw[key] = value
+
+            try:
+                with _file_lock(Path("conf/config.yaml"), exclusive=True):
+                    yaml.dump(raw, temp_path)
+                    temp_path.replace(Path("conf/config.yaml"))
+            except IOError as e:
+                logger.error("Failed to acquire config file lock: %s", e)
+                return web.json_response({"error": "Configuration file is locked by another process"}, status=423)
+
+            if self._config_manager:
+                self._config_manager._reload(Path("conf/config.yaml"))
+
+            return web.json_response({"status": "ok"})
+
+        except Exception as e:
+            logger.error("Failed to replace config: %s", e)
+            if temp_path.exists():
+                temp_path.unlink()
+            return web.json_response({"error": str(e)}, status=500)
+
+    async def _handle_config_defaults(self, request: web.Request) -> web.Response:
+        """Return factory default configuration from conf.example/config.yaml"""
+        try:
+            from alexa_custom.config import load_config
+            defaults = load_config("conf.example/config.yaml")
+            result = self._serialize_config(defaults)
+            return web.json_response(result)
+        except Exception as e:
+            logger.error("Failed to load factory defaults: %s", e)
+            return web.json_response({"error": str(e)}, status=500)
+
+    def _validate_config(self, config: dict | Any) -> tuple[bool, str | None]:
+        """Validate configuration values"""
+        if not isinstance(config, dict):
+            return False, "Config must be a dictionary"
+
+        if "wake_words" in config:
+            for ww in config["wake_words"]:
+                if not ww.get("word"):
+                    return False, "Wake word cannot be empty"
+
+        if "recognition" in config:
+            rec = config["recognition"]
+            if "command_timeout" in rec:
+                command_timeout = rec["command_timeout"]
+                if command_timeout is not None and command_timeout <= 0:
+                    return False, "command_timeout must be positive"
+            if "matching_threshold" in rec:
+                threshold = rec["matching_threshold"]
+                if threshold is not None and not (0 <= threshold <= 100):
+                    return False, "matching_threshold must be between 0 and 100"
+
+        if "stt" in config:
+            stt = config["stt"]
+            if "stage1" in stt:
+                stage1 = stt["stage1"]
+                if "backend" in stage1:
+                    valid_backends = ["vosk", "sherpa-onnx"]
+                    if stage1["backend"] not in valid_backends:
+                        return False, f"Invalid STT backend: {stage1['backend']}"
+                if "confidence" in stage1:
+                    conf = stage1["confidence"]
+                    if conf is not None and not (0 <= conf <= 1):
+                        return False, "confidence must be between 0 and 1"
+                if "rms_threshold" in stage1:
+                    rms = stage1["rms_threshold"]
+                    if rms is not None and not (0 <= rms <= 1):
+                        return False, "rms_threshold must be between 0 and 1"
+
+        if "audio" in config:
+            audio = config["audio"]
+            if "output_volume" in audio:
+                vol = audio["output_volume"]
+                if vol is not None and not (0 <= vol <= 1):
+                    return False, "output_volume must be between 0 and 1"
+            if "input_gain" in audio:
+                gain = audio["input_gain"]
+                if gain is not None and gain < 0:
+                    return False, "input_gain cannot be negative"
+
+        if "tts" in config:
+            tts = config["tts"]
+            if "backend" in tts:
+                valid_backends = ["piper", "pico"]
+                if tts["backend"] not in valid_backends:
+                    return False, f"Invalid TTS backend: {tts['backend']}"
+
+        return True, None
+
+    def _merge_configs(self, current: dict, updates: dict) -> dict:
+        """Merge updates into current config (deep merge for nested dicts)"""
+        result = copy.deepcopy(current)
+
+        for key, value in updates.items():
+            if key == 'wake_words' and isinstance(value, list) and key in result:
+                result[key] = self._merge_wake_words(result[key], value)
+            elif key in result and isinstance(result[key], dict) and isinstance(value, dict):
+                result[key] = self._merge_configs(result[key], value)
+            else:
+                result[key] = value
+
+        return result
+
+    def _merge_wake_words(self, current: list, updates: list) -> list:
+        """Replace wake words list. Preserve extra fields from existing entries.
+
+        For each new wake word, if an entry with the same 'word' exists in
+        the current config, merge the new fields onto the existing entry.
+        This preserves fields like id, skip_unmatched_inline that the
+        frontend doesn't send.
+        """
+        existing = {}
+        for e in current:
+            if isinstance(e, dict) and 'word' in e:
+                existing[e['word']] = e
+
+        result = []
+        for u in updates:
+            word = u.get('word')
+            if word and word in existing:
+                merged = copy.deepcopy(existing[word])
+                merged.update(u)
+                result.append(merged)
+            else:
+                result.append(u)
+
+        return result
 
     # ── broadcast helpers ─────────────────────────────────────────────────────
 
@@ -358,7 +618,7 @@ class WebServer:
             mtimes: dict[str, float] = {}
             for p in watch_paths:
                 candidates = (
-                    [f for f in p.glob("*.yaml") if f.name != "secrets.yaml"]
+                    [f for f in p.glob("*.yaml") if f.name not in ("secrets.yaml", "state.yaml")]
                     + [f for f in p.glob("*.html")]
                     if p.is_dir()
                     else [p]
@@ -407,7 +667,7 @@ class WebServer:
                 new_stop = threading.Event()
                 stt_params["stop_event"] = new_stop
                 new_thread = start_stt_thread(
-                    config=stt_params["config"],
+                    config=lambda: self._config_manager.config if self._config_manager and self._config_manager.config is not None else stt_params["config"],
                     stop_event=new_stop,
                     telegram_client=stt_params["telegram_client"],
                     livekit_connect_fn=stt_params["connect_fn"],
@@ -430,90 +690,94 @@ class WebServer:
         if self._handler:
             logging.getLogger().removeHandler(self._handler)
 
+    @staticmethod
+    def _serialize_trigger(t) -> dict:
+        return {
+            "phrase": t.phrase,
+            "aliases": t.aliases,
+            "actions": WebServer._serialize_action_list(t.actions),
+        }
+
+    @staticmethod
+    def _serialize_action_list(actions: list) -> list[dict]:
+        result = []
+        for a in actions:
+            entry: dict[str, Any] = {
+                "type": a.type,
+                "params": a.params,
+            }
+            if a.on_reply:
+                entry["on_reply"] = [WebServer._serialize_trigger(t) for t in a.on_reply]
+            if a.on_else:
+                entry["on_else"] = WebServer._serialize_action_list(a.on_else)
+            result.append(entry)
+        return result
+
     def _serialize_config(self, config: Any) -> dict:
         from alexa_custom.config import ActionsConfig
 
         if not isinstance(config, ActionsConfig):
             return {}
 
-        def summarize(actions):
-            res = []
-            for a in actions:
-                entry = {"type": a.type}
-                txt = a.params.get(
-                    "text", a.params.get("message", a.params.get("command", ""))
-                )
-                if len(txt) > 30:
-                    txt = txt[:27] + "..."
-
-                if a.type == "say":
-                    entry["label"] = f"say: {txt}"
-                elif a.type == "ask":
-                    entry["label"] = f"ask: {txt}"
-                    entry["on_reply"] = [
-                        {"phrase": r.phrase, "actions": summarize(r.actions)}
-                        for r in a.on_reply
-                    ]
-                    if a.on_else:
-                        entry["on_else"] = summarize(a.on_else)
-                elif a.type == "mqtt_publish":
-                    entry["label"] = f"mqtt: {a.params.get('topic', '')}"
-                elif a.type == "telegram":
-                    entry["label"] = "telegram"
-                elif a.type == "shell":
-                    entry["label"] = f"shell: {txt}"
-                elif a.type == "log":
-                    entry["label"] = f"log: {txt}"
-                else:
-                    entry["label"] = a.type
-                res.append(entry)
-            return res
-
         ww = []
         for g in config.wake_words:
-            entry = {
+            entry: dict[str, Any] = {
                 "word": g.word,
                 "aliases": g.aliases,
-                "skip_unmatched_inline": g.skip_unmatched_inline,
-                "triggers": [
-                    {
-                        "phrase": t.phrase,
-                        "aliases": t.aliases,
-                        "actions": summarize(t.actions),
-                    }
-                    for t in g.triggers
-                ],
+                "triggers": [self._serialize_trigger(t) for t in g.triggers],
             }
+            if g.skip_unmatched_inline:
+                entry["skip_unmatched_inline"] = True
+            if g.id and g.id != g.word:
+                entry["id"] = g.id
             ww.append(entry)
 
-        gt = [
-            {
-                "phrase": t.phrase,
-                "aliases": t.aliases,
-                "actions": summarize(t.actions),
-            }
-            for t in config.triggers
-        ]
+        result: dict[str, Any] = {
+            "wake_words": ww,
+            "global_triggers": [self._serialize_trigger(t) for t in config.triggers],
+        }
 
-        llm_info: dict | None = None
+        if config.recognition is not None:
+            result["recognition"] = {
+                "command_timeout": config.recognition.command_timeout,
+                "matching_threshold": config.recognition.matching_threshold,
+                "partial_matching": config.recognition.partial_matching,
+            }
+
+        if config.stt is not None:
+            result["stt"] = {
+                "stage1": {
+                    "backend": config.stt.stage1.backend,
+                    "confidence": config.stt.stage1.confidence,
+                    "rms_threshold": config.stt.stage1.rms_threshold,
+                }
+            }
+
+        if config.audio is not None:
+            result["audio"] = {
+                "output_volume": config.audio.output_volume,
+                "input_gain": config.audio.input_gain,
+            }
+
+        if config.tts is not None:
+            result["tts"] = {
+                "backend": config.tts.backend,
+                "voice": config.tts.voice,
+            }
+
         if config.llm is not None:
             host = config.llm.host
-            # strip protocol and port for display
             display_host = (
                 host.replace("https://", "").replace("http://", "").split(":")[0]
             )
-            llm_info = {
+            result["llm"] = {
                 "enabled": True,
                 "model": config.llm.model,
                 "host": display_host,
                 "fallback": config.llm.fallback_on_no_match,
             }
 
-        return {
-            "wake_words": ww,
-            "global_triggers": gt,
-            "llm": llm_info,
-        }
+        return result
 
     # ── LiveKit worker thread ─────────────────────────────────────────────────
 
@@ -594,6 +858,10 @@ class WebServer:
         app = web.Application()
         app.router.add_get("/", self._handle_index)
         app.router.add_get("/ws", self._handle_ws)
+        app.router.add_get("/api/config", self._handle_config_get)
+        app.router.add_post("/api/config", self._handle_config_update)
+        app.router.add_put("/api/config", self._handle_config_replace)
+        app.router.add_get("/api/config/defaults", self._handle_config_defaults)
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", self._port)
@@ -636,7 +904,7 @@ class WebServer:
             from alexa_custom.stt import start_stt_thread
 
             stt_thread = start_stt_thread(
-                config=stt_params["config"],
+                config=lambda: self._config_manager.config if self._config_manager and self._config_manager.config is not None else stt_params["config"],
                 stop_event=stt_params["stop_event"],
                 telegram_client=stt_params["telegram_client"],
                 livekit_connect_fn=stt_params["connect_fn"],
@@ -702,6 +970,7 @@ def run_web(
         input_gain=input_gain,
         cpu_limit=cpu_limit,
         shutdown_callback=shutdown_callback,
+        hot_reload=hot_reload,
     )
     try:
         asyncio.run(

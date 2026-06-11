@@ -8,6 +8,7 @@ import threading
 import time
 import numpy as np
 
+from alexa_custom import audio_hw
 from alexa_custom.audio_hw import (
     get_output_volume,
     get_post_playback_ms,
@@ -362,26 +363,12 @@ def play_call_end() -> None:
 
 
 def set_output_volume_direct(volume: float) -> None:
-    """Set output volume without requiring pulsectl connection.
-    
-    This function directly calls wpctl to set the volume and persists
-    the setting to config.yaml. It does not require a pulsectl.Pulse()
-    connection, avoiding ALSA hardware PCM reset.
+    """Set digital output volume without touching system mixer.
+
+    Volume is applied as digital scaling in software (TTS, beeps, WAV playback).
+    The system PipeWire volume is left at 100% to avoid double attenuation.
     """
-    global _OUTPUT_VOLUME
-    _OUTPUT_VOLUME = max(0.0, min(1.0, volume))  # Clamp 0-1
-    if _OUTPUT_VOLUME <= 0:
-        return
-    result = subprocess.run(
-        ["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", f"{_OUTPUT_VOLUME:.4f}"],
-        capture_output=True,
-        check=False,
-    )
-    if result.returncode != 0:
-        logger.warning(
-            f"wpctl set-volume failed: {result.stderr.decode(errors='replace').strip()}"
-        )
-    else:
-        logger.info(f"Set output volume to {_OUTPUT_VOLUME:.0%}")
-    _restore_hw_pcm()
-    save_volume_config(_OUTPUT_VOLUME)
+    volume = max(0.0, min(1.0, volume))
+    audio_hw.set_output_volume(None, None, volume)
+    audio_hw._restore_hw_pcm()
+    save_volume_config(volume)
