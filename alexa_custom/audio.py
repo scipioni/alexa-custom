@@ -9,12 +9,6 @@ import sys
 # Sibling imports and re-exports for 100% backward compatibility
 # ---------------------------------------------------------------------------
 from alexa_custom.audio_hw import (
-    _POST_PLAYBACK_MS,
-    _TONE_PREROLL_MS,
-    _SAMPLERATE,
-    _DEFAULT_CARD_NAME,
-    _OUTPUT_VOLUME,
-    _INPUT_GAIN,
     _pw_device_resolved,
     _pw_device_index,
     _UDEV_PATH,
@@ -70,12 +64,6 @@ from alexa_custom.audio_ops import (
 from alexa_custom.audio_watcher import AudioWatcher
 
 __all__ = [
-    "_POST_PLAYBACK_MS",
-    "_TONE_PREROLL_MS",
-    "_SAMPLERATE",
-    "_DEFAULT_CARD_NAME",
-    "_OUTPUT_VOLUME",
-    "_INPUT_GAIN",
     "_pw_device_resolved",
     "_pw_device_index",
     "_UDEV_PATH",
