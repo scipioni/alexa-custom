@@ -905,6 +905,59 @@ def run_autogain_auto(
 
         winner_gain = _select_best_gain(all_results)
 
+        # ── Refinement pass: fine 0.05-precision sweep around winner ────
+        step = 0.1
+        half_range = 0.4
+        fine_gains = sorted(set(
+            round(winner_gain + i * step, 2)
+            for i in range(
+                int(-half_range / step),
+                int(half_range / step) + 1,
+            )
+        ))
+        fine_gains = [g for g in fine_gains if 0.1 <= g <= 6.0 and abs(g - winner_gain) > 0.01]
+
+        if fine_gains:
+            logger.info("Refining: %.1f-step around %.2f → %s", step, winner_gain, fine_gains)
+            fine_candidates: list[dict] = []
+            for gain in fine_gains:
+                set_input_gain(None, input_spec, gain)
+                time.sleep(0.3)
+                noise_rms = _measure_noise_floor(source, channels, gain)
+                multi, peaks = _capture_playback_response(
+                    source, channels, scaled_wavs["lontano"], pink_duration
+                )
+                if multi.shape[0] < 10:
+                    continue
+                analysis = _analyze_capture(multi, noise_rms)
+                candidate = {
+                    "gain": gain,
+                    "snr": analysis["snr_db"],
+                    "headroom": analysis["headroom_db"],
+                    "clipping": analysis["clipping"],
+                }
+                fine_candidates.append(candidate)
+                logger.info("  refine %4.2f: far/SNR=%.1f", gain, analysis["snr_db"])
+
+            if fine_candidates:
+                valid = [
+                    e for e in fine_candidates
+                    if e["clipping"] < _CLIPPING_MAX_RATIO and e["headroom"] >= _HEADROOM_TARGET_DB
+                ]
+                if not valid:
+                    valid = fine_candidates
+                best_fine = max(valid, key=lambda e: e["snr"])
+                coarse_far = next(
+                    r["volumes"]["lontano"]["snr_db"]
+                    for r in all_results if r["gain"] == winner_gain
+                )
+                if best_fine["snr"] > coarse_far:
+                    logger.info(
+                        "Refined: %.2f → %.2f (far SNR %.1f → %.1f)",
+                        winner_gain, best_fine["gain"], coarse_far, best_fine["snr"],
+                    )
+                    winner_gain = best_fine["gain"]
+
         # ── Confirmation pass at medio volume ───────────────────────────
         set_input_gain(None, input_spec, winner_gain)
         time.sleep(0.3)

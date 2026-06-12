@@ -594,7 +594,7 @@ def test_run_autogain_auto_confirmation_fallback(
     mock_noise.return_value = [0.01]
     good_signal = (np.full((500, 1), 1000.0, dtype=np.float32), [1000.0 / 32768.0])
     bad_signal = (np.zeros((100, 1), dtype=np.float32), [0.0])
-    mock_capture.side_effect = [good_signal] * 18 + [bad_signal, bad_signal]
+    mock_capture.side_effect = [good_signal] * 24 + [bad_signal, bad_signal]
 
     cfg = MagicMock()
     cfg.audio.input_device = "test_mic"
