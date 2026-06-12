@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import os
 import select
@@ -8,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import time
+from typing import TYPE_CHECKING
 
 import numpy as np
 
@@ -16,6 +18,11 @@ from alexa_custom.audio_hw import get_input_gain, set_input_gain
 from alexa_custom.config import load_config, load_secrets
 from alexa_custom.stt_backends import get_stt_backend
 from alexa_custom.tts import get_engine, init_engine
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
+    from alexa_custom.config import ActionsConfig
 
 logger = logging.getLogger(__name__)
 
@@ -33,8 +40,8 @@ COARSE_THRESHOLD = 30.0
 TEST_GAINS = [0.5, 1.0, 2.0, 4.0]
 
 DISTANCES = [
-    ("un metro",     "a un metro dal microfono"),
-    ("tre metri",    "a tre metri dal microfono"),
+    ("un metro", "a un metro dal microfono"),
+    ("tre metri", "a tre metri dal microfono"),
     ("cinque metri", "a cinque metri dal microfono"),
 ]
 
@@ -230,7 +237,14 @@ def _save_gain_to_config(gain: float) -> None:
         yaml.dump(cfg, f)
 
 
+<<<<<<< HEAD
 def _print_summary(results: list[dict], winner: float, dry_run: bool) -> None:
+=======
+def _print_summary(raw: list[dict], winner_gain: float, dry_run: bool) -> None:
+    gains = sorted(set(r["gain"] for r in raw))
+    dist_names = [d[0].capitalize() for d in DISTANCES]
+
+>>>>>>> e70cbf7 (feat: autogain auto-mode (alexa-mic-test) + voice-activated autogain action)
     print()
 <<<<<<< HEAD
     print("Microfono calibrato")
@@ -251,7 +265,6 @@ def _print_summary(results: list[dict], winner: float, dry_run: bool) -> None:
         by_dist = {r["dist"]: r for r in entries}
         row = f"{g:>6.2f}"
         scores = []
-        clip_flags = []
         for di, (dkey, _) in enumerate(DISTANCES):
             e = by_dist.get(dkey)
             if e:
@@ -278,6 +291,532 @@ def _print_summary(results: list[dict], winner: float, dry_run: bool) -> None:
 >>>>>>> 73b63b7 (refactor: autogain redesign - test all gains at all distances)
 
 
+async def run_autogain_interactive(
+    say_fn: Callable[[str], Awaitable[None]],
+    listen_fn: Callable[..., Awaitable[str]],
+    actions_config: ActionsConfig,
+    phrase: str = DEFAULT_PHRASE,
+) -> float:
+    all_results: list[dict] = []
+    input_spec = actions_config.audio.input_device
+
+    async def _test_one(gain: float, dist_key: str) -> float:
+        set_input_gain(None, input_spec, gain)
+        await asyncio.sleep(0.5)
+        play_wake_beep(actions_config.recognition.wake_tone)
+        text = await listen_fn(4.0, flush_ms=500)
+        score = get_similarity_score(phrase, text, "token_set_ratio")
+        all_results.append({"gain": gain, "score": score, "dist": dist_key})
+        logger.info(
+            "  %-12s gain %4.2f: score %5.1f%%  text=%r",
+            dist_key,
+            gain,
+            score,
+            text,
+        )
+        return score
+
+    WEIGHTS = {"un metro": 1.0, "tre metri": 2.0, "cinque metri": 1.0}
+    MID_IDX = 1
+
+    def _weighted_avg(gain: float) -> float:
+        entries = [r for r in all_results if r["gain"] == gain]
+        if not entries:
+            return -1.0
+        total_w = 0.0
+        weighted = 0.0
+        for r in entries:
+            w = WEIGHTS.get(r["dist"], 1.0)
+            weighted += r["score"] * w
+            total_w += w
+        return weighted / total_w if total_w else 0.0
+
+    await say_fn(
+        "calibrazione microfono. "
+        f"ripeti dopo ogni bip: {phrase}. "
+        "ci vogliono circa quaranta secondi."
+    )
+    await asyncio.sleep(2.0)
+
+    mid_dist, mid_desc = DISTANCES[MID_IDX]
+    await say_fn(f"posizione centrale: {mid_desc}. inizia da qui.")
+    await asyncio.sleep(2.0)
+    for gain in TEST_GAINS:
+        await _test_one(gain, mid_dist)
+
+    ranked = sorted(TEST_GAINS, key=lambda g: _weighted_avg(g), reverse=True)
+    top2 = ranked[:2]
+    logger.info("Migliori a 3m: %.2f, %.2f", top2[0], top2[1])
+
+    for di, (dist_key, dist_desc) in enumerate(DISTANCES):
+        if di == MID_IDX:
+            continue
+        await say_fn(f"posizione {di + 1}: {dist_desc}. spostati, ti aspetto.")
+        await asyncio.sleep(3.0)
+        for gain in top2:
+            await _test_one(gain, dist_key)
+
+    winner_gain = max(
+        set(r["gain"] for r in all_results),
+        key=lambda g: _weighted_avg(g),
+    )
+    tested_dists = {r["dist"] for r in all_results if r["gain"] == winner_gain}
+    missing = [d for d, _ in DISTANCES if d not in tested_dists]
+    if missing:
+        for dist_key, dist_desc in DISTANCES:
+            if dist_key not in tested_dists:
+                await say_fn(f"torno {dist_desc}. attendi il bip.")
+                await asyncio.sleep(2.0)
+                await _test_one(winner_gain, dist_key)
+
+    winner_gain = max(
+        set(r["gain"] for r in all_results),
+        key=lambda g: _weighted_avg(g),
+    )
+
+    _save_gain_to_config(winner_gain)
+    _print_summary(all_results, winner_gain, dry_run=False)
+
+    await say_fn(f"calibrazione completata. guadagno migliore: {winner_gain:.1f}.")
+
+    return winner_gain
+
+
+_AUTO_PLAYBACK_PROFILES = [
+    ("lontano", 0.12),
+    ("medio", 0.30),
+    ("vicino", 0.60),
+]
+_AUTO_WEIGHTS = {"lontano": 1.0, "medio": 2.0, "vicino": 1.0}
+
+
+def _synthesize_to_wav(text: str, output_path: str) -> int:
+    from alexa_custom.tts import PIPER_VOICES_DIR
+
+    voice_name = "it_IT-paola-medium"
+    from piper import PiperVoice  # type: ignore[import-untyped]
+
+    voice_file = PIPER_VOICES_DIR / f"{voice_name}.onnx"
+    if not voice_file.is_file():
+        raise FileNotFoundError(f"Piper voice not found: {voice_file}")
+
+    voice = PiperVoice.load(str(voice_file))
+    samplerate = int(
+        getattr(getattr(voice, "config", None), "sample_rate", None)
+        or getattr(voice, "sample_rate", 22050)
+    )
+
+    buffers = []
+    for chunk in voice.synthesize(text):
+        arr = getattr(chunk, "audio_int16_array", None)
+        if arr is None:
+            raw = getattr(chunk, "audio_int16_bytes", None) or bytes(chunk)
+            arr = np.frombuffer(raw, dtype=np.int16)
+        buffers.append(np.asarray(arr, dtype=np.int16))
+
+    samples = np.concatenate(buffers)
+
+    import wave as _wave
+
+    with _wave.open(output_path, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(samplerate)
+        wf.writeframes(samples.tobytes())
+
+    return samplerate
+
+
+def _scale_wav_to_temp(src_path: str, volume: float) -> str:
+    import tempfile
+    import wave as _wave
+
+    with _wave.open(src_path, "rb") as wf:
+        params = wf.getparams()
+        frames = wf.readframes(wf.getnframes())
+
+    samples = np.frombuffer(frames, dtype=np.int16).astype(np.float32)
+    scaled = np.clip(samples * volume, -32768, 32767).astype(np.int16)
+
+    fd, tmp_path = tempfile.mkstemp(suffix=".wav", prefix="autogain_")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            with _wave.open(f, "wb") as wf:
+                wf.setparams(params)
+                wf.writeframes(scaled.tobytes())
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+    return tmp_path
+
+
+def _capture_with_playback(
+    stt_backend,
+    source: str | None,
+    channels: int,
+    wav_path: str,
+    wav_duration: float,
+) -> tuple[str, bytes]:
+    import threading
+
+    proc = start_capture(source, channels)
+    assert proc.stdout is not None
+
+    play_done = threading.Event()
+
+    def _play() -> None:
+        try:
+            subprocess.run(
+                ["pw-play", wav_path],
+                capture_output=True,
+                check=False,
+            )
+        finally:
+            play_done.set()
+
+    play_thread = threading.Thread(target=_play, daemon=True)
+    play_thread.start()
+    time.sleep(0.05)
+
+    total_bytes = int(16000 * channels * 2 * wav_duration)
+    bytes_read = 0
+    all_audio = bytearray()
+    chunk_size = _CHUNK * channels
+
+    stt_backend.reset()
+    t_end = time.monotonic() + wav_duration
+
+    while bytes_read < total_bytes and time.monotonic() < t_end:
+        to_read = min(chunk_size, total_bytes - bytes_read)
+        raw_data = _read_with_timeout(proc.stdout, to_read, 0.5)
+        if not raw_data:
+            break
+        bytes_read += len(raw_data)
+        processed = _apply_input_gain(_downmix_to_mono(raw_data, channels))
+        all_audio.extend(processed)
+        stt_backend.accept_waveform(processed)
+
+    play_thread.join(timeout=3.0)
+
+    text = stt_backend.finalize()
+
+    proc.terminate()
+    try:
+        proc.wait(timeout=2.0)
+    except Exception:
+        proc.kill()
+        proc.wait()
+
+    return text, bytes(all_audio)
+
+
+def _check_ambient_noise(
+    source: str | None, channels: int, gain: float, duration: float = 1.2
+) -> dict:
+    set_input_gain(None, source, gain)
+    time.sleep(0.3)
+
+    proc = start_capture(source, channels)
+    assert proc.stdout is not None
+
+    total = int(16000 * channels * 2 * duration)
+    all_audio = bytearray()
+    chunk_size = _CHUNK * channels
+    t_end = time.monotonic() + duration
+
+    while len(all_audio) < total and time.monotonic() < t_end:
+        to_read = min(chunk_size, total - len(all_audio))
+        raw = _read_with_timeout(proc.stdout, to_read, 0.5)
+        if not raw:
+            break
+        all_audio.extend(_apply_input_gain(_downmix_to_mono(raw, channels)))
+
+    proc.terminate()
+    try:
+        proc.wait(timeout=2.0)
+    except Exception:
+        proc.kill()
+        proc.wait()
+
+    if len(all_audio) < 100:
+        return {"gain": gain, "rms": 0.0, "clipping": 1.0, "peak": 0.0, "valid": False}
+
+    samples = np.frombuffer(bytes(all_audio), dtype=np.int16).astype(np.float32)
+    rms = float(np.sqrt(np.mean(samples**2))) / 32768.0
+    peak = float(np.max(np.abs(samples))) / 32768.0
+    clipping = float(np.sum(np.abs(samples) >= 32767)) / len(samples)
+
+    return {"gain": gain, "rms": rms, "clipping": clipping, "peak": peak, "valid": True}
+
+
+def run_autogain_auto(
+    actions_config: ActionsConfig,
+    phrase: str = DEFAULT_PHRASE,
+    dry_run: bool = False,
+) -> float:
+    import tempfile
+    import wave as _wave
+
+    input_spec = actions_config.audio.input_device
+    source, channels = resolve_capture_source(input_spec)
+    logger.info("Autogain auto: source=%s channels=%d", source, channels)
+
+    test_wav = tempfile.mktemp(suffix=".wav", prefix="autogain_test_")
+    scaled_wavs: list[str] = []
+
+    try:
+        try:
+            samplerate = _synthesize_to_wav(phrase, test_wav)
+            logger.info("Synthesized with Piper to %s (%d Hz)", test_wav, samplerate)
+        except (ImportError, FileNotFoundError) as _piper_err:
+            logger.warning("Piper synthesis failed (%s) — trying pico2wave", _piper_err)
+            subprocess.run(
+                ["pico2wave", "-l", "it-IT", "-w", test_wav, phrase],
+                check=True,
+                capture_output=True,
+                timeout=30,
+            )
+            import wave as _wv
+
+            with _wv.open(test_wav, "rb") as wf:
+                samplerate = wf.getframerate()
+            logger.info(
+                "Synthesized with pico2wave to %s (%d Hz)", test_wav, samplerate
+            )
+
+        with _wave.open(test_wav, "rb") as wf:
+            n_frames = wf.getnframes()
+        wav_duration = n_frames / samplerate + 1.2
+
+        for _label, vol in _AUTO_PLAYBACK_PROFILES:
+            scaled_wavs.append(_scale_wav_to_temp(test_wav, vol))
+
+        noise_results = []
+        for gain in TEST_GAINS:
+            nr = _check_ambient_noise(source, channels, gain)
+            noise_results.append(nr)
+            logger.info(
+                "  noise gain %4.2f: rms=%6.4f clip=%5.3f peak=%5.3f",
+                gain,
+                nr["rms"],
+                nr["clipping"],
+                nr["peak"],
+            )
+
+        valid_gains = [
+            g
+            for nr, g in zip(noise_results, TEST_GAINS)
+            if nr["valid"] and nr["clipping"] < 0.01
+        ]
+        if not valid_gains:
+            logger.warning("All gains failed noise check — using all gains")
+            valid_gains = list(TEST_GAINS)
+
+        logger.info("Valid gains after noise scan: %s", valid_gains)
+
+        _kws_keywords = [
+            p for g in actions_config.wake_words for p in [g.word] + g.aliases
+        ]
+        stt_backend = get_stt_backend(actions_config.stt.stage1, keywords=_kws_keywords)
+
+        all_results: list[dict] = []
+
+        for gain in valid_gains:
+            set_input_gain(None, input_spec, gain)
+            time.sleep(0.3)
+
+            for idx, (dist_key, _vol) in enumerate(_AUTO_PLAYBACK_PROFILES):
+                text, raw_audio = _capture_with_playback(
+                    stt_backend,
+                    source,
+                    channels,
+                    scaled_wavs[idx],
+                    wav_duration,
+                )
+                score = score_transcription(phrase, text, raw_audio)
+                clipping = _compute_clipping_ratio(raw_audio)
+                all_results.append(
+                    {
+                        "gain": gain,
+                        "score": score,
+                        "clipping": clipping,
+                        "dist": dist_key,
+                    }
+                )
+                logger.info(
+                    "  %-7s gain %4.2f: score %5.1f%% clip %5.1f%% text=%r",
+                    dist_key,
+                    gain,
+                    score,
+                    clipping * 100,
+                    text,
+                )
+
+        def _weighted_avg(gain: float) -> float:
+            entries = [r for r in all_results if r["gain"] == gain]
+            if not entries:
+                return -1.0
+            total_w = 0.0
+            weighted = 0.0
+            for r in entries:
+                w = _AUTO_WEIGHTS.get(r["dist"], 1.0)
+                weighted += r["score"] * w
+                total_w += w
+            return weighted / total_w if total_w else 0.0
+
+        winner_gain = max(
+            set(r["gain"] for r in all_results),
+            key=lambda g: _weighted_avg(g),
+        )
+
+        set_input_gain(None, input_spec, winner_gain)
+        time.sleep(0.3)
+        confirm_scores = []
+        for idx, (dist_key, _vol) in enumerate(_AUTO_PLAYBACK_PROFILES):
+            text, raw_audio = _capture_with_playback(
+                stt_backend,
+                source,
+                channels,
+                scaled_wavs[idx],
+                wav_duration,
+            )
+            score = score_transcription(phrase, text, raw_audio)
+            confirm_scores.append(score)
+            logger.info("  confirm %-7s: score %5.1f%%", dist_key, score)
+
+        confirm_avg = (
+            sum(confirm_scores) / len(confirm_scores) if confirm_scores else 0.0
+        )
+        original_avg = _weighted_avg(winner_gain)
+
+        if confirm_avg < original_avg * 0.5 and confirm_avg < 30.0:
+            ranked = sorted(valid_gains, key=lambda g: _weighted_avg(g), reverse=True)
+            if len(ranked) > 1:
+                runner_up = ranked[1]
+                logger.warning(
+                    "Confirmation low (%.1f%% vs %.1f%%) — trying runner-up %.2f",
+                    confirm_avg,
+                    original_avg,
+                    runner_up,
+                )
+                set_input_gain(None, input_spec, runner_up)
+                time.sleep(0.3)
+                ru_scores = []
+                for idx, (dist_key, _vol) in enumerate(_AUTO_PLAYBACK_PROFILES):
+                    text, raw_audio = _capture_with_playback(
+                        stt_backend,
+                        source,
+                        channels,
+                        scaled_wavs[idx],
+                        wav_duration,
+                    )
+                    score = score_transcription(phrase, text, raw_audio)
+                    ru_scores.append(score)
+                ru_avg = sum(ru_scores) / len(ru_scores) if ru_scores else 0.0
+                if ru_avg > confirm_avg:
+                    winner_gain = runner_up
+                    logger.info(
+                        "Switched to runner-up %.2f (avg=%.1f%%)", runner_up, ru_avg
+                    )
+
+        if not dry_run:
+            _save_gain_to_config(winner_gain)
+
+        # ── Print summary ──────────────────────────────────────────────
+        dist_names = [d[0].capitalize() for d in _AUTO_PLAYBACK_PROFILES]
+        print()
+        print("Risultati test microfono")
+        print("=" * 65)
+        all_gains = sorted(set(r["gain"] for r in all_results))
+        header = f"{'Gain':>6}" + "".join(f"{d:>14}" for d in dist_names) + "  Media"
+        print(header)
+        print("-" * len(header))
+        for g in all_gains:
+            entries = [r for r in all_results if r["gain"] == g]
+            by_dist = {r["dist"]: r for r in entries}
+            row = f"{g:>6.2f}"
+            scores = []
+            for dkey, _ in _AUTO_PLAYBACK_PROFILES:
+                e = by_dist.get(dkey)
+                if e:
+                    flag = "!" if e["clipping"] > 0.01 else ""
+                    score_str = f"{e['score']:>8.1f}%{flag}"
+                    scores.append(e["score"])
+                else:
+                    score_str = f"{'─':>9}"
+                row += score_str
+            avg = sum(scores) / len(scores) if scores else 0.0
+            marker = "  ←" if g == winner_gain else ""
+            row += f"  {avg:>5.1f}%{marker}"
+            print(row)
+        print("=" * 65)
+        if dry_run:
+            print(f"Miglior gain: {winner_gain:.2f} (dry-run, non salvato)")
+        else:
+            print(f"✅ Miglior gain: {winner_gain:.2f} — scritto in config.yaml")
+        print()
+
+        logger.info("Autogain auto complete — best gain: %.2f", winner_gain)
+        return winner_gain
+
+    finally:
+        for w in scaled_wavs:
+            try:
+                os.unlink(w)
+            except OSError:
+                pass
+        try:
+            os.unlink(test_wav)
+        except OSError:
+            pass
+
+
+def main_auto() -> None:
+    """CLI: test microfono e imposta il gain migliore (senza interazione)."""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Test microfono e imposta il gain migliore (automatico)."
+    )
+    parser.add_argument(
+        "--text",
+        type=str,
+        default=DEFAULT_PHRASE,
+        help=f"Frase di test (default: {DEFAULT_PHRASE!r})",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Mostra risultati senza scrivere config.yaml",
+    )
+    args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s %(message)s",
+    )
+    logging.getLogger().setLevel(logging.INFO)
+    for name in ["urllib3", "httpcore", "httpx", "livekit"]:
+        logging.getLogger(name).setLevel(logging.ERROR)
+
+    load_secrets("conf/secrets.yaml")
+    config = load_config("conf/config.yaml")
+    if config is None:
+        print("Error: Could not load conf/config.yaml", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Test microfono — frase: {args.text!r}")
+    print(f"Gain da testare: {TEST_GAINS}")
+    print(f"(dry-run: {'sì' if args.dry_run else 'no'})")
+    print()
+
+    run_autogain_auto(config, phrase=args.text, dry_run=args.dry_run)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
 <<<<<<< HEAD
@@ -287,10 +826,13 @@ def main() -> None:
 >>>>>>> 73b63b7 (refactor: autogain redesign - test all gains at all distances)
     )
     parser.add_argument(
-        "--text", type=str, default=DEFAULT_PHRASE,
+        "--text",
+        type=str,
+        default=DEFAULT_PHRASE,
         help=f"Frase di test (default: '{DEFAULT_PHRASE}')",
     )
     parser.add_argument(
+<<<<<<< HEAD
 <<<<<<< HEAD
         "--duration",
         type=float,
@@ -298,11 +840,17 @@ def main() -> None:
         help=f"Recording duration in seconds per rep (default: {DEFAULT_DURATION})",
 =======
         "--duration", type=float, default=DEFAULT_DURATION,
+=======
+        "--duration",
+        type=float,
+        default=DEFAULT_DURATION,
+>>>>>>> e70cbf7 (feat: autogain auto-mode (alexa-mic-test) + voice-activated autogain action)
         help=f"Secondi per registrazione (default: {DEFAULT_DURATION})",
 >>>>>>> 73b63b7 (refactor: autogain redesign - test all gains at all distances)
     )
     parser.add_argument(
-        "--dry-run", action="store_true",
+        "--dry-run",
+        action="store_true",
         help="Mostra risultati senza scrivere config.yaml",
     )
     args = parser.parse_args()
@@ -385,12 +933,18 @@ def main() -> None:
 =======
         score = score_transcription(phrase, text, raw_audio)
         clipping = _compute_clipping_ratio(raw_audio)
-        all_results.append({
-            "gain": gain, "score": score,
-            "clipping": clipping, "dist": dist_key,
-        })
+        all_results.append(
+            {
+                "gain": gain,
+                "score": score,
+                "clipping": clipping,
+                "dist": dist_key,
+            }
+        )
         flag = " !CLIP" if clipping > 0.01 else ""
-        print(f"  {dist_key:>12} gain {gain:4.2f}: score {score:5.1f}%  clip {clipping*100:.1f}%{flag}")
+        print(
+            f"  {dist_key:>12} gain {gain:4.2f}: score {score:5.1f}%  clip {clipping * 100:.1f}%{flag}"
+        )
         return score
 
     WEIGHTS = {"un metro": 1.0, "tre metri": 2.0, "cinque metri": 1.0}
@@ -432,9 +986,7 @@ def main() -> None:
     for di, (dist_key, dist_desc) in enumerate(DISTANCES):
         if di == MID_IDX:
             continue
-        tts_engine.say(
-            f"posizione {di+1}: {dist_desc}. spostati, ti aspetto."
-        )
+        tts_engine.say(f"posizione {di + 1}: {dist_desc}. spostati, ti aspetto.")
         time.sleep(3.0)
         for gain in top2:
             play_wake_beep(config.recognition.wake_tone)
@@ -446,17 +998,13 @@ def main() -> None:
         set(r["gain"] for r in all_results),
         key=lambda g: _weighted_avg(g),
     )
-    tested_dists = {
-        r["dist"] for r in all_results if r["gain"] == winner_gain
-    }
+    tested_dists = {r["dist"] for r in all_results if r["gain"] == winner_gain}
     missing = [d for d, _ in DISTANCES if d not in tested_dists]
     if missing:
         print(f"Completo test per gain {winner_gain:.2f} a: {missing}")
         for dist_key, dist_desc in DISTANCES:
             if dist_key not in tested_dists:
-                tts_engine.say(
-                    f"torno {dist_desc}. attendi il bip."
-                )
+                tts_engine.say(f"torno {dist_desc}. attendi il bip.")
                 time.sleep(2.0)
                 play_wake_beep(config.recognition.wake_tone)
                 time.sleep(0.3)
@@ -1167,9 +1715,7 @@ def main_auto() -> None:
 
     run_autogain_auto(config, dry_run=args.dry_run)
 
-    tts_engine.say(
-        f"calibrazione completata. guadagno migliore: {winner_gain:.1f}."
-    )
+    tts_engine.say(f"calibrazione completata. guadagno migliore: {winner_gain:.1f}.")
 
 
 if __name__ == "__main__":

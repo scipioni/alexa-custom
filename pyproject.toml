@@ -36,6 +36,7 @@ alexa-audio-setup = "alexa_custom.audio:setup_audio"
 alexa-wake-eval = "alexa_custom.wake_eval:main"
 alexa-record = "alexa_custom.record:main"
 alexa-autogain = "alexa_custom.autogain:main"
+alexa-mic-test = "alexa_custom.autogain:main_auto"
 
 [tool.setuptools.packages.find]
 where = ["."]

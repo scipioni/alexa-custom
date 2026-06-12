@@ -717,6 +717,85 @@ async def handle_llm_chat(
             )
 
 
+@registry.register("autogain")
+async def handle_autogain(
+    action: ActionEntry,
+    listen_fn: Callable[[float], Awaitable[str]] | None,
+    mqtt_client: MQTTClient | None,
+    actions_config=None,
+    wake_word: str | None = None,
+    **_,
+) -> None:
+    from alexa_custom.autogain import run_autogain_interactive
+    from alexa_custom.tts import get_engine as get_tts
+
+    if listen_fn is None:
+        logger.warning("autogain action: no listen_fn available")
+        return
+    if actions_config is None:
+        logger.warning("autogain action: no actions_config available")
+        return
+
+    phrase = action.params.get("text", "")
+    lang = "it-IT"
+    if wake_word and actions_config.wake_words:
+        for grp in actions_config.wake_words:
+            if grp.word == wake_word:
+                lang = grp.lang
+                break
+
+    async def say(text: str) -> None:
+        await asyncio.to_thread(get_tts().say, text, lang)
+
+    if mqtt_client:
+        await mqtt_client.publish(
+            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
+            "speaking",
+        )
+
+    try:
+        await run_autogain_interactive(say, listen_fn, actions_config, phrase)
+    except Exception as e:
+        logger.error("autogain failed: %s", e)
+        await say("calibrazione fallita.")
+    finally:
+        if mqtt_client:
+            await mqtt_client.publish(
+                f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
+                "idle",
+            )
+
+
+@registry.register("autogain_auto")
+async def handle_autogain_auto(
+    mqtt_client: MQTTClient | None,
+    actions_config=None,
+    **_,
+) -> None:
+    from alexa_custom.autogain import run_autogain_auto
+
+    if actions_config is None:
+        logger.warning("autogain_auto action: no actions_config available")
+        return
+
+    if mqtt_client:
+        await mqtt_client.publish(
+            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
+            "speaking",
+        )
+
+    try:
+        await asyncio.to_thread(run_autogain_auto, actions_config)
+    except Exception as e:
+        logger.error("autogain_auto failed: %s", e)
+    finally:
+        if mqtt_client:
+            await mqtt_client.publish(
+                f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
+                "idle",
+            )
+
+
 @registry.register("llm_learn")
 async def handle_llm_learn(
     action: ActionEntry,

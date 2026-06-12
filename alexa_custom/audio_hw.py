@@ -107,6 +107,7 @@ def get_output_volume() -> float:
 def get_input_gain() -> float:
     return _INPUT_GAIN
 
+
 def get_input_gain_display() -> float:
     return _INPUT_GAIN_DISPLAY
 
@@ -292,7 +293,7 @@ def set_input_gain(
     Tries to set the hardware source volume via ``pactl set-source-volume``
     first.  If the NewPie PipeWire source cannot be located, falls back to
     updating the software-scaling global used by the STT capture pipeline.
-    
+
     ``_INPUT_GAIN`` tracks the software-scaling multiplier (1.0 = no scaling).
     ``_INPUT_GAIN_DISPLAY`` tracks the target gain for UI display so the web
     dashboard slider does not snap back to 1.0 after a hardware-level change.

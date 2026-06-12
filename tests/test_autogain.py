@@ -3,7 +3,10 @@ from __future__ import annotations
 import sys
 from unittest.mock import MagicMock, patch
 
+<<<<<<< HEAD
 import numpy as np
+=======
+>>>>>>> e70cbf7 (feat: autogain auto-mode (alexa-mic-test) + voice-activated autogain action)
 
 <<<<<<< HEAD
 from alexa_custom.autogain import (
