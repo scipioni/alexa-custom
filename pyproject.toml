@@ -24,6 +24,7 @@ dependencies = [
     "sherpa-onnx>=1.0.0",
     "rapidfuzz>=3.0.0",
     "ruamel.yaml>=0.18",
+    "smbus2>=0.6.1",
 ]
 
 [project.scripts]
@@ -40,8 +41,12 @@ alexa-record = "alexa_custom.record:main"
 where = ["."]
 include = ["alexa_custom*"]
 
+[project.optional-dependencies]
+i2c = ["smbus2>=0.4.0"]
+
 [dependency-groups]
 dev = [
     "pytest>=9.0.3",
     "pytest-asyncio>=1.4.0",
+    "smbus2>=0.4.0",
 ]

@@ -628,17 +628,17 @@ class WebServer:
         _on_event = self.on_event
         if self._extra_event_cb:
             _cb = self._extra_event_cb
-            def _chained_event(event, data):
-                _on_event(event, data)
-                _cb(event, data)
+            def _chained_event(event, data, _cb_event=_on_event, _cb_extra=_cb):
+                _cb_event(event, data)
+                _cb_extra(event, data)
             _on_event = _chained_event
 
         _on_stt_event = self.on_stt_event
         if self._extra_stt_event_cb:
             _cb_stt = self._extra_stt_event_cb
-            def _chained_stt(event, data):
-                _on_stt_event(event, data)
-                _cb_stt(event, data)
+            def _chained_stt(event, data, _cb=_on_stt_event, _extra=_cb_stt):
+                _cb(event, data)
+                _extra(event, data)
             _on_stt_event = _chained_stt
 
         stop_threading = threading.Event()
