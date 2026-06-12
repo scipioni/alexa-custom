@@ -242,6 +242,11 @@ tasks:
         print("=========================================================")
         '
 
+  audio:doctor:
+    desc: Check each NewPie audio invariant (device, PCM level, routing, drop-ins, autosuspend, restore service) and report pass/fail
+    cmds:
+      - PYTHONPATH={{.PYTHONPATH}} python3 -m alexa_custom.audio doctor
+
   audio:test:
     desc: Play a test audio file (/usr/share/sounds/alsa/Front_Center.wav) to verify speaker output
     cmds:
