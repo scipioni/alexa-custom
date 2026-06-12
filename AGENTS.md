@@ -14,6 +14,18 @@ LiveKit headless audio client turning a USB conference speakerphone into a voice
 
 When creating commits, do **not** add a `Co-Authored-By` trailer.
 
+## Semantic Versioning
+
+This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (MAJOR.MINOR.PATCH).
+
+| Bump type | When to use | Command |
+|-----------|-------------|---------|
+| **PATCH** (0.3.0 → 0.3.1) | Bug fixes, refactors, docs, performance — anything that doesn't add or remove public API | `task release:patch` |
+| **MINOR** (0.3.0 → 0.4.0) | New features that are backward-compatible | `task release:minor` |
+| **MAJOR** (1.0.0 → 2.0.0) | Breaking changes to API, configuration, or behaviour | `task release:major` |
+
+Only commits prefixed with `feat:` or `fix:` appear in the auto-generated changelog entry.
+
 ## Commands
 
 ```bash
