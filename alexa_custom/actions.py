@@ -158,6 +158,10 @@ def match_trigger(
     return None
 
 
+_dispatch_depth = 0
+_MAX_DISPATCH_DEPTH = 10
+
+
 async def dispatch(
     trigger: Trigger,
     telegram_client: TelegramClient,
@@ -170,19 +174,31 @@ async def dispatch(
     wake_word: str | None = None,
     transcript: str | None = None,
 ) -> None:
-    for action in trigger.actions:
-        await _run_action(
-            action,
-            telegram_client,
-            livekit_connect_fn,
-            livekit_connected,
-            listen_fn,
-            mqtt_client,
-            on_stt_event,
-            actions_config=actions_config,
-            wake_word=wake_word,
-            transcript=transcript,
+    global _dispatch_depth
+    _dispatch_depth += 1
+    if _dispatch_depth > _MAX_DISPATCH_DEPTH:
+        _dispatch_depth -= 1
+        logger.warning(
+            "Dispatch depth exceeded (%d) — breaking recursive chain",
+            _dispatch_depth,
         )
+        return
+    try:
+        for action in trigger.actions:
+            await _run_action(
+                action,
+                telegram_client,
+                livekit_connect_fn,
+                livekit_connected,
+                listen_fn,
+                mqtt_client,
+                on_stt_event,
+                actions_config=actions_config,
+                wake_word=wake_word,
+                transcript=transcript,
+            )
+    finally:
+        _dispatch_depth -= 1
 
 
 class ActionRegistry:

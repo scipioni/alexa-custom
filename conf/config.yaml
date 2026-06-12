@@ -11,8 +11,15 @@
 # Per-group triggers (wake_triggers in action files) override the global list.
 # ---------------------------------------------------------------------------
 wake_words:
-  - word: "ascolta assistente"
-    aliases: ["ehi galileo", "ehi sofia"]
+  - word: "ehi galileo"
+    id: galileo          # stable key used in wake_triggers (defaults to word)
+    aliases:
+      - "aiuto aiuto"   # alternative phrase that maps to the same group
+      - "e galileo"     # model misrecognition variant — tune via LOG_LEVEL=DEBUG
+    lang: "it-IT"
+    # skip_unmatched_inline: false   # if true, silently ignore when wake+command fires but command matches no trigger
+  - word: "assistente"
+
   # For emergency-style wake words prefer multi-word phrases so a single
   # utterance in normal conversation does not trigger the assistant.
   # - word: "aiuto aiuto"
@@ -24,25 +31,16 @@ wake_words:
 recognition:
   mode: two-stage         # two-stage | single-stage
   command_timeout: 2.5    # seconds to listen after wake word (two-stage only)
-  # command_max_timeout: 8.0  # absolute cap on stage-2 capture; the window slides
-  #   while the user keeps speaking so commands aren't cut off mid-sentence.
-  #   Set to 0 to disable sliding (command_timeout becomes a hard deadline).
   wake_tone: wake         # tone on wake: wake | startup | success | error | info | warning | none
-  partial_matching: true        # scan Vosk partials for (wake+trigger) combos; fires immediately on stable match (default true)
+  # partial_matching: true        # scan Vosk partials for (wake+trigger) combos; fires immediately on stable match (default true)
   # partial_stability_ms: 150     # min ms a partial match must be stable before firing
   # partial_stability_reads: 3    # min consecutive matching partial reads before firing
-  matching_algorithm: token_set_ratio  # token_set_ratio | levenshtein | ratio
-  matching_threshold: 70.0             # similarity threshold (0-100)
-  reply_matching_algorithm: levenshtein  # token_set_ratio | levenshtein | ratio
-  reply_matching_threshold: 80.0         # similarity threshold (0-100)
 
 # ---------------------------------------------------------------------------
 # STT — speech-to-text
 # ---------------------------------------------------------------------------
 stt:
   vad_silence_ms: 500     # idle ms after last speech before command window closes
-  # flush_ms: 300         # audio discarded after the wake beep (absorbs speaker echo);
-  #   lower if you speak immediately after the beep, raise if echo retriggers STT
 
   stage1:                  # continuous wake-word detection (low CPU)
     backend: vosk          # vosk | sherpa-onnx
@@ -83,7 +81,7 @@ audio:
   input_device: pipewire   # PipeWire source name substring, or 'pipewire' for default
   output_device: pipewire  # PipeWire sink name substring, or 'pipewire' for default
   output_volume: 0.5       # speaker volume 0.0–1.0 (set via wpctl, persisted by WirePlumber)
-  input_gain: 1.0          # microphone gain multiplier (1.0 = no change, 2.0 = double)
+  input_gain: 3.0          # microphone gain multiplier (values > 1.0 boost mic, e.g. 3.0 = 300%)
   post_playback_ms: 100    # STT gate hold after playback ends (lets echo decay)
   tone_preroll_ms: 300     # silence before tones/beeps (covers PipeWire cold-start)
   sample_rates:
@@ -135,17 +133,6 @@ actions:
   learn_file: conf/actions/learned.yaml    # file the llm_learn action appends to
 
 # ---------------------------------------------------------------------------
-# Visual display feedback (Arduino UNO Q only)
-# ---------------------------------------------------------------------------
-# Uses the board's built-in LED matrix (8×13) and RGB LEDs.
-# Omit this section to disable visual feedback entirely.
-# display:
-#   enabled: true
-#   backend: auto           # auto | bridge | gpio | mock
-#   matrix_brightness: 50   # 0-100
-#   led_brightness: 50      # 0-100
-
-# ---------------------------------------------------------------------------
 # System tuning
 # ---------------------------------------------------------------------------
 # system:
@@ -154,3 +141,8 @@ actions:
 #   empty_room_timeout: 0      # disconnect after N seconds with no participants (0 = never)
 #   wait_for_participant: true  # join room silently and wait for a remote participant before going live
 #   answer_timeout: 60         # seconds to wait for a participant before disconnecting (wait_for_participant only)
+display:
+  enabled: true
+  backend: auto        # auto | bridge | gpio | mock
+  matrix_brightness: 50
+  led_brightness: 50
