@@ -46,18 +46,18 @@ STATE_ICONS: dict[str, int] = {
 }
 
 STATE_SHORT: dict[str, str] = {
-    "idle": "ID",
-    "listening": "LI",
-    "wake": "WK",
-    "transcribing": "TR",
-    "llm_thinking": "TH",
-    "llm_reply": "RP",
-    "speaking": "SP",
-    "gated": "GT",
-    "nomatch": "NO",
-    "connected": "CO",
-    "disconnected": "DI",
-    "starting": "ST",
+    "idle":          "ID",
+    "listening":     "LI",
+    "wake":          "WK",
+    "transcribing":  "TR",
+    "llm_thinking":  "TH",
+    "llm_reply":     "RP",
+    "speaking":      "SP",
+    "gated":         "GT",
+    "nomatch":       "NO",
+    "connected":     "CO",
+    "disconnected":  "DI",
+    "starting":      "ST",
 }
 
 STATE_TEXTS: dict[str, str] = {

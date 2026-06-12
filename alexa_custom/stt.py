@@ -264,7 +264,7 @@ def run_stt_worker(
                     dispatch_loop=_dispatch_loop,
                 )
             except Exception as e:
-                logger.error(f"STT error: {e}")
+                logger.error(f"STT error: {e}", exc_info=True)
                 time.sleep(2)
             finally:
                 if proc is not None:
