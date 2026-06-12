@@ -39,6 +39,7 @@ _SAMPLERATE = {"usb": 48000, "bluetooth": 16000}
 _DEFAULT_CARD_NAME = "NewPie"
 _OUTPUT_VOLUME = 0.5
 _INPUT_GAIN = 1.0
+_INPUT_GAIN_DISPLAY = 1.0
 
 _pw_device_resolved = False
 _pw_device_index: int | None = None
@@ -88,13 +89,15 @@ def configure(cfg) -> None:
         _SAMPLERATE, \
         _DEFAULT_CARD_NAME, \
         _OUTPUT_VOLUME, \
-        _INPUT_GAIN
+        _INPUT_GAIN, \
+        _INPUT_GAIN_DISPLAY
     _POST_PLAYBACK_MS = int(cfg.audio.post_playback_ms)
     _TONE_PREROLL_MS = int(cfg.audio.tone_preroll_ms)
     _SAMPLERATE = dict(cfg.audio.sample_rates)
     _DEFAULT_CARD_NAME = cfg.audio.card_name
     _OUTPUT_VOLUME = cfg.audio.output_volume
     _INPUT_GAIN = cfg.audio.input_gain
+    _INPUT_GAIN_DISPLAY = cfg.audio.input_gain
 
 
 def get_output_volume() -> float:
@@ -103,6 +106,9 @@ def get_output_volume() -> float:
 
 def get_input_gain() -> float:
     return _INPUT_GAIN
+
+def get_input_gain_display() -> float:
+    return _INPUT_GAIN_DISPLAY
 
 
 def get_post_playback_ms() -> int:
@@ -286,10 +292,15 @@ def set_input_gain(
     Tries to set the hardware source volume via ``pactl set-source-volume``
     first.  If the NewPie PipeWire source cannot be located, falls back to
     updating the software-scaling global used by the STT capture pipeline.
+    
+    ``_INPUT_GAIN`` tracks the software-scaling multiplier (1.0 = no scaling).
+    ``_INPUT_GAIN_DISPLAY`` tracks the target gain for UI display so the web
+    dashboard slider does not snap back to 1.0 after a hardware-level change.
     """
-    global _INPUT_GAIN
+    global _INPUT_GAIN, _INPUT_GAIN_DISPLAY
 
     with _input_gain_lock:
+        _INPUT_GAIN_DISPLAY = max(0.0, gain)
         hw_ok = False
         source_name = _find_pipewire_source(input_spec)
         if source_name is not None:
@@ -316,7 +327,7 @@ def set_input_gain(
                 f"falling back to software scaling for input gain"
             )
 
-        _INPUT_GAIN = 1.0 if hw_ok else max(0.0, gain)
+        _INPUT_GAIN = 1.0 if hw_ok else _INPUT_GAIN_DISPLAY
         if not hw_ok:
             logger.warning(
                 f"Input gain {gain:.0%} applied in software (CPU overhead, clipping risk)"

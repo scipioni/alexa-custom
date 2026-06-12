@@ -10,5 +10,13 @@
   "8": "Community 8",
   "9": "Community 9",
   "10": "Community 10",
+<<<<<<< HEAD
   "11": "Community 11"
+=======
+  "11": "Community 11",
+  "12": "Community 12",
+  "13": "Community 13",
+  "14": "Community 14",
+  "15": "Community 15"
+>>>>>>> 1a14599 (fix: dashboard input gain slider no longer resets)
 }
