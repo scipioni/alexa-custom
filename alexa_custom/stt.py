@@ -14,6 +14,7 @@ import vosk
 if TYPE_CHECKING:
     from alexa_custom.mqtt import MQTTClient
 
+from alexa_custom import metrics
 from alexa_custom.actions import TelegramClient, dispatch, match_trigger, normalize_text
 from alexa_custom.audio import is_playback_active, play_timeout_beep, play_wake_beep
 from alexa_custom.config import (
@@ -607,6 +608,7 @@ def _single_stage_loop(
                 _play_timeout()
             continue
 
+        metrics.inc("commands_matched")
         if on_stt_event:
             on_stt_event("matched", {"transcript": command, "trigger": trigger.phrase})
 
@@ -1084,6 +1086,7 @@ def _wake_detected(
     pre_transcript: str = "",
 ) -> None:
     logger.info(f"Wake word detected: '{wake_group.word}'")
+    metrics.inc("wake_detections")
     if on_stt_event:
         on_stt_event(
             "wake",
@@ -1176,6 +1179,7 @@ def _wake_detected(
             _play_timeout()
         return
 
+    metrics.inc("commands_matched")
     if on_stt_event:
         on_stt_event("matched", {"transcript": transcript, "trigger": trigger.phrase})
 
