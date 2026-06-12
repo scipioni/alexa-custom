@@ -547,6 +547,7 @@ def _recognition_loop(
     if is_vosk:
 
         def _on_playback_end() -> None:
+            assert stage1 is not None
             stage1.Reset()
             _reset_stage1_state()
     elif is_kws:
