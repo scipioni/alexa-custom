@@ -29,6 +29,7 @@
       --llm-dim: rgba(167,139,250,0.15);
       --llm-border: rgba(167,139,250,0.3);
       --bar-bg:      rgba(0,0,0,0.35);
+      --track-empty: rgba(255,255,255,0.20);
       --transcribing: #94a3b8;
       --reply-trig:   #86efac;
       --electric-yellow: #facc15;
@@ -47,6 +48,7 @@
       --text:         #0f172a;
       --muted:        #64748b;
       --bar-bg:       rgba(255,255,255,0.75);
+      --track-empty:  rgba(0,0,0,0.25);
       --transcribing: #475569;
       --reply-trig:   #16a34a;
       --panel-shadow: 0 2px 16px rgba(0,0,0,0.08), 0 1px 0 rgba(255,255,255,0.9) inset;
@@ -1015,73 +1017,74 @@
       text-align: center;
     }
     .vu-gain { color: var(--muted); font-size: 9px; opacity: 0.7; }
-    /* ── volume control ───────────────────────────────────────────────────── */
-    #volume-control {
+    .vu-vol-col {
       display: flex;
       flex-direction: column;
       align-items: center;
       gap: 5px;
-      margin-top: 8px;
-      padding: 12px 0;
-      border-top: 1px solid var(--border);
     }
+    .vol-slider-wrap {
+      position: relative;
+      width: 4px;
+      height: 160px;
+    }
+    /* ── vertical volume slider ────────────────────────────────────────────── */
     #volume-slider {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%) rotate(-90deg);
+      transform-origin: center;
+      width: 160px;
+      height: 4px;
       -webkit-appearance: none;
-      width: 100%;
-      height: 12px;
+      appearance: none;
+      background: var(--track-empty);
+      border-radius: 2px;
+      outline: none;
+      cursor: pointer;
+      padding: 0;
+      border: none;
+      margin: 0;
+    }
+    #volume-slider::-webkit-slider-runnable-track {
+      height: 4px;
       background: linear-gradient(
         to right,
         var(--vol-color, var(--info)) 0%,
-        var(--vol-color, var(--info)) var(--vol-pct, 50%),
-        var(--bar-bg) var(--vol-pct, 50%)
+        var(--vol-color, var(--info)) var(--vol-pct, 0%),
+        var(--track-empty) var(--vol-pct, 0%)
       );
-      border-radius: 6px;
-      outline: none;
-      cursor: pointer;
-      transition: box-shadow 0.15s ease;
+      border-radius: 2px;
     }
     #volume-slider::-webkit-slider-thumb {
       -webkit-appearance: none;
       appearance: none;
-      width: 24px;
-      height: 24px;
+      width: 14px;
+      height: 14px;
       border-radius: 50%;
       background: var(--vol-color, var(--info));
+      box-shadow: 0 0 5px var(--vol-color, var(--info));
       cursor: pointer;
-      border: 2px solid var(--vol-color, var(--info));
-      box-shadow: 0 0 12px var(--vol-color, var(--info));
-      transition: transform 0.12s ease, box-shadow 0.12s ease;
-    }
-    #volume-slider::-webkit-slider-thumb:hover {
-      transform: scale(1.15);
-      box-shadow: 0 0 18px var(--vol-color, var(--info));
-    }
-    #volume-slider.dragging::-webkit-slider-thumb {
-      transform: scale(1.3);
-      box-shadow: 0 0 26px var(--vol-color, var(--info));
-    }
-    #volume-slider::-moz-range-thumb {
-      width: 24px;
-      height: 24px;
-      border-radius: 50%;
-      background: var(--vol-color, var(--info));
-      cursor: pointer;
-      border: 2px solid var(--vol-color, var(--info));
-      box-shadow: 0 0 12px var(--vol-color, var(--info));
-      transition: transform 0.12s ease, box-shadow 0.12s ease;
-    }
-    #volume-slider.dragging::-moz-range-thumb {
-      transform: scale(1.3);
-      box-shadow: 0 0 26px var(--vol-color, var(--info));
+      margin-top: -5px;
     }
     #volume-slider::-moz-range-track {
-      height: 12px;
-      border-radius: 6px;
-      background: var(--bar-bg);
+      height: 4px;
+      border-radius: 2px;
+      background: var(--track-empty);
+    }
+    #volume-slider::-moz-range-thumb {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: var(--vol-color, var(--info));
+      box-shadow: 0 0 5px var(--vol-color, var(--info));
+      cursor: pointer;
+      border: none;
     }
     #volume-slider::-moz-range-progress {
-      height: 12px;
-      border-radius: 6px;
+      height: 4px;
+      border-radius: 2px;
       background: var(--vol-color, var(--info));
     }
 
@@ -1471,24 +1474,26 @@
             </div>
           </div>
 <div id="vu-bottom">
-             <div class="vu-block">
-               <div class="vu-row-v">
-                 <span class="vu-lbl-v">MIC</span>
-                 <div class="vu-segs-v" id="mic-segs-v"><div class="rms-line" id="mic-rms-line"></div></div>
-                 <span class="vu-db" id="mic-db">-∞ dB</span>
-                 <span class="vu-gain" id="mic-gain"></span>
-               </div>
-               <div class="vu-row-v">
-                 <span class="vu-lbl-v">SPK</span>
-                 <div class="vu-segs-v" id="spk-segs-v"></div>
-                 <span class="vu-db" id="spk-db">-∞ dB</span>
-               </div>
-             </div>
-             <div id="volume-control" class="vu-row-v">
-               <span class="vu-lbl-v">VOLUME</span>
-               <input type="range" id="volume-slider" min="0" max="100" value="50">
-               <span class="vu-db" id="volume-percent">50%</span>
-             </div>
+              <div class="vu-block">
+                <div class="vu-row-v">
+                  <span class="vu-lbl-v">MIC</span>
+                  <div class="vu-segs-v" id="mic-segs-v"><div class="rms-line" id="mic-rms-line"></div></div>
+                  <span class="vu-db" id="mic-db">-∞ dB</span>
+                  <span class="vu-gain" id="mic-gain"></span>
+                </div>
+                <div class="vu-row-v">
+                  <span class="vu-lbl-v">SPK</span>
+                  <div class="vu-segs-v" id="spk-segs-v"></div>
+                  <span class="vu-db" id="spk-db">-∞ dB</span>
+                </div>
+                <div class="vu-vol-col">
+                  <span class="vu-lbl-v">VOL</span>
+                  <div class="vol-slider-wrap">
+                    <input type="range" id="volume-slider" min="0" max="100" value="50">
+                  </div>
+                  <span class="vu-db" id="volume-percent">50%</span>
+                </div>
+              </div>
            </div>
         </div>
       </div>
@@ -1526,14 +1531,7 @@
       if (!slider) return;
       const pct = Math.round(vol * 100);
       slider.style.setProperty('--vol-pct', pct + '%');
-      let color;
-      if (vol < 0.70) {
-        color = getComputedStyle(document.documentElement).getPropertyValue('--match').trim() || '#4ade80';
-      } else if (vol < 0.85) {
-        color = getComputedStyle(document.documentElement).getPropertyValue('--amber').trim() || '#facc15';
-      } else {
-        color = getComputedStyle(document.documentElement).getPropertyValue('--nomatch').trim() || '#f87171';
-      }
+      const color = getComputedStyle(document.documentElement).getPropertyValue('--info').trim() || '#60a5fa';
       slider.style.setProperty('--vol-color', color);
     }
 
