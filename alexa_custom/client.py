@@ -518,13 +518,15 @@ class LiveKitSessionManager:
                     )
                 )
 
-            await asyncio.wait(
-                [
-                    asyncio.create_task(self.disconnected.wait()),
-                    asyncio.create_task(stop_event.wait()),
-                ],
-                return_when=asyncio.FIRST_COMPLETED,
-            )
+            waiters = [
+                asyncio.create_task(self.disconnected.wait()),
+                asyncio.create_task(stop_event.wait()),
+            ]
+            try:
+                await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                for w in waiters:
+                    w.cancel()
         finally:
             await self.cleanup()
 
@@ -579,13 +581,15 @@ async def _poll_for_participant(
                     return True
             except Exception as e:
                 logger.debug("Poll participants error: %s", e)
-            await asyncio.wait(
-                [
-                    asyncio.create_task(stop_event.wait()),
-                    asyncio.create_task(asyncio.sleep(min(poll_interval, remaining))),
-                ],
-                return_when=asyncio.FIRST_COMPLETED,
-            )
+            waiters = [
+                asyncio.create_task(stop_event.wait()),
+                asyncio.create_task(asyncio.sleep(min(poll_interval, remaining))),
+            ]
+            try:
+                await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                for w in waiters:
+                    w.cancel()
     return False
 
 
@@ -919,9 +923,14 @@ def _mqtt_settings_from_config(config: ActionsConfig | None) -> dict:
 def make_mqtt_reload_callback(
     client_holder: list,  # list[MQTTClient | None] — mutable single-element container
     loop: asyncio.AbstractEventLoop,
+    initial_config: ActionsConfig | None = None,
 ):
     """Return a reload callback that reconnects MQTT when broker settings change."""
-    prev_settings: dict = {}
+    # Seed from the current config so the first reload of an *unrelated* setting
+    # doesn't spuriously tear down and recreate the MQTT client.
+    prev_settings: dict = (
+        _mqtt_settings_from_config(initial_config) if initial_config is not None else {}
+    )
 
     def _callback(new_config: ActionsConfig) -> None:
         nonlocal prev_settings

@@ -55,11 +55,19 @@ class MQTTClient:
                         f"{self.topic_prefix}/{self.node_id}/action/run"
                     )
 
-                    # 3. Start publisher and subscriber tasks
-                    await asyncio.gather(
-                        self._publisher_loop(),
-                        self._subscriber_loop(),
-                    )
+                    # 3. Start publisher and subscriber tasks.
+                    # Track both so that when one fails (e.g. subscriber raises
+                    # MqttError on disconnect) the sibling is cancelled — otherwise
+                    # each reconnect orphans another publisher draining the same
+                    # queue, causing duplicate publishes and unbounded task growth.
+                    pub = asyncio.create_task(self._publisher_loop())
+                    sub = asyncio.create_task(self._subscriber_loop())
+                    try:
+                        await asyncio.gather(pub, sub)
+                    finally:
+                        for t in (pub, sub):
+                            t.cancel()
+                        await asyncio.gather(pub, sub, return_exceptions=True)
             except aiomqtt.MqttError as e:
                 logger.error(f"MQTT connection error: {e}. Retrying in 5 seconds...")
                 self.client = None

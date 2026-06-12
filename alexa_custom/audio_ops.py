@@ -14,7 +14,6 @@ from alexa_custom.audio_hw import (
     get_post_playback_ms,
     get_tone_preroll_ms,
     save_volume_config,
-    set_output_volume,
 )
 
 logger = logging.getLogger(__name__)
@@ -60,7 +59,9 @@ def _play_array(audio: np.ndarray, samplerate: int) -> None:
     channels = audio.shape[1] if audio.ndim > 1 else 1
     frames = audio.shape[0]
     duration_s = frames / samplerate
-    play_timeout = min(max(duration_s * 3 + 5, 8), 30)
+    # Headroom over the real duration; no upper cap (a 30 s cap would truncate
+    # long TTS mid-playback).
+    play_timeout = max(duration_s + 10, 8)
 
     volume = get_output_volume()
     pcm16 = np.clip(np.ascontiguousarray(audio) * volume * 32767, -32768, 32767).astype(
@@ -112,7 +113,8 @@ def _play_raw(data: bytes, samplerate: int, channels: int) -> None:
 
     frames = len(data) // (channels * 4)
     duration_s = frames / samplerate
-    play_timeout = min(max(duration_s * 3 + 5, 8), 30)
+    # Headroom over the real duration; no upper cap (see _play_array).
+    play_timeout = max(duration_s + 10, 8)
 
     volume = get_output_volume()
     samples = np.frombuffer(data, dtype=np.float32)
@@ -155,20 +157,36 @@ def _play_raw(data: bytes, samplerate: int, channels: int) -> None:
 def play_wav_file(file_path: str) -> None:
     """Play a WAV file via pw-play (native PipeWire) or aplay (ALSA fallback).
 
-    Volume attenuation is applied digitally via ``get_output_volume()`` in
-    ``_play_array`` — that is the single source of output-volume control.
-    The system mixer is intentionally not driven by ``output_volume``.
+    Output volume (``get_output_volume()``) is applied via pw-play's
+    ``--volume`` flag — the single source of output-volume control. The aplay
+    fallback has no volume control and plays at unity.
     """
-    cmd = (
-        [_PW_PLAY, file_path]
-        if _PW_PLAY
-        else ["aplay", "-D", "pipewire", "-q", file_path]
-    )
+    volume = get_output_volume()
+
+    # Derive a duration-based timeout from the WAV header so long clips are not
+    # truncated and a stalled player does not hang forever.
+    play_timeout = 60.0
+    try:
+        import wave as _wave
+
+        with _wave.open(file_path, "rb") as wf:
+            rate = wf.getframerate()
+            if rate:
+                play_timeout = max(wf.getnframes() / rate + 10, 8)
+    except Exception:
+        pass
+
+    if _PW_PLAY:
+        cmd = [_PW_PLAY, "--volume", f"{volume:.3f}", file_path]
+    else:
+        cmd = ["aplay", "-D", "pipewire", "-q", file_path]
 
     with _audio_lock:
         _playback_active.set()
         try:
-            subprocess.run(cmd, timeout=60, check=False, stderr=subprocess.DEVNULL)
+            subprocess.run(
+                cmd, timeout=play_timeout, check=False, stderr=subprocess.DEVNULL
+            )
             post_playback_ms = get_post_playback_ms()
             if post_playback_ms > 0:
                 time.sleep(post_playback_ms / 1000.0)
@@ -207,6 +225,12 @@ def record_wav_file(file_path: str, duration: float) -> None:
         pcm_data = proc.stdout.read()
         proc.wait()
 
+        if not pcm_data:
+            logger.error("Recording produced no audio (parec died immediately?)")
+            return
+        # A mid-frame SIGTERM can leave a trailing odd byte; trim to whole s16 samples.
+        pcm_data = pcm_data[: len(pcm_data) // 2 * 2]
+
         with wave.open(file_path, "wb") as wf:
             wf.setnchannels(channels)
             wf.setsampwidth(2)
@@ -229,10 +253,22 @@ def record_wav_file(file_path: str, duration: float) -> None:
         file_path,
     ]
 
+    # pw-record runs until interrupted — it never exits on its own, so
+    # subprocess.run(timeout=...) would always time out and SIGKILL it before
+    # the WAV header is finalized (data chunk size left at 0). Use Popen + a
+    # timed terminate() so it can close the file cleanly.
+    proc = subprocess.Popen(cmd)
     try:
-        subprocess.run(cmd, check=True, timeout=duration + 2)
+        time.sleep(duration)
+        proc.terminate()  # SIGTERM lets pw-record write the final header
+        try:
+            proc.wait(timeout=2.0)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
     except Exception as e:
         logger.error(f"Recording failed: {e}")
+        proc.kill()
 
 
 def play_tone(name: str):

@@ -2782,9 +2782,12 @@
       if (!isNaN(commandTimeout)) {
         result.recognition = {
           command_timeout: commandTimeout,
-          matching_threshold: parseFloat(document.getElementById('input-matching-threshold').value),
           partial_matching: document.getElementById('input-partial-matching').value === 'true'
         };
+        // Only include if it parses — a NaN would serialize to JSON null, which
+        // breaks the daemon's float() coercion on cold start.
+        const matchingThreshold = parseFloat(document.getElementById('input-matching-threshold').value);
+        if (!isNaN(matchingThreshold)) result.recognition.matching_threshold = matchingThreshold;
       }
 
       const confidence = parseFloat(document.getElementById('input-stt-confidence').value);
@@ -2792,10 +2795,11 @@
         result.stt = {
           stage1: {
             backend: document.getElementById('input-stt-backend').value,
-            confidence: confidence,
-            rms_threshold: parseFloat(document.getElementById('input-rms-threshold').value)
+            confidence: confidence
           }
         };
+        const rmsThreshold = parseFloat(document.getElementById('input-rms-threshold').value);
+        if (!isNaN(rmsThreshold)) result.stt.stage1.rms_threshold = rmsThreshold;
       }
 
       const inputGain = parseFloat(document.getElementById('input-input-gain').value);
