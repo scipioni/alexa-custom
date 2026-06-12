@@ -6,15 +6,42 @@ Optimized for **PipeWire** and fully integrated with **Home Assistant**.
 
 ---
 
+## Prerequisites
+
+### System packages (Debian 13 / Trixie)
+
+```bash
+# Core
+sudo apt install python3 python3-pip python3-venv
+sudo apt install pipewire pipewire-pulse wireplumber
+sudo apt install pulseaudio-utils    # parec, paplay
+sudo apt install pipewire-bin        # pw-play, pw-metadata, wpctl
+sudo apt install alsa-utils          # amixer
+
+# Optional — LED matrix display (Arduino UNO Q)
+sudo apt install gcc make            # compile uart_bridge
+# sudo apt install i2c-tools         # I2C OLED (optional)
+
+# Optional — development
+sudo apt install git task             # task runner
+```
+
+### Python version
+
+Requires **Python ≥ 3.13**.
+
+---
+
 ## Quick Start
 
 ```bash
-# 1. Install system dependencies
-sudo apt install pulseaudio-utils pipewire
+# 1. Setup virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
 
-# 2. Setup virtual environment
-python -m venv .venv
-.venv/bin/pip install -e .
+# 2. Install dependencies
+pip install -e .                      # installs alexa-custom + core deps
+pip install smbus2                    # optional: I2C OLED display
 
 # 3. Download STT models
 alexa-setup
@@ -33,6 +60,98 @@ cp conf.example/secrets.yaml conf/secrets.yaml
 # 6. Run
 alexa-client                # web dashboard at http://<host>:8080
 ```
+
+---
+
+## Python Dependencies
+
+| Package | Required | Purpose |
+|---------|----------|---------|
+| `livekit` | core | LiveKit room client |
+| `livekit-api` | core | LiveKit REST API + tokens |
+| `sounddevice` | core | Audio device enumeration |
+| `numpy` | core | Audio signal processing |
+| `pulsectl` | core | PipeWire/PulseAudio routing |
+| `vosk` | core | Local wake-word + STT |
+| `pyyaml` | core | Config file parsing |
+| `httpx` | core | HTTP client for LLM |
+| `aiomqtt` | core | MQTT / Home Assistant |
+| `aiohttp` | core | Web dashboard server |
+| `piper-tts` | core | Local text-to-speech |
+| `sherpa-onnx` | core | Alternative STT backend |
+| `rapidfuzz` | core | Fuzzy phonetic matching |
+| `ruamel.yaml` | core | YAML round-trip editing |
+| `smbus2` | *optional* | I2C OLED display backend |
+| `msgpack` | *on UNO Q* | RouterBridge communication |
+
+Install optional extras:
+```bash
+pip install smbus2                    # I2C OLED support
+pip install -e ".[i2c]"              # or via extras
+```
+
+---
+
+## Display Backends (Arduino UNO Q)
+
+The project supports multiple display backends for visual feedback:
+
+### Built-in LED Matrix (via RouterBridge)
+- STM32 firmware in `setup/display_firmware/display_firmware.ino`
+- Communicate via `Arduino_RouterBridge` over UART → TCP port 7501
+- Shows animated icons: scanning wave (listening), hourglass (thinking), checkmark (connected), etc.
+- **Flash firmware**:
+  ```bash
+  # Install required libraries (one-time)
+  arduino-cli lib install Arduino_RouterBridge ArduinoGraphics
+
+  # Compile and upload
+  arduino-cli compile --upload --fqbn arduino:zephyr:unoq \
+    setup/display_firmware/display_firmware.ino
+
+  # Restart Router to reconnect to the newly-flashed STM32
+  sudo systemctl restart arduino-router
+  ```
+
+### Router TCP port 7501 not listening
+
+Some UNO Q board images have a systemd drop-in that overrides the Router's command line, **removing** the `--listen-port` flag needed for TCP access:
+
+```bash
+# Check if Router is listening on TCP 7501
+ss -tlnp | grep 7501
+
+# If empty, inspect the active service config:
+sudo systemctl cat arduino-router
+# Look for drop-ins in /run/systemd/generator/arduino-router.service.d/
+```
+
+If a drop-in (`10-imola.conf` or similar) clears `ExecStart` without `--listen-port`, create a higher-priority override:
+
+```bash
+sudo mkdir -p /etc/systemd/system/arduino-router.service.d
+sudo tee /etc/systemd/system/arduino-router.service.d/20-listen-port.conf << 'EOF'
+[Service]
+ExecStart=
+ExecStart=/usr/bin/arduino-router --unix-port /var/run/arduino-router.sock --listen-port 0.0.0.0:7501 --serial-port /dev/ttyHS1 --serial-baudrate 115200 --after-ready '/usr/bin/gpioset -c /dev/gpiochip1 -t0 70=1'
+EOF
+sudo systemctl daemon-reload
+sudo systemctl restart arduino-router
+```
+
+### I2C OLED (SSD1306)
+- Connect SSD1306 128×64 (or similar) to Snapdragon I2C pins
+- Backend: `i2c` in `config.yaml`
+- Requires: `pip install smbus2`
+
+### GPIO LEDs (built-in MPU LEDs)
+- Uses `/sys/class/leds/`
+- Works immediately on UNO Q (2 LEDs)
+
+### UART Bridge (direct STM32 access)
+- Bypasses kernel driver via `/dev/mem` register access
+- Compile: `gcc -o uart_bridge setup/display_firmware/uart_bridge.c`
+- Run: `ALEXA_DISPLAY_CMD="sudo ./uart_bridge" alexa-client`
 
 ---
 
@@ -137,6 +256,7 @@ See `conf.example/config.yaml` and `conf.example/secrets.yaml` for the full refe
 - **Bidirectional MQTT**: Home Assistant Discovery support. Forward voice commands to HA and trigger local actions via MQTT.
 - **Web Dashboard**: Real-time browser UI — VU meters with RMS needle, STT status with wake-word badge, room status panel (closed / waiting / in call), live logs, restart button.
 - **PipeWire native**: Direct integration without PortAudio shims.
+- **LED Matrix Icons**: Animated icons on the built-in 8×13 LED matrix (scanning wave, hourglass, checkmark, etc.) with RGB LED feedback.
 
 ---
 
@@ -158,6 +278,9 @@ See `conf.example/config.yaml` and `conf.example/secrets.yaml` for the full refe
 | `task audio:restart` | Restart WirePlumber and restore routing/PCM |
 | `task audio:status` | Show audio device status dashboard |
 | `task audio:test` | Play a test WAV to verify speaker output |
+| `task display:compile` | Compile uart_bridge for direct UART access |
+| `task display:test` | Test UART communication with STM32 |
+| `task display:setup` | Compile uart_bridge + sudoers setup |
 | `task test` | Run regression tests |
 | `task lint` / `task format` | Code quality checks and formatting |
 
@@ -174,8 +297,14 @@ conf/
     user.yaml         your custom triggers
     learned.yaml      auto-created by llm_learn
 
+setup/
+  display_firmware/
+    display_firmware.ino   STM32 firmware (LED matrix + RGB LEDs)
+    uart_bridge.c          Direct UART access (bypasses kernel driver)
+
 alexa_custom/
   client.py           main loop, LiveKit session
+  display.py          display backends (bridge, gpio, i2c, mock)
   stt.py              two-stage STT pipeline (Vosk / sherpa-onnx)
   tts.py              TTS engine (Piper)
   audio.py            PipeWire routing, AudioWatcher, device enumeration
@@ -195,6 +324,7 @@ alexa_custom/
 - **[Configuration](docs/configuration.md)** — Full config reference
 - **[MQTT & Home Assistant](docs/mqtt_integration.md)** — Auto-discovery and remote control
 - **[Troubleshooting](docs/troubleshooting.md)** — Common audio, connection, and permission fixes
+- **[Display Setup](docs/display_setup.md)** — LED matrix, OLED, and LED configuration
 
 ---
 
