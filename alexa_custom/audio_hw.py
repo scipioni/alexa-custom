@@ -18,6 +18,20 @@ logger = logging.getLogger(__name__)
 
 _input_gain_lock = threading.Lock()
 
+
+@contextmanager
+def pulse_session(name: str):
+    """Open a pulsectl connection that always restores the NewPie PCM on exit."""
+    pulse = pulsectl.Pulse(name)
+    try:
+        yield pulse
+    finally:
+        try:
+            pulse.close()
+        finally:
+            _restore_hw_pcm()
+
+
 # State variables managed through configuration
 _POST_PLAYBACK_MS = int(os.environ.get("AUDIO_POST_PLAYBACK_MS", "100"))
 _TONE_PREROLL_MS = int(os.environ.get("AUDIO_TONE_PREROLL_MS", "300"))
@@ -38,26 +52,30 @@ def save_volume_config(volume: float) -> None:
     if not config_file.exists():
         logger.warning("config.yaml not found, cannot persist volume state")
         return
-
     try:
-        import yaml
+        from ruamel.yaml import YAML
+
+        yaml = YAML()
+        yaml.preserve_quotes = True
 
         with open(config_file, "r") as f:
-            config = yaml.safe_load(f) or {}
+            config = yaml.load(f)
+        if config is None:
+            config = {}
 
         if not isinstance(config, dict):
             logger.warning(
                 "config.yaml has invalid structure, cannot persist volume state"
             )
             return
-
         config.setdefault("audio", {})
         config["audio"]["output_volume"] = volume
-
         with open(config_file, "w") as f:
-            yaml.safe_dump(config, f)
-        logger.info(f"Updated config.yaml with volume: {volume:.0%}")
-
+            yaml.dump(config, f)
+        logger.info(
+            "Updated config.yaml with volume: %.0f%% (ruamel, comments preserved)",
+            volume * 100,
+        )
     except Exception as e:
         logger.warning("Failed to save volume to config.yaml: %s", e)
 
@@ -106,47 +124,22 @@ def get_default_card_name() -> str:
 def _restore_hw_pcm(card: int | None = None) -> None:
     """Restore ALSA hardware PCM to 100% after any pulsectl interaction.
 
-    Resolves the ALSA card dynamically based on the configured card_name, unless `card` is explicitly passed
-    (for test overrides). When no matching card is connected the call is a no-op.
+    Resolves the NewPie card dynamically unless `card` is explicitly passed
+    (for test overrides).  When no NewPie is connected the call is a no-op.
     """
     if card is None:
-        card_name = get_default_card_name()
-        result = _find_alsa_card(card_name)
+        result = _find_alsa_card("NewPie")
         if result is None:
-            logger.debug(f"_restore_hw_pcm: no {card_name} found, skipping")
+            logger.debug("_restore_hw_pcm: no NewPie found, skipping")
             return
         card_index, _ = result
     else:
         card_index = card
-    try:
-        subprocess.run(
-            ["amixer", "-c", str(card_index), "sset", "PCM", "100%"],
-            capture_output=True,
-            check=False,
-        )
-    except FileNotFoundError:
-        logger.warning("_restore_hw_pcm: amixer not installed; cannot restore PCM")
-
-
-@contextmanager
-def pulse_session(name: str):
-    """Open a pulsectl connection that always restores the NewPie PCM on exit.
-
-    Opening any ``pulsectl.Pulse()`` connection makes pipewire-pulse re-init the
-    ALSA device, resetting the NewPie's hardware PCM mixer to 0% (see the audio
-    notes in CLAUDE.md). This wrapper guarantees ``_restore_hw_pcm()`` runs on
-    exit — even when the body raises — so the "never open Pulse() without
-    restoring right after" rule is enforced structurally rather than by
-    convention. Always prefer this over a bare ``pulsectl.Pulse(...)``.
-    """
-    pulse = pulsectl.Pulse(name)
-    try:
-        yield pulse
-    finally:
-        try:
-            pulse.close()
-        finally:
-            _restore_hw_pcm()
+    subprocess.run(
+        ["amixer", "-c", str(card_index), "sset", "PCM", "100%"],
+        capture_output=True,
+        check=False,
+    )
 
 
 def find_pipewire_device():
@@ -200,7 +193,7 @@ def device_from_env(key: str) -> int | None:
 
 def set_pipewire_defaults(input_spec: str | None, output_spec: str | None):
     """Set PipeWire default source/sink by matching INPUT_DEVICE/OUTPUT_DEVICE name."""
-    with pulse_session("alexa-routing") as pulse:
+    with pulsectl.Pulse("alexa-routing") as pulse:
         if output_spec and output_spec.lower() not in ("pipewire", "default"):
             needle = output_spec.lower()
             match = next(
@@ -235,6 +228,7 @@ def set_pipewire_defaults(input_spec: str | None, output_spec: str | None):
                 raise RuntimeError(
                     f"PipeWire source not found for INPUT_DEVICE={input_spec!r}"
                 )
+    _restore_hw_pcm()
 
 
 def find_alexa_card(pulse, spec: str | None = None):
@@ -391,7 +385,7 @@ def check_newpie_ready(
         output_spec = os.environ.get("OUTPUT_DEVICE", "").strip() or None
     is_virtual = (output_spec or "").lower() in ("pipewire", "default")
 
-    with pulse_session("alexa-check") as pulse:
+    with pulsectl.Pulse("alexa-check") as pulse:
         ok, conn = enforce_audio_state(pulse, input_spec, output_spec)
         if not ok:
             print(
@@ -429,6 +423,7 @@ def check_newpie_ready(
             )
             ok = False
 
+    _restore_hw_pcm()
     return ok, conn
 
 
@@ -760,7 +755,6 @@ def audio_doctor() -> int:
     def warn(name: str, detail: str) -> None:
         warnings.append((name, detail))
 
-    # 1. Required binaries
     for tool in ("amixer", "pactl", "pw-play", "parec", "wpctl"):
         present = shutil.which(tool) is not None
         if tool in ("pw-play", "parec", "amixer", "pactl"):
@@ -768,11 +762,9 @@ def audio_doctor() -> int:
         elif not present:
             warn(f"binary:{tool}", "not found (optional)")
 
-    # 2. NewPie present as an ALSA card
     card = _find_alsa_card("NewPie")
     ok("newpie:alsa-card", card is not None, "NewPie not found in /proc/asound")
 
-    # 3. Hardware PCM not muted
     if card is not None:
         pct = _amixer_pcm_percent(card[0])
         if pct is None:
@@ -784,14 +776,12 @@ def audio_doctor() -> int:
                 f"PCM at {pct}% (expected 100% — run `task audio:restart`)",
             )
 
-    # 4. Default routing points at NewPie
     try:
         routed, conn = check_newpie_ready()
         ok("newpie:default-routing", routed, f"connection={conn}")
     except Exception as e:
         warn("newpie:default-routing", f"check failed: {e}")
 
-    # 5. No stale switch-on-connect drop-ins (crash this board's PipeWire 1.4.2)
     home = Path.home()
     stale = [
         home / ".config/pipewire/pipewire.conf.d/99-switch-on-connect.conf",
@@ -804,7 +794,6 @@ def audio_doctor() -> int:
         f"remove: {', '.join(present_stale)}" if present_stale else "",
     )
 
-    # 6. USB autosuspend disabled for the NewPie
     autosuspend_rule = Path("/etc/udev/rules.d/99-newpie-no-autosuspend.rules")
     ok(
         "newpie:no-autosuspend",
@@ -812,7 +801,6 @@ def audio_doctor() -> int:
         "udev rule missing — run `task audio:setup`",
     )
 
-    # 7. PCM-restore user service installed
     unmute_service = home / ".config/systemd/user/alsa-pcm-unmute.service"
     ok(
         "service:alsa-pcm-unmute",
@@ -832,7 +820,6 @@ def audio_doctor() -> int:
         except FileNotFoundError:
             warn("service:alsa-pcm-unmute", "systemctl not available")
 
-    # Report
     print("=" * 60)
     print(" AUDIO DOCTOR")
     print("=" * 60)
