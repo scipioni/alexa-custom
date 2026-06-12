@@ -65,6 +65,22 @@ class WebServer:
         self._livekit_stop_event: asyncio.Event | None = None
         self._handler: _WebLogHandler | None = None
         self._shutting_down = False
+        self._livekit_ok = all(
+            os.environ.get(k)
+            for k in (
+                "LIVEKIT_URL",
+                "LIVEKIT_API_KEY",
+                "LIVEKIT_API_SECRET",
+                "LIVEKIT_ROOM",
+            )
+        )
+        self._telegram_ok = all(
+            os.environ.get(k)
+            for k in (
+                "TELEGRAM_BOT_TOKEN",
+                "TELEGRAM_CHAT_ID",
+            )
+        )
         # snapshot for hello message on new WS connects
         self._state: dict[str, Any] = {
             "status": "Starting…",
@@ -246,6 +262,8 @@ class WebServer:
                     "input_gain": self._input_gain,
                     "output_volume": self._output_volume,
                     "cpu_limit": self._cpu_limit,
+                    "livekit_configured": self._livekit_ok,
+                    "telegram_configured": self._telegram_ok,
                 }
             )
         )
