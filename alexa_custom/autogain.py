@@ -198,6 +198,16 @@ def _compute_zoom_gains(best_gain: float) -> list[float]:
     return [best_gain / 2, best_gain, best_gain * 2]
 
 
+<<<<<<< HEAD
+=======
+def _compute_verify_gains(best_gain: float, dist_index: int) -> list[float]:
+    if dist_index >= 1:
+        gains = [best_gain, best_gain * 2, best_gain * 4]
+        return [min(g, 10.0) for g in gains]
+    return [best_gain]
+
+
+>>>>>>> ade8963 (fix: test wider gain range at far distances (best×4 instead of best×2))
 def _save_gain_to_config(gain: float) -> None:
     from ruamel.yaml import YAML
 

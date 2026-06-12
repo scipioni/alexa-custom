@@ -50,8 +50,13 @@
     "semantic_hash": ""
   },
   "alexa_custom/autogain.py": {
+<<<<<<< HEAD
     "mtime": 1781260313.0039496,
     "ast_hash": "05d450aa7b321aff175cbb176ea7ca16",
+=======
+    "mtime": 1781265665.7758098,
+    "ast_hash": "5e6de5c19006f6d7a5d49f3d8e864cf8",
+>>>>>>> ade8963 (fix: test wider gain range at far distances (best×4 instead of best×2))
     "semantic_hash": ""
   },
   "alexa_custom/client.py": {
