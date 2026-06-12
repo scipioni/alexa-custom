@@ -460,6 +460,27 @@ class WebServer:
             logger.error("Failed to load factory defaults: %s", e)
             return web.json_response({"error": str(e)}, status=500)
 
+    async def _handle_health(self, request: web.Request) -> web.Response:
+        """Liveness/at-a-glance status for monitoring (no auth, no secrets)."""
+        from alexa_custom import metrics
+
+        return web.json_response(
+            {
+                "status": "ok",
+                "uptime_s": round(metrics.uptime_s(), 1),
+                "audio_connected": self._state.get("audio_connected", False),
+                "audio_conn_type": self._state.get("audio_conn_type", ""),
+                "stt_state": self._state.get("stt_state", "idle"),
+                "room_status": self._state.get("room_status", "closed"),
+            }
+        )
+
+    async def _handle_metrics(self, request: web.Request) -> web.Response:
+        """Full metrics snapshot (counters, gauges, timing summaries)."""
+        from alexa_custom import metrics
+
+        return web.json_response(metrics.snapshot())
+
     def _validate_config(self, config: dict | Any) -> tuple[bool, str | None]:
         """Validate configuration values"""
         if not isinstance(config, dict):
@@ -887,6 +908,8 @@ class WebServer:
         app.router.add_post("/api/config", self._handle_config_update)
         app.router.add_put("/api/config", self._handle_config_replace)
         app.router.add_get("/api/config/defaults", self._handle_config_defaults)
+        app.router.add_get("/health", self._handle_health)
+        app.router.add_get("/metrics", self._handle_metrics)
         runner = web.AppRunner(app)
         await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", self._port)
