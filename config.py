@@ -42,9 +42,6 @@ class WakeWordGroup:
     triggers: list[Trigger] = field(default_factory=list)
     lang: str = "it-IT"
     id: str = ""  # stable key for wake_triggers in action files; defaults to word
-    skip_unmatched_inline: bool = (
-        False  # if True, silently skip when inline_cmd doesn't match any trigger
-    )
 
     def __post_init__(self):
         if not self.id:
@@ -120,7 +117,6 @@ class STTStage2Config:
 @dataclass
 class STTConfig:
     vad_silence_ms: int = 500
-    flush_ms: int = 300
     stage1: STTStage1Config = field(default_factory=STTStage1Config)
     stage2: STTStage2Config = field(default_factory=STTStage2Config)
 
@@ -133,24 +129,13 @@ class TTSConfig:
 
 
 _VALID_MODES = {"two-stage", "single-stage"}
-_VALID_ALGORITHMS = {"token_set_ratio", "levenshtein", "ratio"}
 
 
 @dataclass
 class RecognitionConfig:
     mode: str = "two-stage"
     command_timeout: float = 2.5
-    # Absolute cap on stage-2 capture once speech has started; the window
-    # slides while the user keeps speaking, bounded by this. 0 disables sliding.
-    command_max_timeout: float = 8.0
     wake_tone: str = "wake"
-    partial_matching: bool = True
-    partial_stability_ms: int = 150
-    partial_stability_reads: int = 3
-    matching_algorithm: str = "token_set_ratio"
-    matching_threshold: float = 70.0
-    reply_matching_algorithm: str = "levenshtein"
-    reply_matching_threshold: float = 80.0
 
 
 @dataclass
@@ -165,7 +150,6 @@ class MQTTConfig:
 @dataclass
 class WebConfig:
     port: int = 8080
-    cpu_limit: int = 4
 
 
 @dataclass
@@ -307,10 +291,9 @@ def _parse_actions(raw_actions: list[Any], path_prefix: str) -> list[ActionEntry
                 )
             on_else = _parse_actions(raw_else, f"{path_prefix}.actions[{i}].on_else")
 
-        params = dict(a.get("params", {}))
-        for k, v in a.items():
-            if k not in ("type", "on_reply", "on_else", "params"):
-                params[k] = v
+        params = {
+            k: v for k, v in a.items() if k not in ("type", "on_reply", "on_else")
+        }
         actions.append(
             ActionEntry(
                 type=action_type, params=params, on_reply=on_reply, on_else=on_else
@@ -387,7 +370,6 @@ def _parse_wake_word_groups(raw_groups: list[Any], source: str) -> list[WakeWord
         lang = str(entry.get("lang", "it-IT"))
         raw_id = entry.get("id")
         group_id = str(raw_id).strip() if raw_id else word
-        skip_unmatched_inline = bool(entry.get("skip_unmatched_inline", False))
 
         groups.append(
             WakeWordGroup(
@@ -396,7 +378,6 @@ def _parse_wake_word_groups(raw_groups: list[Any], source: str) -> list[WakeWord
                 triggers=group_triggers,
                 lang=lang,
                 id=group_id,
-                skip_unmatched_inline=skip_unmatched_inline,
             )
         )
 
@@ -503,7 +484,6 @@ def _parse_stt_config(raw: dict) -> STTConfig:
         raise ConfigError("'stt.stage2' must be a mapping if present")
     return STTConfig(
         vad_silence_ms=int(raw.get("vad_silence_ms", 700)),
-        flush_ms=int(raw.get("flush_ms", 300)),
         stage1=_parse_stt_stage1_config(stage1_raw),
         stage2=_parse_stt_stage2_config(stage2_raw),
     )
@@ -524,28 +504,10 @@ def _parse_recognition_config(raw: dict) -> RecognitionConfig:
         raise ConfigError(
             f"'recognition.mode' must be one of {sorted(_VALID_MODES)}, got {mode!r}"
         )
-    algo = str(raw.get("matching_algorithm", "token_set_ratio"))
-    if algo not in _VALID_ALGORITHMS:
-        raise ConfigError(
-            f"'recognition.matching_algorithm' must be one of {sorted(_VALID_ALGORITHMS)}, got {algo!r}"
-        )
-    reply_algo = str(raw.get("reply_matching_algorithm", "levenshtein"))
-    if reply_algo not in _VALID_ALGORITHMS:
-        raise ConfigError(
-            f"'recognition.reply_matching_algorithm' must be one of {sorted(_VALID_ALGORITHMS)}, got {reply_algo!r}"
-        )
     return RecognitionConfig(
         mode=mode,
         command_timeout=float(raw.get("command_timeout", 3.0)),
-        command_max_timeout=float(raw.get("command_max_timeout", 8.0)),
         wake_tone=str(raw.get("wake_tone", "wake")),
-        partial_matching=bool(raw.get("partial_matching", True)),
-        partial_stability_ms=int(raw.get("partial_stability_ms", 150)),
-        partial_stability_reads=int(raw.get("partial_stability_reads", 3)),
-        matching_algorithm=algo,
-        matching_threshold=float(raw.get("matching_threshold", 70.0)),
-        reply_matching_algorithm=reply_algo,
-        reply_matching_threshold=float(raw.get("reply_matching_threshold", 80.0)),
     )
 
 
@@ -834,53 +796,7 @@ def load_config(
             "move credentials to conf/secrets.yaml"
         )
 
-    cfg = _parse_actions_config(raw, source=str(p), secrets=secrets)
-
-    return cfg
-
-
-def _merge_user_wake_words(wake_words: list[WakeWordGroup], user_path: Path) -> None:
-    """Append wake word groups from user.yaml that are not already in wake_words."""
-    try:
-        with user_path.open() as f:
-            raw = yaml.safe_load(f)
-    except yaml.YAMLError as e:
-        logger.warning("user.yaml parse error, skipping: %s", e)
-        return
-
-    if not isinstance(raw, dict):
-        logger.warning("user.yaml must be a YAML mapping at the top level, skipping")
-        return
-
-    raw_wake_words = raw.get("wake_words")
-    if not raw_wake_words:
-        return
-    if not isinstance(raw_wake_words, list):
-        logger.warning("user.yaml: 'wake_words' must be a list, skipping")
-        return
-
-    try:
-        user_groups = _parse_wake_word_groups(raw_wake_words, str(user_path))
-    except ConfigError as e:
-        logger.warning("user.yaml wake_words error, skipping: %s", e)
-        return
-
-    existing_ids = {g.id for g in wake_words}
-    added = 0
-    for group in user_groups:
-        if group.id in existing_ids:
-            logger.debug(
-                "user.yaml: wake word %r (id=%r) already defined in config.yaml, skipping",
-                group.word,
-                group.id,
-            )
-        else:
-            wake_words.append(group)
-            existing_ids.add(group.id)
-            added += 1
-
-    if added:
-        logger.info("user.yaml: merged %d wake word group(s)", added)
+    return _parse_actions_config(raw, source=str(p), secrets=secrets)
 
 
 def _parse_actions_config(
@@ -898,12 +814,6 @@ def _parse_actions_config(
         raise ConfigError(f"{source}: 'wake_words' must be a non-empty list")
 
     wake_words = _parse_wake_word_groups(raw_wake_words, source)
-
-    # Merge wake words from user.yaml (optional, sits next to config.yaml)
-    config_dir = Path(source).parent if source != "config" else Path(".")
-    user_path = config_dir / "user.yaml"
-    if user_path.exists():
-        _merge_user_wake_words(wake_words, user_path)
 
     audio_raw = raw.get("audio") or {}
     if not isinstance(audio_raw, dict):
@@ -933,10 +843,7 @@ def _parse_actions_config(
     web_raw = raw.get("web") or {}
     if not isinstance(web_raw, dict):
         raise ConfigError(f"{source}: 'web' must be a mapping if present")
-    web = WebConfig(
-        port=int(web_raw.get("port", 8080)),
-        cpu_limit=int(web_raw.get("cpu_limit", 4)),
-    )
+    web = WebConfig(port=int(web_raw.get("port", 8080)))
 
     system_raw = raw.get("system") or {}
     if not isinstance(system_raw, dict):

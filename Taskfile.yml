@@ -248,6 +248,31 @@ tasks:
       - echo "Playing test sound ('Front_Center.wav')..."
       - pw-play /usr/share/sounds/alsa/Front_Center.wav || aplay /usr/share/sounds/alsa/Front_Center.wav
 
+  display:compile:
+    desc: Compile uart_bridge for direct UART access (bypasses kernel driver)
+    cmds:
+      - gcc -o setup/display_firmware/uart_bridge setup/display_firmware/uart_bridge.c
+
+  display:test:
+    desc: Test UART communication with STM32 (requires sudo for /dev/mem)
+    cmds:
+      - |
+        CMD="sudo setup/display_firmware/uart_bridge"
+        # ping via MsgPack: [0, 0, "ping", []]
+        printf '\x94\x00\x00\xa4ping\x90' | timeout 3 $CMD | xxd
+        echo ""
+        echo "Expected response starts with: 94 01 00..."
+
+  display:setup:
+    desc: Compile uart_bridge and add sudoers entry for alexa user
+    cmds:
+      - task: display:compile
+      - |
+        echo "Adding sudoers entry for uart_bridge..."
+        echo "arduino ALL=(ALL) NOPASSWD: $(pwd)/setup/display_firmware/uart_bridge" | sudo tee /etc/sudoers.d/alexa-uart-bridge
+        sudo chmod 440 /etc/sudoers.d/alexa-uart-bridge
+        echo "Done. The display backend will auto-detect uart_bridge."
+
   clean:
     desc: Clean up temporary files
     cmds:

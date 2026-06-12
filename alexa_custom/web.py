@@ -95,8 +95,10 @@ class WebServer:
         port: int = 8080,
         output_volume: float = 0.5,
         input_gain: float = 1.0,
-        cpu_limit: int = 4,
+        cpu_limit: float = 1.0,
         shutdown_callback: Callable | None = None,
+        extra_event_cb: Callable | None = None,
+        extra_stt_event_cb: Callable | None = None,
         hot_reload: bool = False,
     ) -> None:
         self._port = port
@@ -104,6 +106,8 @@ class WebServer:
         self._input_gain = input_gain
         self._cpu_limit = cpu_limit
         self._shutdown_callback = shutdown_callback
+        self._extra_event_cb = extra_event_cb
+        self._extra_stt_event_cb = extra_stt_event_cb
         self._config_manager: Any = None
         self._html = _DASHBOARD_PATH.read_text()
         self._clients: set[web.WebSocketResponse] = set()
@@ -260,7 +264,6 @@ class WebServer:
             "partial",
             "matched",
             "nomatch",
-            "skipped",
             "gated",
         ):
             self._state["stt_state"] = event
@@ -332,7 +335,7 @@ class WebServer:
                     except json.JSONDecodeError:
                         continue
                     if payload.get("type") == "control":
-                        await self._handle_control(payload.get("action", ""), payload)
+                        await self._handle_control(payload.get("action", ""))
                 elif msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
                     break
         finally:
@@ -340,27 +343,15 @@ class WebServer:
 
         return ws
 
-    async def _handle_control(self, action: str, payload: dict = None) -> None:
+    async def _handle_control(self, action: str) -> None:
         if action == "restart":
             logger.info("Restart requested via web dashboard")
             await self._broadcast({"type": "restarting"})
             await asyncio.sleep(0.15)
             if self._shutdown_callback is not None:
-                asyncio.create_task(self._shutdown_callback())
+                self._shutdown_callback()
             else:
                 os.execv(sys.executable, [sys.executable] + sys.argv)
-        elif action == "set_volume" and payload:
-            volume = payload.get("volume", 0.5)
-            from alexa_custom.audio_ops import set_output_volume_direct
-
-            set_output_volume_direct(volume)
-            self._output_volume = volume
-        elif action == "beep" and payload:
-            frequency = payload.get("frequency", 440)
-            duration = payload.get("duration", 100)
-            from alexa_custom.audio_ops import play_beep
-
-            play_beep(frequency, duration)
 
     # ── config API endpoints ───────────────────────────────────────────────────────
 
@@ -620,21 +611,7 @@ class WebServer:
             await asyncio.sleep(30)
             self._clients = {ws for ws in self._clients if not ws.closed}
 
-    @staticmethod
-    def _ram_free_pct() -> float:
-        try:
-            info: dict[str, int] = {}
-            with open("/proc/meminfo") as f:
-                for line in f:
-                    k, v = line.split(":")
-                    info[k.strip()] = int(v.split()[0])
-            return info["MemAvailable"] / info["MemTotal"] * 100
-        except Exception:
-            return 0.0
-
     async def _system_stats_loop(self) -> None:
-        from alexa_custom.audio_hw import get_output_volume
-
         cpu_count = os.cpu_count() or 1
         while True:
             await asyncio.sleep(2)
@@ -649,8 +626,6 @@ class WebServer:
                     "load5": load5,
                     "load15": load15,
                     "cpu_count": cpu_count,
-                    "ram_free_pct": self._ram_free_pct(),
-                    "output_volume": get_output_volume(),
                 }
             )
 
@@ -697,6 +672,7 @@ class WebServer:
                             logger.warning("Failed to reload HTML %s: %s", path_str, e)
                     else:
                         logger.info("Config changed: %s", path_str)
+                await self._broadcast({"type": "reload"})
         except asyncio.CancelledError:
             pass
 
@@ -838,6 +814,7 @@ class WebServer:
         self,
         run_fn: Callable,
         stop_threading: threading.Event,
+        on_event_cb: Callable | None = None,
     ) -> None:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -852,7 +829,9 @@ class WebServer:
 
         loop.set_exception_handler(_exc_handler)
         try:
-            loop.run_until_complete(run_fn(stop_threading, self.on_event, livekit_stop))
+            loop.run_until_complete(
+                run_fn(stop_threading, on_event_cb or self.on_event, livekit_stop)
+            )
         except Exception as e:
             self._enqueue("error", {"msg": str(e)})
         finally:
@@ -882,33 +861,7 @@ class WebServer:
                 await self._broadcast({"type": "restarting"})
 
             cm = ConfigManager(None)
-
-            def _on_audio_config_reload(new_config):
-                import pulsectl
-                from alexa_custom import audio_hw
-
-                audio_cfg = new_config.audio if new_config else None
-                if audio_cfg is None:
-                    return
-                audio_hw.configure(new_config)
-                with pulsectl.Pulse("alexa-reload"):
-                    audio_hw.set_output_volume(
-                        None,
-                        new_config.audio.output_device,
-                        new_config.audio.output_volume,
-                    )
-                    audio_hw.set_input_gain(
-                        None, new_config.audio.input_device, new_config.audio.input_gain
-                    )
-                audio_hw._restore_hw_pcm()
-                logger.info(
-                    f"Audio config reloaded: output_volume={new_config.audio.output_volume:.2f}, "
-                    f"input_gain={new_config.audio.input_gain:.2f}"
-                )
-
-            cm.register_reload_callback(_on_audio_config_reload)
             cm.start_source_watcher("alexa_custom", on_restart=_on_source_restart)
-            cm.start_watcher("conf")
 
         app = web.Application()
         app.router.add_get("/", self._handle_index)
@@ -935,10 +888,31 @@ class WebServer:
         if stt_params and "config" in stt_params:
             self._state["actions_config"] = self._serialize_config(stt_params["config"])
 
+        # Chain extra event callbacks if provided
+        _on_event = self.on_event
+        if self._extra_event_cb:
+            _cb = self._extra_event_cb
+
+            def _chained_event(event, data, _cb_event=_on_event, _cb_extra=_cb):
+                _cb_event(event, data)
+                _cb_extra(event, data)
+
+            _on_event = _chained_event
+
+        _on_stt_event = self.on_stt_event
+        if self._extra_stt_event_cb:
+            _cb_stt = self._extra_stt_event_cb
+
+            def _chained_stt(event, data, _cb=_on_stt_event, _extra=_cb_stt):
+                _cb(event, data)
+                _extra(event, data)
+
+            _on_stt_event = _chained_stt
+
         stop_threading = threading.Event()
         livekit_thread = threading.Thread(
             target=self._livekit_worker,
-            args=(run_fn, stop_threading),
+            args=(run_fn, stop_threading, _on_event),
             daemon=True,
             name="livekit-web",
         )
@@ -968,7 +942,7 @@ class WebServer:
                 telegram_client=stt_params["telegram_client"],
                 livekit_connect_fn=stt_params["connect_fn"],
                 livekit_connected_flag=stt_params["connected_flag"],
-                on_stt_event=self.on_stt_event,
+                on_stt_event=_on_stt_event,
                 stt_ready_event=stt_params.get("stt_ready_event"),
             )
             stt_thread_holder = [stt_thread]
@@ -1020,8 +994,10 @@ def run_web(
     watch_paths: list[Path] | None = None,
     output_volume: float = 0.5,
     input_gain: float = 1.0,
-    cpu_limit: int = 4,
+    cpu_limit: float = 1.0,
     shutdown_callback: Callable | None = None,
+    extra_event_cb: Callable | None = None,
+    extra_stt_event_cb: Callable | None = None,
 ) -> None:
     server = WebServer(
         port=port,
@@ -1029,6 +1005,8 @@ def run_web(
         input_gain=input_gain,
         cpu_limit=cpu_limit,
         shutdown_callback=shutdown_callback,
+        extra_event_cb=extra_event_cb,
+        extra_stt_event_cb=extra_stt_event_cb,
         hot_reload=hot_reload,
     )
     try:
@@ -1046,4 +1024,5 @@ def run_web(
             )
         )
     except KeyboardInterrupt:
-        pass
+        if shutdown_callback is not None:
+            shutdown_callback()
