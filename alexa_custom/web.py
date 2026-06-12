@@ -120,6 +120,23 @@ class WebServer:
 
             cm = ConfigManager(None)
             self._config_manager = cm
+
+        self._livekit_ok = all(
+            os.environ.get(k)
+            for k in (
+                "LIVEKIT_URL",
+                "LIVEKIT_API_KEY",
+                "LIVEKIT_API_SECRET",
+                "LIVEKIT_ROOM",
+            )
+        )
+        self._telegram_ok = all(
+            os.environ.get(k)
+            for k in (
+                "TELEGRAM_BOT_TOKEN",
+                "TELEGRAM_CHAT_ID",
+            )
+        )
         # snapshot for hello message on new WS connects
         self._state: dict[str, Any] = {
             "status": "Starting…",
@@ -301,6 +318,8 @@ class WebServer:
                     "input_gain": self._input_gain,
                     "output_volume": self._output_volume,
                     "cpu_limit": self._cpu_limit,
+                    "livekit_configured": self._livekit_ok,
+                    "telegram_configured": self._telegram_ok,
                 }
             )
         )
@@ -614,6 +633,8 @@ class WebServer:
             return 0.0
 
     async def _system_stats_loop(self) -> None:
+        from alexa_custom.audio_hw import get_output_volume
+
         cpu_count = os.cpu_count() or 1
         while True:
             await asyncio.sleep(2)
@@ -629,6 +650,7 @@ class WebServer:
                     "load15": load15,
                     "cpu_count": cpu_count,
                     "ram_free_pct": self._ram_free_pct(),
+                    "output_volume": get_output_volume(),
                 }
             )
 
@@ -675,7 +697,6 @@ class WebServer:
                             logger.warning("Failed to reload HTML %s: %s", path_str, e)
                     else:
                         logger.info("Config changed: %s", path_str)
-                await self._broadcast({"type": "reload"})
         except asyncio.CancelledError:
             pass
 

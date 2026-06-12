@@ -14,6 +14,7 @@ from alexa_custom.audio_hw import (
     get_post_playback_ms,
     get_tone_preroll_ms,
     save_volume_config,
+    set_output_volume,
 )
 
 logger = logging.getLogger(__name__)
@@ -56,15 +57,15 @@ def _play_array(audio: np.ndarray, samplerate: int) -> None:
     import tempfile
     import wave as _wave
 
-    # Digitally scale the audio by the global output volume
-    audio = audio * get_output_volume()
-
     channels = audio.shape[1] if audio.ndim > 1 else 1
     frames = audio.shape[0]
     duration_s = frames / samplerate
     play_timeout = min(max(duration_s * 3 + 5, 8), 30)
 
-    pcm16 = np.clip(np.ascontiguousarray(audio) * 32767, -32768, 32767).astype(np.int16)
+    volume = get_output_volume()
+    pcm16 = np.clip(np.ascontiguousarray(audio) * volume * 32767, -32768, 32767).astype(
+        np.int16
+    )
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=".wav")
     try:
         os.close(tmp_fd)
@@ -113,9 +114,9 @@ def _play_raw(data: bytes, samplerate: int, channels: int) -> None:
     duration_s = frames / samplerate
     play_timeout = min(max(duration_s * 3 + 5, 8), 30)
 
-    pcm16 = np.clip(
-        np.frombuffer(data, dtype=np.float32) * 32767, -32768, 32767
-    ).astype(np.int16)
+    volume = get_output_volume()
+    samples = np.frombuffer(data, dtype=np.float32)
+    pcm16 = np.clip(samples * volume * 32767, -32768, 32767).astype(np.int16)
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=".wav")
     try:
         os.close(tmp_fd)
