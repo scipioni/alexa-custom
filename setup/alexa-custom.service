@@ -12,7 +12,6 @@ ExecStartPre=-/usr/bin/wpctl set-volume @DEFAULT_SINK@ 1.0
 ExecStart=%h/alexa-custom/.venv/bin/alexa-client
 Restart=on-failure
 RestartSec=5s
-WatchdogSec=30
 Environment=PYTHONUNBUFFERED=1
 Environment=LANG=it
 
