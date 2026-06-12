@@ -278,11 +278,14 @@ class WebServer:
         elif action == "set_volume" and payload:
             volume = payload.get("volume", 0.5)
             from alexa_custom.audio_ops import set_output_volume_direct
+
             set_output_volume_direct(volume)
+            self._output_volume = volume
         elif action == "beep" and payload:
             frequency = payload.get("frequency", 440)
             duration = payload.get("duration", 100)
             from alexa_custom.audio_ops import play_beep
+
             play_beep(frequency, duration)
 
     # ── broadcast helpers ─────────────────────────────────────────────────────
@@ -333,6 +336,8 @@ class WebServer:
             return 0.0
 
     async def _system_stats_loop(self) -> None:
+        from alexa_custom.audio_hw import get_output_volume
+
         cpu_count = os.cpu_count() or 1
         while True:
             await asyncio.sleep(2)
@@ -348,6 +353,7 @@ class WebServer:
                     "load15": load15,
                     "cpu_count": cpu_count,
                     "ram_free_pct": self._ram_free_pct(),
+                    "output_volume": get_output_volume(),
                 }
             )
 
@@ -390,7 +396,6 @@ class WebServer:
                             logger.warning("Failed to reload HTML %s: %s", path_str, e)
                     else:
                         logger.info("Config changed: %s", path_str)
-                await self._broadcast({"type": "reload"})
         except asyncio.CancelledError:
             pass
 
@@ -576,7 +581,9 @@ class WebServer:
                 audio_hw.configure(new_config)
                 with pulsectl.Pulse("alexa-reload"):
                     audio_hw.set_output_volume(
-                        None, new_config.audio.output_device, new_config.audio.output_volume
+                        None,
+                        new_config.audio.output_device,
+                        new_config.audio.output_volume,
                     )
                     audio_hw.set_input_gain(
                         None, new_config.audio.input_device, new_config.audio.input_gain
