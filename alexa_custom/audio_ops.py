@@ -196,15 +196,53 @@ def play_wav_file(file_path: str) -> None:
             _playback_active.clear()
 
 
+def _run_capture_tool(
+    cmd: list[str], duration: float, *, capture_stdout: bool
+) -> bytes:
+    """Run an audio-capture tool that records until interrupted, for `duration`s.
+
+    Capture tools (parec, pw-record) never exit on their own, so
+    ``subprocess.run(timeout=…)`` would always time out and SIGKILL them —
+    truncating a WAV before its header is finalized. This sends SIGTERM after
+    the window so the tool can finalize its output, and only SIGKILLs if it
+    ignores SIGTERM. Returns captured stdout bytes when ``capture_stdout`` is
+    set, else ``b""``.
+    """
+    stdout = subprocess.PIPE if capture_stdout else None
+    proc = subprocess.Popen(cmd, stdout=stdout, stderr=subprocess.DEVNULL)
+    data = b""
+    try:
+        if capture_stdout:
+            # Terminate from a side thread so the blocking read() is bounded
+            # regardless of how the tool buffers.
+            threading.Thread(
+                target=lambda: (time.sleep(duration), proc.terminate()),
+                daemon=True,
+            ).start()
+            data = proc.stdout.read() if proc.stdout else b""
+            proc.wait()
+        else:
+            time.sleep(duration)
+            proc.terminate()
+            try:
+                proc.wait(timeout=2.0)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+    except Exception as e:
+        logger.error("Recording tool failed: %s", e)
+        proc.kill()
+    return data
+
+
 def record_wav_file(file_path: str, duration: float) -> None:
     """Record a WAV file from the default PipeWire source."""
+    import wave
+
     rate = 16000
     channels = 1
     parec = shutil.which("parec")
     if parec:
-        import threading
-        import wave
-
         cmd = [
             parec,
             "--rate",
@@ -215,16 +253,7 @@ def record_wav_file(file_path: str, duration: float) -> None:
             "s16le",
             "--latency-msec=50",
         ]
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-
-        def kill_after():
-            time.sleep(duration)
-            proc.terminate()
-
-        threading.Thread(target=kill_after, daemon=True).start()
-        pcm_data = proc.stdout.read()
-        proc.wait()
-
+        pcm_data = _run_capture_tool(cmd, duration, capture_stdout=True)
         if not pcm_data:
             logger.error("Recording produced no audio (parec died immediately?)")
             return
@@ -252,23 +281,7 @@ def record_wav_file(file_path: str, duration: float) -> None:
         "s16",
         file_path,
     ]
-
-    # pw-record runs until interrupted — it never exits on its own, so
-    # subprocess.run(timeout=...) would always time out and SIGKILL it before
-    # the WAV header is finalized (data chunk size left at 0). Use Popen + a
-    # timed terminate() so it can close the file cleanly.
-    proc = subprocess.Popen(cmd)
-    try:
-        time.sleep(duration)
-        proc.terminate()  # SIGTERM lets pw-record write the final header
-        try:
-            proc.wait(timeout=2.0)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-    except Exception as e:
-        logger.error(f"Recording failed: {e}")
-        proc.kill()
+    _run_capture_tool(cmd, duration, capture_stdout=False)
 
 
 def play_tone(name: str):

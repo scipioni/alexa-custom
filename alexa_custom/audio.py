@@ -27,6 +27,7 @@ from alexa_custom.audio_hw import (
     get_sample_rates,
     get_default_card_name,
     _restore_hw_pcm,
+    pulse_session,
     find_pipewire_device,
     get_pipewire_device,
     invalidate_pipewire_device_cache,
@@ -87,6 +88,7 @@ __all__ = [
     "get_sample_rates",
     "get_default_card_name",
     "_restore_hw_pcm",
+    "pulse_session",
     "find_pipewire_device",
     "get_pipewire_device",
     "invalidate_pipewire_device_cache",
@@ -143,7 +145,6 @@ def main_devices():
 def main_test():
     import tempfile
     import logging as _logging
-    import pulsectl
     from alexa_custom.tts import init_engine, get_engine
     from alexa_custom.config import load_config
 
@@ -167,9 +168,8 @@ def main_test():
         print(f"WARNING: Could not set PipeWire defaults: {e}")
 
     if config and config.audio.output_volume > 0:
-        with pulsectl.Pulse("alexa-test") as pulse:
+        with pulse_session("alexa-test") as pulse:
             set_output_volume(pulse, output_spec, config.audio.output_volume)
-        _restore_hw_pcm()
 
     print("1. Playing tone...")
     play_tone("info")
