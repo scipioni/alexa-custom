@@ -40,6 +40,7 @@ from alexa_custom.audio_hw import (
     _usb_ids_for_alsa_card,
     setup_audio,
     speakerphone,
+    audio_doctor,
 )
 from alexa_custom.audio_ops import (
     _PW_PLAY,
@@ -94,6 +95,7 @@ __all__ = [
     "_find_alsa_card",
     "_usb_ids_for_alsa_card",
     "setup_audio",
+    "audio_doctor",
     "speakerphone",
     "_PW_PLAY",
     "_playback_active",
@@ -128,6 +130,11 @@ def main():
 
 def main_devices():
     list_env_devices()
+
+
+def main_doctor():
+    """Entry point for `alexa-audio-doctor`: exit non-zero if any check fails."""
+    sys.exit(audio_doctor())
 
 
 def main_test():
@@ -196,4 +203,7 @@ def main_test():
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 1 and sys.argv[1] == "doctor":
+        main_doctor()
+    else:
+        main()

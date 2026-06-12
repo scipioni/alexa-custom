@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import os
+import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -742,3 +744,126 @@ def setup_audio() -> None:
             print(f"WARNING: pactl set-source-volume failed: {result.stderr.strip()}")
 
     print(f"Done. {card_id!r} volumes will be restored automatically on every connect.")
+
+
+def _amixer_pcm_percent(card_index: int) -> int | None:
+    """Return the NewPie hardware PCM level as a percentage, or None if unreadable."""
+    try:
+        result = subprocess.run(
+            ["amixer", "-c", str(card_index), "sget", "PCM"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return None
+    m = re.search(r"\[(\d+)%\]", result.stdout)
+    return int(m.group(1)) if m else None
+
+
+def audio_doctor() -> int:
+    """Check each audio invariant from the platform notes and print pass/fail.
+
+    Returns the number of failed checks (0 == healthy) so callers/CI can use the
+    exit code. Warnings (degraded but not broken) do not count as failures.
+    """
+    results: list[tuple[str, bool, str]] = []
+    warnings: list[tuple[str, str]] = []
+
+    def ok(name: str, passed: bool, detail: str = "") -> None:
+        results.append((name, passed, detail))
+
+    def warn(name: str, detail: str) -> None:
+        warnings.append((name, detail))
+
+    # 1. Required binaries
+    for tool in ("amixer", "pactl", "pw-play", "parec", "wpctl"):
+        present = shutil.which(tool) is not None
+        if tool in ("pw-play", "parec", "amixer", "pactl"):
+            ok(f"binary:{tool}", present, "" if present else "not found in PATH")
+        elif not present:
+            warn(f"binary:{tool}", "not found (optional)")
+
+    # 2. NewPie present as an ALSA card
+    card = _find_alsa_card("NewPie")
+    ok("newpie:alsa-card", card is not None, "NewPie not found in /proc/asound")
+
+    # 3. Hardware PCM not muted
+    if card is not None:
+        pct = _amixer_pcm_percent(card[0])
+        if pct is None:
+            warn("newpie:pcm-level", "could not read PCM level")
+        else:
+            ok(
+                "newpie:pcm-level",
+                pct >= 100,
+                f"PCM at {pct}% (expected 100% — run `task audio:restart`)",
+            )
+
+    # 4. Default routing points at NewPie
+    try:
+        routed, conn = check_newpie_ready()
+        ok("newpie:default-routing", routed, f"connection={conn}")
+    except Exception as e:
+        warn("newpie:default-routing", f"check failed: {e}")
+
+    # 5. No stale switch-on-connect drop-ins (crash this board's PipeWire 1.4.2)
+    home = Path.home()
+    stale = [
+        home / ".config/pipewire/pipewire.conf.d/99-switch-on-connect.conf",
+        home / ".config/pipewire/pipewire-pulse.conf.d/99-switch-on-connect.conf",
+    ]
+    present_stale = [str(p) for p in stale if p.exists()]
+    ok(
+        "pipewire:no-switch-on-connect",
+        not present_stale,
+        f"remove: {', '.join(present_stale)}" if present_stale else "",
+    )
+
+    # 6. USB autosuspend disabled for the NewPie
+    autosuspend_rule = Path("/etc/udev/rules.d/99-newpie-no-autosuspend.rules")
+    ok(
+        "newpie:no-autosuspend",
+        autosuspend_rule.exists(),
+        "udev rule missing — run `task audio:setup`",
+    )
+
+    # 7. PCM-restore user service installed
+    unmute_service = home / ".config/systemd/user/alsa-pcm-unmute.service"
+    ok(
+        "service:alsa-pcm-unmute",
+        unmute_service.exists(),
+        "not installed — run `task audio:setup`",
+    )
+    if unmute_service.exists():
+        try:
+            enabled = subprocess.run(
+                ["systemctl", "--user", "is-enabled", "alsa-pcm-unmute.service"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if enabled.stdout.strip() != "enabled":
+                warn("service:alsa-pcm-unmute", "installed but not enabled")
+        except FileNotFoundError:
+            warn("service:alsa-pcm-unmute", "systemctl not available")
+
+    # Report
+    print("=" * 60)
+    print(" AUDIO DOCTOR")
+    print("=" * 60)
+    failures = 0
+    for name, passed, detail in results:
+        mark = "\x1b[32mPASS\x1b[0m" if passed else "\x1b[31mFAIL\x1b[0m"
+        suffix = f"  — {detail}" if detail and not passed else ""
+        print(f"  [{mark}] {name}{suffix}")
+        if not passed:
+            failures += 1
+    for name, detail in warnings:
+        print(f"  [\x1b[33mWARN\x1b[0m] {name}  — {detail}")
+    print("=" * 60)
+    if failures:
+        print(f"{failures} check(s) failed. See suggestions above.")
+    else:
+        print("All critical checks passed.")
+    return failures
