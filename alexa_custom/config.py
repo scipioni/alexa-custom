@@ -294,9 +294,10 @@ def _parse_actions(raw_actions: list[Any], path_prefix: str) -> list[ActionEntry
                 )
             on_else = _parse_actions(raw_else, f"{path_prefix}.actions[{i}].on_else")
 
-        params = {
-            k: v for k, v in a.items() if k not in ("type", "on_reply", "on_else")
-        }
+        params = dict(a.get("params", {}))
+        for k, v in a.items():
+            if k not in ("type", "on_reply", "on_else", "params"):
+                params[k] = v
         actions.append(
             ActionEntry(
                 type=action_type, params=params, on_reply=on_reply, on_else=on_else

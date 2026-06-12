@@ -8,6 +8,7 @@ import threading
 import time
 import numpy as np
 
+from alexa_custom import audio_hw
 from alexa_custom.audio_hw import (
     get_output_volume,
     get_post_playback_ms,
@@ -367,11 +368,12 @@ def play_call_end() -> None:
 
 
 def set_output_volume_direct(volume: float) -> None:
-    """Set output volume without requiring pulsectl connection.
+    """Set digital output volume without touching system mixer.
 
-    Delegates to set_output_volume() which handles wpctl, PCM restore,
-    and writes to the canonical audio_hw._OUTPUT_VOLUME so that
-    get_output_volume() returns the correct value.
+    Volume is applied as digital scaling in software (TTS, beeps, WAV playback).
+    The system PipeWire volume is left at 100% to avoid double attenuation.
     """
-    set_output_volume(None, None, max(0.0, min(1.0, volume)))
+    volume = max(0.0, min(1.0, volume))
+    audio_hw.set_output_volume(None, None, volume)
+    audio_hw._restore_hw_pcm()
     save_volume_config(volume)
