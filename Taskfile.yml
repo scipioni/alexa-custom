@@ -256,7 +256,7 @@ tasks:
   display:compile:
     desc: Compile uart_bridge for direct UART access (bypasses kernel driver)
     cmds:
-      - gcc -o setup/display_firmware/uart_bridge setup/display_firmware/uart_bridge.c
+      - gcc -o setup/display_firmware/uart_bridge setup/uart_bridge.c
 
   display:test:
     desc: Test UART communication with STM32 (requires sudo for /dev/mem)
