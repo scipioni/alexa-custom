@@ -403,7 +403,10 @@ class WebServer:
             if self._config_manager:
                 self._config_manager._reload(Path("conf/config.yaml"))
 
-            return web.json_response({"status": "ok"})
+            # Return updated config so UI syncs without a separate fetch
+            updated_config = load_config("conf/config.yaml")
+            updated_dict = self._serialize_config(updated_config)
+            return web.json_response({"status": "ok", "config": updated_dict})
 
         except Exception as e:
             logger.error("Failed to update config: %s", e)
@@ -413,6 +416,8 @@ class WebServer:
 
     async def _handle_config_replace(self, request: web.Request) -> web.Response:
         """Replace entire configuration via PUT"""
+        from alexa_custom.config import load_config
+
         temp_path = Path("conf/config.yaml.tmp")
         try:
             data = await request.json()
@@ -440,7 +445,10 @@ class WebServer:
             if self._config_manager:
                 self._config_manager._reload(Path("conf/config.yaml"))
 
-            return web.json_response({"status": "ok"})
+            # Return updated config so UI syncs without a separate fetch
+            updated_config = load_config("conf/config.yaml")
+            updated_dict = self._serialize_config(updated_config)
+            return web.json_response({"status": "ok", "config": updated_dict})
 
         except Exception as e:
             logger.error("Failed to replace config: %s", e)
