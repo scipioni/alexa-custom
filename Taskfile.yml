@@ -90,6 +90,45 @@ tasks:
           *) echo "Unknown bump type: {{.BUMP}}"; exit 1 ;;
         esac
         sed -i "s/^version = \".*\"/version = \"${NEW}\"/" pyproject.toml
+
+        PREV=$(git describe --tags --abbrev=0 2>/dev/null || true)
+        if [ -n "$PREV" ]; then
+          TODAY=$(date +%Y-%m-%d)
+          FEATS=$(git log --oneline --no-merges "${PREV}..HEAD" | sed -n 's/^[0-9a-f]* feat\(([^)]*)\)\?: //p' || true)
+          FIXES=$(git log --oneline --no-merges "${PREV}..HEAD" | sed -n 's/^[0-9a-f]* fix\(([^)]*)\)\?: //p' || true)
+          {
+            echo "## [${NEW}] - ${TODAY}"
+            echo ""
+            if [ -n "$FEATS" ]; then
+              echo "### Added"
+              echo "$FEATS" | sed 's/^/- /'
+              echo ""
+            fi
+            if [ -n "$FIXES" ]; then
+              echo "### Fixed"
+              echo "$FIXES" | sed 's/^/- /'
+              echo ""
+            fi
+          } > /tmp/changelog_entry.tmp
+          if [ -f CHANGELOG.md ]; then
+            sed -i "/^## \[Unreleased\]/r /tmp/changelog_entry.tmp" CHANGELOG.md
+          else
+            {
+              echo "# Changelog"
+              echo ""
+              echo "All notable changes to this project will be documented in this file."
+              echo ""
+              echo "## [Unreleased]"
+              echo ""
+              echo "*No unreleased changes.*"
+              echo ""
+              cat /tmp/changelog_entry.tmp
+            } > CHANGELOG.md
+          fi
+          rm -f /tmp/changelog_entry.tmp
+          git add CHANGELOG.md
+        fi
+
         git add pyproject.toml
         git commit -m "chore: release v${NEW}"
         git tag -a "v${NEW}" -m "Release v${NEW}"
