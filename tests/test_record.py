@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import sys
-from pathlib import Path
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -63,11 +62,11 @@ def test_alexa_record_command(
     mock_start_capture.return_value = mock_proc
 
     # Mock stdin/stdout timeout helper to return some bytes
-    with patch(
-        "alexa_custom.record._read_with_timeout"
-    ) as mock_read_with_timeout:
+    with patch("alexa_custom.record._read_with_timeout") as mock_read_with_timeout:
         # Mock _read_with_timeout to return some mock raw data
-        mock_read_with_timeout.side_effect = lambda stdout, nbytes, timeout: b"\x00" * nbytes
+        mock_read_with_timeout.side_effect = lambda stdout, nbytes, timeout: (
+            b"\x00" * nbytes
+        )
 
         out_file = tmp_path / "test_records.txt"
         test_text = "test_reference_text"
@@ -103,8 +102,12 @@ def test_alexa_record_command(
 
     # Assert say was called for each level
     assert mock_tts.say.call_count == 10
-    mock_tts.say.assert_any_call("imposto il microfono a 0.1, prego registra testo per 0.1 secondi")
-    mock_tts.say.assert_any_call("imposto il microfono a 1.0, prego registra testo per 0.1 secondi")
+    mock_tts.say.assert_any_call(
+        "imposto il microfono a 0.1, prego registra testo per 0.1 secondi"
+    )
+    mock_tts.say.assert_any_call(
+        "imposto il microfono a 1.0, prego registra testo per 0.1 secondi"
+    )
 
     # Assert play_wake_beep was called 10 times
     assert mock_play_wake_beep.call_count == 10
