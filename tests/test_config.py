@@ -254,6 +254,41 @@ class TestExampleConfig:
         assert result is not None
         assert result.wake_words, "example config should define at least one wake word"
 
+    def test_example_config_uses_documented_defaults(self, tmp_path):
+        """conf.example/config.yaml should use the documented default values for
+        all settings, so it can serve as the true source of defaults and doesn't
+        silently drift from the code."""
+        from alexa_custom.config import load_config
+
+        # Load the example config to see what it specifies
+        example = load_config("conf.example/config.yaml")
+        assert example is not None
+
+        # Load a minimal config with only required fields to get dataclass defaults
+        minimal_path = write_file(
+            tmp_path,
+            "minimal.yaml",
+            """\
+wake_words:
+  - word: test
+""",
+        )
+        minimal = load_config(str(minimal_path))
+        assert minimal is not None
+
+        # Check that documented numeric and boolean fields match defaults.
+        # These are the fields most likely to drift in a copy-paste edit.
+        checks = [
+            ("command_timeout", example.recognition.command_timeout, minimal.recognition.command_timeout),
+            ("output_volume", example.audio.output_volume, minimal.audio.output_volume),
+            ("input_gain", example.audio.input_gain, minimal.audio.input_gain),
+        ]
+        for field_name, example_val, default_val in checks:
+            assert example_val == default_val, (
+                f"Example {field_name}={example_val} should match default {default_val}. "
+                f"Update conf.example/config.yaml to match the code."
+            )
+
 
 # ---------------------------------------------------------------------------
 # _parse_stt_config tests (task 10.4)
