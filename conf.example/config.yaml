@@ -138,12 +138,12 @@ actions:
 # Visual display feedback (Arduino UNO Q only)
 # ---------------------------------------------------------------------------
 # Uses the board's built-in LED matrix (8×13) and RGB LEDs.
-# Omit this section to disable visual feedback entirely.
-# display:
-#   enabled: true
-#   backend: auto           # auto | bridge | gpio | mock
-#   matrix_brightness: 50   # 0-100
-#   led_brightness: 50      # 0-100
+# Set enabled to false or omit this section to disable visual feedback entirely.
+display:
+  enabled: false
+  backend: auto           # auto | bridge | gpio | mock | i2c
+  matrix_brightness: 50   # 0-100
+  led_brightness: 50      # 0-100
 
 # ---------------------------------------------------------------------------
 # System tuning
