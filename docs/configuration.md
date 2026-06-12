@@ -129,8 +129,10 @@ audio:
   card_name: NewPie         # ALSA card name substring for hardware PCM restore
   input_device: pipewire    # PipeWire source substring, or 'pipewire' for system default
   output_device: pipewire   # PipeWire sink substring, or 'pipewire' for system default
-  output_volume: 0.5        # speaker volume 0.0–1.0 (persisted by WirePlumber via wpctl)
-  input_gain: 1.0           # microphone gain multiplier
+  output_volume: 0.5        # speaker volume 0.0–1.0 (applied digitally to in-app audio;
+                             # does not change the system mixer or PipeWire sink volume)
+  input_gain: 1.0           # microphone gain: hardware source volume via pactl at runtime,
+                             # with software scaling as fallback when NewPie source is not found
   mic_gain: 300             # ALSA PCM mic gain percent, applied by 'task audio:setup'
   post_playback_ms: 100     # STT gate hold after playback ends (echo decay)
   tone_preroll_ms: 300      # silence before tones to cover PipeWire cold-start

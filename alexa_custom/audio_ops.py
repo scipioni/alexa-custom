@@ -12,6 +12,8 @@ from alexa_custom.audio_hw import (
     get_output_volume,
     get_post_playback_ms,
     get_tone_preroll_ms,
+    save_volume_config,
+    set_output_volume,
 )
 
 logger = logging.getLogger(__name__)
@@ -54,15 +56,15 @@ def _play_array(audio: np.ndarray, samplerate: int) -> None:
     import tempfile
     import wave as _wave
 
-    # Digitally scale the audio by the global output volume
-    audio = audio * get_output_volume()
-
     channels = audio.shape[1] if audio.ndim > 1 else 1
     frames = audio.shape[0]
     duration_s = frames / samplerate
     play_timeout = min(max(duration_s * 3 + 5, 8), 30)
 
-    pcm16 = np.clip(np.ascontiguousarray(audio) * 32767, -32768, 32767).astype(np.int16)
+    volume = get_output_volume()
+    pcm16 = np.clip(np.ascontiguousarray(audio) * volume * 32767, -32768, 32767).astype(
+        np.int16
+    )
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=".wav")
     try:
         os.close(tmp_fd)
@@ -111,9 +113,9 @@ def _play_raw(data: bytes, samplerate: int, channels: int) -> None:
     duration_s = frames / samplerate
     play_timeout = min(max(duration_s * 3 + 5, 8), 30)
 
-    pcm16 = np.clip(
-        np.frombuffer(data, dtype=np.float32) * 32767, -32768, 32767
-    ).astype(np.int16)
+    volume = get_output_volume()
+    samples = np.frombuffer(data, dtype=np.float32)
+    pcm16 = np.clip(samples * volume * 32767, -32768, 32767).astype(np.int16)
     tmp_fd, tmp_path = tempfile.mkstemp(suffix=".wav")
     try:
         os.close(tmp_fd)
@@ -150,11 +152,17 @@ def _play_raw(data: bytes, samplerate: int, channels: int) -> None:
 
 
 def play_wav_file(file_path: str) -> None:
-    """Play a WAV file via pw-play (native PipeWire) or aplay (ALSA fallback)."""
-    if _PW_PLAY:
-        cmd = [_PW_PLAY, f"--volume={get_output_volume():.4f}", file_path]
-    else:
-        cmd = ["aplay", "-D", "pipewire", "-q", file_path]
+    """Play a WAV file via pw-play (native PipeWire) or aplay (ALSA fallback).
+
+    Volume attenuation is applied digitally via ``get_output_volume()`` in
+    ``_play_array`` — that is the single source of output-volume control.
+    The system mixer is intentionally not driven by ``output_volume``.
+    """
+    cmd = (
+        [_PW_PLAY, file_path]
+        if _PW_PLAY
+        else ["aplay", "-D", "pipewire", "-q", file_path]
+    )
 
     with _audio_lock:
         _playback_active.set()
@@ -356,3 +364,14 @@ def play_call_end() -> None:
     """Two falling tones — call ended."""
     play_beep(900, 120)
     play_beep(600, 180)
+
+
+def set_output_volume_direct(volume: float) -> None:
+    """Set output volume without requiring pulsectl connection.
+
+    Delegates to set_output_volume() which handles wpctl, PCM restore,
+    and writes to the canonical audio_hw._OUTPUT_VOLUME so that
+    get_output_volume() returns the correct value.
+    """
+    set_output_volume(None, None, max(0.0, min(1.0, volume)))
+    save_volume_config(volume)

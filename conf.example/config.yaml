@@ -2,6 +2,7 @@
 #
 # Copy to conf/config.yaml and edit as needed.
 # Credentials (LiveKit, Telegram, LLM, MQTT passwords) go in conf/secrets.yaml.
+# Per-user additions (extra wake words) go in conf/user.yaml (see user.yaml.example).
 # This file is hot-reloaded every ~system.config_poll_interval seconds.
 
 # ---------------------------------------------------------------------------
@@ -10,12 +11,8 @@
 # Per-group triggers (wake_triggers in action files) override the global list.
 # ---------------------------------------------------------------------------
 wake_words:
-  - word: "galileo"
-    # id: galileo          # stable key used in wake_triggers (defaults to word)
-    # aliases: ["ehi galileo", "hey galileo"]
-    lang: "it-IT"
-  - word: "assistente"
-
+  - word: "ascolta assistente"
+    aliases: ["ehi galileo", "ehi sofia"]
   # For emergency-style wake words prefer multi-word phrases so a single
   # utterance in normal conversation does not trigger the assistant.
   # - word: "aiuto aiuto"
@@ -27,13 +24,25 @@ wake_words:
 recognition:
   mode: two-stage         # two-stage | single-stage
   command_timeout: 2.5    # seconds to listen after wake word (two-stage only)
+  # command_max_timeout: 8.0  # absolute cap on stage-2 capture; the window slides
+  #   while the user keeps speaking so commands aren't cut off mid-sentence.
+  #   Set to 0 to disable sliding (command_timeout becomes a hard deadline).
   wake_tone: wake         # tone on wake: wake | startup | success | error | info | warning | none
+  partial_matching: true        # scan Vosk partials for (wake+trigger) combos; fires immediately on stable match (default true)
+  # partial_stability_ms: 150     # min ms a partial match must be stable before firing
+  # partial_stability_reads: 3    # min consecutive matching partial reads before firing
+  matching_algorithm: token_set_ratio  # token_set_ratio | levenshtein | ratio
+  matching_threshold: 70.0             # similarity threshold (0-100)
+  reply_matching_algorithm: levenshtein  # token_set_ratio | levenshtein | ratio
+  reply_matching_threshold: 80.0         # similarity threshold (0-100)
 
 # ---------------------------------------------------------------------------
 # STT — speech-to-text
 # ---------------------------------------------------------------------------
 stt:
   vad_silence_ms: 500     # idle ms after last speech before command window closes
+  # flush_ms: 300         # audio discarded after the wake beep (absorbs speaker echo);
+  #   lower if you speak immediately after the beep, raise if echo retriggers STT
 
   stage1:                  # continuous wake-word detection (low CPU)
     backend: vosk          # vosk | sherpa-onnx
@@ -43,7 +52,9 @@ stt:
     #   first — gate on the first decoded token only (original behaviour, safe default)
     #   min   — every token must clear the bar; strictest, best against partial matches
     #   mean  — average across all tokens; moderate trade-off
-    vad_silence_ms: 500    # stage-1 force-finalize after this many ms of silence
+    vad_silence_ms: 900    # stage-1 force-finalize after this many ms of silence
+    #   Raise this value if you speak wake word + command in one breath (mode 2):
+    #   the window must be wide enough to bridge the natural pause between them.
     rms_threshold: 0.02    # stage-1 minimum RMS energy considered speech
     min_speech_ms: 200     # minimum sustained speech before silence timer starts
     # vosk_grammar: false    # restrict Vosk to wake-word vocabulary (grammar mode)
@@ -72,7 +83,7 @@ audio:
   input_device: pipewire   # PipeWire source name substring, or 'pipewire' for default
   output_device: pipewire  # PipeWire sink name substring, or 'pipewire' for default
   output_volume: 0.5       # speaker volume 0.0–1.0 (set via wpctl, persisted by WirePlumber)
-  input_gain: 1.0          # microphone gain multiplier (values > 1.0 boost mic, e.g. 3.0 = 300%)
+  input_gain: 3.0          # microphone gain multiplier (values > 1.0 boost mic, e.g. 3.0 = 300%)
   post_playback_ms: 100    # STT gate hold after playback ends (lets echo decay)
   tone_preroll_ms: 300     # silence before tones/beeps (covers PipeWire cold-start)
   sample_rates:

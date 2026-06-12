@@ -1,0 +1,17 @@
+# conf/user.yaml — optional per-user overrides, not tracked by git
+#
+# Wake words defined here are merged with those in conf/config.yaml.
+# Groups whose 'id' (or 'word' if no id is set) already exists in config.yaml
+# are silently skipped — config.yaml always wins on conflicts.
+# This file is hot-reloaded alongside config.yaml.
+
+# ---------------------------------------------------------------------------
+# Extra wake words (optional)
+# ---------------------------------------------------------------------------
+
+wake_words:
+  - word: "aiuto"
+    id: help          # stable key used in wake_triggers (defaults to word)
+    aliases:
+      - "aiutami"   # alternative phrase that maps to the same group
+    skip_unmatched_inline: true   # if true, silently ignore when wake+command fires but command matches no trigger

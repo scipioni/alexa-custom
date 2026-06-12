@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import difflib
 import logging
 import os
 import re
@@ -72,35 +71,83 @@ class TelegramClient:
     # Future: async def start_polling(self, handler) -> None: ...
 
 
-try:
-    from rapidfuzz import fuzz as _fuzz
+_TRIGGER_THRESHOLD = 70.0
 
-    def _trigger_score(a: str, b: str) -> float:
-        return _fuzz.token_set_ratio(a, b)
 
-    _TRIGGER_THRESHOLD = 70.0
-except ImportError:
-    logger.warning(
-        "rapidfuzz not installed; falling back to difflib for trigger matching"
-    )
+def levenshtein_distance(s1: str, s2: str) -> int:
+    """Calculate the Levenshtein distance between two strings using dynamic programming."""
+    if len(s1) < len(s2):
+        return levenshtein_distance(s2, s1)
+    if len(s2) == 0:
+        return len(s1)
 
-    def _trigger_score(a: str, b: str) -> float:  # type: ignore[misc]
-        return difflib.SequenceMatcher(None, a, b).ratio() * 100
+    previous_row = list(range(len(s2) + 1))
+    for i, c1 in enumerate(s1):
+        current_row = [i + 1]
+        for j, c2 in enumerate(s2):
+            insertions = previous_row[j + 1] + 1
+            deletions = current_row[j] + 1
+            substitutions = previous_row[j] + (0 if c1 == c2 else 1)
+            current_row.append(min(insertions, deletions, substitutions))
+        previous_row = current_row
+    return previous_row[-1]
 
-    _TRIGGER_THRESHOLD = 70.0
+
+def get_similarity_score(a: str, b: str, algorithm: str) -> float:
+    """Calculate a similarity score (0.0 - 100.0) between two strings based on algorithm."""
+    if not a or not b:
+        return 0.0
+
+    # 1. Try using rapidfuzz
+    try:
+        from rapidfuzz import fuzz as _fuzz
+        from rapidfuzz.distance import Levenshtein as _lev
+
+        if algorithm == "levenshtein":
+            max_len = max(len(a), len(b))
+            if max_len == 0:
+                return 100.0
+            dist = _lev.distance(a, b)
+            return (1.0 - (dist / max_len)) * 100.0
+        elif algorithm == "ratio":
+            return _fuzz.ratio(a, b)
+        else:  # "token_set_ratio"
+            return _fuzz.token_set_ratio(a, b)
+
+    # 2. Fall back if rapidfuzz is not installed
+    except ImportError:
+        if algorithm == "levenshtein":
+            max_len = max(len(a), len(b))
+            if max_len == 0:
+                return 100.0
+            dist = levenshtein_distance(a, b)
+            return (1.0 - (dist / max_len)) * 100.0
+        else:  # "ratio" or "token_set_ratio" fallback
+            import difflib
+
+            return difflib.SequenceMatcher(None, a, b).ratio() * 100.0
 
 
 def match_trigger(
     transcript: str,
     triggers: list[Trigger],
     threshold: float = _TRIGGER_THRESHOLD,
+    algorithm: str = "token_set_ratio",
 ) -> Trigger | None:
     best: Trigger | None = None
     best_score = 0.0
     t_phon = italian_phonetic(transcript)
     for trigger in triggers:
         phrases = [trigger.phrase] + trigger.aliases
-        score = max(_trigger_score(t_phon, italian_phonetic(p)) for p in phrases)
+        scores = []
+        for p in phrases:
+            p_phon = italian_phonetic(p)
+            if len(p_phon) < 4:
+                score = 100.0 if t_phon == p_phon else 0.0
+            else:
+                score = get_similarity_score(t_phon, p_phon, algorithm)
+            scores.append(score)
+        score = max(scores)
         if score > best_score:
             best_score = score
             best = trigger
@@ -327,7 +374,18 @@ async def handle_ask(
 
     transcript = await listen_task
     if transcript:
-        reply_trigger = match_trigger(transcript, action.on_reply)
+        algo = "levenshtein"
+        threshold = 80.0
+        if actions_config is not None:
+            algo = actions_config.recognition.reply_matching_algorithm
+            threshold = actions_config.recognition.reply_matching_threshold
+
+        reply_trigger = match_trigger(
+            transcript,
+            action.on_reply,
+            threshold=threshold,
+            algorithm=algo,
+        )
         if reply_trigger:
             logger.info(f"Matched reply trigger: '{reply_trigger.phrase}'")
             if on_stt_event:
@@ -404,6 +462,65 @@ async def handle_tone(action: ActionEntry, **_):
 
     name = action.params.get("name", "info")
     await asyncio.to_thread(play_tone, name)
+
+
+@registry.register("set_volume")
+async def handle_set_volume(action: ActionEntry, **_):
+    import pulsectl
+
+    from alexa_custom.audio import play_tone
+    from alexa_custom.audio_hw import (
+        get_output_volume,
+        save_volume_config,
+        set_output_volume,
+    )
+
+    mode = action.params.get("mode", "absolute")
+    step = float(action.params.get("step", 0.1))
+    value = float(action.params.get("value", 0.5))
+
+    current = get_output_volume()
+    if mode == "up":
+        new_vol = min(1.0, current + step)
+    elif mode == "down":
+        new_vol = max(0.0, current - step)
+    else:
+        new_vol = max(0.0, min(1.0, value))
+
+    if abs(new_vol - current) < 0.001:
+        return
+
+    with pulsectl.Pulse("alexa-volume") as pulse:
+        set_output_volume(pulse, None, new_vol)
+    save_volume_config(new_vol)
+    await asyncio.to_thread(play_tone, "info")
+
+
+@registry.register("set_volume_from_transcript")
+async def handle_set_volume_from_transcript(transcript: str | None = None, **_):
+    from alexa_custom.audio import play_tone
+    from alexa_custom.audio_hw import save_volume_config, set_output_volume
+    from alexa_custom.number_parser import parse_percentage
+
+    if not transcript:
+        logger.debug("set_volume_from_transcript: no transcript, skipping")
+        return
+
+    value = parse_percentage(transcript)
+    if value is None:
+        logger.debug(
+            "set_volume_from_transcript: no percentage found in '%s', skipping",
+            transcript,
+        )
+        return
+
+    import pulsectl
+
+    with pulsectl.Pulse("alexa-volume") as pulse:
+        set_output_volume(pulse, None, value)
+    save_volume_config(value)
+    logger.info("Set volume to %.0f%% via '%s'", value * 100, transcript)
+    await asyncio.to_thread(play_tone, "info")
 
 
 @registry.register("shell")

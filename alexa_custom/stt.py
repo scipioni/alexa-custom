@@ -43,6 +43,7 @@ from alexa_custom.stt_phonetics import (
     _approx_wake_match,
     _resolve_triggers,
     _build_alias_map,
+    build_intent_map,
 )
 from alexa_custom.stt_gating import (
     _CHUNK,
@@ -50,6 +51,7 @@ from alexa_custom.stt_gating import (
     _read_with_timeout,
     _drain_pipe,
     _downmix_to_mono,
+    _apply_input_gain,
     resolve_capture_source,
     start_capture,
     _iter_gated_audio,
@@ -75,11 +77,13 @@ __all__ = [
     "_read_with_timeout",
     "_drain_pipe",
     "_downmix_to_mono",
+    "_apply_input_gain",
     "resolve_capture_source",
     "start_capture",
     "_iter_gated_audio",
     "run_stt_worker",
     "_extract_wake_command",
+    "_match_full_intent",
     "capture_transcript",
     "start_stt_thread",
 ]
@@ -288,8 +292,10 @@ def _extract_wake_command(
     norm_text = normalize_text(text)
     for norm_phrase, group in alias_map.items():
         if norm_text.startswith(norm_phrase):
-            command = text.lower().replace(norm_phrase, "", 1).strip()
-            return group, command
+            rest = norm_text[len(norm_phrase) :]
+            if rest and not rest.startswith(" "):
+                continue  # prefix of a longer word — not a valid wake boundary
+            return group, rest.strip()
     if fuzzy:
         group = _approx_wake_match(text, alias_map)
         if group:
@@ -300,6 +306,30 @@ def _extract_wake_command(
                 command = command.replace(w, "", 1).strip()
             return group, command
     return None, ""
+
+
+def _match_full_intent(
+    partial: str,
+    alias_map: dict[str, WakeWordGroup],
+    intent_map: dict[str, tuple[WakeWordGroup, Trigger]],
+) -> tuple[WakeWordGroup, Trigger, str] | None:
+    """Return (group, trigger, inline_cmd) if partial matches a complete (wake + trigger) intent.
+
+    Uses exact matching only — fuzzy is never applied on partial transcripts.
+    Returns None if only a wake word is present or the command is not a known trigger.
+    """
+    wake_group, inline_cmd = _extract_wake_command(partial, alias_map, fuzzy=False)
+    if wake_group is None or not inline_cmd:
+        return None
+    norm_cmd = normalize_text(inline_cmd)
+    for norm_wake, group in alias_map.items():
+        if group is not wake_group:
+            continue
+        key = normalize_text(f"{norm_wake} {norm_cmd}")
+        if key in intent_map:
+            matched_group, trigger = intent_map[key]
+            return matched_group, trigger, inline_cmd
+    return None
 
 
 def capture_transcript(
@@ -313,8 +343,15 @@ def capture_transcript(
     phrases: list[str] | None = None,
     start_after_playback: bool = False,
     vad_silence_ms: int | None = None,
+    hard_timeout: float | None = None,
 ) -> str:
-    """Capture audio for a set duration and return the transcribed text."""
+    """Capture audio for a set duration and return the transcribed text.
+
+    `timeout` is the window of allowed inactivity: it bounds both the wait for
+    speech to start and — when `hard_timeout` is set — slides forward while
+    speech continues, so the user is not cut off mid-sentence. `hard_timeout`
+    is the absolute cap on the whole capture.
+    """
     assert proc.stdout is not None
     drained = _drain_pipe(proc)
     if drained:
@@ -336,6 +373,11 @@ def capture_transcript(
     else:
         backend.reset()
     deadline = time.monotonic() + timeout
+    hard_deadline = (
+        time.monotonic() + hard_timeout
+        if hard_timeout is not None and hard_timeout > timeout
+        else None
+    )
     transcript_parts: list[str] = []
     was_playing = False
     last_partial = ""
@@ -366,12 +408,14 @@ def capture_transcript(
             was_playing = False
             if start_after_playback:
                 deadline = time.monotonic() + timeout
+                if hard_timeout is not None and hard_timeout > timeout:
+                    hard_deadline = time.monotonic() + hard_timeout
             last_partial = ""
             last_activity = time.monotonic()
             got_speech = False
             continue
 
-        data = _downmix_to_mono(raw_data, channels)
+        data = _apply_input_gain(_downmix_to_mono(raw_data, channels))
 
         if on_stt_event:
             on_stt_event("level", {"mic": _rms_level(data)})
@@ -400,6 +444,9 @@ def capture_transcript(
                     if on_stt_event:
                         full = " ".join(transcript_parts + [partial])
                         on_stt_event("partial", {"text": full})
+
+        if got_speech and hard_deadline is not None:
+            deadline = min(hard_deadline, max(deadline, last_activity + timeout))
 
         _effective_vad_ms = (
             vad_silence_ms if vad_silence_ms is not None else _VAD_SILENCE_MS
@@ -510,7 +557,12 @@ def _single_stage_loop(
             continue
 
         triggers = _resolve_triggers(wake_group, config.triggers)
-        trigger = match_trigger(command, triggers)
+        trigger = match_trigger(
+            command,
+            triggers,
+            algorithm=config.recognition.matching_algorithm,
+            threshold=config.recognition.matching_threshold,
+        )
         if trigger is None:
             if on_stt_event:
                 on_stt_event("nomatch", {"transcript": command})
@@ -591,6 +643,7 @@ def _recognition_loop(
     _eff_vad_ms = config.stt.vad_silence_ms
 
     alias_map = _build_alias_map(config.wake_words)
+    intent_map = build_intent_map(alias_map, config.triggers)
     is_vosk = isinstance(stage1_backend, VoskSTT)
     is_kws = isinstance(stage1_backend, SherpaKeywordSpotter)
     vosk_use_grammar = config.stt.stage1.vosk_grammar
@@ -614,6 +667,9 @@ def _recognition_loop(
     was_gated = False
     stage1_last_speech_t = 0.0
     stage1_speech_ms = 0.0
+    _partial_stable_key: tuple | None = None
+    _partial_stable_reads: int = 0
+    _partial_stable_since: float = 0.0
 
     if on_stt_event:
         on_stt_event(
@@ -626,10 +682,20 @@ def _recognition_loop(
             f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "idle", loop=loop
         )
 
+    def _reset_stage1_state() -> None:
+        nonlocal stage1_last_speech_t, stage1_speech_ms
+        nonlocal _partial_stable_key, _partial_stable_reads, _partial_stable_since
+        stage1_last_speech_t = 0.0
+        stage1_speech_ms = 0.0
+        _partial_stable_key = None
+        _partial_stable_reads = 0
+        _partial_stable_since = 0.0
+
     if is_vosk:
 
         def _on_playback_end() -> None:
             stage1.Reset()
+            _reset_stage1_state()
     elif is_kws:
 
         def _on_playback_end() -> None:
@@ -637,10 +703,8 @@ def _recognition_loop(
     else:
 
         def _on_playback_end() -> None:
-            nonlocal stage1_last_speech_t, stage1_speech_ms
             stage1_backend.reset()
-            stage1_last_speech_t = 0.0
-            stage1_speech_ms = 0.0
+            _reset_stage1_state()
 
     for data in _iter_gated_audio(
         proc, channels, stop_event, on_playback_end=_on_playback_end, name="two-stage"
@@ -684,12 +748,12 @@ def _recognition_loop(
         if time.monotonic() < cooldown_until:
             if is_vosk:
                 stage1.Reset()
+                _reset_stage1_state()
             elif is_kws:
                 stage1_backend.reset()
             else:
                 stage1_backend.reset()
-                stage1_last_speech_t = 0.0
-                stage1_speech_ms = 0.0
+                _reset_stage1_state()
             continue
 
         if is_kws:
@@ -738,10 +802,64 @@ def _recognition_loop(
                 stage1_last_speech_t = time.monotonic()
                 stage1_speech_ms += chunk_ms
 
-            if on_stt_event:
-                partial = json.loads(stage1.PartialResult()).get("partial", "").strip()
-                if partial:
-                    on_stt_event("transcribing", {"text": partial})
+            partial = json.loads(stage1.PartialResult()).get("partial", "").strip()
+            if on_stt_event and partial:
+                on_stt_event("transcribing", {"text": partial})
+
+            if partial and config.recognition.partial_matching and not vosk_use_grammar:
+                intent_result = _match_full_intent(partial, alias_map, intent_map)
+                if intent_result is not None:
+                    intent_key = (intent_result[0].word, intent_result[1].phrase)
+                    if intent_key == _partial_stable_key:
+                        _partial_stable_reads += 1
+                        elapsed_ms = (time.monotonic() - _partial_stable_since) * 1000
+                        if (
+                            _partial_stable_reads
+                            >= config.recognition.partial_stability_reads
+                            and elapsed_ms >= config.recognition.partial_stability_ms
+                        ):
+                            wake_group, trigger, inline_cmd = intent_result
+                            logger.debug("Streaming intent fired: %r", partial)
+                            _reset_stage1_state()
+                            stage1.Reset()
+                            _wake_detected(
+                                wake_group=wake_group,
+                                proc=proc,
+                                channels=channels,
+                                pre_transcript=inline_cmd,
+                                backend=stage2_backend,
+                                config=config,
+                                stop_event=stop_event,
+                                telegram_client=telegram_client,
+                                livekit_connect_fn=livekit_connect_fn,
+                                livekit_connected_flag=livekit_connected_flag,
+                                on_stt_event=on_stt_event,
+                                mqtt_client=mqtt_client,
+                                loop=loop,
+                                dispatch_loop=dispatch_loop,
+                                vad_silence_ms=_eff_vad_ms,
+                            )
+                            _drain_pipe(proc)
+                            if on_stt_event:
+                                on_stt_event(
+                                    "listening",
+                                    {"wake_words": [g.word for g in config.wake_words]},
+                                )
+                            if mqtt_client:
+                                mqtt_client.publish_threadsafe(
+                                    f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
+                                    "idle",
+                                    loop=loop,
+                                )
+                            continue
+                    else:
+                        _partial_stable_key = intent_key
+                        _partial_stable_reads = 1
+                        _partial_stable_since = time.monotonic()
+                else:
+                    _partial_stable_key = None
+                    _partial_stable_reads = 0
+                    _partial_stable_since = 0.0
 
             vad_triggered = (
                 stage1_speech_ms >= _eff_stage1_min_speech_ms
@@ -760,11 +878,20 @@ def _recognition_loop(
                 logger.debug("Stage1 Vosk force-finalized by software VAD")
             else:
                 result = json.loads(stage1.Result())
-                rms_gate = config.stt.stage1.rms_threshold
+                # The chunk that fires the Vosk endpoint is usually trailing
+                # silence, so gating its RMS would reject valid wakes. Skip the
+                # chunk gate when the speech tracker already saw enough speech
+                # across the utterance.
+                rms_gate = (
+                    0.0
+                    if stage1_speech_ms >= _eff_stage1_min_speech_ms
+                    else config.stt.stage1.rms_threshold
+                )
 
             stage1_last_speech_t = 0.0
             stage1_speech_ms = 0.0
 
+            inline_cmd = ""
             if vosk_use_grammar:
                 wake_match = _vosk_check_result(
                     data,
@@ -778,12 +905,46 @@ def _recognition_loop(
                 text = result.get("text", "").strip()
                 logger.debug("Stage1 Vosk free-vocab result: %r", text)
                 wake_match, inline_cmd = (
-                    _extract_wake_command(text, alias_map, fuzzy=True)
+                    _extract_wake_command(text, alias_map, fuzzy=False)
                     if text
                     else (None, "")
                 )
 
             if wake_match is not None:
+                if wake_match.skip_unmatched_inline:
+                    if not inline_cmd:
+                        logger.debug(
+                            "skip_unmatched_inline: standalone wake %r with no command — skipping",
+                            wake_match.word,
+                        )
+                        if on_stt_event:
+                            on_stt_event(
+                                "skipped",
+                                {"word": wake_match.word, "text": ""},
+                            )
+                        _reset_stage1_state()
+                        stage1.Reset()
+                        continue
+                    triggers = _resolve_triggers(wake_match, config.triggers)
+                    if not match_trigger(
+                        inline_cmd,
+                        triggers,
+                        algorithm=config.recognition.matching_algorithm,
+                        threshold=config.recognition.matching_threshold,
+                    ):
+                        logger.debug(
+                            "skip_unmatched_inline: inline %r didn't match any trigger for %r",
+                            inline_cmd,
+                            wake_match.word,
+                        )
+                        if on_stt_event:
+                            on_stt_event(
+                                "skipped",
+                                {"word": wake_match.word, "text": inline_cmd},
+                            )
+                        _reset_stage1_state()
+                        stage1.Reset()
+                        continue
                 _wake_detected(
                     wake_group=wake_match,
                     proc=proc,
@@ -798,6 +959,7 @@ def _recognition_loop(
                     mqtt_client=mqtt_client,
                     loop=loop,
                     dispatch_loop=dispatch_loop,
+                    vad_silence_ms=_eff_vad_ms,
                     pre_transcript=inline_cmd,
                 )
                 logger.debug(
@@ -805,8 +967,7 @@ def _recognition_loop(
                     f"was_gated={was_gated}"
                 )
                 _drain_pipe(proc)
-                stage1_last_speech_t = 0.0
-                stage1_speech_ms = 0.0
+                _reset_stage1_state()
                 stage1 = _make_stage1_recognizer()
                 if on_stt_event:
                     on_stt_event(
@@ -825,6 +986,7 @@ def _recognition_loop(
                     logger.debug(
                         f"two-stage: drained {backlog} backlog bytes after segment"
                     )
+                _reset_stage1_state()
                 stage1.Reset()
         else:
             chunk_ms = len(data) / (16000 * 2) * 1000
@@ -935,8 +1097,9 @@ def _wake_detected(
             config.recognition.command_timeout,
             stop_event,
             on_stt_event,
-            flush_ms=300,
+            flush_ms=config.stt.flush_ms,
             vad_silence_ms=vad_silence_ms,
+            hard_timeout=config.recognition.command_max_timeout,
         )
     logger.info(f"Command transcript: '{transcript}'")
 
@@ -948,10 +1111,7 @@ def _wake_detected(
     if not transcript:
         if on_stt_event:
             on_stt_event("nomatch", {"transcript": ""})
-        if config.llm and config.llm.fallback_on_no_match:
-            pass
-        else:
-            _play_timeout()
+        _play_timeout()
         return
 
     if mqtt_client:
@@ -965,7 +1125,12 @@ def _wake_detected(
         )
 
     triggers = _resolve_triggers(wake_group, config.triggers)
-    trigger = match_trigger(transcript, triggers)
+    trigger = match_trigger(
+        transcript,
+        triggers,
+        algorithm=config.recognition.matching_algorithm,
+        threshold=config.recognition.matching_threshold,
+    )
     if trigger is None:
         if on_stt_event:
             on_stt_event("nomatch", {"transcript": transcript})
