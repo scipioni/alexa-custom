@@ -669,7 +669,7 @@ class GpioLedDisplay(DisplayBackend):
 # Protocol: [0, msg_id, "method", [args]] / [1, msg_id, err, result]
 
 _BRIDGE_CMD_DEFAULT = os.environ.get("ALEXA_DISPLAY_CMD", "uart_bridge")
-_ROUTER_HOST = os.environ.get("ALEXA_DISPLAY_HOST", "192.168.9.43")
+_ROUTER_HOST = os.environ.get("ALEXA_DISPLAY_HOST", "127.0.0.1")
 _ROUTER_PORT = int(os.environ.get("ALEXA_DISPLAY_PORT", "7501"))
 
 
