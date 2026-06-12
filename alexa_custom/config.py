@@ -185,7 +185,7 @@ class ActionsDirectoryConfig:
 
 @dataclass
 class DisplayConfig:
-    enabled: bool = True
+    enabled: bool = False
     backend: str = "auto"  # auto | bridge | gpio | mock | i2c
     matrix_brightness: int = 50
     led_brightness: int = 50
