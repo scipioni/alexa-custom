@@ -6,6 +6,8 @@ from typing import Any, Awaitable, Callable
 
 import aiomqtt
 
+from alexa_custom import metrics
+
 logger = logging.getLogger(__name__)
 
 
@@ -71,10 +73,12 @@ class MQTTClient:
             except aiomqtt.MqttError as e:
                 logger.error(f"MQTT connection error: {e}. Retrying in 5 seconds...")
                 self.client = None
+                metrics.inc("mqtt_reconnects")
                 await asyncio.sleep(5)
             except Exception as e:
                 logger.error(f"Unexpected MQTT error: {e}")
                 self.client = None
+                metrics.inc("mqtt_reconnects")
                 await asyncio.sleep(5)
 
     async def _publish_discovery(self) -> None:

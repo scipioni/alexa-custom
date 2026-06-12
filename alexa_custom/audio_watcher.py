@@ -6,6 +6,7 @@ import time
 from typing import Callable
 import pulsectl
 
+from alexa_custom import metrics
 from alexa_custom.audio_hw import (
     enforce_audio_state,
     _restore_hw_pcm,
@@ -74,6 +75,7 @@ class AudioWatcher(threading.Thread):
         if ok != self.connected or conn != self.conn_type:
             if ok and not self.connected:
                 logger.info(f"Audio device {conn} connected and configured")
+                metrics.inc("audio_device_connects")
                 _restore_hw_pcm()
                 if self.output_volume > 0:
                     set_output_volume(pulse, self.output_spec, self.output_volume)
@@ -81,6 +83,7 @@ class AudioWatcher(threading.Thread):
 
             self.connected = ok
             self.conn_type = conn
+            metrics.set_gauge("audio_connected", 1.0 if ok else 0.0)
             invalidate_pipewire_device_cache()
             if self.on_status_change:
                 self.on_status_change(ok, conn)
