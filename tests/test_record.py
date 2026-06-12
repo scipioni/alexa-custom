@@ -103,8 +103,8 @@ def test_alexa_record_command(
 
     # Assert say was called for each level
     assert mock_tts.say.call_count == 10
-    mock_tts.say.assert_any_call("microfono a 0.1, prego registra testo")
-    mock_tts.say.assert_any_call("microfono a 1.0, prego registra testo")
+    mock_tts.say.assert_any_call("imposto il microfono a 0.1, prego registra testo per 0.1 secondi")
+    mock_tts.say.assert_any_call("imposto il microfono a 1.0, prego registra testo per 0.1 secondi")
 
     # Assert play_wake_beep was called 10 times
     assert mock_play_wake_beep.call_count == 10

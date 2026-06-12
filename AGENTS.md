@@ -14,6 +14,18 @@ LiveKit headless audio client turning a USB conference speakerphone into a voice
 
 When creating commits, do **not** add a `Co-Authored-By` trailer.
 
+## Semantic Versioning
+
+This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (MAJOR.MINOR.PATCH).
+
+| Bump type | When to use | Command |
+|-----------|-------------|---------|
+| **PATCH** (0.3.0 → 0.3.1) | Bug fixes, refactors, docs, performance — anything that doesn't add or remove public API | `task release:patch` |
+| **MINOR** (0.3.0 → 0.4.0) | New features that are backward-compatible | `task release:minor` |
+| **MAJOR** (1.0.0 → 2.0.0) | Breaking changes to API, configuration, or behaviour | `task release:major` |
+
+Only commits prefixed with `feat:` or `fix:` appear in the auto-generated changelog entry.
+
 ## Commands
 
 ```bash
@@ -27,7 +39,7 @@ task setup         # install systemd user service
 
 Manual entry points:
 ```bash
-alexa-client [--web-port PORT]             # main daemon
+alexa-client [--web-port PORT]             # main daemon (web dashboard with config panel)
 alexa-audio                              # mic→speaker loopback test
 alexa-devices                            # list audio devices
 alexa-setup                              # download/update STT models
@@ -150,6 +162,23 @@ triggers:
     actions:
       - type: livekit_join
 ```
+
+### Web Configuration Panel
+
+Access via the web dashboard (http://localhost:8080/config):
+- **Wake Words**: Add/remove wake words individually with delete buttons
+- **Recognition**: Adjust command timeout, matching thresholds, and partial matching
+- **Speech-to-Text**: Change STT backend and confidence thresholds
+- **Audio**: Set output volume and input gain
+- **Text-to-Speech**: Configure TTS backend and voice
+
+**Features**:
+- Developer-only feature (controlled by dev-mode toggle)
+- Real-time validation before saving
+- Hot-reload on save (restarts daemon)
+- Reset button to restore original values
+- Preserves YAML formatting and comments
+- File locking prevents concurrent edits
 
 ## Key dependencies
 

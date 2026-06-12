@@ -35,39 +35,37 @@ Requires **Python ≥ 3.13**.
 ## Quick Start
 
 ```bash
-<<<<<<< HEAD
-# 1. Setup virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
-=======
 # 1. Install system dependencies
 sudo apt install -y pulseaudio-utils pipewire python3-venv
->>>>>>> develop
 
-# 2. Install dependencies
+# 2. Setup virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
+
+# 3. Install dependencies
 pip install -e .                      # installs alexa-custom + core deps
 pip install smbus2                    # optional: I2C OLED display
 
-# 3. Download STT models
+# 4. Download STT models
 alexa-setup
 
-# 4. Configure USB audio (run once after first boot)
+# 5. Configure USB audio (run once after first boot)
 task audio:setup            # sets NewPie as default, installs PCM restore service
 task audio:status           # verify routing and endpoints
 
-# 5. Create config
+# 6. Create config
 mkdir -p conf/actions
 cp conf.example/config.yaml conf/config.yaml
 cp conf.example/secrets.yaml conf/secrets.yaml
 # Edit conf/secrets.yaml — add LiveKit, Telegram, LLM credentials
 # Edit conf/config.yaml  — set wake words, audio device, STT backend
 
-# 6. Install as a systemd service (recommended for headless use)
+# 7. Install as a systemd service (recommended for headless use)
 task setup
 sudo loginctl enable-linger arduino   # keep service alive when SSH disconnects
 systemctl --user start alexa-custom
 
-# 7. Or run manually
+# 8. Or run manually
 alexa-client                # web dashboard at http://<host>:8080
 ```
 
@@ -254,6 +252,18 @@ triggers:
 
 See `conf.example/config.yaml` and `conf.example/secrets.yaml` for the full reference.
 
+### Web Configuration Panel
+
+Access the configuration panel at `http://<host>:8080/config` (requires dev-mode toggle in the dashboard sidebar). From the panel you can:
+
+- **Wake Words**: Add or remove wake words individually with delete buttons
+- **Recognition**: Adjust `command_timeout`, `matching_threshold`, and `partial_matching`
+- **Speech-to-Text**: Switch between Vosk and sherpa-onnx backends, adjust confidence and RMS thresholds
+- **Audio**: Set output volume (0–1) and input gain
+- **Text-to-Speech**: Choose backend (piper/pico) and voice
+
+Changes are validated client-side and server-side before saving, preserve YAML comments and formatting via `ruamel.yaml`, and trigger hot-reload immediately. A file-locking mechanism prevents concurrent edit conflicts.
+
 ---
 
 ## Key Features
@@ -264,7 +274,7 @@ See `conf.example/config.yaml` and `conf.example/secrets.yaml` for the full refe
 - **Multi-file actions**: Drop `.yaml` files into `conf/actions/` for modular command sets; `system.yaml` always loads first.
 - **LLM learning**: Say "impara nuovo comando" to teach the assistant a new trigger via voice dialogue (stored in `conf/actions/learned.yaml`).
 - **Bidirectional MQTT**: Home Assistant Discovery support. Forward voice commands to HA and trigger local actions via MQTT.
-- **Web Dashboard**: Real-time browser UI — VU meters with RMS needle, STT status with wake-word badge, room status panel (closed / waiting / in call), live logs, restart button.
+- **Web Dashboard**: Real-time browser UI — VU meters with RMS needle, STT status with wake-word badge, room status panel (closed / waiting / in call), live logs, restart button. **Configuration panel** at `/config` for editing wake words, recognition thresholds, STT/TTS backends, and audio settings without SSH.
 - **PipeWire native**: Direct integration without PortAudio shims.
 - **LED Matrix Icons**: Animated icons on the built-in 8×13 LED matrix (scanning wave, hourglass, checkmark, etc.) with RGB LED feedback.
 
