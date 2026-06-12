@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import socket
 import sys
 import urllib.request
 import zipfile
@@ -83,11 +84,21 @@ def _progress(count: int, block_size: int, total: int) -> None:
 
 def _download(url: str, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
+    # urlretrieve has no timeout of its own; without this a stalled server hangs
+    # the downloader forever. setdefaulttimeout bounds each socket operation.
+    prev_timeout = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(60)
     try:
         urllib.request.urlretrieve(url, dest, reporthook=_progress)
     except Exception as exc:
         dest.unlink(missing_ok=True)
         print(f"\nDownload failed: {exc}", file=sys.stderr)
+        sys.exit(1)
+    finally:
+        socket.setdefaulttimeout(prev_timeout)
+    if dest.stat().st_size == 0:
+        dest.unlink(missing_ok=True)
+        print("\nDownload failed: received an empty file", file=sys.stderr)
         sys.exit(1)
     print()
 

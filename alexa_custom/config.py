@@ -408,6 +408,22 @@ def _parse_wake_word_groups(raw_groups: list[Any], source: str) -> list[WakeWord
 # ---------------------------------------------------------------------------
 
 
+def _get_float(raw: dict, key: str, default: float) -> float:
+    """float(raw[key]) but tolerant of a present-but-null value.
+
+    The web config editor can write `key: null` (e.g. a cleared numeric field),
+    and `float(None)` raises TypeError — which would otherwise break daemon
+    startup on the next cold load. Treat null/missing as the default.
+    """
+    value = raw.get(key)
+    return default if value is None else float(value)
+
+
+def _get_int(raw: dict, key: str, default: int) -> int:
+    value = raw.get(key)
+    return default if value is None else int(value)
+
+
 def _parse_audio_config(raw: dict) -> AudioConfig:
     webrtc_raw = raw.get("webrtc") or {}
     if not isinstance(webrtc_raw, dict):
@@ -428,13 +444,13 @@ def _parse_audio_config(raw: dict) -> AudioConfig:
         "internal": int(sample_rates_raw.get("internal", 48000)),
     }
 
-    output_volume = float(raw.get("output_volume", 0.5))
+    output_volume = _get_float(raw, "output_volume", 0.5)
     if not (0.0 <= output_volume <= 1.0):
         raise ConfigError(
             f"'audio.output_volume' must be between 0.0 and 1.0, got {output_volume}"
         )
 
-    input_gain = float(raw.get("input_gain", 1.0))
+    input_gain = _get_float(raw, "input_gain", 1.0)
     if input_gain < 0.0:
         raise ConfigError(f"'audio.input_gain' must be >= 0.0, got {input_gain}")
 
@@ -469,15 +485,15 @@ def _parse_stt_stage1_config(raw: dict) -> STTStage1Config:
     return STTStage1Config(
         backend=backend,
         model_path=str(model_path_raw) if model_path_raw else None,
-        confidence=float(raw.get("confidence", 0.65)),
+        confidence=_get_float(raw, "confidence", 0.65),
         confidence_mode=confidence_mode,
-        vad_silence_ms=int(raw.get("vad_silence_ms", 500)),
-        rms_threshold=float(raw.get("rms_threshold", 0.02)),
-        min_speech_ms=int(raw.get("min_speech_ms", 300)),
+        vad_silence_ms=_get_int(raw, "vad_silence_ms", 500),
+        rms_threshold=_get_float(raw, "rms_threshold", 0.02),
+        min_speech_ms=_get_int(raw, "min_speech_ms", 300),
         vosk_grammar=bool(raw.get("vosk_grammar", False)),
         keyword_spotter=bool(raw.get("keyword_spotter", False)),
-        keywords_score=float(raw.get("keywords_score", 1.0)),
-        keywords_threshold=float(raw.get("keywords_threshold", 0.25)),
+        keywords_score=_get_float(raw, "keywords_score", 1.0),
+        keywords_threshold=_get_float(raw, "keywords_threshold", 0.25),
     )
 
 
@@ -536,16 +552,16 @@ def _parse_recognition_config(raw: dict) -> RecognitionConfig:
         )
     return RecognitionConfig(
         mode=mode,
-        command_timeout=float(raw.get("command_timeout", 3.0)),
-        command_max_timeout=float(raw.get("command_max_timeout", 8.0)),
+        command_timeout=_get_float(raw, "command_timeout", 3.0),
+        command_max_timeout=_get_float(raw, "command_max_timeout", 8.0),
         wake_tone=str(raw.get("wake_tone", "wake")),
         partial_matching=bool(raw.get("partial_matching", True)),
-        partial_stability_ms=int(raw.get("partial_stability_ms", 150)),
-        partial_stability_reads=int(raw.get("partial_stability_reads", 3)),
+        partial_stability_ms=_get_int(raw, "partial_stability_ms", 150),
+        partial_stability_reads=_get_int(raw, "partial_stability_reads", 3),
         matching_algorithm=algo,
-        matching_threshold=float(raw.get("matching_threshold", 70.0)),
+        matching_threshold=_get_float(raw, "matching_threshold", 70.0),
         reply_matching_algorithm=reply_algo,
-        reply_matching_threshold=float(raw.get("reply_matching_threshold", 80.0)),
+        reply_matching_threshold=_get_float(raw, "reply_matching_threshold", 80.0),
     )
 
 
