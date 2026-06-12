@@ -6,11 +6,14 @@ import os
 
 logger = logging.getLogger(__name__)
 
-# Load libc to call sd_notify()
-try:
-    libc = ctypes.CDLL("libc.so.6")
-except OSError:
-    libc = None
+# Load libsystemd for sd_notify() — libc.so.6 on aarch64 often lacks it
+_lib = None
+for lib in ("libsystemd.so.0", "libsystemd.so", "libc.so.6"):
+    try:
+        _lib = ctypes.CDLL(lib)
+        break
+    except OSError:
+        pass
 
 
 def sd_notify(state: str) -> bool:
@@ -24,7 +27,7 @@ def sd_notify(state: str) -> bool:
     Returns True if the notification was sent (systemd socket exists),
     False otherwise (not running under systemd or notification failed).
     """
-    if not libc:
+    if not _lib:
         return False
 
     # sd_notify() only works if NOTIFY_SOCKET is set (systemd passes this)
@@ -35,7 +38,7 @@ def sd_notify(state: str) -> bool:
     try:
         # int sd_notify(int unset_environment, const char *state)
         # Return value: 0 if no NOTIFY_SOCKET, >0 if sent, <0 on error
-        result = libc.sd_notify(ctypes.c_int(0), ctypes.c_char_p(state_bytes))
+        result = _lib.sd_notify(ctypes.c_int(0), ctypes.c_char_p(state_bytes))
         if result > 0:
             logger.debug(f"sd_notify({state!r}) sent successfully")
             return True
