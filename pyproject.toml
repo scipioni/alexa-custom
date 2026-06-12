@@ -48,5 +48,25 @@ i2c = ["smbus2>=0.4.0"]
 dev = [
     "pytest>=9.0.3",
     "pytest-asyncio>=1.4.0",
+    "pyright>=1.1.390",
+    "ruff>=0.8.0",
     "smbus2>=0.4.0",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Markers are declared explicitly; keep strict mode so a forgotten
+# @pytest.mark.asyncio surfaces instead of silently passing.
+asyncio_mode = "strict"
+
+[tool.ruff]
+target-version = "py313"
+
+[tool.pyright]
+# Introduced on an existing codebase: run in basic mode and surface findings
+# without blocking CI yet (the type-check job is non-blocking). Drive the
+# error count to zero over time, then flip the job to required.
+include = ["alexa_custom"]
+pythonVersion = "3.13"
+typeCheckingMode = "basic"
+reportMissingImports = false
