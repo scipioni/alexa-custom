@@ -1,0 +1,1862 @@
+{
+  "addons/kernel/build_kernel_6.sh": {
+    "mtime": 1781088036.0836608,
+    "ast_hash": "74634021ab47fc2cb5a6f3b03e41c32b",
+    "semantic_hash": ""
+  },
+  "addons/sherpa-onnx/build-sherpa-onnx-unoq.sh": {
+    "mtime": 1781088036.0851774,
+    "ast_hash": "9317aa3328200f09f1bfea36910690fb",
+    "semantic_hash": ""
+  },
+  "addons/sherpa-onnx/transcribe_it.py": {
+    "mtime": 1781159070.6723788,
+    "ast_hash": "59c1f58db8580a5f84ed21fda97b3d90",
+    "semantic_hash": ""
+  },
+  "alexa_custom/__init__.py": {
+    "mtime": 1781257487.207564,
+    "ast_hash": "a532a8fc37f80f34cdb010c0a02a1c9f",
+    "semantic_hash": ""
+  },
+  "alexa_custom/_env.py": {
+    "mtime": 1781258482.7539904,
+    "ast_hash": "e907c41b01598f33a9868f6894f7d6df",
+    "semantic_hash": ""
+  },
+  "alexa_custom/actions.py": {
+    "mtime": 1781256179.7910502,
+    "ast_hash": "a24a65319e41038d3ecedb2b132138c1",
+    "semantic_hash": ""
+  },
+  "alexa_custom/audio.py": {
+    "mtime": 1781257487.2077625,
+    "ast_hash": "9e4e45caa407b2ac61da717e9e8903a2",
+    "semantic_hash": ""
+  },
+  "alexa_custom/audio_hw.py": {
+    "mtime": 1781258897.4294333,
+    "ast_hash": "b1b357087e4fdb64a68c1f8f0c8622e2",
+    "semantic_hash": ""
+  },
+  "alexa_custom/audio_ops.py": {
+    "mtime": 1781256179.7914581,
+    "ast_hash": "6ca2119bb83fb6c61397e2999ced0c48",
+    "semantic_hash": ""
+  },
+  "alexa_custom/audio_watcher.py": {
+    "mtime": 1781257704.8039186,
+    "ast_hash": "92c2343d613d8599cb6cab4eca190e45",
+    "semantic_hash": ""
+  },
+  "alexa_custom/autogain.py": {
+    "mtime": 1781258897.4286456,
+    "ast_hash": "0c261c1581dd58d92c40c60b68e41781",
+    "semantic_hash": ""
+  },
+  "alexa_custom/client.py": {
+    "mtime": 1781257487.2079508,
+    "ast_hash": "cb22c2f9a6621c52b7e6bf8b98742e8a",
+    "semantic_hash": ""
+  },
+  "alexa_custom/config.py": {
+    "mtime": 1781257487.2080991,
+    "ast_hash": "47327b5eb1368e7337fbd68533e6e247",
+    "semantic_hash": ""
+  },
+  "alexa_custom/config_manager.py": {
+    "mtime": 1781257704.8041198,
+    "ast_hash": "4717d8a39f138b4857b82892cfd17685",
+    "semantic_hash": ""
+  },
+  "alexa_custom/llm.py": {
+    "mtime": 1781257487.2082496,
+    "ast_hash": "5ead0099b8bb2bf340844bd3c4121af1",
+    "semantic_hash": ""
+  },
+  "alexa_custom/mqtt.py": {
+    "mtime": 1781257487.2084298,
+    "ast_hash": "87f6445f7b5388d23af308d1d700a4c9",
+    "semantic_hash": ""
+  },
+  "alexa_custom/number_parser.py": {
+    "mtime": 1781257487.2085037,
+    "ast_hash": "59668f75a28a815a42765cb0facbe023",
+    "semantic_hash": ""
+  },
+  "alexa_custom/record.py": {
+    "mtime": 1781256179.7919261,
+    "ast_hash": "9ea674f66b071e4b1b6003d61e657769",
+    "semantic_hash": ""
+  },
+  "alexa_custom/setup.py": {
+    "mtime": 1781257704.804328,
+    "ast_hash": "c8ef0e3a21b0d3e1c6f0c3e5713583b3",
+    "semantic_hash": ""
+  },
+  "alexa_custom/stt.py": {
+    "mtime": 1781257487.2087677,
+    "ast_hash": "667ed59b5d6af6b3a06af89a1c10dcbf",
+    "semantic_hash": ""
+  },
+  "alexa_custom/stt_backends.py": {
+    "mtime": 1781257487.2089205,
+    "ast_hash": "39936ba97fb962a2993139fd221f1cab",
+    "semantic_hash": ""
+  },
+  "alexa_custom/stt_gating.py": {
+    "mtime": 1781257487.2090583,
+    "ast_hash": "8039b4531d36b7be1238d709c8e729a3",
+    "semantic_hash": ""
+  },
+  "alexa_custom/stt_phonetics.py": {
+    "mtime": 1781257487.2091272,
+    "ast_hash": "631180fe3fe30b318ea8635250a71ab9",
+    "semantic_hash": ""
+  },
+  "alexa_custom/tts.py": {
+    "mtime": 1781256179.7920492,
+    "ast_hash": "2aeabb72f8fdf90db1c50a4a526740d6",
+    "semantic_hash": ""
+  },
+  "alexa_custom/wake_eval.py": {
+    "mtime": 1781257704.8044543,
+    "ast_hash": "5d1bf11c50307b164349b45c0e703d1b",
+    "semantic_hash": ""
+  },
+  "alexa_custom/web.py": {
+    "mtime": 1781256179.7921703,
+    "ast_hash": "d0826c51bbaeacf4289478f5f59f2a34",
+    "semantic_hash": ""
+  },
+  "test-sherpa.py": {
+    "mtime": 1779970268.5007522,
+    "ast_hash": "7680388956fb98cabbc2f1924eb3556a",
+    "semantic_hash": ""
+  },
+  "tests/test_actions.py": {
+    "mtime": 1781256179.7986305,
+    "ast_hash": "b283929ff7936d03ae0bd454f933fd8e",
+    "semantic_hash": ""
+  },
+  "tests/test_audio.py": {
+    "mtime": 1781256179.7988462,
+    "ast_hash": "6d348de71bcce70fd3c59a09a81843c9",
+    "semantic_hash": ""
+  },
+  "tests/test_autogain.py": {
+    "mtime": 1781258912.5919418,
+    "ast_hash": "24a468a2b08190c61408d93f3258e31b",
+    "semantic_hash": ""
+  },
+  "tests/test_client.py": {
+    "mtime": 1781088036.1004944,
+    "ast_hash": "00a7ac82648c401879b86c3c762d655f",
+    "semantic_hash": ""
+  },
+  "tests/test_config.py": {
+    "mtime": 1781246257.9984033,
+    "ast_hash": "40b93b3490958b884b8363b7e9ce4620",
+    "semantic_hash": ""
+  },
+  "tests/test_llm.py": {
+    "mtime": 1780924386.8277092,
+    "ast_hash": "0f435d1ec49cbffacb55b2ee75c82686",
+    "semantic_hash": ""
+  },
+  "tests/test_number_parser.py": {
+    "mtime": 1781246257.998455,
+    "ast_hash": "a164812ac2b074f7606b32e3bb7b2544",
+    "semantic_hash": ""
+  },
+  "tests/test_record.py": {
+    "mtime": 1781256179.79899,
+    "ast_hash": "fc5daa6b636ae04830099f880f971e31",
+    "semantic_hash": ""
+  },
+  "tests/test_stt_e2e.py": {
+    "mtime": 1781246257.998594,
+    "ast_hash": "618a5f9d14a395070724df2db37a36ae",
+    "semantic_hash": ""
+  },
+  "tests/test_tts.py": {
+    "mtime": 1780924386.8279235,
+    "ast_hash": "291e7d7b30c77d2c6a91fdbb634cde1e",
+    "semantic_hash": ""
+  },
+  "tests/test_wake_detection.py": {
+    "mtime": 1781256179.799208,
+    "ast_hash": "4b8c263bfdf75c4461af9fc9afad8c69",
+    "semantic_hash": ""
+  },
+  ".claude/CLAUDE.md": {
+    "mtime": 1781246257.9899833,
+    "ast_hash": "9419c1008c22f2e75d72a1e2afee1c5d",
+    "semantic_hash": ""
+  },
+  ".claude/commands/opsx/apply.md": {
+    "mtime": 1780907068.3678358,
+    "ast_hash": "449ed654939d2179ce62e0845707ab35",
+    "semantic_hash": ""
+  },
+  ".claude/commands/opsx/archive.md": {
+    "mtime": 1780907068.368703,
+    "ast_hash": "18594057d0fa5e17fb78e48493553625",
+    "semantic_hash": ""
+  },
+  ".claude/commands/opsx/bulk-archive.md": {
+    "mtime": 1780907068.368953,
+    "ast_hash": "396357c9ffc4fc9c6650f261440aa946",
+    "semantic_hash": ""
+  },
+  ".claude/commands/opsx/continue.md": {
+    "mtime": 1780907068.367563,
+    "ast_hash": "c26284d2b34fcd13b033d7cba2c79ccd",
+    "semantic_hash": ""
+  },
+  ".claude/commands/opsx/explore.md": {
+    "mtime": 1780907068.3668683,
+    "ast_hash": "c5bdf374bfb2bb1902b3a4aacdc3b898",
+    "semantic_hash": ""
+  },
+  ".claude/commands/opsx/ff.md": {
+    "mtime": 1780907068.3680792,
+    "ast_hash": "5f76311f0ab84cd2762f898750cfcb83",
+    "semantic_hash": ""
+  },
+  ".claude/commands/opsx/new.md": {
+    "mtime": 1780907068.367204,
+    "ast_hash": "c3c5532c954fdef210d4c9fa5be48fa1",
+    "semantic_hash": ""
+  },
+  ".claude/commands/opsx/onboard.md": {
+    "mtime": 1780907068.3694625,
+    "ast_hash": "0e2ea5c4099be23cb94ded26c05a909e",
+    "semantic_hash": ""
+  },
+  ".claude/commands/opsx/propose.md": {
+    "mtime": 1780907068.3697312,
+    "ast_hash": "43622af941f4617cc53b12af14d6b355",
+    "semantic_hash": ""
+  },
+  ".claude/commands/opsx/sync.md": {
+    "mtime": 1780907068.3683867,
+    "ast_hash": "7a91922fe8b344d562aa9b5dbeb970e6",
+    "semantic_hash": ""
+  },
+  ".claude/commands/opsx/verify.md": {
+    "mtime": 1780907068.3691895,
+    "ast_hash": "c0b3914b313644601577f3671b206226",
+    "semantic_hash": ""
+  },
+  ".claude/skills/openspec-apply-change/SKILL.md": {
+    "mtime": 1780907068.363322,
+    "ast_hash": "ef62fef14cd5c347e2be60d2af4ea59f",
+    "semantic_hash": ""
+  },
+  ".claude/skills/openspec-archive-change/SKILL.md": {
+    "mtime": 1780907068.3645613,
+    "ast_hash": "a853b3ce25149061a7f13f05b127350c",
+    "semantic_hash": ""
+  },
+  ".claude/skills/openspec-bulk-archive-change/SKILL.md": {
+    "mtime": 1780907068.364839,
+    "ast_hash": "4c4243b11da830e2a11e06fb236397a7",
+    "semantic_hash": ""
+  },
+  ".claude/skills/openspec-continue-change/SKILL.md": {
+    "mtime": 1780907068.362795,
+    "ast_hash": "2f94797a9d8e395b9beeba7ea9a43288",
+    "semantic_hash": ""
+  },
+  ".claude/skills/openspec-explore/SKILL.md": {
+    "mtime": 1780907068.361168,
+    "ast_hash": "61496eebbad91c2af8b3e5bf7fc9d256",
+    "semantic_hash": ""
+  },
+  ".claude/skills/openspec-ff-change/SKILL.md": {
+    "mtime": 1780907068.3638873,
+    "ast_hash": "1ed86fa2b49c8ddc08652ee4c88f0b45",
+    "semantic_hash": ""
+  },
+  ".claude/skills/openspec-new-change/SKILL.md": {
+    "mtime": 1780907068.3621418,
+    "ast_hash": "a391aba5d8946da580904fe3782e190d",
+    "semantic_hash": ""
+  },
+  ".claude/skills/openspec-onboard/SKILL.md": {
+    "mtime": 1780907068.3658016,
+    "ast_hash": "310fc85a6f93383a1ec59e0cfe24e211",
+    "semantic_hash": ""
+  },
+  ".claude/skills/openspec-propose/SKILL.md": {
+    "mtime": 1780907068.3661563,
+    "ast_hash": "5fe13ada44751b3ff94f56c22c383749",
+    "semantic_hash": ""
+  },
+  ".claude/skills/openspec-sync-specs/SKILL.md": {
+    "mtime": 1780907068.364261,
+    "ast_hash": "211bc14ef7cb2d1e24b6b73e878d8509",
+    "semantic_hash": ""
+  },
+  ".claude/skills/openspec-verify-change/SKILL.md": {
+    "mtime": 1780907068.365225,
+    "ast_hash": "2baab6b815515578795441106d2d5abd",
+    "semantic_hash": ""
+  },
+  ".claude/skills/test-stt-e2e/SKILL.md": {
+    "mtime": 1780568916.5984297,
+    "ast_hash": "fb33bf40d493cee4cc4730e68020cca3",
+    "semantic_hash": ""
+  },
+  ".gemini/skills/openspec-apply-change/SKILL.md": {
+    "mtime": 1780907068.371213,
+    "ast_hash": "ef62fef14cd5c347e2be60d2af4ea59f",
+    "semantic_hash": ""
+  },
+  ".gemini/skills/openspec-archive-change/SKILL.md": {
+    "mtime": 1780907068.3718877,
+    "ast_hash": "a853b3ce25149061a7f13f05b127350c",
+    "semantic_hash": ""
+  },
+  ".gemini/skills/openspec-bulk-archive-change/SKILL.md": {
+    "mtime": 1780907068.3721406,
+    "ast_hash": "4c4243b11da830e2a11e06fb236397a7",
+    "semantic_hash": ""
+  },
+  ".gemini/skills/openspec-continue-change/SKILL.md": {
+    "mtime": 1780907068.3709404,
+    "ast_hash": "2f94797a9d8e395b9beeba7ea9a43288",
+    "semantic_hash": ""
+  },
+  ".gemini/skills/openspec-explore/SKILL.md": {
+    "mtime": 1780907068.3704617,
+    "ast_hash": "61496eebbad91c2af8b3e5bf7fc9d256",
+    "semantic_hash": ""
+  },
+  ".gemini/skills/openspec-ff-change/SKILL.md": {
+    "mtime": 1780907068.3714406,
+    "ast_hash": "1ed86fa2b49c8ddc08652ee4c88f0b45",
+    "semantic_hash": ""
+  },
+  ".gemini/skills/openspec-new-change/SKILL.md": {
+    "mtime": 1780907068.3707051,
+    "ast_hash": "a391aba5d8946da580904fe3782e190d",
+    "semantic_hash": ""
+  },
+  ".gemini/skills/openspec-onboard/SKILL.md": {
+    "mtime": 1780907068.3727448,
+    "ast_hash": "310fc85a6f93383a1ec59e0cfe24e211",
+    "semantic_hash": ""
+  },
+  ".gemini/skills/openspec-propose/SKILL.md": {
+    "mtime": 1780907068.372968,
+    "ast_hash": "5fe13ada44751b3ff94f56c22c383749",
+    "semantic_hash": ""
+  },
+  ".gemini/skills/openspec-sync-specs/SKILL.md": {
+    "mtime": 1780907068.3716738,
+    "ast_hash": "211bc14ef7cb2d1e24b6b73e878d8509",
+    "semantic_hash": ""
+  },
+  ".gemini/skills/openspec-verify-change/SKILL.md": {
+    "mtime": 1780907068.3725064,
+    "ast_hash": "2baab6b815515578795441106d2d5abd",
+    "semantic_hash": ""
+  },
+  ".opencode/commands/opsx-apply.md": {
+    "mtime": 1780907068.3792348,
+    "ast_hash": "43612ae8ffdcce031feaa4079d4a5dcd",
+    "semantic_hash": ""
+  },
+  ".opencode/commands/opsx-archive.md": {
+    "mtime": 1780907068.3797886,
+    "ast_hash": "6e97176b00322accd70c0449de52d0c5",
+    "semantic_hash": ""
+  },
+  ".opencode/commands/opsx-bulk-archive.md": {
+    "mtime": 1780907068.3799534,
+    "ast_hash": "83ba1c138ad055ab27caef86cd2b67f7",
+    "semantic_hash": ""
+  },
+  ".opencode/commands/opsx-continue.md": {
+    "mtime": 1780907068.3789115,
+    "ast_hash": "81beec773fb38bc223134f2062e5705a",
+    "semantic_hash": ""
+  },
+  ".opencode/commands/opsx-explore.md": {
+    "mtime": 1780907068.3784387,
+    "ast_hash": "52269c126732fd32d2cce0769ada2870",
+    "semantic_hash": ""
+  },
+  ".opencode/commands/opsx-ff.md": {
+    "mtime": 1780907068.379411,
+    "ast_hash": "12e3b055d4be4c7992bb8bedb8843148",
+    "semantic_hash": ""
+  },
+  ".opencode/commands/opsx-new.md": {
+    "mtime": 1780907068.378742,
+    "ast_hash": "1d07e8e58515345dae63329e6c8c8469",
+    "semantic_hash": ""
+  },
+  ".opencode/commands/opsx-onboard.md": {
+    "mtime": 1780907068.380359,
+    "ast_hash": "7b76249065d02b1563c27432fb826f75",
+    "semantic_hash": ""
+  },
+  ".opencode/commands/opsx-propose.md": {
+    "mtime": 1780907068.380546,
+    "ast_hash": "d2415ea5329320b825b4e3dd44b48634",
+    "semantic_hash": ""
+  },
+  ".opencode/commands/opsx-sync.md": {
+    "mtime": 1780907068.3796086,
+    "ast_hash": "0a1256ea2b7e172a968644f2e0caf1b6",
+    "semantic_hash": ""
+  },
+  ".opencode/commands/opsx-verify.md": {
+    "mtime": 1780907068.3801315,
+    "ast_hash": "a31717d12290837954447e65d00b73be",
+    "semantic_hash": ""
+  },
+  ".opencode/skills/openspec-apply-change/SKILL.md": {
+    "mtime": 1780907068.3766954,
+    "ast_hash": "0c644086b9d1191f7639324aa9d90557",
+    "semantic_hash": ""
+  },
+  ".opencode/skills/openspec-archive-change/SKILL.md": {
+    "mtime": 1780907068.3772843,
+    "ast_hash": "a853b3ce25149061a7f13f05b127350c",
+    "semantic_hash": ""
+  },
+  ".opencode/skills/openspec-bulk-archive-change/SKILL.md": {
+    "mtime": 1780907068.3774664,
+    "ast_hash": "4c4243b11da830e2a11e06fb236397a7",
+    "semantic_hash": ""
+  },
+  ".opencode/skills/openspec-continue-change/SKILL.md": {
+    "mtime": 1780907068.3764808,
+    "ast_hash": "2f94797a9d8e395b9beeba7ea9a43288",
+    "semantic_hash": ""
+  },
+  ".opencode/skills/openspec-explore/SKILL.md": {
+    "mtime": 1780907068.3757536,
+    "ast_hash": "b50d65377c6c7fe4c9591e114ff77f5f",
+    "semantic_hash": ""
+  },
+  ".opencode/skills/openspec-ff-change/SKILL.md": {
+    "mtime": 1780907068.3768988,
+    "ast_hash": "472d58bb9fa8dc01f0a93956ef153f48",
+    "semantic_hash": ""
+  },
+  ".opencode/skills/openspec-new-change/SKILL.md": {
+    "mtime": 1780907068.3761065,
+    "ast_hash": "a391aba5d8946da580904fe3782e190d",
+    "semantic_hash": ""
+  },
+  ".opencode/skills/openspec-onboard/SKILL.md": {
+    "mtime": 1780907068.378002,
+    "ast_hash": "230b8a8e316d76ffcc4f972ef8ea1425",
+    "semantic_hash": ""
+  },
+  ".opencode/skills/openspec-propose/SKILL.md": {
+    "mtime": 1780907068.3782008,
+    "ast_hash": "40b0eb2c1f2d14397b5ad856cd9cbc23",
+    "semantic_hash": ""
+  },
+  ".opencode/skills/openspec-sync-specs/SKILL.md": {
+    "mtime": 1780907068.3770974,
+    "ast_hash": "211bc14ef7cb2d1e24b6b73e878d8509",
+    "semantic_hash": ""
+  },
+  ".opencode/skills/openspec-verify-change/SKILL.md": {
+    "mtime": 1780907068.3776448,
+    "ast_hash": "2baab6b815515578795441106d2d5abd",
+    "semantic_hash": ""
+  },
+  "AGENTS.md": {
+    "mtime": 1781246257.9899833,
+    "ast_hash": "9419c1008c22f2e75d72a1e2afee1c5d",
+    "semantic_hash": ""
+  },
+  "README.md": {
+    "mtime": 1781246257.9901466,
+    "ast_hash": "f3c104035b7d5e9801581f56430f0381",
+    "semantic_hash": ""
+  },
+  "Taskfile.yml": {
+    "mtime": 1781088036.0833578,
+    "ast_hash": "bf4b47e526507b12ff9b4ae0bb25d8b3",
+    "semantic_hash": ""
+  },
+  "addons/kernel/kernel_6.md": {
+    "mtime": 1781088036.084527,
+    "ast_hash": "475aaab9b9863c4281a1e09e7a4a14df",
+    "semantic_hash": ""
+  },
+  "addons/kernel/kernel_7.md": {
+    "mtime": 1781088036.0847123,
+    "ast_hash": "9efc912b0f520454ca3560a1e6cfb1f7",
+    "semantic_hash": ""
+  },
+  "addons/sherpa-onnx/README.md": {
+    "mtime": 1781088036.0850255,
+    "ast_hash": "62f38777aaef5dbbebce05dff20dcfc8",
+    "semantic_hash": ""
+  },
+  "alexa_custom/dashboard.html": {
+    "mtime": 1781256179.7917273,
+    "ast_hash": "c0e226750cc3b5d00e4601cccb809172",
+    "semantic_hash": ""
+  },
+  "alexa_custom/data/it_corpus.txt": {
+    "mtime": 1781258482.7555625,
+    "ast_hash": "ee07422122bd174abd1a494c68cc049c",
+    "semantic_hash": ""
+  },
+  "conf.example/actions/system.yaml": {
+    "mtime": 1781256179.7926505,
+    "ast_hash": "0afe1b6d979636c12c4dbc118d11a2b5",
+    "semantic_hash": ""
+  },
+  "conf.example/actions/user.yaml": {
+    "mtime": 1781256179.7928083,
+    "ast_hash": "18543b288ef5a2da88888b4b5ad06388",
+    "semantic_hash": ""
+  },
+  "conf.example/user.yaml": {
+    "mtime": 1781246257.9937487,
+    "ast_hash": "058220fae9d5ffafd13b925a18bd3aff",
+    "semantic_hash": ""
+  },
+  "docs/arduino-uno-q.md": {
+    "mtime": 1780924386.8082526,
+    "ast_hash": "deb2be105436ad8ab80d7cc3c8c836df",
+    "semantic_hash": ""
+  },
+  "docs/audio.md": {
+    "mtime": 1780924386.8085606,
+    "ast_hash": "e046400481037bbf0a8fbacac03d06d1",
+    "semantic_hash": ""
+  },
+  "docs/configuration.md": {
+    "mtime": 1781246257.993948,
+    "ast_hash": "68c853b348a01fd441adfe3b5ca8b51f",
+    "semantic_hash": ""
+  },
+  "docs/llm.md": {
+    "mtime": 1780924386.808989,
+    "ast_hash": "58b8366ef95760015a9cac65aab42d33",
+    "semantic_hash": ""
+  },
+  "docs/mqtt_integration.md": {
+    "mtime": 1780924386.8090513,
+    "ast_hash": "ade4b7627f8b37868d4bdcef6923b2bb",
+    "semantic_hash": ""
+  },
+  "docs/reports/comparison_2026-05-23T13:54:29.md": {
+    "mtime": 1781088036.094722,
+    "ast_hash": "84d324300df461ab636d1bffaa4c683a",
+    "semantic_hash": ""
+  },
+  "docs/reports/optimization_2026-05-23.md": {
+    "mtime": 1781088036.0948572,
+    "ast_hash": "aae570cbe5fe5abb09ddd39224aee7a4",
+    "semantic_hash": ""
+  },
+  "docs/reports/snapshot_2026-05-23T13:38:42.md": {
+    "mtime": 1781088036.0949512,
+    "ast_hash": "9a5f6295266c80654a4d31dd61436e1e",
+    "semantic_hash": ""
+  },
+  "docs/reports/snapshot_2026-05-23T13:54:29.md": {
+    "mtime": 1781088036.095027,
+    "ast_hash": "eb53316e0e869aacc5331ed69d4094b7",
+    "semantic_hash": ""
+  },
+  "docs/setup_hardware.md": {
+    "mtime": 1780924386.8091066,
+    "ast_hash": "f09ed66a4a339bd1d2231d4e69375d45",
+    "semantic_hash": ""
+  },
+  "docs/setup_software.md": {
+    "mtime": 1780924386.8091578,
+    "ast_hash": "f351b5a610563a6cd8602d6bb46dbc6b",
+    "semantic_hash": ""
+  },
+  "docs/sherpa_onnx.md": {
+    "mtime": 1781088036.0952427,
+    "ast_hash": "4bb43c0e114a008d17fd3aeb24dd631d",
+    "semantic_hash": ""
+  },
+  "docs/stt-modes.md": {
+    "mtime": 1781246257.9941056,
+    "ast_hash": "16ba8c078e3b88210172c98542df50c5",
+    "semantic_hash": ""
+  },
+  "docs/troubleshooting.md": {
+    "mtime": 1780924386.8092785,
+    "ast_hash": "13fe029bb6a630a86521ff63ac5a964b",
+    "semantic_hash": ""
+  },
+  "docs/wake_word_eval.md": {
+    "mtime": 1781088036.0953872,
+    "ast_hash": "adb9371378065318ffb33a221cabb011",
+    "semantic_hash": ""
+  },
+  "eval/baseline.yaml": {
+    "mtime": 1781088036.0955033,
+    "ast_hash": "35d82d4dc16952484a48457aa1a21feb",
+    "semantic_hash": ""
+  },
+  "make-report.md": {
+    "mtime": 1779970268.488931,
+    "ast_hash": "5448bd881e846f658260b1ec6a2ac4d1",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-22-fix-audio-and-exit/design.md": {
+    "mtime": 1781258482.757082,
+    "ast_hash": "475c59debb842e34fc2f3410b3db55b8",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-22-fix-audio-and-exit/proposal.md": {
+    "mtime": 1781258482.757258,
+    "ast_hash": "241564d603bc09ee458d8daa81853615",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-22-fix-audio-and-exit/tasks.md": {
+    "mtime": 1781258482.7573729,
+    "ast_hash": "ac4ab2c966b6e11d5add6a0bbfce8c92",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-22-gated-stt/design.md": {
+    "mtime": 1781258482.7575846,
+    "ast_hash": "1a6d142a9653624ba6fbd428c69b500a",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-22-gated-stt/proposal.md": {
+    "mtime": 1781258482.7576997,
+    "ast_hash": "1b42d2f6727db506294efe2350b6378d",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-22-gated-stt/tasks.md": {
+    "mtime": 1781258482.757805,
+    "ast_hash": "9c880a92c4f4cfddf436dee18844d43c",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-22-optimize-vu-meters/design.md": {
+    "mtime": 1781258482.758007,
+    "ast_hash": "7c81c8f0ecb7ea538c7951c5e056d7dd",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-22-optimize-vu-meters/proposal.md": {
+    "mtime": 1781258482.7581332,
+    "ast_hash": "56952f927ed08e3c577650ea836e91bf",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-22-optimize-vu-meters/specs/audio-level-monitoring/spec.md": {
+    "mtime": 1781258482.758373,
+    "ast_hash": "72628f761adcff75bc6f95989980d9d5",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-22-optimize-vu-meters/tasks.md": {
+    "mtime": 1781258482.7584646,
+    "ast_hash": "c4ff57936a79c16b853f0cc49b170aba",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-22-proactive-audio-and-tts/.openspec.yaml": {
+    "mtime": 1781258482.7585952,
+    "ast_hash": "85a5072b86855cc04e0eab8453b7ed25",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-22-proactive-audio-and-tts/design.md": {
+    "mtime": 1781258482.758694,
+    "ast_hash": "84b41538dfea70883b3616c8d1b1acf6",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-22-proactive-audio-and-tts/proposal.md": {
+    "mtime": 1781258482.7587962,
+    "ast_hash": "44edd8ad6f246c8a38ad0154e7ed4ce5",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-22-proactive-audio-and-tts/specs/action-dispatch/spec.md": {
+    "mtime": 1781258482.7590237,
+    "ast_hash": "159fee40cbce74843f4af8e79bd63267",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-22-proactive-audio-and-tts/specs/audio-management/spec.md": {
+    "mtime": 1781258482.759199,
+    "ast_hash": "ccb9e56d6801d6326875c891b84974bf",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-22-proactive-audio-and-tts/specs/text-to-speech/spec.md": {
+    "mtime": 1781258482.759349,
+    "ast_hash": "efc6a11391f52ddd803951d8049ac88b",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-22-proactive-audio-and-tts/specs/wake-word-detection/spec.md": {
+    "mtime": 1781258482.7595167,
+    "ast_hash": "390c9a71bc3a7645c062fb9b4a533b7b",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-22-proactive-audio-and-tts/tasks.md": {
+    "mtime": 1781258482.759623,
+    "ast_hash": "3e797868c22c84be8b440808e3cfb3a3",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-22-vosk-wake-word-actions/.openspec.yaml": {
+    "mtime": 1781258482.759758,
+    "ast_hash": "2c508fe82d9583ed1fb0c700dbf80c41",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-22-vosk-wake-word-actions/design.md": {
+    "mtime": 1781258482.7599568,
+    "ast_hash": "c56efb2660cea3c79472a82d860ed443",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-22-vosk-wake-word-actions/proposal.md": {
+    "mtime": 1781258482.7600658,
+    "ast_hash": "39e44dd21e9130464c1fac3cd1cc9cde",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-22-vosk-wake-word-actions/specs/action-dispatch/spec.md": {
+    "mtime": 1781258482.7602746,
+    "ast_hash": "00b0b79b79ebbdcc227d6eaa648c12e1",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-22-vosk-wake-word-actions/specs/audio-level-monitoring/spec.md": {
+    "mtime": 1781258482.7604315,
+    "ast_hash": "af0004e7fc00c0c7800765c28ad1a78a",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-22-vosk-wake-word-actions/specs/telegram-notify/spec.md": {
+    "mtime": 1781258482.7605832,
+    "ast_hash": "284fa88b6967d79d6369705ed913eda3",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-22-vosk-wake-word-actions/specs/wake-word-detection/spec.md": {
+    "mtime": 1781258482.760723,
+    "ast_hash": "30b04a6c21dd4a744d5860baefd6b03a",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-22-vosk-wake-word-actions/tasks.md": {
+    "mtime": 1781258482.760924,
+    "ast_hash": "fd481b0a568925c81aad88877509aae1",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-23-alexa-client-improvements/.openspec.yaml": {
+    "mtime": 1781258482.76105,
+    "ast_hash": "85a5072b86855cc04e0eab8453b7ed25",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-23-alexa-client-improvements/design.md": {
+    "mtime": 1781258482.7611496,
+    "ast_hash": "f4c1cdc8beabfec2ae63d0b0e5bf3dfe",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-23-alexa-client-improvements/proposal.md": {
+    "mtime": 1781258482.761234,
+    "ast_hash": "ff306f52d635afbd66d2fe8f1e5503b3",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-23-alexa-client-improvements/specs/action-dispatch/spec.md": {
+    "mtime": 1781258482.7614224,
+    "ast_hash": "59f72e4ea3befddf65e3efa3956f7ddd",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-23-alexa-client-improvements/specs/audio-management/spec.md": {
+    "mtime": 1781258482.7615674,
+    "ast_hash": "b8d01991d4c5b377e61527ab6bdf9c55",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-23-alexa-client-improvements/tasks.md": {
+    "mtime": 1781258482.761665,
+    "ast_hash": "a36a3209d88ad90ce928d00b07d38d4b",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-23-centralize-yaml-config-hot-reload/.openspec.yaml": {
+    "mtime": 1781258482.7618074,
+    "ast_hash": "85a5072b86855cc04e0eab8453b7ed25",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-23-centralize-yaml-config-hot-reload/design.md": {
+    "mtime": 1781258482.7620292,
+    "ast_hash": "2fdabe7765718b0b270ac958242bf4f3",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-23-centralize-yaml-config-hot-reload/proposal.md": {
+    "mtime": 1781258482.7621353,
+    "ast_hash": "19584c948fa039862fc2d4c80aa0541c",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-23-centralize-yaml-config-hot-reload/specs/action-dispatch/spec.md": {
+    "mtime": 1781258482.7623296,
+    "ast_hash": "8bd5e313ad0c3a97550e5ec89f5982ae",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-23-centralize-yaml-config-hot-reload/specs/yaml-config/spec.md": {
+    "mtime": 1781258482.7625504,
+    "ast_hash": "d4b2bb20ba03de3ec22f1b6386dad5fa",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-23-centralize-yaml-config-hot-reload/tasks.md": {
+    "mtime": 1781258482.7626529,
+    "ast_hash": "455ee7c2d84c3896abce21121d43b652",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-23-mqtt-ha-discovery/.openspec.yaml": {
+    "mtime": 1781258482.7627957,
+    "ast_hash": "85a5072b86855cc04e0eab8453b7ed25",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-23-mqtt-ha-discovery/design.md": {
+    "mtime": 1781258482.7628946,
+    "ast_hash": "56e92acb932adf456b2704528d642127",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-23-mqtt-ha-discovery/proposal.md": {
+    "mtime": 1781258482.763001,
+    "ast_hash": "daec8e76d14334eb707c54b619efb6ae",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-23-mqtt-ha-discovery/specs/action-dispatch/spec.md": {
+    "mtime": 1781258482.763205,
+    "ast_hash": "4439e35e796dcc13ab66604719197ae5",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-23-mqtt-ha-discovery/specs/home-assistant-integration/spec.md": {
+    "mtime": 1781258482.763349,
+    "ast_hash": "e4f6ad37315c0a2348675d5c38fc7672",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-23-mqtt-ha-discovery/specs/mqtt-integration/spec.md": {
+    "mtime": 1781258482.7635036,
+    "ast_hash": "d69d9513c463fef8e9799681eb2fc8e2",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-23-mqtt-ha-discovery/specs/wake-word-detection/spec.md": {
+    "mtime": 1781258482.763686,
+    "ast_hash": "3b6c20962e4f2c4bfac007a429cf7d56",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-23-mqtt-ha-discovery/tasks.md": {
+    "mtime": 1781258482.763789,
+    "ast_hash": "40649b9855feb1cfc05b73fc328fce78",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-23-wake-word-groups/.openspec.yaml": {
+    "mtime": 1781258482.7639182,
+    "ast_hash": "85a5072b86855cc04e0eab8453b7ed25",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-23-wake-word-groups/design.md": {
+    "mtime": 1781258482.764109,
+    "ast_hash": "d788a5c33e38cffd247574ebf5c794c4",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-23-wake-word-groups/proposal.md": {
+    "mtime": 1781258482.7642024,
+    "ast_hash": "a134c19429e4b3fe892ecf7a3ae6045f",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-23-wake-word-groups/specs/wake-word-detection/spec.md": {
+    "mtime": 1781258482.7643883,
+    "ast_hash": "41fa802da653081897fb39409159b64e",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-23-wake-word-groups/specs/yaml-config/spec.md": {
+    "mtime": 1781258482.7645113,
+    "ast_hash": "3653cae8a578035d85a6d4c4b49dbc0d",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-23-wake-word-groups/tasks.md": {
+    "mtime": 1781258482.7645946,
+    "ast_hash": "33417bf212e4635c2e8fa54344418f90",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-23-web-interface/.openspec.yaml": {
+    "mtime": 1781258482.76471,
+    "ast_hash": "85a5072b86855cc04e0eab8453b7ed25",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-23-web-interface/design.md": {
+    "mtime": 1781258482.7649014,
+    "ast_hash": "bbaadf411ecbbd2ff1999d560ad4c395",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-23-web-interface/proposal.md": {
+    "mtime": 1781258482.7649896,
+    "ast_hash": "92e1cf9cc082b7a0942e3303546e251d",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-23-web-interface/specs/web-interface/spec.md": {
+    "mtime": 1781258482.76527,
+    "ast_hash": "29fdfe046cde7ed19ddbc7d6d876aa22",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-23-web-interface/specs/yaml-config/spec.md": {
+    "mtime": 1781258482.7653944,
+    "ast_hash": "e1b8e7935159bcd0200e574475c5a1c5",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-23-web-interface/tasks.md": {
+    "mtime": 1781258482.7654831,
+    "ast_hash": "e64df37a78500ab6fde29fba88039c0a",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-24-sherpa-onnx-stt/.openspec.yaml": {
+    "mtime": 1781258482.76561,
+    "ast_hash": "85a5072b86855cc04e0eab8453b7ed25",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-24-sherpa-onnx-stt/design.md": {
+    "mtime": 1781258482.765785,
+    "ast_hash": "7ffe1156c07fd42f8f8a465b772ceaa2",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-24-sherpa-onnx-stt/proposal.md": {
+    "mtime": 1781258482.7658672,
+    "ast_hash": "255539165beafbe90cc2da472499bc1c",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-24-sherpa-onnx-stt/specs/sherpa-onnx-stt/spec.md": {
+    "mtime": 1781258482.766043,
+    "ast_hash": "5d93c2d42e1e52d9af4322c5b18a6b6a",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-24-sherpa-onnx-stt/specs/wake-word-detection/spec.md": {
+    "mtime": 1781258482.7661843,
+    "ast_hash": "793798b194e0b5913d868228256fc6c9",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-05-24-sherpa-onnx-stt/tasks.md": {
+    "mtime": 1781258482.766271,
+    "ast_hash": "3261a7ab80b2df013a7c57971e7dd497",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-alexa-client-hardening/.openspec.yaml": {
+    "mtime": 1781258482.7663872,
+    "ast_hash": "5d9279698973023d258878bcf03da639",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-alexa-client-hardening/design.md": {
+    "mtime": 1781258482.7665632,
+    "ast_hash": "1ce88351f216203faffd103823707d1c",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-alexa-client-hardening/proposal.md": {
+    "mtime": 1781258482.7666452,
+    "ast_hash": "6c818a9942cae24f4616c99bbc559ca8",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-alexa-client-hardening/specs/audio-management/spec.md": {
+    "mtime": 1781258482.7668211,
+    "ast_hash": "9516358fe48d8013810804398a3459e5",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-alexa-client-hardening/specs/config-error-feedback/spec.md": {
+    "mtime": 1781258482.7669528,
+    "ast_hash": "f77a09f3218c54945e7f35b95e8a34dd",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-alexa-client-hardening/specs/config-hardening/spec.md": {
+    "mtime": 1781258482.7670872,
+    "ast_hash": "fdd7c6e6be2b93534c094cda7760035a",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-alexa-client-hardening/specs/graceful-shutdown/spec.md": {
+    "mtime": 1781258482.767218,
+    "ast_hash": "6d14f190e3c01fa50810bb3cc92cb1fc",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-alexa-client-hardening/specs/mqtt-integration/spec.md": {
+    "mtime": 1781258482.7673512,
+    "ast_hash": "50f6052ba9a6bc761563933a382aa3ea",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-alexa-client-hardening/specs/text-to-speech/spec.md": {
+    "mtime": 1781258482.7674782,
+    "ast_hash": "dc373dbe75f03740ad93b6c2de2a0aff",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-alexa-client-hardening/specs/yaml-config/spec.md": {
+    "mtime": 1781258482.7676153,
+    "ast_hash": "5e35e66e2eaab48d1e6c66bfef71c950",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-alexa-client-hardening/tasks.md": {
+    "mtime": 1781258482.7678216,
+    "ast_hash": "db0d0b8fb65a60bc2ade069b8a626415",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-italian-phonetic-matching/.openspec.yaml": {
+    "mtime": 1781258482.7679873,
+    "ast_hash": "5d9279698973023d258878bcf03da639",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-italian-phonetic-matching/design.md": {
+    "mtime": 1781258482.7681923,
+    "ast_hash": "0a48951df234ef2fdc15caccdba7cf59",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-italian-phonetic-matching/proposal.md": {
+    "mtime": 1781258482.7683008,
+    "ast_hash": "c7226522bebdde0efcae99a3ce7341ab",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-italian-phonetic-matching/specs/action-dispatch/spec.md": {
+    "mtime": 1781258482.7684731,
+    "ast_hash": "3a84ce4189005a7ba5b8fc39ba6d0229",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-italian-phonetic-matching/specs/italian-phonetic-normalization/spec.md": {
+    "mtime": 1781258482.7686205,
+    "ast_hash": "985168807a930e09884479d6e4be97b8",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-italian-phonetic-matching/tasks.md": {
+    "mtime": 1781258482.7687044,
+    "ast_hash": "faeca68ad479a566f6a84ed6edd9e7d2",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-llm-learning-mode/.openspec.yaml": {
+    "mtime": 1781258482.768832,
+    "ast_hash": "5d9279698973023d258878bcf03da639",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-llm-learning-mode/design.md": {
+    "mtime": 1781258482.7689435,
+    "ast_hash": "37302bf8f304288a319fa721e7da9ac6",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-llm-learning-mode/proposal.md": {
+    "mtime": 1781258482.769027,
+    "ast_hash": "97e4f667130abf0a9a38e8312e45601e",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-llm-learning-mode/specs/action-dispatch/spec.md": {
+    "mtime": 1781258482.7691917,
+    "ast_hash": "5ce103d43131e8056bebd09a12670aad",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-llm-learning-mode/specs/actions-file/spec.md": {
+    "mtime": 1781258482.769325,
+    "ast_hash": "7d1a18b04b7223bcd16eca91b3d8af89",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-llm-learning-mode/specs/llm-command-learning/spec.md": {
+    "mtime": 1781258482.7694542,
+    "ast_hash": "92dbc2a3cb423dbebbae65fc9ca34c57",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-llm-learning-mode/specs/llm-conversation/spec.md": {
+    "mtime": 1781258482.769617,
+    "ast_hash": "89bddd67609148132aae154a32adea34",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-llm-learning-mode/specs/yaml-config/spec.md": {
+    "mtime": 1781258482.7697403,
+    "ast_hash": "8efb7c592ea5b492c83fc7186f1a7368",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-llm-learning-mode/tasks.md": {
+    "mtime": 1781258482.769922,
+    "ast_hash": "cbceed502ab922fd5731de0537f4a2e3",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-piper-streaming-tts/.openspec.yaml": {
+    "mtime": 1781258482.770033,
+    "ast_hash": "5d9279698973023d258878bcf03da639",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-piper-streaming-tts/design.md": {
+    "mtime": 1781258482.7701209,
+    "ast_hash": "6d2dc028727d94f7ca333b45bb0ddab2",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-piper-streaming-tts/proposal.md": {
+    "mtime": 1781258482.7701936,
+    "ast_hash": "73457839d28500f6d2672164e0dc70bc",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-piper-streaming-tts/specs/piper-streaming-playback/spec.md": {
+    "mtime": 1781258482.7703602,
+    "ast_hash": "3abc5bb4e8ce28c8a31579f4051ebdbc",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-piper-streaming-tts/specs/text-to-speech/spec.md": {
+    "mtime": 1781258482.770501,
+    "ast_hash": "edbe13b2fff7859afbf2158bb72d29f2",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-piper-streaming-tts/tasks.md": {
+    "mtime": 1781258482.7705956,
+    "ast_hash": "bb4a67efe03c19d909074ab0bb2b7695",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-web-dashboard-redesign/.openspec.yaml": {
+    "mtime": 1781258482.7707272,
+    "ast_hash": "5d9279698973023d258878bcf03da639",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-web-dashboard-redesign/design.md": {
+    "mtime": 1781258482.7709103,
+    "ast_hash": "69784809fae02e43d24dd167ab8871be",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-web-dashboard-redesign/proposal.md": {
+    "mtime": 1781258482.7709985,
+    "ast_hash": "4d14986384bcb7f9d3609a6c0a6f84bf",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-web-dashboard-redesign/specs/web-interface/spec.md": {
+    "mtime": 1781258482.7712502,
+    "ast_hash": "a863b69a59cecf1419cd7a9f2fb6bfd2",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-06-web-dashboard-redesign/tasks.md": {
+    "mtime": 1781258482.771335,
+    "ast_hash": "0994df345594861913e4ad0958c3840a",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-07-config-stt-arch-refactor/.openspec.yaml": {
+    "mtime": 1781258482.7714455,
+    "ast_hash": "f63adfbd18401f608d1cbd630e182a2e",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-07-config-stt-arch-refactor/design.md": {
+    "mtime": 1781258482.771546,
+    "ast_hash": "5e5d9c56b4a16d3ecd8f00422d4ce4a3",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-07-config-stt-arch-refactor/proposal.md": {
+    "mtime": 1781258482.7717147,
+    "ast_hash": "581376e9e9f24a936cb545a7f4ca3067",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-07-config-stt-arch-refactor/specs/actions-file/spec.md": {
+    "mtime": 1781258482.771911,
+    "ast_hash": "af32ed99385edc5a3f3081f23f7c6d04",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-07-config-stt-arch-refactor/specs/conf-layout/spec.md": {
+    "mtime": 1781258482.7720304,
+    "ast_hash": "2d2089781ab39322166df00d060b83e9",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-07-config-stt-arch-refactor/specs/multi-action-files/spec.md": {
+    "mtime": 1781258482.7722297,
+    "ast_hash": "8c194a589d02ed4439a081492c47e07a",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-07-config-stt-arch-refactor/specs/multi-stage-stt/spec.md": {
+    "mtime": 1781258482.7724488,
+    "ast_hash": "fd7e97080da5966cb8e92d24108137bd",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-07-config-stt-arch-refactor/specs/secrets-config/spec.md": {
+    "mtime": 1781258482.7725759,
+    "ast_hash": "fc87972de57430d3b7a99794e906d111",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-07-config-stt-arch-refactor/specs/wake-word-detection/spec.md": {
+    "mtime": 1781258482.7726996,
+    "ast_hash": "040ae65ccc1df444442ced8c91771e88",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-07-config-stt-arch-refactor/specs/yaml-config/spec.md": {
+    "mtime": 1781258482.772912,
+    "ast_hash": "44f73933c55fe0d515401eeb922c0df8",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-07-config-stt-arch-refactor/tasks.md": {
+    "mtime": 1781258482.7730045,
+    "ast_hash": "ee8f61d242b05894178a0d3d8c3c333f",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-07-fix-latent-bugs/.openspec.yaml": {
+    "mtime": 1781258482.7731154,
+    "ast_hash": "f63adfbd18401f608d1cbd630e182a2e",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-07-fix-latent-bugs/design.md": {
+    "mtime": 1781258482.7732155,
+    "ast_hash": "af090d5af46d73af8f81c87896101b46",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-07-fix-latent-bugs/proposal.md": {
+    "mtime": 1781258482.7732885,
+    "ast_hash": "882e8b24399585a0a9d6fd9af93eb59c",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-07-fix-latent-bugs/specs/audio-level-monitoring/spec.md": {
+    "mtime": 1781258482.773436,
+    "ast_hash": "fbbc141fe56252a9b899b82c951f3203",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-07-fix-latent-bugs/specs/stt-thread-watchdog/spec.md": {
+    "mtime": 1781258482.7735648,
+    "ast_hash": "9e4fb17f6652efbc79928bc179f7239f",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-07-fix-latent-bugs/specs/wake-word-detection/spec.md": {
+    "mtime": 1781258482.7736943,
+    "ast_hash": "0ae1efc48f03fb7c1c0d21fe540844a2",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-07-fix-latent-bugs/tasks.md": {
+    "mtime": 1781258482.77378,
+    "ast_hash": "d8aaafcb1ad1d9547e299d7090a1ba28",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-08-dark-light-mode-toggle/.openspec.yaml": {
+    "mtime": 1781258482.7738895,
+    "ast_hash": "563aa4b3ac0b07a7a7857a21749f7843",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-08-dark-light-mode-toggle/design.md": {
+    "mtime": 1781258482.7740476,
+    "ast_hash": "c61f5ae00a11855aa12d1090e10bf1d1",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-08-dark-light-mode-toggle/proposal.md": {
+    "mtime": 1781258482.7741325,
+    "ast_hash": "2e35150ca2727f94b9891702788bc792",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-08-dark-light-mode-toggle/specs/theme-toggle/spec.md": {
+    "mtime": 1781258482.7743742,
+    "ast_hash": "14c01a01ec82b5a50760545bda4deb6b",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-08-dark-light-mode-toggle/tasks.md": {
+    "mtime": 1781258482.774464,
+    "ast_hash": "0629aa83a9aab5d0527b43c6bf4faa73",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-08-reduce-wake-word-false-positives/.openspec.yaml": {
+    "mtime": 1781258482.7745998,
+    "ast_hash": "563aa4b3ac0b07a7a7857a21749f7843",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-08-reduce-wake-word-false-positives/design.md": {
+    "mtime": 1781258482.7747924,
+    "ast_hash": "9efefe278401e1693b4a04aa75d33406",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-08-reduce-wake-word-false-positives/proposal.md": {
+    "mtime": 1781258482.7748783,
+    "ast_hash": "8da520586aad8c74c3334d9fc9c052f9",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-08-reduce-wake-word-false-positives/specs/wake-word-detection-eval/spec.md": {
+    "mtime": 1781258482.7751405,
+    "ast_hash": "63e0785a835f9204b6feaebe9a570c9a",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-08-reduce-wake-word-false-positives/specs/wake-word-detection/spec.md": {
+    "mtime": 1781258482.7752614,
+    "ast_hash": "2cad7e2e7c8e35e6bfb578a7c3c2217c",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-08-reduce-wake-word-false-positives/tasks.md": {
+    "mtime": 1781258482.7753427,
+    "ast_hash": "a2544d0be4f0f88f7eed805081af704a",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-08-sherpa-onnx-kws-ctc/.openspec.yaml": {
+    "mtime": 1781258482.7754548,
+    "ast_hash": "563aa4b3ac0b07a7a7857a21749f7843",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-08-sherpa-onnx-kws-ctc/design.md": {
+    "mtime": 1781258482.7756202,
+    "ast_hash": "3acf404727ec0d8008934fdc7494aee6",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-08-sherpa-onnx-kws-ctc/proposal.md": {
+    "mtime": 1781258482.775705,
+    "ast_hash": "138a0df1dbc5966967a2379521d6fbe8",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-08-sherpa-onnx-kws-ctc/specs/multi-stage-stt/spec.md": {
+    "mtime": 1781258482.775881,
+    "ast_hash": "30ebe6308e0640e97fb71192c0eff513",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-08-sherpa-onnx-kws-ctc/specs/sherpa-kws-wake-detection/spec.md": {
+    "mtime": 1781258482.776001,
+    "ast_hash": "1dc732b5ced6b280226153dedcce36af",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-08-sherpa-onnx-kws-ctc/specs/sherpa-onnx-stt/spec.md": {
+    "mtime": 1781258482.776101,
+    "ast_hash": "534529fc47fe05fd33964bcf558080ff",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-08-sherpa-onnx-kws-ctc/tasks.md": {
+    "mtime": 1781258482.77618,
+    "ast_hash": "c9d505ef09ee92a885ca8c335a13c758",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-08-wake-word-confuser-grammar/.openspec.yaml": {
+    "mtime": 1781258482.7762856,
+    "ast_hash": "563aa4b3ac0b07a7a7857a21749f7843",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-08-wake-word-confuser-grammar/design.md": {
+    "mtime": 1781258482.7764537,
+    "ast_hash": "74987ee46de2ee929d4f282c650027bb",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-08-wake-word-confuser-grammar/proposal.md": {
+    "mtime": 1781258482.7765253,
+    "ast_hash": "0a37c1d680615dc641e7ada86fc253b5",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-08-wake-word-confuser-grammar/specs/wake-word-confusers/spec.md": {
+    "mtime": 1781258482.7767825,
+    "ast_hash": "a224bf575b87a5c1d90511a6a98736e5",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-08-wake-word-confuser-grammar/specs/wake-word-detection/spec.md": {
+    "mtime": 1781258482.7768965,
+    "ast_hash": "d2aaf0f5dd15e23456f8d314c7b60439",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-08-wake-word-confuser-grammar/tasks.md": {
+    "mtime": 1781258482.7769814,
+    "ast_hash": "dd633e443348fc0a5658a0e9deef9e54",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-09-dashboard-ui-polish/.openspec.yaml": {
+    "mtime": 1781258482.777101,
+    "ast_hash": "aaba5678cd6ab062ca2787f2e47c0c08",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-09-dashboard-ui-polish/design.md": {
+    "mtime": 1781258482.7772713,
+    "ast_hash": "748371d5136dc4d9e71bbb9b683420f1",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-09-dashboard-ui-polish/proposal.md": {
+    "mtime": 1781258482.777345,
+    "ast_hash": "c930d5d981466c7442bc51f54e4a0cf6",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-09-dashboard-ui-polish/tasks.md": {
+    "mtime": 1781258482.7775042,
+    "ast_hash": "42ae89cf4b493b8f1890df618f43e7db",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-09-fix-dashboard-wake-words/.openspec.yaml": {
+    "mtime": 1781258482.7776172,
+    "ast_hash": "aaba5678cd6ab062ca2787f2e47c0c08",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-09-fix-dashboard-wake-words/design.md": {
+    "mtime": 1781258482.7776973,
+    "ast_hash": "2081b5fbd64b94a8e390c4b6cec3e6af",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-09-fix-dashboard-wake-words/proposal.md": {
+    "mtime": 1781258482.7777696,
+    "ast_hash": "10c2266e476b83ac3d229c0e1cbe35c6",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-09-fix-dashboard-wake-words/specs/wake-word-panels/spec.md": {
+    "mtime": 1781258482.7779446,
+    "ast_hash": "ce3429ff5bc7c870b1edf86d89aac102",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-09-fix-dashboard-wake-words/tasks.md": {
+    "mtime": 1781258482.778027,
+    "ast_hash": "f83dc8b6909261f6ac98357035816efd",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-09-web-ui-refactor/design.md": {
+    "mtime": 1781258482.7781584,
+    "ast_hash": "4b8b140d0566f097c9aa9938dc1602fc",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-09-web-ui-refactor/proposal.md": {
+    "mtime": 1781258482.7782369,
+    "ast_hash": "649a5612d2ca60d8c2a79df7f4b8a1c6",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-09-web-ui-refactor/specs/web-interface/spec.md": {
+    "mtime": 1781258482.7784922,
+    "ast_hash": "4ec9af5c8f9260e3c868fb8b2f14d73f",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-09-web-ui-refactor/tasks.md": {
+    "mtime": 1781258482.7785726,
+    "ast_hash": "7b85893d878671f49a6f9f17ffef6a92",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-10-configurable-levenshtein-matching/.openspec.yaml": {
+    "mtime": 1781258482.7786956,
+    "ast_hash": "5b16868bf1deabfa5fe7a41a32c6185c",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-10-configurable-levenshtein-matching/design.md": {
+    "mtime": 1781258482.7790987,
+    "ast_hash": "b1dfb28ba26cc88c3e7f7256ee3c9790",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-10-configurable-levenshtein-matching/proposal.md": {
+    "mtime": 1781258482.77918,
+    "ast_hash": "b8e3784a5bbf7ce5f1d91406c712dc7d",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-10-configurable-levenshtein-matching/specs/action-dispatch/spec.md": {
+    "mtime": 1781258482.7794342,
+    "ast_hash": "ef2c8db59de775db5011acaa04e1c234",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-10-configurable-levenshtein-matching/tasks.md": {
+    "mtime": 1781258482.779511,
+    "ast_hash": "25e2ad1ea95201b3fe0b2f80a96240a0",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-10-streaming-intent-detector/.openspec.yaml": {
+    "mtime": 1781258482.7796218,
+    "ast_hash": "5b16868bf1deabfa5fe7a41a32c6185c",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-10-streaming-intent-detector/design.md": {
+    "mtime": 1781258482.7797866,
+    "ast_hash": "f9be44e8b0ad2967b22ed2e768562c1d",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-10-streaming-intent-detector/proposal.md": {
+    "mtime": 1781258482.7798648,
+    "ast_hash": "b55838d2ea0826fc6af8070d89c97e55",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-10-streaming-intent-detector/specs/multi-stage-stt/spec.md": {
+    "mtime": 1781258482.7800343,
+    "ast_hash": "1a82ff992e11f5a5b658d6e91b015069",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-10-streaming-intent-detector/specs/streaming-intent-detection/spec.md": {
+    "mtime": 1781258482.7802289,
+    "ast_hash": "2526fd4927aa18234f8dad85dcf283d6",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-10-streaming-intent-detector/tasks.md": {
+    "mtime": 1781258482.7803037,
+    "ast_hash": "dfb7f99eb168450d1ff99bcb075e4932",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-10-voice-volume-control/.openspec.yaml": {
+    "mtime": 1781258482.780396,
+    "ast_hash": "5b16868bf1deabfa5fe7a41a32c6185c",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-10-voice-volume-control/design.md": {
+    "mtime": 1781258482.7805502,
+    "ast_hash": "c48639d12fe817fc4c78de4123667cb3",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-10-voice-volume-control/proposal.md": {
+    "mtime": 1781258482.7806146,
+    "ast_hash": "66c5e8b4eb2dd2d3a0f9dce7b448d8bb",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-10-voice-volume-control/specs/voice-volume-control/spec.md": {
+    "mtime": 1781258482.780854,
+    "ast_hash": "9a9df64c348257e1b4cebc1924277a80",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-10-voice-volume-control/tasks.md": {
+    "mtime": 1781258482.7809222,
+    "ast_hash": "99739b315c5f4c4888f0b20d633ac80f",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-10-voice-volume-control/voice-volume-control/.openspec.yaml": {
+    "mtime": 1781258482.78102,
+    "ast_hash": "5b16868bf1deabfa5fe7a41a32c6185c",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-10-voice-volume-control/voice-volume-control/design.md": {
+    "mtime": 1781258482.7811787,
+    "ast_hash": "6a6b2962e862e785d6a6b4b61ab39252",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-10-voice-volume-control/voice-volume-control/proposal.md": {
+    "mtime": 1781258482.7812426,
+    "ast_hash": "bebad530f807de8f4c3436f0d40cd237",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-10-voice-volume-control/voice-volume-control/specs/action-dispatch/spec.md": {
+    "mtime": 1781258482.7813773,
+    "ast_hash": "d128a69ff81294e99543c9487f509afc",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-10-voice-volume-control/voice-volume-control/specs/audio-management/spec.md": {
+    "mtime": 1781258482.7814765,
+    "ast_hash": "921ed3792ad790a05f51781bb58a6e85",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-10-voice-volume-control/voice-volume-control/specs/voice-volume-control/spec.md": {
+    "mtime": 1781258482.7815878,
+    "ast_hash": "e0c0abb4cfc59005c8c5cdbfa6621107",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-10-voice-volume-control/voice-volume-control/tasks.md": {
+    "mtime": 1781258482.7816591,
+    "ast_hash": "2926d841dac40011199a7abeabfaf6a8",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-add-volume-slider-with-tone/.openspec.yaml": {
+    "mtime": 1781256179.7933824,
+    "ast_hash": "5b16868bf1deabfa5fe7a41a32c6185c",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-add-volume-slider-with-tone/design.md": {
+    "mtime": 1781256179.7935643,
+    "ast_hash": "8fc478beac4f6cfdfb4842d14bd25349",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-add-volume-slider-with-tone/proposal.md": {
+    "mtime": 1781256179.7936697,
+    "ast_hash": "5fd8cc11c479a3f86844b4d011bc2809",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-add-volume-slider-with-tone/specs/web-volume-control/spec.md": {
+    "mtime": 1781256179.7938654,
+    "ast_hash": "81ced12574e75add449dcfe780b25458",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-add-volume-slider-with-tone/tasks.md": {
+    "mtime": 1781256179.793956,
+    "ast_hash": "127f2c8064411a775715732e59ea5534",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-fix-tts-volume/.openspec.yaml": {
+    "mtime": 1781256179.7941372,
+    "ast_hash": "def395c587271070f380f7d51fb7aefe",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-fix-tts-volume/design.md": {
+    "mtime": 1781256179.794303,
+    "ast_hash": "74bf2e9a1e6998803946ebcf94d0667d",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-fix-tts-volume/proposal.md": {
+    "mtime": 1781256179.794381,
+    "ast_hash": "4a2682f440069b6675bbeae3fa457bb5",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-fix-tts-volume/specs/piper-streaming-playback/spec.md": {
+    "mtime": 1781256179.7945611,
+    "ast_hash": "99defd5a5a8fdeb4dc4326478ed17057",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-fix-tts-volume/tasks.md": {
+    "mtime": 1781256179.7946415,
+    "ast_hash": "7afa3b917d040d229ca66e855ebaf716",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-fix-web-volume-slider/.openspec.yaml": {
+    "mtime": 1781256179.7947562,
+    "ast_hash": "def395c587271070f380f7d51fb7aefe",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-fix-web-volume-slider/design.md": {
+    "mtime": 1781256179.7948358,
+    "ast_hash": "c5e43b31e2f021a4c14854ccee90c2e7",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-fix-web-volume-slider/proposal.md": {
+    "mtime": 1781256179.7949235,
+    "ast_hash": "6b203c17f82d201636839b516f5209ba",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-fix-web-volume-slider/specs/volume-control/delta.md": {
+    "mtime": 1781256179.795108,
+    "ast_hash": "1c3e9c85c1b57a8838e65de3785ecf6d",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-fix-web-volume-slider/tasks.md": {
+    "mtime": 1781256179.7951899,
+    "ast_hash": "a2e7d88d622dc22235665c859cdcced5",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-polish-volume-slider/.openspec.yaml": {
+    "mtime": 1781256179.7953243,
+    "ast_hash": "def395c587271070f380f7d51fb7aefe",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-polish-volume-slider/design.md": {
+    "mtime": 1781256179.795487,
+    "ast_hash": "454506d0770e041ed717b12a195a82ee",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-polish-volume-slider/proposal.md": {
+    "mtime": 1781256179.7955737,
+    "ast_hash": "efba7d5dc272fddd22027ae082aa360e",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-polish-volume-slider/specs/web-volume-control/spec.md": {
+    "mtime": 1781256179.795748,
+    "ast_hash": "380bec17632629575c1403cbfbd87c0d",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-polish-volume-slider/tasks.md": {
+    "mtime": 1781256179.7958379,
+    "ast_hash": "e564435f631fc86d2c819336a386cc72",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-portable-volume-control/.openspec.yaml": {
+    "mtime": 1781256179.7959409,
+    "ast_hash": "def395c587271070f380f7d51fb7aefe",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-portable-volume-control/design.md": {
+    "mtime": 1781256179.7960145,
+    "ast_hash": "4e7d0fed71a8c071ec3f073c000da8b7",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-portable-volume-control/proposal.md": {
+    "mtime": 1781256179.7960896,
+    "ast_hash": "2a727b45797dfae69963835e7f3f672f",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-portable-volume-control/specs/portable-volume/spec.md": {
+    "mtime": 1781256179.796256,
+    "ast_hash": "5bce6e2c4132c0760e5128b17a0d5e3f",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-portable-volume-control/tasks.md": {
+    "mtime": 1781256179.796335,
+    "ast_hash": "7066f87ba2ae53a55173ef18a4bb3075",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-replace-voice-volume-presets/.openspec.yaml": {
+    "mtime": 1781256179.7964532,
+    "ast_hash": "def395c587271070f380f7d51fb7aefe",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-replace-voice-volume-presets/design.md": {
+    "mtime": 1781256179.7965574,
+    "ast_hash": "fed9aebdbe68341dd48bfd4ded67d07b",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-replace-voice-volume-presets/proposal.md": {
+    "mtime": 1781256179.7966318,
+    "ast_hash": "ccc98c25113e77e55a62818873ff3f3d",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-replace-voice-volume-presets/specs/action-dispatch/spec.md": {
+    "mtime": 1781256179.7968132,
+    "ast_hash": "937bbd4f1ee67972a389adb33b0e3f40",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-replace-voice-volume-presets/specs/volume-presets/spec.md": {
+    "mtime": 1781256179.7969365,
+    "ast_hash": "9db903dbac857863ebf1e108dd4d4ba8",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-replace-voice-volume-presets/specs/web-interface/spec.md": {
+    "mtime": 1781256179.7971377,
+    "ast_hash": "ac289897b5df7780417171d39f5e809f",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-replace-voice-volume-presets/tasks.md": {
+    "mtime": 1781256179.7972064,
+    "ast_hash": "81329e01415c1aeb3d38c19a41d924d2",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-runtime-volume-gain-control/design.md": {
+    "mtime": 1781258482.7819343,
+    "ast_hash": "edf068e4ff35cdc02479a5f2ce868321",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-runtime-volume-gain-control/proposal.md": {
+    "mtime": 1781258482.7820992,
+    "ast_hash": "1fc88a7ec119b57c5862927c8c344fc7",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-runtime-volume-gain-control/specs/audio-management/spec.md": {
+    "mtime": 1781258482.782346,
+    "ast_hash": "3a19e412963e6c1529f299d7b41e2af1",
+    "semantic_hash": ""
+  },
+  "openspec/changes/archive/2026-06-11-runtime-volume-gain-control/tasks.md": {
+    "mtime": 1781258482.782499,
+    "ast_hash": "96a871c78748fa1f6027f6722efbb1b4",
+    "semantic_hash": ""
+  },
+  "openspec/specs/action-dispatch/spec.md": {
+    "mtime": 1781258482.7826962,
+    "ast_hash": "61d3686800296ad11119ab788bf8ca9f",
+    "semantic_hash": ""
+  },
+  "openspec/specs/actions-file/spec.md": {
+    "mtime": 1781258482.782807,
+    "ast_hash": "891e1baba4d3c82c871c501ccf979eaf",
+    "semantic_hash": ""
+  },
+  "openspec/specs/audio-level-monitoring/spec.md": {
+    "mtime": 1781258482.7828991,
+    "ast_hash": "f75e09c0054107d87e9b8b877c2dc461",
+    "semantic_hash": ""
+  },
+  "openspec/specs/audio-management/spec.md": {
+    "mtime": 1781258482.7830052,
+    "ast_hash": "275e5dfc09353dffe9a770ed7256fc54",
+    "semantic_hash": ""
+  },
+  "openspec/specs/conf-layout/spec.md": {
+    "mtime": 1781258482.7831092,
+    "ast_hash": "e77b1d02d0c567ea14015c9d70d35335",
+    "semantic_hash": ""
+  },
+  "openspec/specs/config-error-feedback/spec.md": {
+    "mtime": 1781258482.7832103,
+    "ast_hash": "c2bec82f0d256d4c7c911cb40662b81e",
+    "semantic_hash": ""
+  },
+  "openspec/specs/config-hardening/spec.md": {
+    "mtime": 1781258482.7833169,
+    "ast_hash": "064c65824d01de1ecf05de45f0bf1f57",
+    "semantic_hash": ""
+  },
+  "openspec/specs/graceful-shutdown/spec.md": {
+    "mtime": 1781258482.783429,
+    "ast_hash": "6724e6e09bdf3ec1a78986be3778df85",
+    "semantic_hash": ""
+  },
+  "openspec/specs/home-assistant-integration/spec.md": {
+    "mtime": 1781258482.7835364,
+    "ast_hash": "161d4f66fc9d3ce83a8c928568f74b48",
+    "semantic_hash": ""
+  },
+  "openspec/specs/italian-phonetic-normalization/spec.md": {
+    "mtime": 1781258482.7836363,
+    "ast_hash": "5a1e7629c1f8438a3de6fe465ce42aa0",
+    "semantic_hash": ""
+  },
+  "openspec/specs/llm-command-learning/spec.md": {
+    "mtime": 1781258482.7838135,
+    "ast_hash": "0302382296db1c448d6dd69fbf884556",
+    "semantic_hash": ""
+  },
+  "openspec/specs/llm-conversation/spec.md": {
+    "mtime": 1781258482.783922,
+    "ast_hash": "6aff381d9d6229c380b14af244613712",
+    "semantic_hash": ""
+  },
+  "openspec/specs/mqtt-integration/spec.md": {
+    "mtime": 1781258482.7840273,
+    "ast_hash": "47587415845b7e6922ac3c67c5c9146e",
+    "semantic_hash": ""
+  },
+  "openspec/specs/multi-action-files/spec.md": {
+    "mtime": 1781258482.784214,
+    "ast_hash": "19232a767c8931690117ce124a3cc7ed",
+    "semantic_hash": ""
+  },
+  "openspec/specs/multi-stage-stt/spec.md": {
+    "mtime": 1781258482.7844005,
+    "ast_hash": "746ac303803c860124abe1fe3f157636",
+    "semantic_hash": ""
+  },
+  "openspec/specs/piper-streaming-playback/spec.md": {
+    "mtime": 1781258482.7845063,
+    "ast_hash": "610d547415d1ddf1a4c4ff8423cc0707",
+    "semantic_hash": ""
+  },
+  "openspec/specs/secrets-config/spec.md": {
+    "mtime": 1781258482.784606,
+    "ast_hash": "614eda4036aeb03b9d279497d6e09e21",
+    "semantic_hash": ""
+  },
+  "openspec/specs/sherpa-kws-wake-detection/spec.md": {
+    "mtime": 1781258482.784735,
+    "ast_hash": "800c57672694b3550a8b07c70210fe32",
+    "semantic_hash": ""
+  },
+  "openspec/specs/sherpa-onnx-stt/spec.md": {
+    "mtime": 1781258482.784837,
+    "ast_hash": "f377ccfab9fb0e75619cee2ac4bdd9ab",
+    "semantic_hash": ""
+  },
+  "openspec/specs/streaming-intent-detection/spec.md": {
+    "mtime": 1781258482.7850044,
+    "ast_hash": "a1d9ede01da94c83160c04d155cc49b9",
+    "semantic_hash": ""
+  },
+  "openspec/specs/stt-thread-watchdog/spec.md": {
+    "mtime": 1781258482.7851012,
+    "ast_hash": "797d41b1234d3ae96a5e82303629fb0e",
+    "semantic_hash": ""
+  },
+  "openspec/specs/telegram-notify/spec.md": {
+    "mtime": 1781258482.7851985,
+    "ast_hash": "98ad9a2ba8f01a473d5a2788c9932c01",
+    "semantic_hash": ""
+  },
+  "openspec/specs/text-to-speech/spec.md": {
+    "mtime": 1781258482.7852876,
+    "ast_hash": "041808b23c46ea19e95500d244c54a62",
+    "semantic_hash": ""
+  },
+  "openspec/specs/theme-toggle/spec.md": {
+    "mtime": 1781258482.7854548,
+    "ast_hash": "494baa947e274a4eb20e0ed4d0046971",
+    "semantic_hash": ""
+  },
+  "openspec/specs/volume-presets/spec.md": {
+    "mtime": 1781256179.797368,
+    "ast_hash": "9db903dbac857863ebf1e108dd4d4ba8",
+    "semantic_hash": ""
+  },
+  "openspec/specs/wake-word-confusers/spec.md": {
+    "mtime": 1781258482.7856326,
+    "ast_hash": "98c872a70a5a01d9a14aaa269ab099c3",
+    "semantic_hash": ""
+  },
+  "openspec/specs/wake-word-detection-eval/spec.md": {
+    "mtime": 1781258482.7858105,
+    "ast_hash": "1128c4f2f9b717703626aa57895f2b94",
+    "semantic_hash": ""
+  },
+  "openspec/specs/wake-word-detection/spec.md": {
+    "mtime": 1781258482.7859943,
+    "ast_hash": "87b740f9bf1a9c19ab77a6335f51328d",
+    "semantic_hash": ""
+  },
+  "openspec/specs/web-interface/spec.md": {
+    "mtime": 1781256179.7975209,
+    "ast_hash": "518d64b6721b2ceb363ca1b41f0837c0",
+    "semantic_hash": ""
+  },
+  "openspec/specs/web-volume-control/spec.md": {
+    "mtime": 1781256179.797715,
+    "ast_hash": "e1440bd697a1072b787f8070abe3b6b0",
+    "semantic_hash": ""
+  },
+  "openspec/specs/yaml-config/spec.md": {
+    "mtime": 1781258482.7861218,
+    "ast_hash": "c3367a5cc179d54128938f4541e698e8",
+    "semantic_hash": ""
+  },
+  "records.txt": {
+    "mtime": 1781256179.7981842,
+    "ast_hash": "184cbc126f38900fab25beefed6efffb",
+    "semantic_hash": ""
+  },
+  "alexa_custom/static/favicon.png": {
+    "mtime": 1781258482.7563064,
+    "ast_hash": "326d367014d7490e99b05733d0927ba3",
+    "semantic_hash": ""
+  },
+  "docs/logo_alexa.png": {
+    "mtime": 1781088036.0945342,
+    "ast_hash": "d0b412af35c7968993cb6f0dfceff4d1",
+    "semantic_hash": ""
+  }
+}
