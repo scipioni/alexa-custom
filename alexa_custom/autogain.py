@@ -198,11 +198,12 @@ _PINK_NOISE_FADE_MS = 50
 _PINK_NOISE_PLAYBACK_VOLUME = 0.5
 _HEADROOM_TARGET_DB = 6.0
 _CLIPPING_MAX_RATIO = 0.01
+_FAR_MIN_SNR_DB = 6.0
 _CONFIRM_TOLERANCE = 0.20
 
 _AUTO_PLAY_VOLUMES = [
-    ("lontano", 0.12, 3.0),
-    ("medio", 0.40, 2.0),
+    ("lontano", 0.06, 5.0),
+    ("medio", 0.30, 2.0),
     ("vicino", 0.80, 1.0),
 ]
 
@@ -614,10 +615,17 @@ def _select_best_gain(results: list[dict]) -> float:
     def _any_headroom(r: dict) -> bool:
         return any(v["headroom_db"] >= _HEADROOM_TARGET_DB for v in r["volumes"].values())
 
-    candidates = [r for r in results if not _any_clip(r) and _any_headroom(r)]
+    def _far_snr_ok(r: dict) -> bool:
+        far = r["volumes"].get("lontano", {})
+        return far.get("snr_db", -999.0) >= _FAR_MIN_SNR_DB
+
+    candidates = [r for r in results if not _any_clip(r) and _any_headroom(r) and _far_snr_ok(r)]
+    if not candidates:
+        logger.warning("No gain meets far SNR constraint (>=%.0fdB) — relaxing", _FAR_MIN_SNR_DB)
+        candidates = [r for r in results if not _any_clip(r) and _any_headroom(r)]
     if not candidates:
         candidates = sorted(results, key=lambda r: (-r["weighted_snr"], r["gain"]))
-        logger.warning("No gain passes constraints — picking best weighted SNR")
+        logger.warning("No gain passes any constraint — picking best weighted SNR")
     candidates.sort(key=lambda r: r["weighted_snr"], reverse=True)
     return candidates[0]["gain"]
 >>>>>>> db0c56e (fix: multi-volume playback with far-distance weighting in acoustic calibration)
