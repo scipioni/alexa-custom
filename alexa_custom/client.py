@@ -4,6 +4,7 @@ import logging
 import os
 import signal
 import threading
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -30,6 +31,7 @@ from alexa_custom.audio import (
     play_call_start,
     set_pipewire_defaults,
 )
+from alexa_custom.watchdog import sd_notify, should_use_watchdog
 
 # Re-exported for backward compatibility (tests and callers import these from client).
 from alexa_custom.livekit_audio import (  # noqa: F401
@@ -598,8 +600,24 @@ async def _async_main(
     )
     _base_reconnect_delay = reconnect_delay
     _ever_connected = False
+
+    use_watchdog = should_use_watchdog()
+    last_watchdog_ping = 0.0
+    watchdog_interval = 10.0  # ping every 10 seconds
+
+    # Send initial systemd notification to signal startup complete.
+    if use_watchdog:
+        sd_notify("READY=1")
+        last_watchdog_ping = time.time()
+
     try:
         while not stop_event.is_set():
+            # Periodically ping systemd watchdog to prevent auto-restart.
+            # Only ping if enabled (Type=notify + WatchdogSec in systemd unit).
+            if use_watchdog and (time.time() - last_watchdog_ping) >= watchdog_interval:
+                sd_notify("WATCHDOG=1")
+                last_watchdog_ping = time.time()
+
             # On-demand mode: wait for STT to signal a connect trigger.
             if connect_trigger is not None:
                 logger.info("Waiting for voice trigger to connect to LiveKit…")
