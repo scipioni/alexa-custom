@@ -125,6 +125,7 @@ async def test_run_action_dispatch():
 class TestConfigurableMatching:
     def test_levenshtein_distance(self):
         from alexa_custom.actions import levenshtein_distance
+
         assert levenshtein_distance("si", "si") == 0
         assert levenshtein_distance("si", "se") == 1
         assert levenshtein_distance("si", "si grazie") == 7
@@ -133,8 +134,11 @@ class TestConfigurableMatching:
 
     def test_get_similarity_score_all_algorithms(self):
         from alexa_custom.actions import get_similarity_score
+
         # 1. levenshtein similarity
-        assert get_similarity_score("ciao", "miao", "levenshtein") == 75.0  # (1 - 1/4) * 100
+        assert (
+            get_similarity_score("ciao", "miao", "levenshtein") == 75.0
+        )  # (1 - 1/4) * 100
         assert get_similarity_score("si", "si", "levenshtein") == 100.0
 
         # 2. ratio similarity
@@ -147,10 +151,20 @@ class TestConfigurableMatching:
         triggers = [_trigger("accendi la luce")]
 
         # token_set_ratio is tolerant to word ordering & extra words
-        assert match_trigger("luce accendi la", triggers, threshold=80, algorithm="token_set_ratio") is not None
+        assert (
+            match_trigger(
+                "luce accendi la", triggers, threshold=80, algorithm="token_set_ratio"
+            )
+            is not None
+        )
 
         # levenshtein is strict about character alignment and sequence
-        assert match_trigger("luce accendi la", triggers, threshold=80, algorithm="levenshtein") is None
+        assert (
+            match_trigger(
+                "luce accendi la", triggers, threshold=80, algorithm="levenshtein"
+            )
+            is None
+        )
 
     def test_short_phrase_exact_match_guard(self):
         # Trigger phrase "si" has length 2 (< 4)
@@ -167,6 +181,7 @@ class TestConfigurableMatching:
     @pytest.mark.asyncio
     async def test_reply_matching_independence(self):
         from alexa_custom.config import RecognitionConfig
+
         # Mock ActionsConfig
         config = MagicMock()
         config.recognition = RecognitionConfig(
@@ -177,6 +192,7 @@ class TestConfigurableMatching:
         )
 
         from alexa_custom.actions import handle_ask
+
         action = ActionEntry(
             type="ask",
             params={"text": "vuoi?", "timeout": 1.0},
@@ -188,7 +204,9 @@ class TestConfigurableMatching:
         # Under levenshtein threshold of 90.0, "chiamare" should fail to match "chiama"!
         mock_listen_fn = AsyncMock(return_value="chiamare")
 
-        with patch("alexa_custom.actions.dispatch", new_callable=AsyncMock) as mock_dispatch:
+        with patch(
+            "alexa_custom.actions.dispatch", new_callable=AsyncMock
+        ) as mock_dispatch:
             with patch("alexa_custom.tts.get_engine"):
                 await handle_ask(
                     action,
@@ -204,7 +222,9 @@ class TestConfigurableMatching:
 
         # Let's verify that with an exact match "chiama" -> 100% -> should match!
         mock_listen_fn_exact = AsyncMock(return_value="chiama")
-        with patch("alexa_custom.actions.dispatch", new_callable=AsyncMock) as mock_dispatch_exact:
+        with patch(
+            "alexa_custom.actions.dispatch", new_callable=AsyncMock
+        ) as mock_dispatch_exact:
             with patch("alexa_custom.tts.get_engine"):
                 await handle_ask(
                     action,

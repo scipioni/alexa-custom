@@ -964,40 +964,67 @@
       align-items: center;
       gap: 5px;
       margin-top: 8px;
-      padding: 8px 0;
+      padding: 12px 0;
       border-top: 1px solid var(--border);
     }
     #volume-slider {
       -webkit-appearance: none;
       width: 100%;
-      height: 6px;
-      background: var(--bar-bg);
-      border-radius: 3px;
+      height: 12px;
+      background: linear-gradient(
+        to right,
+        var(--vol-color, var(--info)) 0%,
+        var(--vol-color, var(--info)) var(--vol-pct, 50%),
+        var(--bar-bg) var(--vol-pct, 50%)
+      );
+      border-radius: 6px;
       outline: none;
       cursor: pointer;
+      transition: box-shadow 0.15s ease;
     }
     #volume-slider::-webkit-slider-thumb {
       -webkit-appearance: none;
       appearance: none;
-      width: 16px;
-      height: 16px;
+      width: 24px;
+      height: 24px;
       border-radius: 50%;
-      background: var(--info);
+      background: var(--vol-color, var(--info));
       cursor: pointer;
-      box-shadow: 0 0 8px rgba(96,165,250,0.5);
-      transition: transform 0.1s ease;
+      border: 2px solid var(--vol-color, var(--info));
+      box-shadow: 0 0 12px var(--vol-color, var(--info));
+      transition: transform 0.12s ease, box-shadow 0.12s ease;
     }
     #volume-slider::-webkit-slider-thumb:hover {
-      transform: scale(1.2);
+      transform: scale(1.15);
+      box-shadow: 0 0 18px var(--vol-color, var(--info));
+    }
+    #volume-slider.dragging::-webkit-slider-thumb {
+      transform: scale(1.3);
+      box-shadow: 0 0 26px var(--vol-color, var(--info));
     }
     #volume-slider::-moz-range-thumb {
-      width: 16px;
-      height: 16px;
+      width: 24px;
+      height: 24px;
       border-radius: 50%;
-      background: var(--info);
+      background: var(--vol-color, var(--info));
       cursor: pointer;
-      border: none;
-      box-shadow: 0 0 8px rgba(96,165,250,0.5);
+      border: 2px solid var(--vol-color, var(--info));
+      box-shadow: 0 0 12px var(--vol-color, var(--info));
+      transition: transform 0.12s ease, box-shadow 0.12s ease;
+    }
+    #volume-slider.dragging::-moz-range-thumb {
+      transform: scale(1.3);
+      box-shadow: 0 0 26px var(--vol-color, var(--info));
+    }
+    #volume-slider::-moz-range-track {
+      height: 12px;
+      border-radius: 6px;
+      background: var(--bar-bg);
+    }
+    #volume-slider::-moz-range-progress {
+      height: 12px;
+      border-radius: 6px;
+      background: var(--vol-color, var(--info));
     }
 
     /* ── room panel ──────────────────────────────────────────────────────── */
@@ -1396,16 +1423,36 @@
     const _heroTimers = {};
 
     // ── volume control ─────────────────────────────────────────────────────
+    function _setSliderFill(vol) {
+      const slider = document.getElementById('volume-slider');
+      if (!slider) return;
+      const pct = Math.round(vol * 100);
+      slider.style.setProperty('--vol-pct', pct + '%');
+      let color;
+      if (vol < 0.70) {
+        color = getComputedStyle(document.documentElement).getPropertyValue('--match').trim() || '#4ade80';
+      } else if (vol < 0.85) {
+        color = getComputedStyle(document.documentElement).getPropertyValue('--amber').trim() || '#facc15';
+      } else {
+        color = getComputedStyle(document.documentElement).getPropertyValue('--nomatch').trim() || '#f87171';
+      }
+      slider.style.setProperty('--vol-color', color);
+    }
+
     function initVolumeSlider(volume) {
       const slider = document.getElementById('volume-slider');
       const percent = document.getElementById('volume-percent');
       if (slider && percent) {
         slider.value = volume * 100;
         percent.textContent = Math.round(volume * 100) + '%';
+        _setSliderFill(volume);
         slider.oninput = () => {
           percent.textContent = slider.value + '%';
+          _setSliderFill(parseFloat(slider.value) / 100);
         };
+        slider.onmousedown = () => { slider.classList.add('dragging'); };
         slider.onmouseup = () => {
+          slider.classList.remove('dragging');
           sendVolumeControl('set_volume', {volume: parseFloat(slider.value) / 100});
           playBeepForVolume(parseFloat(slider.value) / 100);
         };
@@ -1427,7 +1474,6 @@
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
       ws.send(JSON.stringify({type: 'control', action: type, ...payload}));
     }
-
     function connect() {
       clearTimeout(reconnTimer);
       if (ws) { ws.onclose = ws.onerror = null; try { ws.close(); } catch(e) {} }
@@ -1580,9 +1626,23 @@
           break;
         }
         case 'room_status': setRoomStatus(m.status, m.timeout||0); break;
-        case 'system_stats': updateSparkline(m); break;
+        case 'system_stats': {
+          updateSparkline(m);
+          if (m.output_volume != null) {
+            const slider = document.getElementById('volume-slider');
+            const percent = document.getElementById('volume-percent');
+            if (slider && percent) {
+              const current = parseFloat(slider.value) / 100;
+              if (Math.abs(m.output_volume - current) > 0.005) {
+                slider.value = m.output_volume * 100;
+                percent.textContent = Math.round(m.output_volume * 100) + '%';
+                _setSliderFill(m.output_volume);
+              }
+            }
+          }
+          break;
+        }
         case 'error': setSt('Error: ' + (m.msg||'unknown'), null); break;
-        case 'reload': location.reload(); break;
       }
     }
 

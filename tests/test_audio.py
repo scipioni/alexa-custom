@@ -30,7 +30,38 @@ def test_play_array_scales_by_output_volume():
             written_bytes = mock_wf.writeframes.call_args[0][0]
             written_samples = np.frombuffer(written_bytes, dtype=np.int16)
 
+            # Digital gain is applied at the application layer — samples
+            # are scaled by _OUTPUT_VOLUME before writing the WAV
             assert np.all(written_samples == 16383)
+
+
+def test_play_array_full_volume_passthrough():
+    audio_hw._OUTPUT_VOLUME = 1.0
+
+    test_audio = np.ones((100, 2), dtype=np.float32)
+
+    with (
+        patch("tempfile.mkstemp") as mock_mkstemp,
+        patch("alexa_custom.audio_ops.subprocess.run"),
+    ):
+        mock_mkstemp.return_value = (999, "dummy_temp_path.wav")
+
+        with (
+            patch("alexa_custom.audio_ops.os.close"),
+            patch("alexa_custom.audio_ops.os.unlink"),
+            patch("wave.open") as mock_wave_open,
+        ):
+            mock_wf = MagicMock()
+            mock_wave_open.return_value.__enter__.return_value = mock_wf
+
+            audio._play_array(test_audio, 16000)
+
+            mock_wf.writeframes.assert_called_once()
+            written_bytes = mock_wf.writeframes.call_args[0][0]
+            written_samples = np.frombuffer(written_bytes, dtype=np.int16)
+
+            # At full volume, samples pass through unattenuated
+            assert np.all(written_samples == 32767)
 
 
 def test_play_wav_file_no_volume_flag():
@@ -76,10 +107,7 @@ def test_set_input_gain_calls_pactl_when_source_found():
     ):
         audio_hw.set_input_gain(None, "NewPie", 1.5)
 
-        pactl_calls = [
-            c for c in mock_run.call_args_list
-            if c[0][0][0] == "pactl"
-        ]
+        pactl_calls = [c for c in mock_run.call_args_list if c[0][0][0] == "pactl"]
         assert len(pactl_calls) == 1, f"Expected 1 pactl call, got {len(pactl_calls)}"
         pactl_cmd = pactl_calls[0][0][0]
         assert "set-source-volume" in pactl_cmd
@@ -102,10 +130,7 @@ def test_set_input_gain_noop_when_source_not_found():
     ):
         audio_hw.set_input_gain(None, "NonExistentDevice", 2.0)
 
-        pactl_calls = [
-            c for c in mock_run.call_args_list
-            if c[0][0][0] == "pactl"
-        ]
+        pactl_calls = [c for c in mock_run.call_args_list if c[0][0][0] == "pactl"]
         assert len(pactl_calls) == 0, f"Expected 0 pactl calls, got {pactl_calls}"
         assert audio_hw._INPUT_GAIN == 2.0
 
@@ -116,10 +141,11 @@ def test_restore_hw_pcm_noop_without_newpie():
             audio_hw._restore_hw_pcm()
 
             amixer_calls = [
-                c for c in mock_run.call_args_list
-                if c[0][0][0] == "amixer"
+                c for c in mock_run.call_args_list if c[0][0][0] == "amixer"
             ]
-            assert len(amixer_calls) == 0, f"Expected 0 amixer calls, got {amixer_calls}"
+            assert len(amixer_calls) == 0, (
+                f"Expected 0 amixer calls, got {amixer_calls}"
+            )
 
 
 def test_restore_hw_pcm_calls_amixer_when_newpie_found():
@@ -128,8 +154,7 @@ def test_restore_hw_pcm_calls_amixer_when_newpie_found():
             audio_hw._restore_hw_pcm()
 
             amixer_calls = [
-                c for c in mock_run.call_args_list
-                if c[0][0][0] == "amixer"
+                c for c in mock_run.call_args_list if c[0][0][0] == "amixer"
             ]
             assert len(amixer_calls) == 1
             amixer_cmd = amixer_calls[0][0][0]

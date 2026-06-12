@@ -38,7 +38,24 @@ triggers:
   - phrase: "impara nuovo comando"
     actions:
       - type: llm_learn
-
   - phrase: "volume al"
     actions:
       - type: set_volume_from_transcript
+
+  - phrase: "Volume basso"
+    actions:
+      - type: set_volume
+        mode: absolute
+        value: 0.1
+
+  - phrase: "Volume medio"
+    actions:
+      - type: set_volume
+        mode: absolute
+        value: 0.5
+
+  - phrase: "Volume alto"
+    actions:
+      - type: set_volume
+        mode: absolute
+        value: 0.9

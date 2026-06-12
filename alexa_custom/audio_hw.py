@@ -10,7 +10,6 @@ from pathlib import Path
 
 import numpy as np
 import pulsectl
-import yaml
 
 logger = logging.getLogger(__name__)
 
@@ -39,11 +38,14 @@ def save_volume_config(volume: float) -> None:
 
     try:
         import yaml
+
         with open(config_file, "r") as f:
             config = yaml.safe_load(f) or {}
 
         if not isinstance(config, dict):
-            logger.warning("config.yaml has invalid structure, cannot persist volume state")
+            logger.warning(
+                "config.yaml has invalid structure, cannot persist volume state"
+            )
             return
 
         config.setdefault("audio", {})
@@ -295,7 +297,9 @@ def set_input_gain(
 
         _INPUT_GAIN = 1.0 if hw_ok else max(0.0, gain)
         if not hw_ok:
-            logger.warning(f"Input gain {gain:.0%} applied in software (CPU overhead, clipping risk)")
+            logger.warning(
+                f"Input gain {gain:.0%} applied in software (CPU overhead, clipping risk)"
+            )
 
 
 def enforce_audio_state(
