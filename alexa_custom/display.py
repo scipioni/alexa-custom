@@ -60,6 +60,21 @@ STATE_SHORT: dict[str, str] = {
     "starting": "ST",
 }
 
+STATE_ICON_IDS: dict[str, int] = {
+    "idle": 0,
+    "listening": 1,
+    "wake": 1,
+    "transcribing": 1,
+    "llm_thinking": 2,
+    "llm_reply": 3,
+    "speaking": 3,
+    "gated": 7,
+    "nomatch": 4,
+    "connected": 5,
+    "disconnected": 6,
+    "starting": 8,
+}
+
 STATE_TEXTS: dict[str, str] = {
     "idle": "in ascolto",
     "listening": "ascolto...",
@@ -817,9 +832,9 @@ class BridgeDisplay(DisplayBackend):
 
     def show(self, state: str) -> None:
         color = STATE_COLORS.get(state, (0, 0, 0))
-        text = STATE_SHORT.get(state, state[:2].upper())
+        icon_id = STATE_ICON_IDS.get(state, 0)
         try:
-            ok1 = self._client.set_text(text)
+            ok1 = self._client.call("set_icon", icon_id)
             ok2 = self._client.set_leds(
                 color[0],
                 color[1],
