@@ -9,6 +9,7 @@ import pulsectl
 from alexa_custom.audio_hw import (
     enforce_audio_state,
     _restore_hw_pcm,
+    pulse_session,
     set_output_volume,
     set_input_gain,
     invalidate_pipewire_device_cache,
@@ -48,7 +49,9 @@ class AudioWatcher(threading.Thread):
         )
         while not self._stop.is_set():
             try:
-                with pulsectl.Pulse("alexa-watcher") as pulse:
+                with pulse_session("alexa-watcher") as pulse:
+                    # Restore on open (the connection itself reset PCM); the
+                    # session also restores again on close.
                     _restore_hw_pcm()
                     self._check_and_enforce(pulse)
                     pulse.event_mask_set("card", "sink", "source")

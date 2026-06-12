@@ -466,11 +466,10 @@ async def handle_tone(action: ActionEntry, **_):
 
 @registry.register("set_volume")
 async def handle_set_volume(action: ActionEntry, **_):
-    import pulsectl
-
     from alexa_custom.audio import play_tone
     from alexa_custom.audio_hw import (
         get_output_volume,
+        pulse_session,
         save_volume_config,
         set_output_volume,
     )
@@ -490,7 +489,7 @@ async def handle_set_volume(action: ActionEntry, **_):
     if abs(new_vol - current) < 0.001:
         return
 
-    with pulsectl.Pulse("alexa-volume") as pulse:
+    with pulse_session("alexa-volume") as pulse:
         set_output_volume(pulse, None, new_vol)
     save_volume_config(new_vol)
     await asyncio.to_thread(play_tone, "info")
@@ -499,7 +498,11 @@ async def handle_set_volume(action: ActionEntry, **_):
 @registry.register("set_volume_from_transcript")
 async def handle_set_volume_from_transcript(transcript: str | None = None, **_):
     from alexa_custom.audio import play_tone
-    from alexa_custom.audio_hw import save_volume_config, set_output_volume
+    from alexa_custom.audio_hw import (
+        pulse_session,
+        save_volume_config,
+        set_output_volume,
+    )
     from alexa_custom.number_parser import parse_percentage
 
     if not transcript:
@@ -514,9 +517,7 @@ async def handle_set_volume_from_transcript(transcript: str | None = None, **_):
         )
         return
 
-    import pulsectl
-
-    with pulsectl.Pulse("alexa-volume") as pulse:
+    with pulse_session("alexa-volume") as pulse:
         set_output_volume(pulse, None, value)
     save_volume_config(value)
     logger.info("Set volume to %.0f%% via '%s'", value * 100, transcript)

@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 from unittest.mock import patch, MagicMock
 
 import alexa_custom.audio as audio
@@ -186,3 +187,29 @@ def test_configure_propagates_to_globals(monkeypatch):
     assert audio_hw._TONE_PREROLL_MS == 400
     assert audio_hw._DEFAULT_CARD_NAME == "ConferenceCam"
     assert audio_hw._SAMPLERATE == {"usb": 44100, "bluetooth": 16000}
+
+
+def test_pulse_session_restores_pcm_on_success():
+    fake_pulse = MagicMock()
+    with (
+        patch("alexa_custom.audio_hw.pulsectl.Pulse", return_value=fake_pulse),
+        patch("alexa_custom.audio_hw._restore_hw_pcm") as mock_restore,
+    ):
+        with audio_hw.pulse_session("test") as p:
+            assert p is fake_pulse
+    fake_pulse.close.assert_called_once()
+    mock_restore.assert_called_once()
+
+
+def test_pulse_session_restores_pcm_on_exception():
+    fake_pulse = MagicMock()
+    with (
+        patch("alexa_custom.audio_hw.pulsectl.Pulse", return_value=fake_pulse),
+        patch("alexa_custom.audio_hw._restore_hw_pcm") as mock_restore,
+    ):
+        with pytest.raises(RuntimeError):
+            with audio_hw.pulse_session("test"):
+                raise RuntimeError("boom")
+    # PCM must be restored even when the body raises.
+    fake_pulse.close.assert_called_once()
+    mock_restore.assert_called_once()
