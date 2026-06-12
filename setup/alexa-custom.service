@@ -4,7 +4,7 @@ After=pipewire.service pipewire-pulse.service
 Wants=pipewire.service pipewire-pulse.service
 
 [Service]
-Type=notify
+Type=simple
 WorkingDirectory=%h/alexa-custom
 ExecStartPre=-/usr/bin/amixer -c 0 sset PCM 100%
 ExecStartPre=-/usr/bin/amixer -c NewPie sset PCM 100%
