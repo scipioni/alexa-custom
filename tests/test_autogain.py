@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import numpy as np
 
+<<<<<<< HEAD
 from alexa_custom.autogain import (
     _compute_channel_balance,
     _compute_frequency_weighted_snr,
@@ -12,6 +13,9 @@ from alexa_custom.autogain import (
     _select_best_gain,
     main,
 )
+=======
+from alexa_custom.autogain import TEST_GAINS, main
+>>>>>>> 73b63b7 (refactor: autogain redesign - test all gains at all distances)
 
 
 def _mock_config():
@@ -142,7 +146,11 @@ def test_custom_text_used(
 @patch("alexa_custom.autogain._capture_and_transcribe")
 @patch("alexa_custom.autogain.set_input_gain")
 @patch("alexa_custom.autogain.time.sleep")
+<<<<<<< HEAD
 def test_summary_contains_coarse_gains(
+=======
+def test_all_gains_in_summary(
+>>>>>>> 73b63b7 (refactor: autogain redesign - test all gains at all distances)
     mock_sleep,
     mock_set_gain,
     mock_capture,
@@ -163,6 +171,7 @@ def test_summary_contains_coarse_gains(
         main()
 
     captured = capsys.readouterr()
+<<<<<<< HEAD
     for gain in [0.05, 0.15, 0.4, 1.0, 3.0]:
         assert f"{gain:.2f}" in captured.out or f" {gain}" in captured.out
 
@@ -392,3 +401,7 @@ class TestRunAutogainAutoIntegration:
 
         mock_save.assert_called_once()
         assert 0.1 <= result <= 6.0
+=======
+    for gain in TEST_GAINS:
+        assert f"{gain:.2f}" in captured.out
+>>>>>>> 73b63b7 (refactor: autogain redesign - test all gains at all distances)

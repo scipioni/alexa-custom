@@ -24,18 +24,21 @@ _CHUNK = 4096
 DEFAULT_PHRASE = "ascolta assistente chiama aiuto"
 DEFAULT_DURATION = 3.0
 
+<<<<<<< HEAD
 COARSE_GAINS = [0.05, 0.15, 0.4, 1.0, 3.0]
 EXTENDED_GAINS = [1.0, 3.0, 5.0]
 COARSE_THRESHOLD = 30.0
 
+=======
+TEST_GAINS = [0.5, 1.0, 2.0, 4.0]
 
-def _rms_level(data: bytes) -> float:
-    samples = np.frombuffer(data, dtype=np.int16)
-    n = len(samples)
-    if n == 0:
-        return 0.0
-    return float(np.linalg.norm(samples)) / (32768.0 * n**0.5)
+DISTANCES = [
+    ("un metro",     "a un metro dal microfono"),
+    ("tre metri",    "a tre metri dal microfono"),
+    ("cinque metri", "a cinque metri dal microfono"),
+]
 
+>>>>>>> 73b63b7 (refactor: autogain redesign - test all gains at all distances)
 
 def _read_with_timeout(stdout, nbytes: int, timeout: float) -> bytes:
     if stdout is None:
@@ -190,6 +193,7 @@ def score_transcription(expected: str, actual: str, raw_audio: bytes) -> float:
     return stt_score
 
 
+<<<<<<< HEAD
 def _compute_zoom_gains(best_gain: float) -> list[float]:
     if best_gain <= 0.05:
         return [0.05, 0.1, 0.2]
@@ -208,6 +212,8 @@ def _compute_verify_gains(best_gain: float, dist_index: int) -> list[float]:
 
 
 >>>>>>> ade8963 (fix: test wider gain range at far distances (best×4 instead of best×2))
+=======
+>>>>>>> 73b63b7 (refactor: autogain redesign - test all gains at all distances)
 def _save_gain_to_config(gain: float) -> None:
     from ruamel.yaml import YAML
 
@@ -226,6 +232,7 @@ def _save_gain_to_config(gain: float) -> None:
 
 def _print_summary(results: list[dict], winner: float, dry_run: bool) -> None:
     print()
+<<<<<<< HEAD
     print("Microfono calibrato")
     print("─────────────────────")
     for r in results:
@@ -233,32 +240,70 @@ def _print_summary(results: list[dict], winner: float, dry_run: bool) -> None:
         clip_pct = r["clipping"] * 100
         print(f"  {r['gain']:<5.2f}  {r['score']:>5.1f}%  {clip_pct:>5.1f}%{marker}")
     print("─────────────────────")
+=======
+    print("Risultati calibrazione")
+    print("=" * 65)
+    header = f"{'Gain':>6}" + "".join(f"{d:>14}" for d in dist_names) + "  Media"
+    print(header)
+    print("-" * len(header))
+    for g in gains:
+        entries = [r for r in raw if r["gain"] == g]
+        by_dist = {r["dist"]: r for r in entries}
+        row = f"{g:>6.2f}"
+        scores = []
+        clip_flags = []
+        for di, (dkey, _) in enumerate(DISTANCES):
+            e = by_dist.get(dkey)
+            if e:
+                flag = "!" if e["clipping"] > 0.01 else ""
+                score_str = f"{e['score']:>8.1f}%{flag}"
+                scores.append(e["score"])
+            else:
+                score_str = f"{'─':>9}"
+            row += score_str
+        avg = sum(scores) / len(scores) if scores else 0.0
+        marker = "  ←" if g == winner_gain else ""
+        row += f"  {avg:>5.1f}%{marker}"
+        print(row)
+    print("=" * 65)
+>>>>>>> 73b63b7 (refactor: autogain redesign - test all gains at all distances)
     if dry_run:
         print(f"  Miglior gain: {winner:.2f} (dry-run, non salvato)")
     else:
+<<<<<<< HEAD
         print(f"  ✅ Miglior gain: {winner:.2f} — scritto in config.yaml")
+=======
+        print(f"✅ Miglior gain: {winner_gain:.2f} — scritto in config.yaml")
+    print()
+>>>>>>> 73b63b7 (refactor: autogain redesign - test all gains at all distances)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
+<<<<<<< HEAD
         description="Interactive microphone gain calibration."
+=======
+        description="Trova il miglior guadagno microfono per tutta la stanza."
+>>>>>>> 73b63b7 (refactor: autogain redesign - test all gains at all distances)
     )
     parser.add_argument(
-        "--text",
-        type=str,
-        default=DEFAULT_PHRASE,
-        help=f"Reference phrase (default: '{DEFAULT_PHRASE}')",
+        "--text", type=str, default=DEFAULT_PHRASE,
+        help=f"Frase di test (default: '{DEFAULT_PHRASE}')",
     )
     parser.add_argument(
+<<<<<<< HEAD
         "--duration",
         type=float,
         default=DEFAULT_DURATION,
         help=f"Recording duration in seconds per rep (default: {DEFAULT_DURATION})",
+=======
+        "--duration", type=float, default=DEFAULT_DURATION,
+        help=f"Secondi per registrazione (default: {DEFAULT_DURATION})",
+>>>>>>> 73b63b7 (refactor: autogain redesign - test all gains at all distances)
     )
     parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Run calibration and show results without writing to config.yaml",
+        "--dry-run", action="store_true",
+        help="Mostra risultati senza scrivere config.yaml",
     )
     args = parser.parse_args()
 
@@ -310,6 +355,7 @@ def main() -> None:
         all_results.append(
             {"gain": gain, "score": level_score, "clipping": avg_clipping}
         )
+<<<<<<< HEAD
         print(
             f"  gain {gain:.2f}: score={level_score:.1f}% clipping={avg_clipping * 100:.1f}%"
         )
@@ -336,6 +382,51 @@ def main() -> None:
 
     best_idx = max(range(len(all_results)), key=lambda i: all_results[i]["score"])
     winner = all_results[best_idx]["gain"]
+=======
+        score = score_transcription(phrase, text, raw_audio)
+        clipping = _compute_clipping_ratio(raw_audio)
+        all_results.append({
+            "gain": gain, "score": score,
+            "clipping": clipping, "dist": dist_key,
+        })
+        flag = " !CLIP" if clipping > 0.01 else ""
+        print(f"  {dist_key:>12} gain {gain:4.2f}: score {score:5.1f}%  clip {clipping*100:.1f}%{flag}")
+        return score
+
+    tts_engine.say(
+        "calibrazione microfono. testerò quattro livelli di guadagno "
+        "a tre distanze: uno, tre e cinque metri. "
+        f"ripeti dopo ogni bip: {phrase}. "
+        "la calibrazione dura meno di un minuto e mezzo."
+    )
+    time.sleep(2.0)
+
+    for di, (dist_key, dist_desc) in enumerate(DISTANCES):
+        if di == 0:
+            tts_engine.say(f"posizione uno: {dist_desc}. inizia da qui.")
+        else:
+            tts_engine.say(
+                f"posizione {di+1}: {dist_desc}. spostati, ti aspetto."
+            )
+        time.sleep(3.0)
+
+        tts_engine.say(f"provo diversi guadagni. attendi il bip e ripeti.")
+        time.sleep(1.0)
+
+        for gain in TEST_GAINS:
+            play_wake_beep(config.recognition.wake_tone)
+            time.sleep(0.3)
+            _test_one(gain, dist_key)
+
+    gain_scores: dict[float, list[float]] = {}
+    for r in all_results:
+        gain_scores.setdefault(r["gain"], []).append(r["score"])
+
+    winner_gain = max(
+        gain_scores,
+        key=lambda g: sum(gain_scores[g]) / len(gain_scores[g]),
+    )
+>>>>>>> 73b63b7 (refactor: autogain redesign - test all gains at all distances)
 
     if not args.dry_run:
         _save_gain_to_config(winner)
@@ -1034,6 +1125,10 @@ def main_auto() -> None:
     print()
 
     run_autogain_auto(config, dry_run=args.dry_run)
+
+    tts_engine.say(
+        f"calibrazione completata. guadagno migliore: {winner_gain:.1f}."
+    )
 
 
 if __name__ == "__main__":
