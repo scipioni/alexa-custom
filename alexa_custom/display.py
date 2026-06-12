@@ -1120,6 +1120,22 @@ class DisplayController:
     def on_stt_event(self, event: str, data: dict) -> None:
         self._queue.put(("stt", event, data))
 
+    def shutdown(self) -> None:
+        self._stop.set()
+        self._queue.put(("stop", None, None))
+        self._thread.join(timeout=3)
+        if not isinstance(self._backend, MockDisplay):
+            try:
+                logger.info("[display] shutdown: showing exit icon via RPC")
+                self._backend.show("starting")
+                logger.info("[display] shutdown: icon shown, waiting 1s")
+                time.sleep(1.0)
+                logger.info("[display] shutdown: clearing")
+                self._backend.clear()
+                logger.info("[display] shutdown: clear done")
+            except Exception as e:
+                logger.error("[display] shutdown RPC error: %s", e)
+
     def stop(self) -> None:
         self._stop.set()
         self._queue.put(("stop", None, None))

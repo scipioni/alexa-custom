@@ -35,6 +35,7 @@ alexa-test = "alexa_custom.audio:main_test"
 alexa-setup = "alexa_custom.setup:main"
 alexa-audio-setup = "alexa_custom.audio:setup_audio"
 alexa-wake-eval = "alexa_custom.wake_eval:main"
+alexa-record = "alexa_custom.record:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

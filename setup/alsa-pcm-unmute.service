@@ -9,14 +9,16 @@ Type=oneshot
 # catch WirePlumber's late ACP profile init which resets PCM to 0 after we set it.
 ExecStart=/bin/bash -c '\
   for i in $(seq 1 30); do \
-    if wpctl status 2>/dev/null | grep -q "NewPie Analog Stereo"; then \
+    if wpctl status 2>/dev/null | grep -q "NewPie"; then \
       break; \
     fi; \
     sleep 1; \
   done; \
-  pw-metadata -n default 0 default.audio.sink \
+  pactl set-card-profile alsa_card.usb-0a12_NewPie_SABINESMICDFU-00 output:analog-stereo+input:analog-stereo 2>/dev/null || true; \
+  sleep 2; \
+  pw-metadata -n default 0 default.configured.audio.sink \
     '"'"'{"name":"alsa_output.usb-0a12_NewPie_SABINESMICDFU-00.analog-stereo"}'"'"' "Spa:String:JSON"; \
-  pw-metadata -n default 0 default.audio.source \
+  pw-metadata -n default 0 default.configured.audio.source \
     '"'"'{"name":"alsa_input.usb-0a12_NewPie_SABINESMICDFU-00.analog-stereo"}'"'"' "Spa:String:JSON"; \
   for i in $(seq 1 10); do \
     amixer -c 0 sset PCM 100%%; \

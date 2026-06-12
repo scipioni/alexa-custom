@@ -270,7 +270,7 @@ class WebServer:
             await self._broadcast({"type": "restarting"})
             await asyncio.sleep(0.15)
             if self._shutdown_callback is not None:
-                asyncio.create_task(self._shutdown_callback())
+                self._shutdown_callback()
             else:
                 os.execv(sys.executable, [sys.executable] + sys.argv)
 
@@ -317,13 +317,15 @@ class WebServer:
                 load1, load5, load15 = os.getloadavg()
             except OSError:
                 load1 = load5 = load15 = 0.0
-            await self._broadcast({
-                "type": "system_stats",
-                "load1": load1,
-                "load5": load5,
-                "load15": load15,
-                "cpu_count": cpu_count,
-            })
+            await self._broadcast(
+                {
+                    "type": "system_stats",
+                    "load1": load1,
+                    "load5": load5,
+                    "load15": load15,
+                    "cpu_count": cpu_count,
+                }
+            )
 
     async def _asset_watcher_loop(
         self, watch_paths: list[Path], interval: float = 1.0
@@ -509,7 +511,9 @@ class WebServer:
 
         loop.set_exception_handler(_exc_handler)
         try:
-            loop.run_until_complete(run_fn(stop_threading, on_event_cb or self.on_event, livekit_stop))
+            loop.run_until_complete(
+                run_fn(stop_threading, on_event_cb or self.on_event, livekit_stop)
+            )
         except Exception as e:
             self._enqueue("error", {"msg": str(e)})
         finally:
@@ -566,17 +570,21 @@ class WebServer:
         _on_event = self.on_event
         if self._extra_event_cb:
             _cb = self._extra_event_cb
+
             def _chained_event(event, data, _cb_event=_on_event, _cb_extra=_cb):
                 _cb_event(event, data)
                 _cb_extra(event, data)
+
             _on_event = _chained_event
 
         _on_stt_event = self.on_stt_event
         if self._extra_stt_event_cb:
             _cb_stt = self._extra_stt_event_cb
+
             def _chained_stt(event, data, _cb=_on_stt_event, _extra=_cb_stt):
                 _cb(event, data)
                 _extra(event, data)
+
             _on_stt_event = _chained_stt
 
         stop_threading = threading.Event()
@@ -687,4 +695,5 @@ def run_web(
             )
         )
     except KeyboardInterrupt:
-        pass
+        if shutdown_callback is not None:
+            shutdown_callback()

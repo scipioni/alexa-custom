@@ -1092,15 +1092,6 @@ def main() -> None:
             stt_ready_event=stt_params["stt_ready_event"] if stt_params else None,
         )
 
-    def _web_shutdown_callback():
-        import sys as _sys
-
-        async def _do() -> None:
-            await asyncio.sleep(0.1)
-            os.execv(_sys.executable, [_sys.executable] + _sys.argv)
-
-        return _do()
-
     run_web(
         run_fn=_run_for_web,
         input_spec=input_spec,
@@ -1112,7 +1103,7 @@ def main() -> None:
         watch_paths=[Path("conf")],
         output_volume=output_volume,
         input_gain=input_gain,
-        shutdown_callback=_web_shutdown_callback,
+        shutdown_callback=None,
         extra_event_cb=display_controller.on_event if display_controller else None,
         extra_stt_event_cb=display_controller.on_stt_event
         if display_controller
@@ -1121,6 +1112,24 @@ def main() -> None:
 
     import time as _time
     import os as _os
+
+    if display_controller is not None:
+        display_controller._stop.set()
+        display_controller._queue.put(("stop", None, None))
+        display_controller._thread.join(timeout=3)
+        try:
+            from alexa_custom.display import BridgeDisplay
+
+            logger.info("Display shutdown: connecting to Router...")
+            bc = BridgeDisplay(host="127.0.0.1", port=7501)
+            logger.info("Display shutdown: showing exit icon...")
+            bc.show("starting")
+            _time.sleep(1.0)
+            logger.info("Display shutdown: clearing...")
+            bc.clear()
+            logger.info("Display shutdown: done")
+        except Exception as exc:
+            logger.warning("Display shutdown failed: %s", exc)
 
     _time.sleep(0.2)
     _os._exit(0)
