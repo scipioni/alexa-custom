@@ -1620,6 +1620,7 @@
           setStatusListening(m.stt_state === 'wake' || m.stt_state === 'partial' || m.stt_state === 'transcribing');
           if (m.actions_config && Object.keys(m.actions_config).length) { _cfg = m.actions_config; renderActions(_cfg); }
           setRoomStatus(m.room_status || 'closed', m.room_answer_timeout || 0);
+          _checkRoomConfig(m);
           if (m.input_gain != null) {
             const el = document.getElementById('mic-gain');
             if (el) el.textContent = '×' + m.input_gain.toFixed(1);
@@ -1777,6 +1778,16 @@
       const wrap = document.getElementById('donut-wrap');
       if (wrap) wrap.classList.remove('visible');
     }
+    function _checkRoomConfig(m) {
+      if (m.livekit_configured && m.telegram_configured) return;
+      const missing = [];
+      if (!m.livekit_configured) missing.push('LiveKit');
+      if (!m.telegram_configured) missing.push('Telegram');
+      document.getElementById('rs-icon').textContent = '\u26A0\uFE0F';
+      document.getElementById('rs-label').textContent = 'Calls disabled';
+      document.getElementById('rs-sub').textContent = 'Missing: ' + missing.join(', ');
+    }
+
     function setRoomStatus(status, timeout) {
       const cfg = _RS[status] || _RS.closed;
       const body = document.getElementById('room-status-body');
