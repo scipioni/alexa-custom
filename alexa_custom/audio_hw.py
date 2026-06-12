@@ -6,6 +6,7 @@ import subprocess
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 import numpy as np
@@ -123,11 +124,35 @@ def _restore_hw_pcm(card: int | None = None) -> None:
         card_index, _ = result
     else:
         card_index = card
-    subprocess.run(
-        ["amixer", "-c", str(card_index), "sset", "PCM", "100%"],
-        capture_output=True,
-        check=False,
-    )
+    try:
+        subprocess.run(
+            ["amixer", "-c", str(card_index), "sset", "PCM", "100%"],
+            capture_output=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        logger.warning("_restore_hw_pcm: amixer not installed; cannot restore PCM")
+
+
+@contextmanager
+def pulse_session(name: str):
+    """Open a pulsectl connection that always restores the NewPie PCM on exit.
+
+    Opening any ``pulsectl.Pulse()`` connection makes pipewire-pulse re-init the
+    ALSA device, resetting the NewPie's hardware PCM mixer to 0% (see the audio
+    notes in CLAUDE.md). This wrapper guarantees ``_restore_hw_pcm()`` runs on
+    exit — even when the body raises — so the "never open Pulse() without
+    restoring right after" rule is enforced structurally rather than by
+    convention. Always prefer this over a bare ``pulsectl.Pulse(...)``.
+    """
+    pulse = pulsectl.Pulse(name)
+    try:
+        yield pulse
+    finally:
+        try:
+            pulse.close()
+        finally:
+            _restore_hw_pcm()
 
 
 def find_pipewire_device():
@@ -181,7 +206,7 @@ def device_from_env(key: str) -> int | None:
 
 def set_pipewire_defaults(input_spec: str | None, output_spec: str | None):
     """Set PipeWire default source/sink by matching INPUT_DEVICE/OUTPUT_DEVICE name."""
-    with pulsectl.Pulse("alexa-routing") as pulse:
+    with pulse_session("alexa-routing") as pulse:
         if output_spec and output_spec.lower() not in ("pipewire", "default"):
             needle = output_spec.lower()
             match = next(
@@ -216,7 +241,6 @@ def set_pipewire_defaults(input_spec: str | None, output_spec: str | None):
                 raise RuntimeError(
                     f"PipeWire source not found for INPUT_DEVICE={input_spec!r}"
                 )
-    _restore_hw_pcm()
 
 
 def find_alexa_card(pulse, spec: str | None = None):
@@ -378,7 +402,7 @@ def check_newpie_ready(
         output_spec = os.environ.get("OUTPUT_DEVICE", "").strip() or None
     is_virtual = (output_spec or "").lower() in ("pipewire", "default")
 
-    with pulsectl.Pulse("alexa-check") as pulse:
+    with pulse_session("alexa-check") as pulse:
         ok, conn = enforce_audio_state(pulse, input_spec, output_spec)
         if not ok:
             print(
@@ -416,7 +440,6 @@ def check_newpie_ready(
             )
             ok = False
 
-    _restore_hw_pcm()
     return ok, conn
 
 
@@ -425,7 +448,7 @@ def list_devices():
     print("AUDIO DEVICES")
     print("=" * 60)
 
-    with pulsectl.Pulse("newpie-lister") as pulse:
+    with pulse_session("newpie-lister") as pulse:
         info = pulse.server_info()
 
         cards = pulse.card_list()
@@ -591,7 +614,7 @@ def _find_pipewire_source(input_spec: str | None) -> str | None:
     Excludes monitor sources (they represent playback outputs, not mic inputs).
     When input_spec is None, returns the server default source.
     """
-    with pulsectl.Pulse("alexa-source-lookup") as pulse:
+    with pulse_session("alexa-source-lookup") as pulse:
         if input_spec is None:
             info = pulse.server_info()
             return info.default_source_name or None
