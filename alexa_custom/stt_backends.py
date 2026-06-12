@@ -66,6 +66,15 @@ class VoskSTT(STTBackend):
     def partial_text(self) -> str:
         return json.loads(self._rec.PartialResult()).get("partial", "").strip()
 
+    def finalize(self) -> str:
+        """Flush the decoder (InputFinished) and return the final text.
+
+        The base finalize() calls Result(), which does not flush Vosk's
+        lookahead buffer, so the tail of an utterance can be dropped when the
+        software VAD force-finalizes mid-command. FinalResult() flushes.
+        """
+        return json.loads(self._rec.FinalResult()).get("text", "").strip()
+
     def reset(self) -> None:
         self._rec.Reset()
 

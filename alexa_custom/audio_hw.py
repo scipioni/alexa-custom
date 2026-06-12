@@ -304,8 +304,13 @@ def set_input_gain(
                 f"falling back to software scaling for input gain"
             )
 
-        _INPUT_GAIN = max(0.0, gain)
-        if not hw_ok:
+        if hw_ok:
+            # Gain was applied at the source (hardware) level. The software
+            # scaling path in stt_gating multiplies every chunk by _INPUT_GAIN,
+            # so it must be a no-op here — otherwise gain is applied twice (gain²).
+            _INPUT_GAIN = 1.0
+        else:
+            _INPUT_GAIN = max(0.0, gain)
             logger.warning(
                 f"Input gain {gain:.0%} applied in software (CPU overhead, clipping risk)"
             )
@@ -487,7 +492,7 @@ def speakerphone():
     input_info = sd.query_devices(input_device)
     max_in_channels = input_info["max_input_channels"]
 
-    samplerate = _SAMPLERATE[conn]
+    samplerate = _SAMPLERATE.get(conn, 48000)
     print(f"\nConnection:        {conn}")
     print(
         f"Input device:      {input_device} ({input_info['name']}) [{max_in_channels} ch]"

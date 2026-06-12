@@ -382,19 +382,12 @@ class WebServer:
             current_config = load_config("conf/config.yaml")
             current_dict = self._serialize_config(current_config)
             merged_config = self._merge_configs(current_dict, data)
+            merged_config = self._strip_action_derived(merged_config)
 
             raw = yaml.load(Path("conf/config.yaml"))
             if raw is None:
                 raw = {}
-            for key, value in merged_config.items():
-                if (
-                    key in raw
-                    and isinstance(raw[key], dict)
-                    and isinstance(value, dict)
-                ):
-                    raw[key].update(value)
-                else:
-                    raw[key] = value
+            self._deep_update_raw(raw, merged_config)
 
             try:
                 with _file_lock(Path("conf/config.yaml"), exclusive=True):
@@ -431,15 +424,7 @@ class WebServer:
             raw = yaml.load(Path("conf/config.yaml"))
             if raw is None:
                 raw = {}
-            for key, value in data.items():
-                if (
-                    key in raw
-                    and isinstance(raw[key], dict)
-                    and isinstance(value, dict)
-                ):
-                    raw[key].update(value)
-                else:
-                    raw[key] = value
+            self._deep_update_raw(raw, self._strip_action_derived(data))
 
             try:
                 with _file_lock(Path("conf/config.yaml"), exclusive=True):
@@ -575,6 +560,38 @@ class WebServer:
                 result.append(u)
 
         return result
+
+    @staticmethod
+    def _strip_action_derived(payload: dict) -> dict:
+        """Drop keys that originate from conf/actions/*.yaml, not the editor.
+
+        load_config() merges wake_triggers from action files into each wake
+        group's `.triggers`, and global triggers into the top-level list. The
+        serializer re-emits both; if we persisted them into config.yaml they
+        would be merged again on the next load, duplicating and diverging from
+        the action files (their source of truth). The editor only owns
+        word/aliases/id/skip_unmatched_inline on wake words.
+        """
+        payload = copy.deepcopy(payload)
+        payload.pop("global_triggers", None)
+        for entry in payload.get("wake_words", []):
+            if isinstance(entry, dict):
+                entry.pop("triggers", None)
+        return payload
+
+    def _deep_update_raw(self, raw: Any, updates: dict) -> None:
+        """Recursively merge `updates` into the ruamel `raw` mapping in place.
+
+        Only leaf keys present in `updates` are overwritten; nested mappings on
+        disk (e.g. stt.stage1's model_path, vad_silence_ms, …) that the editor
+        does not serialize are preserved. A shallow dict.update() would replace
+        whole nested mappings and silently wipe those keys.
+        """
+        for key, value in updates.items():
+            if key in raw and isinstance(raw[key], dict) and isinstance(value, dict):
+                self._deep_update_raw(raw[key], value)
+            else:
+                raw[key] = value
 
     # ── broadcast helpers ─────────────────────────────────────────────────────
 

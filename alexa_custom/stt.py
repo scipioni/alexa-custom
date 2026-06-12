@@ -270,6 +270,14 @@ def run_stt_worker(
             except Exception as e:
                 logger.error(f"STT error: {e}", exc_info=True)
                 time.sleep(2)
+            else:
+                # loop_fn returned without raising: capture ended (e.g. parec EOF
+                # on mic unplug / pipewire restart). start_capture() succeeds even
+                # when the device is gone, so without this backoff the while loop
+                # respawns parec tens of times per second.
+                if not stop_event.is_set():
+                    logger.info("Capture ended unexpectedly — restarting in 2s")
+                    stop_event.wait(2.0)
             finally:
                 if proc is not None:
                     try:
@@ -299,11 +307,16 @@ def _extract_wake_command(
     if fuzzy:
         group = _approx_wake_match(text, alias_map)
         if group:
-            # Best-effort command extraction: strip matching phrase words from text
-            norm_phrase = normalize_text(group.word)
-            command = norm_text
-            for w in norm_phrase.split():
-                command = command.replace(w, "", 1).strip()
+            # Best-effort command extraction: drop any token that belongs to the
+            # group's wake phrases (canonical word + aliases). Token-level removal
+            # avoids substring mangling (e.g. "ehi" turning "ehilà" into "là") and
+            # works even when an alias matched rather than the canonical word.
+            wake_tokens = {
+                w
+                for phrase in [group.word, *group.aliases]
+                for w in normalize_text(phrase).split()
+            }
+            command = " ".join(t for t in norm_text.split() if t not in wake_tokens)
             return group, command
     return None, ""
 
@@ -610,6 +623,7 @@ def _single_stage_loop(
                     actions_config=config,
                     wake_word=wake_group.word,
                     transcript=command,
+                    mqtt_client=mqtt_client,
                 )
             )
             _drain_pipe(proc)

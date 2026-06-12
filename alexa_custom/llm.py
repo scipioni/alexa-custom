@@ -593,13 +593,16 @@ def is_exit_phrase(text: str, exit_phrases: list[str] | None = None) -> bool:
 
 
 def normalize_confirm(text: str) -> str:
+    # Match on whole tokens, not substrings: "si" is a substring of "sicuro",
+    # so a substring check would read "non sicuro" as a yes. Multi-word entries
+    # (e.g. "no grazie") are matched against the full phrase.
     t = text.strip().lower()
-    yes_words = {"sì", "si", "sì", "yes", "ok", "confermo", "certo", "esatto", "giusto"}
-    no_words = {"no", "nope", "annulla", "cancella", "stop", "no grazie"}
-    for w in yes_words:
-        if w in t:
-            return "yes"
-    for w in no_words:
-        if w in t:
-            return "no"
+    tokens = set(t.split())
+    yes_words = {"sì", "si", "yes", "ok", "confermo", "certo", "esatto", "giusto"}
+    no_words = {"no", "nope", "annulla", "cancella", "stop"}
+    no_phrases = {"no grazie"}
+    if t in no_phrases or tokens & no_words:
+        return "no"
+    if tokens & yes_words:
+        return "yes"
     return "no"
