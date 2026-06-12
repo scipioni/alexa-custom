@@ -7,7 +7,7 @@ import alexa_custom.audio_hw as audio_hw
 
 
 def test_play_array_scales_by_output_volume():
-    audio_hw._OUTPUT_VOLUME = 0.5
+    audio_hw._state.output_volume = 0.5
 
     test_audio = np.ones((100, 2), dtype=np.float32)
 
@@ -32,12 +32,12 @@ def test_play_array_scales_by_output_volume():
             written_samples = np.frombuffer(written_bytes, dtype=np.int16)
 
             # Digital gain is applied at the application layer — samples
-            # are scaled by _OUTPUT_VOLUME before writing the WAV
+            # are scaled by the output volume before writing the WAV
             assert np.all(written_samples == 16383)
 
 
 def test_play_array_full_volume_passthrough():
-    audio_hw._OUTPUT_VOLUME = 1.0
+    audio_hw._state.output_volume = 1.0
 
     test_audio = np.ones((100, 2), dtype=np.float32)
 
@@ -66,7 +66,7 @@ def test_play_array_full_volume_passthrough():
 
 
 def test_play_wav_file_no_volume_flag():
-    audio_hw._OUTPUT_VOLUME = 0.25
+    audio_hw._state.output_volume = 0.25
     audio._PW_PLAY = "/usr/bin/pw-play"
 
     with patch("alexa_custom.audio_ops.subprocess.run") as mock_run:
@@ -79,7 +79,7 @@ def test_play_wav_file_no_volume_flag():
 
 
 def test_set_output_volume_no_longer_calls_wpctl():
-    audio_hw._OUTPUT_VOLUME = 0.5
+    audio_hw._state.output_volume = 0.5
 
     with patch("subprocess.run") as mock_run:
         audio_hw.set_output_volume(None, "pipewire", 0.3)
@@ -90,7 +90,7 @@ def test_set_output_volume_no_longer_calls_wpctl():
 
 
 def test_set_input_gain_calls_pactl_when_source_found():
-    audio_hw._INPUT_GAIN = 1.0
+    audio_hw._state.input_gain = 1.0
 
     mock_source = MagicMock()
     mock_source.name = "alsa_input.usb-0a12_NewPie_SABINESMICDFU-00.analog-stereo"
@@ -113,11 +113,11 @@ def test_set_input_gain_calls_pactl_when_source_found():
         pactl_cmd = pactl_calls[0][0][0]
         assert "set-source-volume" in pactl_cmd
         assert "150%" in pactl_cmd
-        assert audio_hw._INPUT_GAIN == 1.5
+        assert audio_hw.get_input_gain() == 1.5
 
 
 def test_set_input_gain_noop_when_source_not_found():
-    audio_hw._INPUT_GAIN = 1.0
+    audio_hw._state.input_gain = 1.0
 
     mock_pulse_instance = MagicMock()
     mock_pulse_instance.source_list.return_value = []
@@ -133,7 +133,7 @@ def test_set_input_gain_noop_when_source_not_found():
 
         pactl_calls = [c for c in mock_run.call_args_list if c[0][0][0] == "pactl"]
         assert len(pactl_calls) == 0, f"Expected 0 pactl calls, got {pactl_calls}"
-        assert audio_hw._INPUT_GAIN == 2.0
+        assert audio_hw.get_input_gain() == 2.0
 
 
 def test_restore_hw_pcm_noop_without_newpie():
@@ -181,12 +181,12 @@ def test_configure_propagates_to_globals(monkeypatch):
 
     audio_hw.configure(fake_cfg)
 
-    assert audio_hw._OUTPUT_VOLUME == 0.35
-    assert audio_hw._INPUT_GAIN == 1.8
-    assert audio_hw._POST_PLAYBACK_MS == 200
-    assert audio_hw._TONE_PREROLL_MS == 400
-    assert audio_hw._DEFAULT_CARD_NAME == "ConferenceCam"
-    assert audio_hw._SAMPLERATE == {"usb": 44100, "bluetooth": 16000}
+    assert audio_hw.get_output_volume() == 0.35
+    assert audio_hw.get_input_gain() == 1.8
+    assert audio_hw.get_post_playback_ms() == 200
+    assert audio_hw.get_tone_preroll_ms() == 400
+    assert audio_hw.get_default_card_name() == "ConferenceCam"
+    assert audio_hw.get_sample_rates() == {"usb": 44100, "bluetooth": 16000}
 
 
 def test_pulse_session_restores_pcm_on_success():

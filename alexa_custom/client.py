@@ -717,11 +717,12 @@ async def _async_main(
         on_event("idle", {})
 
     # Use connection-type-appropriate sample rate from config (default: usb=48000, bt=16000).
-    from alexa_custom.audio import check_newpie_ready, _SAMPLERATE as _audio_samplerates
+    from alexa_custom.audio import check_newpie_ready, get_sample_rates
 
     _, conn_type = await asyncio.to_thread(
         check_newpie_ready, _input_spec, _output_spec
     )
+    _audio_samplerates = get_sample_rates()
     samplerate = _audio_samplerates.get(conn_type, _audio_samplerates.get("usb", 48000))
     if conn_type == "bluetooth":
         logger.info(

@@ -13,7 +13,7 @@ from alexa_custom.audio_hw import (
     set_output_volume,
     set_input_gain,
     invalidate_pipewire_device_cache,
-    _DEFAULT_CARD_NAME,
+    get_default_card_name,
 )
 
 logger = logging.getLogger(__name__)
@@ -45,7 +45,7 @@ class AudioWatcher(threading.Thread):
 
     def run(self):
         logger.info(
-            f"Audio watcher started (target: {self.output_spec or _DEFAULT_CARD_NAME})"
+            f"Audio watcher started (target: {self.output_spec or get_default_card_name()})"
         )
         while not self._stop.is_set():
             try:
