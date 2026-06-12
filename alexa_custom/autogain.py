@@ -393,38 +393,79 @@ def main() -> None:
         print(f"  {dist_key:>12} gain {gain:4.2f}: score {score:5.1f}%  clip {clipping*100:.1f}%{flag}")
         return score
 
+    WEIGHTS = {"un metro": 1.0, "tre metri": 2.0, "cinque metri": 1.0}
+    MID_IDX = 1
+
+    def _weighted_avg(gain: float) -> float:
+        entries = [r for r in all_results if r["gain"] == gain]
+        if not entries:
+            return -1.0
+        total_w = 0.0
+        weighted = 0.0
+        for r in entries:
+            w = WEIGHTS.get(r["dist"], 1.0)
+            weighted += r["score"] * w
+            total_w += w
+        return weighted / total_w if total_w else 0.0
+
     tts_engine.say(
-        "calibrazione microfono. testerò quattro livelli di guadagno "
-        "a tre distanze: uno, tre e cinque metri. "
+        "calibrazione microfono. "
         f"ripeti dopo ogni bip: {phrase}. "
-        "la calibrazione dura meno di un minuto e mezzo."
+        "ci vogliono circa quaranta secondi."
     )
     time.sleep(2.0)
 
+    # ── Phase 1: all gains at middle distance (3m) ──────────────────────
+    mid_dist, mid_desc = DISTANCES[MID_IDX]
+    tts_engine.say(f"posizione centrale: {mid_desc}. inizia da qui.")
+    time.sleep(2.0)
+    for gain in TEST_GAINS:
+        play_wake_beep(config.recognition.wake_tone)
+        time.sleep(0.3)
+        _test_one(gain, mid_dist)
+
+    ranked = sorted(TEST_GAINS, key=lambda g: _weighted_avg(g), reverse=True)
+    top2 = ranked[:2]
+    print(f"Migliori a 3m: {top2[0]:.2f}, {top2[1]:.2f}")
+
+    # ── Phase 2: test top 2 gains at 1m and 5m ─────────────────────────
     for di, (dist_key, dist_desc) in enumerate(DISTANCES):
-        if di == 0:
-            tts_engine.say(f"posizione uno: {dist_desc}. inizia da qui.")
-        else:
-            tts_engine.say(
-                f"posizione {di+1}: {dist_desc}. spostati, ti aspetto."
-            )
+        if di == MID_IDX:
+            continue
+        tts_engine.say(
+            f"posizione {di+1}: {dist_desc}. spostati, ti aspetto."
+        )
         time.sleep(3.0)
-
-        tts_engine.say(f"provo diversi guadagni. attendi il bip e ripeti.")
-        time.sleep(1.0)
-
-        for gain in TEST_GAINS:
+        for gain in top2:
             play_wake_beep(config.recognition.wake_tone)
             time.sleep(0.3)
             _test_one(gain, dist_key)
 
-    gain_scores: dict[float, list[float]] = {}
-    for r in all_results:
-        gain_scores.setdefault(r["gain"], []).append(r["score"])
-
+    # ── Phase 3: complete missing distances for the winner ─────────────
     winner_gain = max(
-        gain_scores,
-        key=lambda g: sum(gain_scores[g]) / len(gain_scores[g]),
+        set(r["gain"] for r in all_results),
+        key=lambda g: _weighted_avg(g),
+    )
+    tested_dists = {
+        r["dist"] for r in all_results if r["gain"] == winner_gain
+    }
+    missing = [d for d, _ in DISTANCES if d not in tested_dists]
+    if missing:
+        print(f"Completo test per gain {winner_gain:.2f} a: {missing}")
+        for dist_key, dist_desc in DISTANCES:
+            if dist_key not in tested_dists:
+                tts_engine.say(
+                    f"torno {dist_desc}. attendi il bip."
+                )
+                time.sleep(2.0)
+                play_wake_beep(config.recognition.wake_tone)
+                time.sleep(0.3)
+                _test_one(winner_gain, dist_key)
+
+    # ── Final winner ───────────────────────────────────────────────────
+    winner_gain = max(
+        set(r["gain"] for r in all_results),
+        key=lambda g: _weighted_avg(g),
     )
 >>>>>>> 73b63b7 (refactor: autogain redesign - test all gains at all distances)
 
