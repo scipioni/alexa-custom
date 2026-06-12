@@ -14,6 +14,7 @@ Restart=on-failure
 RestartSec=5s
 WatchdogSec=30
 Environment=PYTHONUNBUFFERED=1
+Environment=LANG=it
 
 [Install]
 WantedBy=default.target
