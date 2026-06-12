@@ -213,6 +213,47 @@ class TestLoadConfig:
         result = load_config(cfg_path)
         assert result.wake_words[0].lang == "en-US"
 
+    def test_null_numeric_fields_fall_back_to_defaults(self, tmp_path):
+        """The web config editor can write `key: null` for a cleared field.
+
+        float(None)/int(None) would raise and break cold start, so the parsers
+        must treat an explicit null as 'use the default'.
+        """
+        cfg_path = self._make_config(
+            tmp_path,
+            "wake_words:\n"
+            "  - word: alexa\n"
+            "recognition:\n"
+            "  matching_threshold: null\n"
+            "  command_timeout: null\n"
+            "stt:\n"
+            "  stage1:\n"
+            "    rms_threshold: null\n"
+            "    confidence: null\n"
+            "audio:\n"
+            "  input_gain: null\n",
+        )
+        from alexa_custom.config import load_config
+
+        result = load_config(cfg_path)  # must not raise
+        assert result is not None
+        assert result.recognition.matching_threshold == 70.0
+        assert result.recognition.command_timeout == 3.0
+        assert result.stt.stage1.rms_threshold == pytest.approx(0.02)
+        assert result.stt.stage1.confidence == pytest.approx(0.65)
+        assert result.audio.input_gain == pytest.approx(1.0)
+
+
+class TestExampleConfig:
+    def test_example_config_loads(self):
+        """conf.example/config.yaml must always be loadable — the web dashboard
+        serves it as the 'factory defaults'."""
+        from alexa_custom.config import load_config
+
+        result = load_config("conf.example/config.yaml")
+        assert result is not None
+        assert result.wake_words, "example config should define at least one wake word"
+
 
 # ---------------------------------------------------------------------------
 # _parse_stt_config tests (task 10.4)
