@@ -13,8 +13,13 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-import alexa_custom.audio as _audio_module
-from alexa_custom.audio import _play_array
+from alexa_custom.audio_hw import _POST_PLAYBACK_MS, get_output_volume
+from alexa_custom.audio_ops import (
+    _audio_lock,
+    _play_array,
+    _playback_active,
+    set_playback_level,
+)
 
 if TYPE_CHECKING:
     import threading
@@ -179,8 +184,8 @@ class PiperTTS(TTSBackend):
                         stdin=subprocess.PIPE,
                         stderr=subprocess.DEVNULL,
                     )
-                    _audio_module._audio_lock.acquire()
-                    _audio_module._playback_active.set()
+                    _audio_lock.acquire()
+                    _playback_active.set()
 
                     if self._preroll_ms > 0:
                         n_preroll = samplerate * self._preroll_ms // 1000
@@ -188,14 +193,13 @@ class PiperTTS(TTSBackend):
 
                 assert proc.stdin is not None
                 # Digitally scale the audio chunk by the global output volume
-                scaled_arr = (
-                    np.asarray(arr, dtype=np.int16) * _audio_module.get_output_volume()
-                ).astype(np.int16)
+                volume = get_output_volume()
+                scaled_arr = (np.asarray(arr, dtype=np.int16) * volume).astype(np.int16)
                 proc.stdin.write(scaled_arr.tobytes())
                 n = len(scaled_arr)
                 if n:
                     rms = float(np.linalg.norm(scaled_arr)) / (32768.0 * n**0.5)
-                    _audio_module.set_playback_level(rms)
+                    set_playback_level(rms)
 
             if proc is None:
                 return
@@ -209,8 +213,8 @@ class PiperTTS(TTSBackend):
                 )
                 proc.kill()
                 proc.wait()
-            if _audio_module._POST_PLAYBACK_MS > 0:
-                time.sleep(_audio_module._POST_PLAYBACK_MS / 1000.0)
+            if _POST_PLAYBACK_MS > 0:
+                time.sleep(_POST_PLAYBACK_MS / 1000.0)
 
         except Exception as e:
             logger.error(f"Piper TTS (streaming) failed: {e}")
@@ -222,9 +226,9 @@ class PiperTTS(TTSBackend):
                     pass
         finally:
             if proc is not None:
-                _audio_module.set_playback_level(0.0)
-                _audio_module._playback_active.clear()
-                _audio_module._audio_lock.release()
+                set_playback_level(0.0)
+                _playback_active.clear()
+                _audio_lock.release()
 
     def _say_wav_fallback(self, text: str) -> None:
         """Collect all chunks, write a WAV, and play via aplay (paplay absent)."""

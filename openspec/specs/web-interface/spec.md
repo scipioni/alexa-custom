@@ -60,11 +60,18 @@ The system SHALL exit cleanly when `SIGINT` (Ctrl+C) is received. The aiohttp se
 - **THEN** the process exits cleanly with no unhandled exception printed to stderr
 
 ### Requirement: Auto-reconnecting browser client
-The browser JavaScript client SHALL automatically attempt to reconnect to `/ws` after a 2-second delay when the WebSocket connection closes unexpectedly.
+The browser JavaScript client SHALL automatically attempt to reconnect to `/ws` after a 2-second delay when the WebSocket connection closes unexpectedly. The browser SHALL NOT reload the page under any normal operation; reconnection SHALL happen transparently.
 
 #### Scenario: Server restarts and browser reconnects
 - **WHEN** the process restarts and the server becomes available again
 - **THEN** the browser reconnects within 3 seconds without a page refresh
+
+### Requirement: No full-page reload on file changes
+The WebSocket server SHALL NOT broadcast a `{"type": "reload"}` message when monitored files change. Configuration reloads (triggered by the `ConfigManager`) SHALL update state internally without instructing the browser to perform a full page reload. The browser JavaScript SHALL also not contain a `location.reload()` handler for any incoming WebSocket message type except `restarting`.
+
+#### Scenario: Config file changed during runtime
+- **WHEN** a monitored config file changes on disk (e.g., volume persisted to config.yaml)
+- **THEN** the server processes the change internally and the web dashboard continues running without a page reload
 
 ### Requirement: Glassmorphism visual style
 The dashboard SHALL use a glassmorphism visual design: panels with `backdrop-filter: blur(12px)`, semi-transparent backgrounds (`rgba(255,255,255,0.04)`), `1px` borders at `rgba(255,255,255,0.08)`, and `12px` border-radius. The colour palette SHALL be defined as CSS custom properties on `:root` including `--wake` (orange), `--match` (green), `--nomatch` (red), `--bg` (near-black), `--surface`, `--border`, `--text`, and `--muted`. The font SHALL be the system font stack (`system-ui, -apple-system, sans-serif`) with no external font dependency.
@@ -125,3 +132,35 @@ Animations SHALL be implemented as CSS `@keyframes` classes added/removed via Ja
 #### Scenario: History row slides in
 - **WHEN** a new entry is prepended to the history panel
 - **THEN** the row slides in from above via a CSS transform transition
+
+### Requirement: Room panel shows configuration status
+The room panel (`#room-panel`) SHALL display the configuration status of LiveKit and Telegram in addition to the normal room status.
+
+When both LiveKit and Telegram are configured (all required env vars non-empty), the room panel SHALL behave exactly as before — showing room connection state (`closed`, `waiting`, `in_call`).
+
+When at least one service is missing configuration, the room panel SHALL override its display:
+- Icon becomes `⚠️`
+- Label becomes `Calls disabled`
+- Subtitle becomes `Missing: LiveKit` / `Missing: Telegram` / `Missing: LiveKit, Telegram`
+
+The configuration check SHALL happen once on WebSocket `hello` and SHALL NOT change during the session (secrets require a full restart).
+
+#### Scenario: Both services configured
+- **GIVEN** `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `LIVEKIT_ROOM`, `TELEGRAM_BOT_TOKEN`, and `TELEGRAM_CHAT_ID` are all set
+- **WHEN** the WebSocket `hello` message has `livekit_configured: true` and `telegram_configured: true`
+- **THEN** the room panel shows normal status (`closed`/`waiting`/`in_call`) unchanged
+
+#### Scenario: LiveKit not configured
+- **GIVEN** only `LIVEKIT_URL` is missing from env
+- **WHEN** the WebSocket `hello` message has `livekit_configured: false`
+- **THEN** the room panel displays `⚠️ Calls disabled — Missing: LiveKit`
+
+#### Scenario: Telegram not configured
+- **GIVEN** only `TELEGRAM_BOT_TOKEN` is missing from env
+- **WHEN** the WebSocket `hello` message has `telegram_configured: false`
+- **THEN** the room panel displays `⚠️ Calls disabled — Missing: Telegram`
+
+#### Scenario: Neither configured
+- **GIVEN** all LiveKit and Telegram env vars are empty
+- **WHEN** the WebSocket `hello` message has both flags `false`
+- **THEN** the room panel displays `⚠️ Calls disabled — Missing: LiveKit, Telegram`
