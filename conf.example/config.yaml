@@ -23,7 +23,7 @@ wake_words:
 # ---------------------------------------------------------------------------
 recognition:
   mode: two-stage         # two-stage | single-stage
-  command_timeout: 2.5    # seconds to listen after wake word (two-stage only)
+  command_timeout: 3.0    # seconds to listen after wake word (two-stage only)
   # command_max_timeout: 8.0  # absolute cap on stage-2 capture; the window slides
   #   while the user keeps speaking so commands aren't cut off mid-sentence.
   #   Set to 0 to disable sliding (command_timeout becomes a hard deadline).
