@@ -85,7 +85,7 @@ recognition:
 stt:
   stage1:                   # continuous wake-word detection (low CPU)
     backend: vosk
-    vosk_grammar: false     # false = free-vocabulary (recommended); true = grammar mode (lower CPU, no reject path)
+    vosk_grammar: true      # true = grammar mode (recommended, low CPU); false = free-vocabulary
     confidence: 0.65        # minimum confidence threshold (grammar mode only)
     confidence_mode: first  # first | min | mean (grammar mode only)
     vad_silence_ms: 500     # force-finalize after N ms of silence

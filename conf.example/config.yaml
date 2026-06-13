@@ -57,13 +57,13 @@ stt:
     #   the window must be wide enough to bridge the natural pause between them.
     rms_threshold: 0.02    # stage-1 minimum RMS energy considered speech
     min_speech_ms: 200     # minimum sustained speech before silence timer starts
-    # vosk_grammar: false    # restrict Vosk to wake-word vocabulary (grammar mode)
-    #   false — free-vocabulary (default): full decoder; scores are absolute; unrelated speech genuinely rejected.
-    #           Trade-off: higher CPU than grammar mode.
-    #   true  — grammar mode: low CPU, but every segment is forced onto nearest phrase (no real reject path).
+    vosk_grammar: true     # restrict Vosk to wake-word vocabulary (grammar mode)
+    #   true  — grammar mode (default): low CPU, forces segments onto nearest phrase.
+    #   false — free-vocabulary: full decoder; higher CPU but better at rejecting unrelated speech.
 
   stage2:                  # command recognition after wake
     backend: vosk          # can differ from stage1 for higher accuracy
+    vosk_grammar: true     # restrict Vosk to command vocabulary (grammar mode)
     # backend: sherpa-onnx
     # model_path: models/it/kroko_128l
 

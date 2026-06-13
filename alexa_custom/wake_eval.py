@@ -284,7 +284,7 @@ def _score_clip_vosk(
         last_chunk = chunk
         if recognizer.AcceptWaveform(chunk):
             result = json.loads(recognizer.Result())
-            match = _vosk_check_result(
+            match, _ = _vosk_check_result(
                 chunk,
                 result,
                 alias_map,
@@ -298,7 +298,7 @@ def _score_clip_vosk(
     # Use rms_threshold=0.0 here — we can't meaningfully gate on the final trailing chunk.
     final = json.loads(recognizer.FinalResult())
     if final.get("text", "").strip():
-        match = _vosk_check_result(
+        match, _ = _vosk_check_result(
             last_chunk,
             final,
             alias_map,
