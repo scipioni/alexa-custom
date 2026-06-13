@@ -450,4 +450,3 @@ class TestVoskGrammar:
         # "caffè" -> "caffe"
         # "sì" -> "si"
         assert parsed == ["caffe", "che ora e", "si", "[unk]"]
-
