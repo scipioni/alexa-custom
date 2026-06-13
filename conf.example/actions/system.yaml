@@ -24,7 +24,7 @@ triggers:
       - "che giorno è oggi"
     actions:
       - type: say
-        text: "$(date +'Oggi è %A %d %B %Y')"
+        text: "$date_ita"
 
   - phrase: "riavvia"
     actions:

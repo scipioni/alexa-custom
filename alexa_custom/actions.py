@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import unicodedata
+from datetime import datetime
 from typing import Awaitable, Callable, TYPE_CHECKING
 
 import httpx
@@ -334,11 +335,24 @@ async def handle_livekit_join(
     await livekit_connect_fn()
 
 
+_WEEKDAYS_IT = ['lunedì', 'martedì', 'mercoledì', 'giovedì', 'venerdì', 'sabato', 'domenica']
+_MONTHS_IT = ['gennaio', 'febbraio', 'marzo', 'aprile', 'maggio', 'giugno',
+              'luglio', 'agosto', 'settembre', 'ottobre', 'novembre', 'dicembre']
+
+
+def _date_ita() -> str:
+    now = datetime.now()
+    return (f"Oggi è {_WEEKDAYS_IT[now.weekday()]} {now.day} "
+            f"{_MONTHS_IT[now.month - 1]} {now.year}")
+
+
 _CMD_RE = re.compile(r"\$\(([^)]+)\)")
 
 
 async def _render_text(text: str) -> str:
-    """Expand $(shell command) placeholders in text."""
+    """Expand $date_ita and $(shell command) placeholders in text."""
+
+    text = text.replace("$date_ita", _date_ita())
 
     async def _run(cmd: str) -> str:
         try:
