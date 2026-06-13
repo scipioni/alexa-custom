@@ -349,6 +349,12 @@ async def handle_livekit_join(
     await livekit_connect_fn()
 
 
+_WEEKDAYS_IT = ["lunedì", "martedì", "mercoledì", "giovedì", "venerdì", "sabato", "domenica"]
+_MONTHS_IT = [
+    "gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno",
+    "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre",
+]
+
 _CMD_RE = re.compile(r"\$\(([^)]+)\)")
 
 
@@ -610,6 +616,32 @@ async def handle_shell(action: ActionEntry, **_):
             logger.info(f"Shell command output: {stdout.decode().strip()}")
     except Exception as e:
         logger.error(f"Failed to execute shell command: {e}")
+
+
+@registry.register("say_date")
+async def handle_say_date(action: ActionEntry, mqtt_client: MQTTClient | None, **_):
+    from datetime import datetime
+
+    from alexa_custom.tts import get_engine
+
+    now = datetime.now()
+    fmt = action.params.get("format") or "Oggi è {weekday} {day} {month} {year}"
+    text = fmt.format(
+        weekday=_WEEKDAYS_IT[now.weekday()],
+        day=now.day,
+        month=_MONTHS_IT[now.month - 1],
+        year=now.year,
+    )
+    if mqtt_client:
+        await mqtt_client.publish(
+            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
+            "speaking",
+        )
+    await asyncio.to_thread(get_engine().say, text, "it-IT")
+    if mqtt_client:
+        await mqtt_client.publish(
+            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "idle"
+        )
 
 
 @registry.register("mqtt_publish")

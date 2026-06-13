@@ -8,32 +8,11 @@ on_startup:
     text: "Sistema pronto"
     lang: "it-IT"
 
-# Schema:
-#   wake_words:      extra wake word groups (merged with conf/config.yaml)
-#   triggers:        flat list of triggers; scope set via optional 'wake_words' field:
-#                      absent            → active after any wake word (global)
-#                      wake_words: []    → direct match (no wake word required)
-#                      wake_words: [id]  → active only after the named wake word group
-# ---------------------------------------------------------------------------
-# Wake words (required)
-# Each group listens for its 'word' and optional 'aliases'.
-# Additional groups can be defined in conf/actions/*.yaml via a 'wake_words:' key.
-# ---------------------------------------------------------------------------
-wake_words:
-  - word: "ehi assistente"
-    aliases: ["ascolta assistente", "ehi galileo", "ehi sofia"]
-    id: default
-  # For emergency-style wake words prefer multi-word phrases so a single
-  # utterance in normal conversation does not trigger the assistant.
-  # - word: "aiuto aiuto"
-  #   aliases: ["aiutami", "mi serve aiuto"]
-
 # ---------------------------------------------------------------------------
 # Global triggers — active for every wake word group
 # ---------------------------------------------------------------------------
 triggers:
   - phrase: "che ora è"
-    wake_words: []
     aliases:
       - "che ore sono"
     actions:
@@ -41,129 +20,38 @@ triggers:
         text: "$(date +'Sono le %H e %M')"
 
   - phrase: "che giorno è"
-    wake_words: []
     aliases:
       - "che giorno è oggi"
     actions:
-      - type: say
-        text: "$(LC_ALL=it_IT.UTF-8 date +'Oggi è %A %d %B %Y')"
+      - type: say_date
 
   - phrase: "riavvia"
-    wake_words: [default]
     actions:
-      - type: say
-        text: "riavvio il sistema"
-      - type: restart
+      - type: shell
+        command: "systemctl --user restart alexa-client"
 
   - phrase: "chatta con me"
-    wake_words: [default]
     actions:
       - type: llm_chat
 
   - phrase: "impara nuovo comando"
-    wake_words: [default]
     actions:
       - type: llm_learn
 
-  - phrase: "volume al"
-    wake_words: [default]
-    actions:
-      - type: set_volume_from_transcript
-
-  - phrase: "volume basso"
-    wake_words: [default]
+  - phrase: "Volume basso"
     actions:
       - type: set_volume
         mode: absolute
         value: 0.1
-      - type: say
-        text: "volume basso"
 
-  - phrase: "volume medio"
-    wake_words: [default]
+  - phrase: "Volume medio"
     actions:
       - type: set_volume
         mode: absolute
         value: 0.5
-      - type: say
-        text: "volume medio"
 
-  - phrase: "volume alto"
-    wake_words: [default]
+  - phrase: "Volume alto"
     actions:
       - type: set_volume
         mode: absolute
         value: 0.9
-      - type: say
-        text: "volume alto"
-  
-  - phrase: "alza il volume"
-    wake_words: [default]
-    actions:
-      - type: set_volume
-        mode: up
-        step: 0.1
-      - type: say
-        text: "volume più alto"
-
-  - phrase: "abbassa il volume"
-    wake_words: [default]
-    actions:
-      - type: set_volume
-        mode: down
-        step: 0.1
-      - type: say
-        text: "volume più basso"
-
-  - phrase: "che tempo farà domani ?"
-    wake_words: []
-    patterns:
-      - "che tempo * domani"
-    actions:
-      - type: meteo
-        params:
-          city: "Verona"        # Default fallback city if not spoken in the transcript
-          days: "domani"      # Default fallback day ("oggi" / "domani") if not spoken in the transcript
-          lang: "it-IT"       # Language for spoken feedback ("it-IT" or "en-US")
-          # Custom coordinates can be specified directly to bypass city lookup:
-          # latitude: 41.8919
-          # longitude: 12.5113
-
-  - phrase: "che tempo farà oggi ?"
-    wake_words: []
-    patterns:
-      - "che tempo * oggi"
-    actions:
-      - type: meteo
-        params:
-          city: "Verona"        # Default fallback city if not spoken in the transcript
-          days: "oggi"      # Default fallback day ("oggi" / "domani") if not spoken in the transcript
-
-  - phrase: "dormi"
-    wake_words: [default]
-    aliases:
-      - "smetti di ascoltare"
-    actions:
-      - type: say
-        text: "Va bene, vado a dormire. Dì 'svégliati adesso' per riattivarmi."
-      - type: stop_listening
-
-  - phrase: "svegliati adesso"
-    wake_words: []
-    aliases:
-      - "attiva ascolto"
-    actions:
-      - type: start_listening
-      - type: say
-        text: "Sono sveglia, pronta ad ascoltare!"
-
-  - phrase: "calibra microfono"
-    wake_words: [default]
-    actions:
-      - type: calibrate_input_gain
-        sentence: "uno due tre quattro cinque"
-        gain_low: 0.2
-        gain_mid: 1.5
-        gain_high: 3.0
-        listen_timeout: 6.0
-        settle_ms: 500
