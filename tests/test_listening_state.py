@@ -164,3 +164,39 @@ async def test_tones_suppressed_when_sleeping():
         mock_play_array.assert_called_once()
 
 
+@pytest.mark.asyncio
+async def test_sleeping_dynamic_wake_up_phrase_propagation():
+    from alexa_custom.web import WebServer
+    server = WebServer()
+    server.on_stt_event("sleeping", {"wake_up_phrase": "svegliati adesso"})
+    assert server._state["stt_state"] == "sleeping"
+    assert server._state["stt_text"] == "sleeping... wait for wake up svegliati adesso"
+
+
+@pytest.mark.asyncio
+async def test_get_wake_up_phrases_helper():
+    from alexa_custom.stt import get_wake_up_phrases
+    from alexa_custom.config import ActionsConfig, Trigger, ActionEntry, WakeWordGroup
+    
+    # Trigger with start_listening
+    wakeup_trigger = Trigger(
+        phrase="svegliati",
+        actions=[ActionEntry(type="start_listening")],
+    )
+    # Trigger without start_listening
+    dummy_trigger = Trigger(
+        phrase="test",
+        actions=[ActionEntry(type="log")],
+    )
+    
+    config = ActionsConfig(
+        wake_words=[WakeWordGroup(word="galileo")],
+        triggers=[wakeup_trigger, dummy_trigger],
+        direct_triggers=[dummy_trigger],
+    )
+    
+    phrases = get_wake_up_phrases(config)
+    assert "svegliati" in phrases
+    assert "test" not in phrases
+
+

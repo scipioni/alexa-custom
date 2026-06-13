@@ -2674,8 +2674,9 @@
       switch (state) {
         case 'sleeping':
           _cancelPartialClear();
+          var displayText = text || 'Sleeping — say "start listening" to wake';
           _setHeroContent('<span class="hero-icon hero-muted" style="color:var(--muted);font-size:24px">💤</span>'
-            + '<span class="hero-text hero-muted">Sleeping — say "start listening" to wake</span>');
+            + '<span class="hero-text hero-muted">' + esc(displayText) + '</span>');
           break;
         case 'listening':
           _cancelPartialClear();
