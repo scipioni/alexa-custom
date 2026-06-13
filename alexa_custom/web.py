@@ -687,13 +687,14 @@ class WebServer:
     async def _system_stats_loop(self) -> None:
         cpu_count = os.cpu_count() or 1
         from alexa_custom.audio_hw import get_output_volume
+
         while True:
             await asyncio.sleep(2)
             try:
                 load1, load5, load15 = os.getloadavg()
             except OSError:
                 load1 = load5 = load15 = 0.0
-            
+
             try:
                 vol = get_output_volume()
             except Exception:

@@ -384,12 +384,12 @@ def _grammar_json_all(
         for t in g.triggers:
             phrases.append(t.phrase)
             phrases.extend(t.aliases)
-    
+
     # Add global triggers
     for t in triggers:
         phrases.append(t.phrase)
         phrases.extend(t.aliases)
-        
+
     # Optional: deduplicate
     phrases = list(set(phrases))
     return _phrases_to_grammar(phrases)
@@ -441,33 +441,32 @@ def _vosk_check_result(
     """Process a Vosk stage-1 result and return (matched WakeWordGroup, inline_cmd)."""
     text = result.get("text", "").strip()
     words = result.get("result", [])
-    
+
     from alexa_custom.stt import _extract_wake_command
+
     wake_match, inline_cmd = (
-        _extract_wake_command(text, alias_map, fuzzy=False)
-        if text
-        else (None, "")
+        _extract_wake_command(text, alias_map, fuzzy=False) if text else (None, "")
     )
-    
+
     if not wake_match:
         return None, ""
-        
+
     # We only care about the confidence of the wake word part.
     # The wake word text is text minus inline_cmd.
     wake_text_len = len(text) - len(inline_cmd)
     wake_text = text[:wake_text_len].strip()
     wake_word_count = len(wake_text.split())
-    
+
     wake_words_data = words[:wake_word_count] if words else []
     conf = _vosk_confidence(wake_words_data, confidence_mode)
-    
+
     logger.debug("Stage1 result: %r conf=%.2f (mode=%s)", text, conf, confidence_mode)
-    
+
     if conf < confidence:
         return None, ""
-        
+
     if _rms_level(trigger_chunk) < rms_threshold:
         logger.debug("Stage1 RMS gate rejected %r (quiet chunk)", text)
         return None, ""
-        
+
     return wake_match, inline_cmd

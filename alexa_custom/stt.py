@@ -173,21 +173,29 @@ def run_stt_worker(
         current_config.stt.stage1.backend,
         current_config.stt.stage1.model_path,
         current_config.stt.stage1.vosk_grammar,
-        hash((
-            tuple(g.word for g in current_config.wake_words),
-            tuple(t.phrase for g in current_config.wake_words for t in g.triggers),
-            tuple(t.phrase for t in current_config.triggers)
-        )) if current_config.stt.stage1.vosk_grammar else 0,
+        hash(
+            (
+                tuple(g.word for g in current_config.wake_words),
+                tuple(t.phrase for g in current_config.wake_words for t in g.triggers),
+                tuple(t.phrase for t in current_config.triggers),
+            )
+        )
+        if current_config.stt.stage1.vosk_grammar
+        else 0,
     )
     stage2_key = (
         current_config.stt.stage2.backend,
         current_config.stt.stage2.model_path,
         current_config.stt.stage2.vosk_grammar,
-        hash((
-            tuple(g.word for g in current_config.wake_words),
-            tuple(t.phrase for g in current_config.wake_words for t in g.triggers),
-            tuple(t.phrase for t in current_config.triggers)
-        )) if current_config.stt.stage2.vosk_grammar else 0,
+        hash(
+            (
+                tuple(g.word for g in current_config.wake_words),
+                tuple(t.phrase for g in current_config.wake_words for t in g.triggers),
+                tuple(t.phrase for t in current_config.triggers),
+            )
+        )
+        if current_config.stt.stage2.vosk_grammar
+        else 0,
     )
 
     _dispatch_loop = asyncio.new_event_loop()
@@ -204,20 +212,32 @@ def run_stt_worker(
                 current_config.stt.stage1.backend,
                 current_config.stt.stage1.model_path,
                 current_config.stt.stage1.vosk_grammar,
-                hash((
-            tuple(g.word for g in current_config.wake_words),
-            tuple(t.phrase for g in current_config.wake_words for t in g.triggers),
-            tuple(t.phrase for t in current_config.triggers)
-        )) if current_config.stt.stage1.vosk_grammar else 0,
+                hash(
+                    (
+                        tuple(g.word for g in current_config.wake_words),
+                        tuple(
+                            t.phrase
+                            for g in current_config.wake_words
+                            for t in g.triggers
+                        ),
+                        tuple(t.phrase for t in current_config.triggers),
+                    )
+                )
+                if current_config.stt.stage1.vosk_grammar
+                else 0,
             )
             new_stage2_key = (
                 current_config.stt.stage2.backend,
                 current_config.stt.stage2.model_path,
                 current_config.stt.stage2.vosk_grammar,
-                hash((
-                    tuple(g.word for g in current_config.wake_words),
-                    tuple(t.phrase for t in current_config.triggers)
-                )) if current_config.stt.stage2.vosk_grammar else 0,
+                hash(
+                    (
+                        tuple(g.word for g in current_config.wake_words),
+                        tuple(t.phrase for t in current_config.triggers),
+                    )
+                )
+                if current_config.stt.stage2.vosk_grammar
+                else 0,
             )
 
             if new_stage1_key != stage1_key:
@@ -240,7 +260,9 @@ def run_stt_worker(
             if new_stage2_key != stage2_key:
                 try:
                     stage2_grammar = (
-                        _grammar_json_all(current_config.wake_words, current_config.triggers)
+                        _grammar_json_all(
+                            current_config.wake_words, current_config.triggers
+                        )
                         if current_config.stt.stage2.vosk_grammar
                         else None
                     )
@@ -382,14 +404,19 @@ def _single_stage_loop(
     )
     _dloop = dispatch_loop
     assert _dloop is not None, "dispatch_loop must be provided to _single_stage_loop"
-    
+
     _adaptive_rms = config.stt.stage1.adaptive_rms
     _adaptive_rms_margin = config.stt.stage1.adaptive_rms_margin
     _eff_stage1_rms = config.stt.stage1.rms_threshold
     _noise_floor_buffer: list[float] = []
 
     for data in _iter_gated_audio(
-        proc, channels, stop_event, on_playback_end=backend.reset, name="single-stage"
+        proc,
+        channels,
+        stop_event,
+        on_playback_end=backend.reset,
+        name="single-stage",
+        post_playback_ms=config.audio.post_playback_ms,
     ):
         if data is None:
             continue
@@ -405,15 +432,20 @@ def _single_stage_loop(
             _noise_floor_buffer.append(rms)
             if len(_noise_floor_buffer) > 50:
                 _noise_floor_buffer.pop(0)
-                _eff_stage1_rms = (sum(_noise_floor_buffer) / len(_noise_floor_buffer)) + _adaptive_rms_margin
+                _eff_stage1_rms = (
+                    sum(_noise_floor_buffer) / len(_noise_floor_buffer)
+                ) + _adaptive_rms_margin
 
         if on_stt_event:
-            on_stt_event("level", {
-                "mic": rms,
-                "rms_threshold": _eff_stage1_rms,
-                "confidence": None,
-                "adaptive": _adaptive_rms
-            })
+            on_stt_event(
+                "level",
+                {
+                    "mic": rms,
+                    "rms_threshold": _eff_stage1_rms,
+                    "confidence": None,
+                    "adaptive": _adaptive_rms,
+                },
+            )
 
         if time.monotonic() < cooldown_until:
             backend.reset()
@@ -550,7 +582,7 @@ def _recognition_loop(
     _eff_stage1_rms = config.stt.stage1.rms_threshold
     _eff_stage1_min_speech_ms = config.stt.stage1.min_speech_ms
     _eff_vad_ms = config.stt.vad_silence_ms
-    
+
     _adaptive_rms = config.stt.stage1.adaptive_rms
     _adaptive_rms_margin = config.stt.stage1.adaptive_rms_margin
     _noise_floor_buffer: list[float] = []
@@ -621,7 +653,12 @@ def _recognition_loop(
             _reset_stage1_state()
 
     for data in _iter_gated_audio(
-        proc, channels, stop_event, on_playback_end=_on_playback_end, name="two-stage"
+        proc,
+        channels,
+        stop_event,
+        on_playback_end=_on_playback_end,
+        name="two-stage",
+        post_playback_ms=config.audio.post_playback_ms,
     ):
         if data is None:
             continue
@@ -642,22 +679,29 @@ def _recognition_loop(
             continue
 
         rms = _rms_level(data)
-        
+
         # Adaptive RMS tracking
         if _adaptive_rms and not was_gated and stage1_speech_ms == 0:
             _noise_floor_buffer.append(rms)
             if len(_noise_floor_buffer) > 50:  # ~1 second rolling window
                 _noise_floor_buffer.pop(0)
-                _current_noise_floor = sum(_noise_floor_buffer) / len(_noise_floor_buffer)
+                _current_noise_floor = sum(_noise_floor_buffer) / len(
+                    _noise_floor_buffer
+                )
                 _eff_stage1_rms = _current_noise_floor + _adaptive_rms_margin
 
         if on_stt_event:
-            on_stt_event("level", {
-                "mic": rms, 
-                "rms_threshold": _eff_stage1_rms,
-                "confidence": config.stt.stage1.confidence if is_vosk and vosk_use_grammar else None,
-                "adaptive": _adaptive_rms
-            })
+            on_stt_event(
+                "level",
+                {
+                    "mic": rms,
+                    "rms_threshold": _eff_stage1_rms,
+                    "confidence": config.stt.stage1.confidence
+                    if is_vosk and vosk_use_grammar
+                    else None,
+                    "adaptive": _adaptive_rms,
+                },
+            )
 
         if was_gated:
             logger.info("STT resumed (call ended)")
