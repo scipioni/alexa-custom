@@ -81,7 +81,7 @@ class AudioWebRTCConfig:
 
 @dataclass
 class AudioConfig:
-    card_name: str = "NewPie"
+    card_name: str | None = None
     input_device: str | None = None
     output_device: str | None = None
     output_volume: float = 0.5
@@ -467,9 +467,10 @@ def _parse_audio_config(raw: dict) -> AudioConfig:
 
     input_device = raw.get("input_device") or None
     output_device = raw.get("output_device") or None
+    card_name_raw = raw.get("card_name")
 
     return AudioConfig(
-        card_name=str(raw.get("card_name", "NewPie")),
+        card_name=str(card_name_raw) if card_name_raw else None,
         input_device=str(input_device) if input_device else None,
         output_device=str(output_device) if output_device else None,
         output_volume=output_volume,

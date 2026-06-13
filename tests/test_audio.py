@@ -150,20 +150,23 @@ def test_restore_hw_pcm_noop_without_newpie():
 
 
 def test_restore_hw_pcm_calls_amixer_when_newpie_found():
-    with patch.object(audio_hw, "_find_alsa_card", return_value=(2, "NewPie")):
-        with patch("subprocess.run") as mock_run:
-            audio_hw._restore_hw_pcm()
+    with (
+        patch.object(audio_hw, "get_default_card_name", return_value="NewPie"),
+        patch.object(audio_hw, "_find_alsa_card", return_value=(2, "NewPie")),
+        patch("subprocess.run") as mock_run,
+    ):
+        audio_hw._restore_hw_pcm()
 
-            amixer_calls = [
-                c for c in mock_run.call_args_list if c[0][0][0] == "amixer"
-            ]
-            assert len(amixer_calls) == 1
-            amixer_cmd = amixer_calls[0][0][0]
-            assert "amixer" in amixer_cmd
-            assert "-c" in amixer_cmd
-            assert "2" in amixer_cmd
-            assert "PCM" in amixer_cmd
-            assert "100%" in amixer_cmd
+        amixer_calls = [
+            c for c in mock_run.call_args_list if c[0][0][0] == "amixer"
+        ]
+        assert len(amixer_calls) == 1
+        amixer_cmd = amixer_calls[0][0][0]
+        assert "amixer" in amixer_cmd
+        assert "-c" in amixer_cmd
+        assert "2" in amixer_cmd
+        assert "PCM" in amixer_cmd
+        assert "100%" in amixer_cmd
 
 
 def test_configure_propagates_to_globals(monkeypatch):
