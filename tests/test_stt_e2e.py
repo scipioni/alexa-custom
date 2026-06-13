@@ -30,7 +30,9 @@ PIPER_BIN = shutil.which("piper") or str(
     Path(__file__).parent.parent / ".venv/bin/piper"
 )
 PIPER_VOICE = str(Path(__file__).parent.parent / "models/piper/it_IT-paola-medium.onnx")
-SHERPA_MODEL = str(Path(__file__).parent.parent / "models/it/kroko_128l")
+SHERPA_MODEL = str(
+    Path(__file__).parent.parent / "models/sherpa-onnx/zipformer2-ctc-it"
+)
 VOSK_MODEL = str(Path(__file__).parent.parent / "models/it")
 
 _FFMPEG = shutil.which("ffmpeg")

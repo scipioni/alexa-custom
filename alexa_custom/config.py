@@ -109,12 +109,14 @@ class STTStage1Config:
     keyword_spotter: bool = False
     keywords_score: float = 1.0
     keywords_threshold: float = 0.25
+    model_variant: str = "auto"
 
 
 @dataclass
 class STTStage2Config:
     backend: str = "vosk"
     model_path: str | None = None
+    model_variant: str = "auto"
 
 
 @dataclass
@@ -454,6 +456,12 @@ def _parse_stt_stage1_config(raw: dict) -> STTStage1Config:
         raise ConfigError(
             f"'stt.stage1.confidence_mode' must be 'first', 'min', or 'mean', got {confidence_mode!r}"
         )
+    model_variant = str(raw.get("model_variant", "auto"))
+    _VALID_VARIANTS = {"auto", "transducer", "zipformer2-ctc", "paraformer", "nemo_ctc"}
+    if model_variant not in _VALID_VARIANTS:
+        raise ConfigError(
+            f"'stt.stage1.model_variant' must be one of {sorted(_VALID_VARIANTS)}, got {model_variant!r}"
+        )
     return STTStage1Config(
         backend=backend,
         model_path=str(model_path_raw) if model_path_raw else None,
@@ -466,6 +474,7 @@ def _parse_stt_stage1_config(raw: dict) -> STTStage1Config:
         keyword_spotter=bool(raw.get("keyword_spotter", False)),
         keywords_score=float(raw.get("keywords_score", 1.0)),
         keywords_threshold=float(raw.get("keywords_threshold", 0.25)),
+        model_variant=model_variant,
     )
 
 
@@ -476,9 +485,16 @@ def _parse_stt_stage2_config(raw: dict) -> STTStage2Config:
             f"'stt.stage2.backend' must be 'vosk' or 'sherpa-onnx', got {backend!r}"
         )
     model_path_raw = raw.get("model_path")
+    model_variant = str(raw.get("model_variant", "auto"))
+    _VALID_VARIANTS = {"auto", "transducer", "zipformer2-ctc", "paraformer", "nemo_ctc"}
+    if model_variant not in _VALID_VARIANTS:
+        raise ConfigError(
+            f"'stt.stage2.model_variant' must be one of {sorted(_VALID_VARIANTS)}, got {model_variant!r}"
+        )
     return STTStage2Config(
         backend=backend,
         model_path=str(model_path_raw) if model_path_raw else None,
+        model_variant=model_variant,
     )
 
 
