@@ -9,6 +9,7 @@ from pathlib import Path
 
 _SHERPA_MODELS = {
 <<<<<<< HEAD
+<<<<<<< HEAD
     "kroko_128l": (
         "https://huggingface.co/hudaiapa88/sherpa-stt-onnx/resolve/main/it/kroko_128l",
         "models/it/kroko_128l",
@@ -26,23 +27,17 @@ _SHERPA_MODELS = {
         "https://huggingface.co/hudaiapa88/sherpa-stt-onnx/resolve/main/it/kroko_128l",
         "models/it/kroko_128l",
 >>>>>>> 77759e6 (fix: revert model download/path to kroko_128l (NeMo FastConformer CTC metadata incompatible with board's sherpa-onnx))
+=======
+    "ita": (
+        "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-fast-conformer-ctc-be-de-en-es-fr-hr-it-pl-ru-uk-20k/resolve/main",
+        "models/sherpa-onnx/nemo-ctc-it",
+>>>>>>> 50b0bb0 (feat: add NeMoOfflineSTT backend using OfflineRecognizer.from_nemo_ctc())
     ),
 }
-_SHERRPA_FILES = [
-    "encoder.int8.onnx",
-    "decoder.int8.onnx",
-    "joiner.int8.onnx",
+_SHERPA_FILES = [
+    "model.onnx",
     "tokens.txt",
 ]
-
-# Alternative models (uncomment to use):
-# _SHERPA_MODELS["nemo_ctc"] = (
-#     "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-fast-conformer-ctc-be-de-en-es-fr-hr-it-pl-ru-uk-20k/resolve/main",
-#     "models/sherpa-onnx/nemo-ctc-it",
-# )
-# _SHERRPA_FILES = ["model.onnx", "tokens.txt"]
-# Note: the NeMo model above lacks ONNX metadata required by from_nemo_ctc().
-# Use the export script at addons/nemo-export/ to add metadata.
 
 
 def download_sherpa_onnx(model: str = "kroko_128l", force: bool = False) -> None:
@@ -243,7 +238,7 @@ def main() -> None:
         ),
 =======
         action="store_true",
-        help="Also download the sherpa-onnx kroko Italian transducer model (alternative STT backend)",
+        help="Also download the NeMo FastConformer CTC Italian model (offline STT backend, ~461 MB)",
     )
     parser.add_argument(
         "--whisper-cpp",
