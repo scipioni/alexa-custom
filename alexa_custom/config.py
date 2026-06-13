@@ -187,6 +187,7 @@ class ActionsDirectoryConfig:
 class DisplayConfig:
     enabled: bool = False
     backend: str = "auto"  # auto | bridge | gpio | mock | i2c
+    transport: str = "unix"  # auto | subprocess | unix | tcp
     matrix_brightness: int = 50
     led_brightness: int = 50
     i2c_bus: int = 1
@@ -995,6 +996,7 @@ def _parse_actions_config(
         display = DisplayConfig(
             enabled=bool(raw_display.get("enabled", True)),
             backend=str(raw_display.get("backend", "auto")),
+            transport=str(raw_display.get("transport", "unix")),
             matrix_brightness=int(raw_display.get("matrix_brightness", 50)),
             led_brightness=int(raw_display.get("led_brightness", 50)),
             i2c_bus=int(raw_display.get("i2c_bus", 1)),

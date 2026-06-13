@@ -142,6 +142,7 @@ actions:
 display:
   enabled: false
   backend: auto           # auto | bridge | gpio | mock | i2c
+  transport: unix        # auto | subprocess | unix | tcp (bridge backend only)
   matrix_brightness: 50   # 0-100
   led_brightness: 50      # 0-100
 
