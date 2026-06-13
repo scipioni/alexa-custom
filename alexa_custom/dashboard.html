@@ -3242,10 +3242,10 @@
           </div>
           <div class="form-group">
             <label>Adattamento Rumore di Fondo (RMS Adattivo)</label>
-            <div class="toggle-group">
-              <input type="checkbox" id="input-adaptive-rms">
-              <span>Abilita (sovrascrive RMS fisso)</span>
-            </div>
+            <select id="input-adaptive-rms">
+              <option value="true">Abilita (sovrascrive RMS fisso)</option>
+              <option value="false">Disabilita</option>
+            </select>
             <span class="form-hint">Regola automaticamente la soglia in base al rumore della stanza.</span>
           </div>
         </div>
@@ -3278,7 +3278,7 @@
       document.getElementById('input-stt-confidence').value = config.stt?.stage1?.confidence || '';
       document.getElementById('input-input-gain').value = config.audio?.input_gain != null ? config.audio.input_gain : '';
       document.getElementById('input-rms-threshold').value = config.stt?.stage1?.rms_threshold != null ? config.stt.stage1.rms_threshold : '';
-      document.getElementById('input-adaptive-rms').checked = !!config.stt?.stage1?.adaptive_rms;
+      document.getElementById('input-adaptive-rms').value = config.stt?.stage1?.adaptive_rms !== false ? 'true' : 'false';
       document.getElementById('input-tts-backend').value = config.tts?.backend || 'piper';
       document.getElementById('input-tts-voice').value = config.tts?.voice || '';
     }
@@ -3326,7 +3326,7 @@
         };
         const rmsThreshold = parseFloat(document.getElementById('input-rms-threshold').value);
         if (!isNaN(rmsThreshold)) result.stt.stage1.rms_threshold = rmsThreshold;
-        result.stt.stage1.adaptive_rms = document.getElementById('input-adaptive-rms').checked;
+        result.stt.stage1.adaptive_rms = document.getElementById('input-adaptive-rms').value === 'true';
       }
 
       const inputGain = parseFloat(document.getElementById('input-input-gain').value);

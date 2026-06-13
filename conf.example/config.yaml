@@ -56,6 +56,7 @@ stt:
     #   Raise this value if you speak wake word + command in one breath (mode 2):
     #   the window must be wide enough to bridge the natural pause between them.
     rms_threshold: 0.02    # stage-1 minimum RMS energy considered speech
+    adaptive_rms: true     # dynamically adjusts rms_threshold based on room noise floor
     min_speech_ms: 200     # minimum sustained speech before silence timer starts
     vosk_grammar: true     # restrict Vosk to wake-word vocabulary (grammar mode)
     #   true  — grammar mode (default): low CPU, forces segments onto nearest phrase.
