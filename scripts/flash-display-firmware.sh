@@ -4,10 +4,10 @@ set -euo pipefail
 
 BOARD_FQBN="arduino:zephyr:unoq"
 SKETCH_DIR="$(dirname "$(readlink -f "$0")")/../setup/display_firmware"
-LIBS=("Arduino_RouterBridge@0.4.2" "ArduinoGraphics" "Arduino_LED_Matrix")
+LIBS=("Arduino_RouterBridge@0.4.2" "ArduinoGraphics")
 TIMEOUT_SECS=60
 
-log() { echo "[flash-firmware] $*"; }
+log() { echo "[flash-firmware] $*" >&2; }
 warn() { echo "[flash-firmware] WARNING: $*" >&2; }
 die() { echo "[flash-firmware] ERROR: $*" >&2; exit 1; }
 
@@ -24,11 +24,22 @@ find_port() {
         python3 -c "
 import sys, json
 data = json.load(sys.stdin)
+for item in data.get('detected_ports', []):
+    for dev in item.get('matching_boards', []):
+        if 'unoq' in dev.get('name', '').lower() or 'UNO Q' in dev.get('name', ''):
+            addr = item.get('port', {}).get('address')
+            sn = item.get('port', {}).get('properties', {}).get('serialNumber', '')
+            if addr:
+                print(f'{addr} {sn}')
+                sys.exit(0)
 for p in data.get('ports', []):
     for dev in p.get('boards', []):
         if 'unoq' in dev.get('name', '').lower() or 'UNO Q' in dev.get('name', ''):
-            print(p['address'])
-            break
+            addr = p.get('address')
+            sn = p.get('properties', {}).get('serialNumber', '')
+            if addr:
+                print(f'{addr} {sn}')
+                sys.exit(0)
 " 2>/dev/null || true)
 
     if [[ -n "$ports" ]]; then
@@ -81,6 +92,7 @@ install_all_libs() {
 
 flash_firmware() {
     local port="$1"
+    local sn="${2:-}"
 
     log "Compiling firmware..."
     arduino-cli compile \
@@ -89,11 +101,18 @@ flash_firmware() {
         "$SKETCH_DIR" || die "Compilation failed"
 
     log "Uploading to $port..."
-    arduino-cli upload \
-        -p "$port" \
-        --fqbn "$BOARD_FQBN" \
-        --input-dir "/tmp/arduino-build-$$" \
-        --wait-for-upload-port || die "Upload failed"
+    if [[ -n "$sn" ]]; then
+        arduino-cli upload \
+            -p "$port" \
+            --fqbn "$BOARD_FQBN" \
+            --input-dir "/tmp/arduino-build-$$" \
+            --upload-property "upload.port.properties.serialNumber=$sn" || die "Upload failed"
+    else
+        arduino-cli upload \
+            -p "$port" \
+            --fqbn "$BOARD_FQBN" \
+            --input-dir "/tmp/arduino-build-$$" || die "Upload failed"
+    fi
 
     rm -rf "/tmp/arduino-build-$$"
     log "Upload complete!"
@@ -102,12 +121,16 @@ flash_firmware() {
 main() {
     install_all_libs
 
-    if ! port=$(wait_for_board); then
+    local board_info
+    if ! board_info=$(wait_for_board); then
         die "No UNO Q board found after ${TIMEOUT_SECS}s. Connect the board via USB and retry."
     fi
 
-    log "Found UNO Q at $port"
-    flash_firmware "$port"
+    local port sn
+    read -r port sn <<< "$board_info"
+
+    log "Found UNO Q at $port (Serial: $sn)"
+    flash_firmware "$port" "$sn"
 }
 
 main "$@"

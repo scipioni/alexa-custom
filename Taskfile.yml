@@ -278,6 +278,11 @@ tasks:
         sudo chmod 440 /etc/sudoers.d/alexa-uart-bridge
         echo "Done. The display backend will auto-detect uart_bridge."
 
+  display:flash:
+    desc: Compile and flash the STM32 display firmware to the Arduino UNO Q board
+    cmds:
+      - ./scripts/flash-display-firmware.sh
+
   clean:
     desc: Clean up temporary files
     cmds:
