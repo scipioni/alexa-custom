@@ -128,12 +128,86 @@ def get_similarity_score(a: str, b: str, algorithm: str) -> float:
             return difflib.SequenceMatcher(None, a, b).ratio() * 100.0
 
 
+def _match_glob_pattern(
+    pattern: str,
+    transcript: str,
+    algorithm: str = "token_set_ratio",
+    threshold: float = _TRIGGER_THRESHOLD,
+) -> bool:
+    """Fuzzy ordered-subsequence walk of a word-glob pattern against a transcript.
+
+    Token semantics:
+    - standalone ``*``  : matches zero or more transcript words (gap)
+    - ``foo*``          : matches a transcript word whose phonetic form starts
+                          with the phonetic prefix of ``foo``
+    - literal token     : matches a transcript word above the phonetic similarity
+                          threshold (via italian_phonetic + get_similarity_score)
+    """
+    p_tokens = pattern.split()
+    t_tokens = [italian_phonetic(w) for w in transcript.split()]
+
+    def _token_matches(p_tok: str, t_phon: str) -> bool:
+        if p_tok.endswith("*"):
+            prefix = italian_phonetic(p_tok[:-1])
+            return t_phon.startswith(prefix)
+        return (
+            get_similarity_score(italian_phonetic(p_tok), t_phon, algorithm)
+            >= threshold
+        )
+
+    # Recursive ordered-subsequence walk with memoisation.
+    from functools import lru_cache
+
+    @lru_cache(maxsize=None)
+    def _walk(pi: int, ti: int) -> bool:
+        # consumed all pattern tokens → matched
+        if pi == len(p_tokens):
+            return True
+        tok = p_tokens[pi]
+        if tok == "*":
+            # gap: try consuming 0 … remaining transcript words
+            for skip in range(ti, len(t_tokens) + 1):
+                if _walk(pi + 1, skip):
+                    return True
+            return False
+        # literal or glob token: find the next transcript word that satisfies it
+        for ti2 in range(ti, len(t_tokens)):
+            if _token_matches(tok, t_tokens[ti2]):
+                if _walk(pi + 1, ti2 + 1):
+                    return True
+        return False
+
+    return _walk(0, 0)
+
+
+def _trigger_matches_patterns(
+    trigger: "Trigger",
+    transcript: str,
+    algorithm: str = "token_set_ratio",
+    threshold: float = _TRIGGER_THRESHOLD,
+) -> bool:
+    """Return True if any of the trigger's patterns match the transcript."""
+    return any(
+        _match_glob_pattern(p, transcript, algorithm, threshold)
+        for p in trigger.patterns
+    )
+
+
 def match_trigger(
     transcript: str,
     triggers: list[Trigger],
     threshold: float = _TRIGGER_THRESHOLD,
     algorithm: str = "token_set_ratio",
 ) -> Trigger | None:
+    # Pattern match is definitive: first trigger whose patterns match wins.
+    for trigger in triggers:
+        if trigger.patterns and _trigger_matches_patterns(
+            trigger, transcript, algorithm, threshold
+        ):
+            logger.info(f"Matched trigger '{trigger.phrase}' (glob pattern)")
+            return trigger
+
+    # Fuzzy fallback: best phonetic similarity score above threshold.
     best: Trigger | None = None
     best_score = 0.0
     t_phon = italian_phonetic(transcript)
