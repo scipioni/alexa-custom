@@ -24,6 +24,10 @@ recognition:
   matching_threshold: 70.0             # similarity threshold (0-100)
   reply_matching_algorithm: levenshtein  # token_set_ratio | levenshtein | ratio
   reply_matching_threshold: 80.0         # similarity threshold (0-100)
+  # follow_up: false          # re-open command window after a match without re-waking
+  # follow_up_timeout: 4.0    # seconds of silence before the follow-up window closes
+  # follow_up_max_turns: 5    # max consecutive follow-up turns (runaway guard)
+  # follow_up_tone: info      # chime played when the follow-up window opens
 
 # ---------------------------------------------------------------------------
 # STT — speech-to-text

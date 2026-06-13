@@ -68,6 +68,21 @@ triggers:
         payload: "ON"
 
 # ---------------------------------------------------------------------------
+# Follow-up — per-trigger override
+#
+# Quando recognition.follow_up è abilitato globalmente, i singoli trigger
+# possono sovrascrivere il comportamento:
+#   follow_up: false   — non aprire la finestra dopo questo comando
+#   follow_up: true    — apri sempre la finestra anche se il flag globale è off
+# ---------------------------------------------------------------------------
+
+  # - phrase: "buonanotte"
+  #   follow_up: false        # chiudi la conversazione dopo questo comando
+  #   actions:
+  #     - type: say
+  #       text: "Buonanotte!"
+
+# ---------------------------------------------------------------------------
 # Domotica — esempi con pattern word-glob
 #
 # I pattern vengono testati PRIMA della corrispondenza fuzzy.
