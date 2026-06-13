@@ -806,6 +806,7 @@ class WebServer:
             "phrase": t.phrase,
             "aliases": t.aliases,
             "actions": WebServer._serialize_action_list(t.actions),
+            "direct_match": t.direct_match,
         }
 
     @staticmethod

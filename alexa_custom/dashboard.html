@@ -2124,7 +2124,7 @@
           trigs.forEach((t, ti) => {
             const h = trigH(t);
             nodes.push({ id: `t${wi}_${ti}`, type: 'trig', label: t.phrase,
-                         aliases: t.aliases || [],
+                         aliases: t.aliases || [], direct_match: !!t.direct_match,
                          actions: t.actions, x: TR_X, y: ty + h / 2, w: TR_W, h });
             edges.push({ from: `w${wi}`, to: `t${wi}_${ti}`,
                          parts: [0.12, 0.52, 0.84].map(t0 => ({ t: t0 })) });
@@ -2158,7 +2158,7 @@
           const cx  = contX + CONT_PAD + col * (cellW + GRID_GAP_X);
           const cy  = globsY0 + TITLE_H + CONT_PAD + row * (cellH + GRID_GAP_Y) + cellH / 2;
           nodes.push({ id: `g${gi}`, type: 'global', label: t.phrase,
-                       aliases: t.aliases || [],
+                       aliases: t.aliases || [], direct_match: !!t.direct_match,
                        actions: t.actions, x: cx, y: cy, w: cellW, h: cellH });
         });
 
@@ -2261,19 +2261,41 @@
         ctx.lineWidth   = flash > 0.1 ? 2 + flash : (isHov ? 2 : 1.5);
         ctx.stroke();
         ctx.shadowBlur  = 0;
-        // Primary word
+        // Primary word — rendered as a badge chip
         const WW_PAD = 9, LINE_H = 17;
-        ctx.fillStyle = col;
         ctx.font = 'bold 12px system-ui,sans-serif';
         ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-        ctx.fillText(n.label.toUpperCase(), n.x + WW_PAD, n.y + WW_PAD + LINE_H * 0.5);
-        // Aliases
+        const wwStr = n.label.toUpperCase();
+        const WB_PAD_X = 7, WB_H = 18, WB_R = 4;
+        const wwW = ctx.measureText(wwStr).width + WB_PAD_X * 2;
+        const wwBX = n.x + WW_PAD, wwBY = n.y + WW_PAD;
+        ctx.beginPath(); _rrect(ctx, wwBX, wwBY, wwW, WB_H, WB_R);
+        ctx.fillStyle = col + '28';
+        ctx.fill();
+        ctx.strokeStyle = col + '99';
+        ctx.lineWidth = 0.5;
+        ctx.setLineDash([]);
+        ctx.stroke();
+        ctx.fillStyle = col;
+        ctx.fillText(wwStr, wwBX + WB_PAD_X, wwBY + WB_H / 2);
+        // Aliases — same badge chip style
         if (n.aliases.length) {
-          ctx.fillStyle = col + '99';
           ctx.font = '11px system-ui,sans-serif';
-          n.aliases.forEach((a, i) =>
-            ctx.fillText(a, n.x + WW_PAD, n.y + WW_PAD + LINE_H * (i + 1.5))
-          );
+          const AB_PAD_X = 6, AB_H = 15, AB_R = 3;
+          n.aliases.forEach((a, i) => {
+            const abW = ctx.measureText(a).width + AB_PAD_X * 2;
+            const abX = n.x + WW_PAD;
+            const abY = n.y + WW_PAD + LINE_H * (i + 1) + (LINE_H - AB_H) / 2;
+            ctx.beginPath(); _rrect(ctx, abX, abY, abW, AB_H, AB_R);
+            ctx.fillStyle = col + '18';
+            ctx.fill();
+            ctx.strokeStyle = col + '66';
+            ctx.lineWidth = 0.5;
+            ctx.setLineDash([]);
+            ctx.stroke();
+            ctx.fillStyle = col + 'bb';
+            ctx.fillText(a, abX + AB_PAD_X, abY + AB_H / 2);
+          });
         }
         ctx.restore();
       }
@@ -2281,7 +2303,7 @@
       function drawTrig(n) {
         const flash = _flashVal(n.id);
         const isHov = hov === n.id;
-        const col   = _gActionColor(n.actions);
+        const col   = n.direct_match ? '#f97316' : _gActionColor(n.actions);
         const x = n.x, y = n.y - n.h / 2, w = n.w, h = n.h;
         ctx.save();
         ctx.shadowColor = col;
@@ -2316,10 +2338,28 @@
         const maxCh     = Math.floor((leftW - 16 - ICONS_W) / 6.2);
         ctx.textBaseline = 'middle';
         // Primary phrase
-        ctx.fillStyle = isHov || flash > 0.3 ? _tc(0.95) : _tc(0.80);
         ctx.font = '12px system-ui,sans-serif';
         ctx.textAlign = 'left';
-        ctx.fillText(n.label.length > maxCh ? n.label.slice(0, maxCh-1)+'…' : n.label, x + 10, lblY);
+        const phraseStr = n.label.length > maxCh ? n.label.slice(0, maxCh-1)+'…' : n.label;
+        if (n.direct_match) {
+          // Render phrase as a badge chip
+          const PH_PAD_X = 7, PH_PAD_Y = 3, PH_R = 4;
+          const phW = ctx.measureText(phraseStr).width + PH_PAD_X * 2;
+          const phH = 16;
+          const phX = x + 8, phY = lblY - phH / 2;
+          ctx.beginPath(); _rrect(ctx, phX, phY, phW, phH, PH_R);
+          ctx.fillStyle = col + '28';
+          ctx.fill();
+          ctx.strokeStyle = col + '99';
+          ctx.lineWidth = 0.5;
+          ctx.setLineDash([]);
+          ctx.stroke();
+          ctx.fillStyle = isHov || flash > 0.3 ? _tc(0.95) : col;
+          ctx.fillText(phraseStr, phX + PH_PAD_X, lblY);
+        } else {
+          ctx.fillStyle = isHov || flash > 0.3 ? _tc(0.95) : _tc(0.80);
+          ctx.fillText(phraseStr, x + 10, lblY);
+        }
         // Action icons — right-aligned inside the left section
         ctx.font = '13px sans-serif';
         ctx.textAlign = 'left';
