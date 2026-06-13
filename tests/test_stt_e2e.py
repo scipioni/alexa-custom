@@ -434,3 +434,20 @@ class TestSherpaKeywordSpotterUnit:
         spotter = SherpaKeywordSpotter(str(model_dir), ["galileo"])
         assert spotter.accept_waveform(b"\x00\x00" * 512) is True
         assert spotter.text() == "galileo"
+
+
+class TestVoskGrammar:
+    def test_phrases_to_grammar_normalization(self):
+        from alexa_custom.stt_backends import _phrases_to_grammar
+        import json
+
+        phrases = ["Che ora è", "caffè", "sì"]
+        grammar_json = _phrases_to_grammar(phrases)
+        parsed = json.loads(grammar_json)
+
+        # Expected output must have normalized lowercase words, sorted and deduplicated, plus "[unk]"
+        # "Che ora è" -> "che ora e"
+        # "caffè" -> "caffe"
+        # "sì" -> "si"
+        assert parsed == ["caffe", "che ora e", "si", "[unk]"]
+
