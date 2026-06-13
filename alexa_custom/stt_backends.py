@@ -19,7 +19,7 @@ _MODEL_PATH = os.environ.get("VOSK_MODEL_PATH", "models/it")
 _SHERPA_MODEL_PATH = os.environ.get("SHERPA_ONNX_PATH", "models/it/kroko_128l")
 =======
 _SHERPA_MODEL_PATH = os.environ.get(
-    "SHERPA_ONNX_PATH", "models/sherpa-onnx/zipformer2-ctc-it"
+    "SHERPA_ONNX_PATH", "models/it/kroko_128l"
 )
 _WHISPER_CPP_MODEL_PATH = os.environ.get(
     "WHISPER_CPP_MODEL_PATH", "models/whisper-cpp/ggml-tiny-q4_0.bin"

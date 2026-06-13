@@ -99,7 +99,7 @@ _SHERPA_MODEL_PATH = os.environ.get("SHERPA_ONNX_PATH", "models/sherpa-onnx")
 =======
 =======
 _SHERPA_MODEL_PATH = os.environ.get(
-    "SHERPA_ONNX_PATH", "models/sherpa-onnx/zipformer2-ctc-it"
+    "SHERPA_ONNX_PATH", "models/sherpa-onnx"
 )
 >>>>>>> 84a06b1 (feat: switch sherpa-onnx to NeMo FastConformer CTC with model_variant config)
 _WHISPER_CPP_MODEL_PATH = os.environ.get(

@@ -14,6 +14,7 @@ _SHERPA_MODELS = {
         "models/it/kroko_128l",
 =======
     "ita": (
+<<<<<<< HEAD
         "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-fast-conformer-ctc-be-de-en-es-fr-hr-it-pl-ru-uk-20k/resolve/main",
         "models/sherpa-onnx/zipformer2-ctc-it",
 >>>>>>> 84a06b1 (feat: switch sherpa-onnx to NeMo FastConformer CTC with model_variant config)
@@ -21,10 +22,16 @@ _SHERPA_MODELS = {
     "kroko_64l": (
         "https://huggingface.co/hudaiapa88/sherpa-stt-onnx/resolve/main/it/kroko_64l",
         "models/it/kroko_64l",
+=======
+        "https://huggingface.co/hudaiapa88/sherpa-stt-onnx/resolve/main/it/kroko_128l",
+        "models/it/kroko_128l",
+>>>>>>> 77759e6 (fix: revert model download/path to kroko_128l (NeMo FastConformer CTC metadata incompatible with board's sherpa-onnx))
     ),
 }
-_SHERPA_FILES = [
-    "model.onnx",
+_SHERRPA_FILES = [
+    "encoder.int8.onnx",
+    "decoder.int8.onnx",
+    "joiner.int8.onnx",
     "tokens.txt",
 ]
 
@@ -227,7 +234,7 @@ def main() -> None:
         ),
 =======
         action="store_true",
-        help="Also download the sherpa-onnx NeMo FastConformer CTC Italian model (non-autoregressive, faster)",
+        help="Also download the sherpa-onnx kroko Italian transducer model (alternative STT backend)",
     )
     parser.add_argument(
         "--whisper-cpp",

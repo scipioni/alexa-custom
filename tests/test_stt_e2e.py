@@ -31,7 +31,7 @@ PIPER_BIN = shutil.which("piper") or str(
 )
 PIPER_VOICE = str(Path(__file__).parent.parent / "models/piper/it_IT-paola-medium.onnx")
 SHERPA_MODEL = str(
-    Path(__file__).parent.parent / "models/sherpa-onnx/zipformer2-ctc-it"
+    Path(__file__).parent.parent / "models/it/kroko_128l"
 )
 VOSK_MODEL = str(Path(__file__).parent.parent / "models/it")
 
