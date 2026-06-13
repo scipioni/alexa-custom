@@ -287,6 +287,7 @@ def play_tone(name: str):
     """Play a predefined tone by name (startup, success, error, info, warning)."""
     try:
         from alexa_custom.stt import is_stt_sleeping
+
         if is_stt_sleeping():
             logger.debug(f"play_tone({name}) suppressed because STT is sleeping")
             return
@@ -383,8 +384,11 @@ def play_beep(frequency_hz: float, duration_ms: int) -> None:
     """Play a pure-tone beep through the PipeWire default sink via aplay or pw-play."""
     try:
         from alexa_custom.stt import is_stt_sleeping
+
         if is_stt_sleeping():
-            logger.debug(f"play_beep({frequency_hz}) suppressed because STT is sleeping")
+            logger.debug(
+                f"play_beep({frequency_hz}) suppressed because STT is sleeping"
+            )
             return
     except ImportError:
         pass
