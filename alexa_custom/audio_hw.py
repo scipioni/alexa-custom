@@ -32,7 +32,7 @@ class _AudioState:
     samplerate: dict[str, int] = field(
         default_factory=lambda: {"usb": 48000, "bluetooth": 16000}
     )
-    default_card_name: str = "NewPie"
+    default_card_name: str | None = None
     output_volume: float = 0.5
     input_gain: float = 1.0
 
@@ -126,6 +126,8 @@ def _restore_hw_pcm(card: int | None = None) -> None:
     """
     if card is None:
         card_name = get_default_card_name()
+        if not card_name:
+            return  # quietly skip, no card configured
         result = _find_alsa_card(card_name)
         if result is None:
             logger.debug(f"_restore_hw_pcm: no {card_name} found, skipping")

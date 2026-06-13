@@ -199,7 +199,7 @@
     /* ── three-column main grid ─────────────────────────────────────────── */
     #main {
       display: grid;
-      grid-template-columns: 1fr 220px 252px;
+      grid-template-columns: 240px 1fr 252px;
       gap: 8px;
       min-height: 0;
       margin: 8px 12px 0;
@@ -664,6 +664,16 @@
       padding: 1px 7px;
     }
     .htrig::before { content: '→'; opacity: 0.6; margin-right: 2px; }
+    .hnomatch {
+      display: inline-flex; align-items: center; gap: 4px;
+      flex-shrink: 0;
+      font-size: 10px; font-weight: 600;
+      color: var(--nomatch);
+      background: rgba(248,113,113,0.09);
+      border: 1px solid rgba(248,113,113,0.22);
+      border-radius: 4px;
+      padding: 1px 7px;
+    }
     .hllm-reply {
       font-size: 11px;
       color: var(--llm);
@@ -1395,6 +1405,15 @@
 
   <div id="main">
 
+    <div class="hist-col">
+      <div class="panel" id="history-section">
+        <div class="panel-hdr clickable" onclick="toggleHistory()">HISTORY <span style="margin-right:auto"></span><button onclick="event.stopPropagation();clearHistory()">clear</button><span id="hist-toggle-icon">▾</span></div>
+        <div id="hist-content">
+          <div id="hl"></div>
+        </div>
+      </div>
+    </div>
+
     <div class="center-col">
       <div id="hero">
         <span class="hero-inner">
@@ -1413,15 +1432,6 @@
         <div class="panel-hdr clickable" onclick="toggleLog()">LOGS <span style="margin-right:auto"></span><button onclick="event.stopPropagation();clearLogs()">clear</button><span id="log-toggle-icon">▾</span></div>
         <div id="log-content">
           <div id="le"></div>
-        </div>
-      </div>
-    </div>
-
-    <div class="hist-col">
-      <div class="panel" id="history-section">
-        <div class="panel-hdr clickable" onclick="toggleHistory()">HISTORY <span style="margin-right:auto"></span><button onclick="event.stopPropagation();clearHistory()">clear</button><span id="hist-toggle-icon">▾</span></div>
-        <div id="hist-content">
-          <div id="hl"></div>
         </div>
       </div>
     </div>
@@ -1727,11 +1737,12 @@
           }
           if (s === 'nomatch') {
             clearReplyDim();
+            const txt = m.transcript || m.text || '';
+            addHistory(_lastWakeWord, txt, '✗ no match');
             if (_lastWakeWord) {
-              addHistoryWake(_lastWakeWord);
-              updateInteraction(_lastWakeWord, (m.text ? '"'+m.text+'" ' : '') + '✗ no match', true);
-              _lastWakeWord = '';
+              updateInteraction(_lastWakeWord, (txt ? '"'+txt+'" ' : '') + '✗ no match', true);
             }
+            _lastWakeWord = '';
           }
           if (s === 'skipped') {
             clearReplyDim();
@@ -2808,7 +2819,7 @@
         + (transcript || hasTrig
             ? '<div class="he-mid">'
               + (transcript ? '<span class="hcmd">"' + esc(transcript) + '"</span>' : '')
-              + (hasTrig ? '<span class="htrig">' + esc(trigger) + '</span>' : '')
+              + (hasTrig ? '<span class="' + (trigger.includes('✗') ? 'hnomatch' : 'htrig') + '">' + esc(trigger) + '</span>' : '')
               + '</div>'
             : ''));
     }
