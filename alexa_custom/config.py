@@ -34,7 +34,7 @@ class Trigger:
     actions: list[ActionEntry]
     aliases: list[str] = field(default_factory=list)
     patterns: list[str] = field(default_factory=list)
-    direct_match: bool = False
+    wake_words: list[str] | None = None  # None=global, []=direct, [ids]=scoped
 
 
 @dataclass
@@ -257,13 +257,13 @@ class SecretsConfig:
 @dataclass
 class ActionsData:
     triggers: list[Trigger] = field(default_factory=list)
-    wake_triggers: dict[str, list[Trigger]] = field(default_factory=dict)
 
 
 @dataclass
 class ActionsConfig:
     wake_words: list[WakeWordGroup]
-    triggers: list[Trigger]  # merged global fallback; may be empty
+    triggers: list[Trigger]  # global (active after any wake word)
+    direct_triggers: list[Trigger] = field(default_factory=list)  # no wake word needed
     on_startup: list[ActionEntry] = field(default_factory=list)
     audio: AudioConfig = field(default_factory=AudioConfig)
     stt: STTConfig = field(default_factory=STTConfig)
@@ -346,14 +346,26 @@ def _parse_triggers(raw_triggers: list[Any], path_prefix: str) -> list[Trigger]:
         if not isinstance(raw_patterns, list):
             raise ConfigError(f"config:{path_prefix}[{i}].patterns must be a list")
         patterns = [str(p) for p in raw_patterns if p]
-        direct_match = bool(t.get("direct_match", False))
+        if "direct_match" in t:
+            logger.warning(
+                "%s[%d]: 'direct_match' is no longer supported — use 'wake_words: []' instead",
+                path_prefix,
+                i,
+            )
+        raw_wake_words = t.get("wake_words")
+        if raw_wake_words is None:
+            wake_words_val: list[str] | None = None
+        elif not isinstance(raw_wake_words, list):
+            raise ConfigError(f"config:{path_prefix}[{i}].wake_words must be a list")
+        else:
+            wake_words_val = [str(w) for w in raw_wake_words if w is not None]
         triggers.append(
             Trigger(
                 phrase=phrase,
                 actions=actions,
                 aliases=aliases,
                 patterns=patterns,
-                direct_match=direct_match,
+                wake_words=wake_words_val,
             )
         )
     return triggers
@@ -695,11 +707,10 @@ def _load_actions_dir(
     for p in other_paths:
         paths.append((p, False))
 
-    id_set = {g.id for g in wake_words}
+    existing_ids = {g.id for g in wake_words}
 
     on_startup: list[ActionEntry] = []
     all_triggers: list[Trigger] = []
-    all_wake_triggers: dict[str, list[Trigger]] = {}
 
     for path, is_system in paths:
         source = str(path)
@@ -722,7 +733,42 @@ def _load_actions_dir(
                 "%s: 'on_startup' ignored (only honoured in %s)", source, system_file
             )
 
-        # triggers: concatenate in load order
+        # wake_words: new groups declared in action files
+        raw_ww = raw.get("wake_words")
+        if raw_ww is not None:
+            if not isinstance(raw_ww, list):
+                logger.warning("%s: 'wake_words' must be a list — ignored", source)
+            else:
+                try:
+                    new_groups = _parse_wake_word_groups(raw_ww, source)
+                except ConfigError as e:
+                    logger.warning("%s: wake_words error — ignored: %s", source, e)
+                    new_groups = []
+                added = 0
+                for group in new_groups:
+                    if group.id in existing_ids:
+                        logger.debug(
+                            "%s: wake word %r (id=%r) already defined — skipping",
+                            source,
+                            group.word,
+                            group.id,
+                        )
+                    else:
+                        wake_words.append(group)
+                        existing_ids.add(group.id)
+                        added += 1
+                if added:
+                    logger.info("%s: merged %d wake word group(s)", source, added)
+
+        # wake_triggers: removed key — warn if present
+        if raw.get("wake_triggers") is not None:
+            logger.warning(
+                "%s: 'wake_triggers' is no longer supported — "
+                "use 'wake_words: [<id>]' on individual trigger entries instead",
+                source,
+            )
+
+        # triggers: flat list with optional wake_words field
         raw_triggers = raw.get("triggers")
         if raw_triggers is not None:
             if not isinstance(raw_triggers, list):
@@ -730,38 +776,7 @@ def _load_actions_dir(
             else:
                 all_triggers.extend(_parse_triggers(raw_triggers, f"{source}:triggers"))
 
-        # wake_triggers: merge per word, concatenate in load order
-        raw_wake = raw.get("wake_triggers")
-        if raw_wake is not None:
-            if not isinstance(raw_wake, dict):
-                logger.warning(
-                    "%s: 'wake_triggers' must be a mapping — ignored", source
-                )
-            else:
-                for word, raw_wt in raw_wake.items():
-                    if word not in id_set:
-                        logger.debug(
-                            "%s: wake_triggers key %r has no matching wake word group — ignored",
-                            source,
-                            word,
-                        )
-                        continue
-                    if not isinstance(raw_wt, list):
-                        logger.warning(
-                            "%s: 'wake_triggers.%s' must be a list — ignored",
-                            source,
-                            word,
-                        )
-                        continue
-                    wt = _parse_triggers(raw_wt, f"{source}:wake_triggers.{word}")
-                    if word in all_wake_triggers:
-                        all_wake_triggers[word].extend(wt)
-                    else:
-                        all_wake_triggers[word] = wt
-
-    return on_startup, ActionsData(
-        triggers=all_triggers, wake_triggers=all_wake_triggers
-    )
+    return on_startup, ActionsData(triggers=all_triggers)
 
 
 # ---------------------------------------------------------------------------
@@ -878,50 +893,6 @@ def load_config(
     return cfg
 
 
-def _merge_user_wake_words(wake_words: list[WakeWordGroup], user_path: Path) -> None:
-    """Append wake word groups from user.yaml that are not already in wake_words."""
-    try:
-        with user_path.open() as f:
-            raw = yaml.safe_load(f)
-    except yaml.YAMLError as e:
-        logger.warning("user.yaml parse error, skipping: %s", e)
-        return
-
-    if not isinstance(raw, dict):
-        logger.warning("user.yaml must be a YAML mapping at the top level, skipping")
-        return
-
-    raw_wake_words = raw.get("wake_words")
-    if not raw_wake_words:
-        return
-    if not isinstance(raw_wake_words, list):
-        logger.warning("user.yaml: 'wake_words' must be a list, skipping")
-        return
-
-    try:
-        user_groups = _parse_wake_word_groups(raw_wake_words, str(user_path))
-    except ConfigError as e:
-        logger.warning("user.yaml wake_words error, skipping: %s", e)
-        return
-
-    existing_ids = {g.id for g in wake_words}
-    added = 0
-    for group in user_groups:
-        if group.id in existing_ids:
-            logger.debug(
-                "user.yaml: wake word %r (id=%r) already defined in config.yaml, skipping",
-                group.word,
-                group.id,
-            )
-        else:
-            wake_words.append(group)
-            existing_ids.add(group.id)
-            added += 1
-
-    if added:
-        logger.info("user.yaml: merged %d wake word group(s)", added)
-
-
 def _parse_actions_config(
     raw: dict,
     source: str = "config",
@@ -929,20 +900,12 @@ def _parse_actions_config(
 ) -> ActionsConfig:
     """Parse a raw YAML dict into ActionsConfig."""
     raw_wake_words = raw.get("wake_words")
-    if (
-        not raw_wake_words
-        or not isinstance(raw_wake_words, list)
-        or len(raw_wake_words) == 0
-    ):
-        raise ConfigError(f"{source}: 'wake_words' must be a non-empty list")
+    if raw_wake_words is not None and not isinstance(raw_wake_words, list):
+        raise ConfigError(f"{source}: 'wake_words' must be a list if present")
 
-    wake_words = _parse_wake_word_groups(raw_wake_words, source)
-
-    # Merge wake words from user.yaml (optional, sits next to config.yaml)
-    config_dir = Path(source).parent if source != "config" else Path(".")
-    user_path = config_dir / "user.yaml"
-    if user_path.exists():
-        _merge_user_wake_words(wake_words, user_path)
+    wake_words = (
+        _parse_wake_word_groups(raw_wake_words, source) if raw_wake_words else []
+    )
 
     audio_raw = raw.get("audio") or {}
     if not isinstance(audio_raw, dict):
@@ -1048,15 +1011,39 @@ def _parse_actions_config(
 
     on_startup, actions_data = _load_actions_dir(actions_dir, wake_words)
 
-    # Merge wake_triggers into wake word groups (keyed by group id)
+    if not wake_words:
+        raise ConfigError(
+            f"{source}: no wake word groups defined — add 'wake_words:' to "
+            "config.yaml or to a conf/actions/*.yaml file"
+        )
+
+    # Resolve triggers to slots: global, direct, or per-group
     id_map = {g.id: g for g in wake_words}
-    for group_id, wt_list in actions_data.wake_triggers.items():
-        if group_id in id_map:
-            id_map[group_id].triggers = id_map[group_id].triggers + wt_list
+    global_triggers: list[Trigger] = []
+    direct_triggers: list[Trigger] = []
+    for t in actions_data.triggers:
+        ww = t.wake_words
+        if ww is None:
+            global_triggers.append(t)
+        elif len(ww) == 0:
+            direct_triggers.append(t)
+        else:
+            for group_id in ww:
+                if group_id == "global":
+                    global_triggers.append(t)
+                elif group_id in id_map:
+                    id_map[group_id].triggers = id_map[group_id].triggers + [t]
+                else:
+                    logger.debug(
+                        "trigger %r: wake_words id %r has no matching group — ignored",
+                        t.phrase,
+                        group_id,
+                    )
 
     return ActionsConfig(
         wake_words=wake_words,
-        triggers=actions_data.triggers,
+        triggers=global_triggers,
+        direct_triggers=direct_triggers,
         on_startup=on_startup,
         audio=audio,
         stt=stt,

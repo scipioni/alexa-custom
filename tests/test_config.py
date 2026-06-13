@@ -440,27 +440,28 @@ class TestLoadActionsDir:
         assert len(on_startup) == 1
         assert on_startup[0].params.get("text") == "Sistema pronto"
 
-    def test_wake_triggers_merged(self, tmp_path):
+    def test_wake_words_scoped_triggers_merged(self, tmp_path):
         actions_dir = tmp_path / "actions"
         actions_dir.mkdir()
         self._write_system(
             actions_dir,
-            "wake_triggers:\n  galileo:\n    - phrase: from_system\n      actions:\n        - type: log\n          message: s\n",
+            "triggers:\n  - phrase: from_system\n    wake_words: [galileo]\n    actions:\n      - type: log\n        message: s\n",
         )
         self._write_file(
             actions_dir,
             "user.yaml",
-            "wake_triggers:\n  galileo:\n    - phrase: from_user\n      actions:\n        - type: log\n          message: u\n",
+            "triggers:\n  - phrase: from_user\n    wake_words: [galileo]\n    actions:\n      - type: log\n        message: u\n",
         )
         from alexa_custom.config import _load_actions_dir
 
         _, data = _load_actions_dir(actions_dir, make_wake_words())
-        phrases = [t.phrase for t in data.wake_triggers.get("galileo", [])]
+        galileo_triggers = [t for t in data.triggers if t.wake_words == ["galileo"]]
+        phrases = [t.phrase for t in galileo_triggers]
         assert "from_system" in phrases
         assert "from_user" in phrases
         assert phrases.index("from_system") < phrases.index("from_user")
 
-    def test_unknown_wake_word_ignored(self, tmp_path):
+    def test_deprecated_wake_triggers_key_ignored(self, tmp_path):
         actions_dir = tmp_path / "actions"
         actions_dir.mkdir()
         self._write_system(
@@ -470,7 +471,7 @@ class TestLoadActionsDir:
         from alexa_custom.config import _load_actions_dir
 
         _, data = _load_actions_dir(actions_dir, make_wake_words())
-        assert "nonexistent" not in data.wake_triggers
+        assert not any(t.phrase == "xyz" for t in data.triggers)
 
     def test_multiple_files_alphabetical_after_system(self, tmp_path):
         actions_dir = tmp_path / "actions"
@@ -766,7 +767,7 @@ class TestActionsDirectoryIntegration:
         assert len(cfg.on_startup) == 1
         assert cfg.on_startup[0].params.get("text") == "Ciao"
 
-    def test_wake_triggers_merged_into_wake_words(self, tmp_path):
+    def test_wake_words_scoped_triggers_merged_into_wake_words(self, tmp_path):
         conf_dir = tmp_path / "conf"
         actions_dir = conf_dir / "actions"
         actions_dir.mkdir(parents=True)
@@ -774,7 +775,7 @@ class TestActionsDirectoryIntegration:
             "wake_words:\n  - word: galileo\nactions:\n  dir: conf/actions\n"
         )
         (actions_dir / "system.yaml").write_text(
-            "wake_triggers:\n  galileo:\n    - phrase: che ora è\n      actions:\n        - type: log\n          message: time\n"
+            "triggers:\n  - phrase: che ora è\n    wake_words: [galileo]\n    actions:\n      - type: log\n        message: time\n"
         )
         from alexa_custom.config import load_config
 
@@ -822,18 +823,16 @@ class TestActionsDirectoryIntegration:
 
         assert received and "new_cmd" in received[-1]
 
-    def test_user_yaml_wake_triggers_linked(self, tmp_path):
+    def test_action_file_wake_words_group_and_scoped_trigger(self, tmp_path):
         conf_dir = tmp_path / "conf"
         actions_dir = conf_dir / "actions"
         actions_dir.mkdir(parents=True)
         (conf_dir / "config.yaml").write_text(
             "wake_words:\n  - word: alexa\nactions:\n  dir: conf/actions\n"
         )
-        (conf_dir / "user.yaml").write_text(
+        (actions_dir / "user.yaml").write_text(
             "wake_words:\n  - word: aiuto\n    id: help\n"
-        )
-        (actions_dir / "system.yaml").write_text(
-            "wake_triggers:\n  help:\n    - phrase: chiama assistenza\n      actions:\n        - type: log\n          message: calling\n"
+            "triggers:\n  - phrase: chiama assistenza\n    wake_words: [help]\n    actions:\n      - type: log\n        message: calling\n"
         )
         from alexa_custom.config import load_config
 
@@ -843,6 +842,64 @@ class TestActionsDirectoryIntegration:
 
         help_group = next(g for g in cfg.wake_words if g.id == "help")
         assert any(t.phrase == "chiama assistenza" for t in help_group.triggers)
+
+    def test_direct_trigger_in_direct_triggers_not_global(self, tmp_path):
+        conf_dir = tmp_path / "conf"
+        actions_dir = conf_dir / "actions"
+        actions_dir.mkdir(parents=True)
+        (conf_dir / "config.yaml").write_text(
+            "wake_words:\n  - word: galileo\nactions:\n  dir: conf/actions\n"
+        )
+        (actions_dir / "user.yaml").write_text(
+            "triggers:\n  - phrase: chiama Stefano\n    wake_words: []\n    actions:\n      - type: log\n        message: x\n"
+        )
+        from alexa_custom.config import load_config
+
+        cfg = load_config(conf_dir / "config.yaml")
+        assert any(t.phrase == "chiama Stefano" for t in cfg.direct_triggers)
+        assert not any(t.phrase == "chiama Stefano" for t in cfg.triggers)
+
+    def test_global_explicit_identical_to_absent(self, tmp_path):
+        conf_dir = tmp_path / "conf"
+        actions_dir = conf_dir / "actions"
+        actions_dir.mkdir(parents=True)
+        (conf_dir / "config.yaml").write_text(
+            "wake_words:\n  - word: galileo\nactions:\n  dir: conf/actions\n"
+        )
+        (actions_dir / "user.yaml").write_text(
+            "triggers:\n"
+            "  - phrase: implicit_global\n    actions:\n      - type: log\n        message: x\n"
+            "  - phrase: explicit_global\n    wake_words: [global]\n    actions:\n      - type: log\n        message: x\n"
+        )
+        from alexa_custom.config import load_config
+
+        cfg = load_config(conf_dir / "config.yaml")
+        global_phrases = [t.phrase for t in cfg.triggers]
+        assert "implicit_global" in global_phrases
+        assert "explicit_global" in global_phrases
+        assert not any(
+            t.phrase in ("implicit_global", "explicit_global")
+            for t in cfg.direct_triggers
+        )
+
+    def test_multi_wake_word_trigger_appears_in_both_groups(self, tmp_path):
+        conf_dir = tmp_path / "conf"
+        actions_dir = conf_dir / "actions"
+        actions_dir.mkdir(parents=True)
+        (conf_dir / "config.yaml").write_text(
+            "wake_words:\n  - word: galileo\n    id: galileo\n  - word: aiuto\n    id: help\nactions:\n  dir: conf/actions\n"
+        )
+        (actions_dir / "user.yaml").write_text(
+            "triggers:\n  - phrase: accendi la luce\n    wake_words: [galileo, help]\n    actions:\n      - type: log\n        message: x\n"
+        )
+        from alexa_custom.config import load_config
+
+        cfg = load_config(conf_dir / "config.yaml")
+        galileo_group = next(g for g in cfg.wake_words if g.id == "galileo")
+        help_group = next(g for g in cfg.wake_words if g.id == "help")
+        assert any(t.phrase == "accendi la luce" for t in galileo_group.triggers)
+        assert any(t.phrase == "accendi la luce" for t in help_group.triggers)
+        assert not any(t.phrase == "accendi la luce" for t in cfg.triggers)
 
 
 # ---------------------------------------------------------------------------
