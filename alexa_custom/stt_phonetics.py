@@ -1,11 +1,65 @@
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
+
+from rapidfuzz import fuzz
 
 if TYPE_CHECKING:
     from alexa_custom.config import WakeWordGroup, Trigger
 
 from alexa_custom.actions import normalize_text
+
+
+def _phonetic_normalize(text: str) -> str:
+    text = text.lower().strip()
+    text = re.sub(r"[^\w\s]", "", text)
+    text = re.sub(r"(.)\1+", r"\1", text)
+    substitutions = {
+        "sci": "si",
+        "sce": "se",
+        "gli": "li",
+        "gni": "ni",
+        "gn": "n",
+        "chi": "ci",
+        "che": "ce",
+        "ghi": "gi",
+        "ghe": "ge",
+    }
+    for old, new in substitutions.items():
+        text = text.replace(old, new)
+    return text.strip()
+
+
+def _phonetic_wake_match(
+    text: str,
+    alias_map: dict[str, WakeWordGroup],
+    threshold: float = 0.6,
+) -> tuple[WakeWordGroup | None, str]:
+    norm_text = normalize_text(text)
+    phon_text = _phonetic_normalize(norm_text)
+    text_words = phon_text.split()
+
+    best_group: WakeWordGroup | None = None
+    best_command = ""
+    best_score = 0.0
+
+    for norm_phrase, group in alias_map.items():
+        phon_alias = _phonetic_normalize(norm_phrase)
+        alias_words = phon_alias.split()
+        alias_word_count = len(alias_words)
+
+        max_window = min(len(text_words), alias_word_count + 2)
+        for end in range(alias_word_count, max_window + 1):
+            prefix = " ".join(text_words[:end])
+            score = fuzz.ratio(prefix, phon_alias, score_cutoff=threshold * 100)
+            if score and score > best_score:
+                best_score = score
+                best_group = group
+                orig_words = norm_text.split()
+                best_command = " ".join(orig_words[end:])
+
+    return best_group, best_command
 
 
 def _build_alias_map(groups: list[WakeWordGroup]) -> dict[str, WakeWordGroup]:

@@ -25,7 +25,12 @@ from alexa_custom.stt import (
     _match_full_intent,
     _extract_wake_command,
 )
-from alexa_custom.stt_phonetics import build_intent_map, _build_alias_map
+from alexa_custom.stt_phonetics import (
+    build_intent_map,
+    _build_alias_map,
+    _phonetic_normalize,
+    _phonetic_wake_match,
+)
 from alexa_custom.config import (
     WakeWordGroup,
     Trigger,
@@ -410,3 +415,128 @@ class TestExtractWakeCommand:
         am = bam([group])
         matched, cmd = _extract_wake_command("ascolta assistente", am, fuzzy=False)
         assert matched is None
+
+    def test_phonetic_match_catches_misrecognition(self):
+        from alexa_custom.stt_phonetics import _build_alias_map as bam
+
+        group = WakeWordGroup(word="ascoltami assistente")
+        am = bam([group])
+        matched, cmd = _extract_wake_command(
+            "ascolta insistente", am, fuzzy=False, phonetic=True, phonetic_threshold=0.6
+        )
+        assert matched is group
+
+    def test_phonetic_match_extracts_command(self):
+        from alexa_custom.stt_phonetics import _build_alias_map as bam
+
+        group = WakeWordGroup(word="ascoltami assistente")
+        am = bam([group])
+        matched, cmd = _extract_wake_command(
+            "ascolta insistente chiama mario",
+            am,
+            fuzzy=False,
+            phonetic=True,
+            phonetic_threshold=0.6,
+        )
+        assert matched is group
+        assert cmd == "chiama mario"
+
+    def test_exact_match_still_takes_priority(self):
+        from alexa_custom.stt_phonetics import _build_alias_map as bam
+
+        group = WakeWordGroup(word="ascoltami assistente")
+        am = bam([group])
+        matched, cmd = _extract_wake_command(
+            "ascoltami assistente",
+            am,
+            fuzzy=False,
+            phonetic=True,
+            phonetic_threshold=0.6,
+        )
+        assert matched is group
+        assert cmd == ""
+
+    def test_low_confidence_phonetic_rejected(self):
+        from alexa_custom.stt_phonetics import _build_alias_map as bam
+
+        group = WakeWordGroup(word="ascoltami assistente")
+        am = bam([group])
+        matched, cmd = _extract_wake_command(
+            "arresta il sistema",
+            am,
+            fuzzy=False,
+            phonetic=True,
+            phonetic_threshold=0.7,
+        )
+        assert matched is None
+        assert cmd == ""
+
+
+# ---------------------------------------------------------------------------
+# _phonetic_normalize
+# ---------------------------------------------------------------------------
+
+
+class TestPhoneticNormalize:
+    def test_collapses_double_consonants(self):
+        assert _phonetic_normalize("assistente") == "asistente"
+        assert _phonetic_normalize("ascoltammi") == "ascoltami"
+
+    def test_normalizes_palatal_clusters(self):
+        assert _phonetic_normalize("sciarpa") == "siarpa"
+        assert _phonetic_normalize("ascoltami") == "ascoltami"  # unchanged
+        assert _phonetic_normalize("gli") == "li"
+        assert _phonetic_normalize("gnomo") == "nomo"
+        assert _phonetic_normalize("chiaro") == "ciaro"
+        assert _phonetic_normalize("ghepardo") == "gepardo"
+
+    def test_handles_word_boundary_text(self):
+        assert _phonetic_normalize("ascolta mi") == "ascolta mi"
+
+    def test_removes_punctuation(self):
+        assert _phonetic_normalize("ciao, mondo!") == "ciao mondo"
+
+    def test_empty_string_returns_empty(self):
+        assert _phonetic_normalize("") == ""
+
+    def test_only_punctuation_returns_empty(self):
+        assert _phonetic_normalize("!?.") == ""
+
+
+# ---------------------------------------------------------------------------
+# _phonetic_wake_match
+# ---------------------------------------------------------------------------
+
+
+class TestPhoneticWakeMatch:
+    def _am(self, word: str) -> dict:
+        group = WakeWordGroup(word=word)
+        return _build_alias_map([group]), group
+
+    def test_above_threshold_returns_group(self):
+        am, group = self._am("ascoltami assistente")
+        matched, cmd = _phonetic_wake_match("ascolta insistente", am, 0.6)
+        assert matched is group
+
+    def test_below_threshold_returns_none(self):
+        am, _ = self._am("ascoltami assistente")
+        matched, cmd = _phonetic_wake_match("arresta il sistema", am, 0.7)
+        assert matched is None
+        assert cmd == ""
+
+    def test_command_extraction(self):
+        am, group = self._am("ascoltami assistente")
+        matched, cmd = _phonetic_wake_match("ascolta insistente chiama mario", am, 0.6)
+        assert matched is group
+        assert cmd == "chiama mario"
+
+    def test_exact_text_returns_empty_command(self):
+        am, group = self._am("ascoltami assistente")
+        matched, cmd = _phonetic_wake_match("ascoltami assistente", am, 0.6)
+        assert matched is group
+        assert cmd == ""
+
+    def test_word_boundary_error_still_matches(self):
+        am, group = self._am("ascoltami assistente")
+        matched, cmd = _phonetic_wake_match("ascolta mi assistente", am, 0.6)
+        assert matched is group

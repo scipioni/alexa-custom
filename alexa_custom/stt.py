@@ -51,6 +51,7 @@ from alexa_custom.stt_backends import (
 )
 from alexa_custom.stt_phonetics import (
     _approx_wake_match,
+    _phonetic_wake_match,
     _resolve_triggers,
     _build_alias_map,
     build_intent_map,
@@ -109,6 +110,12 @@ logger = logging.getLogger(__name__)
 _MODEL_PATH = os.environ.get("VOSK_MODEL_PATH", "models/it")
 _STT_COOLDOWN = 1.0
 _SHERPA_MODEL_PATH = os.environ.get("SHERPA_ONNX_PATH", "models/sherpa-onnx")
+<<<<<<< HEAD
+=======
+_WHISPER_CPP_MODEL_PATH = os.environ.get(
+    "WHISPER_CPP_MODEL_PATH", "models/whisper-cpp/ggml-tiny-q4_0.bin"
+)
+>>>>>>> f77eeed (feat: phonetic Levenshtein matching for Vosk free-vocab wake words)
 
 _STAGE1_VAD_SILENCE_MS = int(os.environ.get("STT_STAGE1_VAD_SILENCE_MS", "500"))
 _STAGE1_RMS_THRESHOLD = float(os.environ.get("STT_STAGE1_RMS_THRESHOLD", "0.02"))
@@ -419,12 +426,20 @@ def run_stt_worker(
 
 
 def _extract_wake_command(
-    text: str, alias_map: dict[str, WakeWordGroup], fuzzy: bool = False
+    text: str,
+    alias_map: dict[str, WakeWordGroup],
+    fuzzy: bool = False,
+    phonetic: bool = False,
+    phonetic_threshold: float = 0.6,
 ) -> tuple[WakeWordGroup | None, str]:
     """Return (group, command) if text begins with a known wake phrase, else (None, '').
 
     With fuzzy=True (sherpa-onnx single-stage path) uses _approx_wake_match to
     handle open-vocabulary transcription noise around wake words.
+
+    With phonetic=True (Vosk free-vocab path) falls through to _phonetic_wake_match
+    when exact matching fails, using Italian-specific phonetic normalisation and
+    Levenshtein ratio via rapidfuzz.
     """
     norm_text = normalize_text(text)
     for norm_phrase, group in alias_map.items():
@@ -433,6 +448,10 @@ def _extract_wake_command(
             if rest and not rest.startswith(" "):
                 continue  # prefix of a longer word — not a valid wake boundary
             return group, rest.strip()
+    if phonetic:
+        group, command = _phonetic_wake_match(text, alias_map, phonetic_threshold)
+        if group:
+            return group, command
     if fuzzy:
         group = _approx_wake_match(text, alias_map)
         if group:
@@ -1210,7 +1229,13 @@ def _recognition_loop(
                 text = vosk_text
                 logger.debug("Stage1 Vosk free-vocab result: %r", text)
                 wake_match, inline_cmd = (
-                    _extract_wake_command(text, alias_map, fuzzy=False)
+                    _extract_wake_command(
+                        text,
+                        alias_map,
+                        fuzzy=False,
+                        phonetic=config.recognition.phonetic_matching,
+                        phonetic_threshold=config.recognition.phonetic_threshold,
+                    )
                     if text
                     else (None, "")
                 )
