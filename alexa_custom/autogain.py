@@ -1163,9 +1163,10 @@ def _ensure_test_wav(path: str) -> str:
         buffers.append(arr)
     audio = np.concatenate(buffers)
     if sr != 16000:
-        from scipy import signal
         target_len = int(len(audio) * 16000 / sr)
-        audio = signal.resample(audio, target_len).astype(np.int16)
+        x_old = np.linspace(0, 1, len(audio))
+        x_new = np.linspace(0, 1, target_len)
+        audio = np.interp(x_new, x_old, audio.astype(np.float64)).astype(np.int16)
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with _wave.open(path, "wb") as wf:
         wf.setnchannels(1)
