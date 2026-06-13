@@ -74,7 +74,7 @@ audio:
   output_device: pipewire  # PipeWire sink name substring, or 'pipewire' for default
   output_volume: 0.5       # speaker volume 0.0–1.0 (set via wpctl, persisted by WirePlumber)
   input_gain: 1.0          # microphone gain multiplier (1.0 = no change, 2.0 = double)
-  post_playback_ms: 100    # STT gate hold after playback ends (lets echo decay)
+  post_playback_ms: 300    # STT gate hold after playback ends (lets echo decay)
   tone_preroll_ms: 50      # silence before tones/beeps (covers PipeWire cold-start)
   sample_rates:
     usb: 48000
