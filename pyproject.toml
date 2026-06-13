@@ -37,6 +37,7 @@ alexa-wake-eval = "alexa_custom.wake_eval:main"
 alexa-record = "alexa_custom.record:main"
 alexa-autogain = "alexa_custom.autogain:main"
 alexa-mic-test = "alexa_custom.autogain:main_auto"
+alexa-mic-calibrate = "alexa_custom.autogain:main_calibrate"
 
 [tool.setuptools.packages.find]
 where = ["."]

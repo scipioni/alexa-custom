@@ -1068,6 +1068,311 @@ def run_autogain_auto(
             pass
 
 
+# ── Shared sweep helpers ────────────────────────────────────────────────────
+
+_SPEECH_TEST_PHRASE = "ascolta assistente chiama aiuto"
+_SPEECH_TEST_WAV = "models/test_phrase.wav"
+
+_LABEL_TO_DIST = {
+    "vicino": "un metro",
+    "medio": "tre metri",
+    "lontano": "cinque metri",
+}
+
+_DIST_TO_LABEL = {v: k for k, v in _LABEL_TO_DIST.items()}
+
+
+def _weighted_score(scores: dict[str, dict], weights: dict[str, float] | None = None) -> float:
+    if weights is None:
+        weights = {"un metro": 1.0, "tre metri": 2.0, "cinque metri": 1.0}
+    total_w = 0.0
+    weighted = 0.0
+    for label, r in scores.items():
+        dist_key = _LABEL_TO_DIST.get(label, "tre metri")
+        w = weights.get(dist_key, 1.0)
+        weighted += r["score"] * w
+        total_w += w
+    return weighted / total_w if total_w else 0.0
+
+
+def _compute_fine_gains(winner_gain: float, step: float = 0.1, half_range: float = 0.4) -> list[float]:
+    gains = sorted(set(
+        round(winner_gain + i * step, 2)
+        for i in range(int(-half_range / step), int(half_range / step) + 1)
+    ))
+    return [g for g in gains if 0.1 <= g <= 6.0 and abs(g - winner_gain) > 0.01]
+
+
+def _score_transcription(expected_phrase: str, multi: np.ndarray, stt_backend, channels: int) -> float:
+    from alexa_custom.actions import get_similarity_score
+    from alexa_custom.stt_gating import _downmix_to_mono
+
+    stt_backend.reset()
+    mono_bytes = (
+        _downmix_to_mono(multi.astype(np.int16).tobytes(), channels)
+        if multi.ndim > 1 and channels > 1
+        else multi.astype(np.int16).tobytes()
+    )
+
+    chunk_size = 4096
+    for i in range(0, len(mono_bytes), chunk_size):
+        chunk = mono_bytes[i:i + chunk_size]
+        if len(chunk) < chunk_size:
+            chunk = chunk + b'\x00' * (chunk_size - len(chunk))
+        stt_backend.accept_waveform(chunk)
+
+    actual_text = stt_backend.finalize()
+    score = get_similarity_score(expected_phrase, actual_text, "token_set_ratio")
+
+    clipping = _compute_clipping_ratio(mono_bytes)
+    if clipping > 0.05:
+        return 0.0
+    if clipping > 0.01:
+        score *= 0.5
+    return score
+
+
+def _init_speech_test_wavs() -> dict[str, str]:
+    import tempfile
+    scaled_wavs: dict[str, str] = {}
+    try:
+        for label, vol, _w in _AUTO_PLAY_VOLUMES:
+            w = tempfile.mktemp(suffix=".wav", prefix=f"calibrate_{label}_")
+            _scale_wav_to_playback_volume(_SPEECH_TEST_WAV, w, volume=vol)
+            scaled_wavs[label] = w
+        return scaled_wavs
+    except Exception:
+        for p in scaled_wavs.values():
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+        raise
+
+
+def _print_model_aware_summary(results: list[dict], winner_gain: float, dry_run: bool) -> None:
+    gains = sorted(set(r["gain"] for r in results))
+    dist_names = [d[0].capitalize() for d in DISTANCES]
+    print()
+    print("Risultati calibrazione (model-aware, trascrizione STT)")
+    print("=" * 65)
+    header = f"{'Gain':>6}" + "".join(f"{d:>14}" for d in dist_names) + "  Media"
+    print(header)
+    print("-" * len(header))
+    for g in gains:
+        entries = [r for r in results if r["gain"] == g]
+        by_dist: dict[str, dict] = {}
+        for e in entries:
+            label = e.get("label", "tre metri")
+            by_dist[label] = e
+        row = f"{g:>6.2f}"
+        scores: list[float] = []
+        for di, (dkey, _) in enumerate(DISTANCES):
+            e = by_dist.get(dkey)
+            if e:
+                score_str = f"{e['score']:>8.1f}%"
+                clipping = e.get("clipping", 0.0)
+                if clipping > 0.01:
+                    score_str += "!"
+                scores.append(e["score"])
+            else:
+                score_str = f"{'─':>9}"
+            row += f"  {score_str:>14}"
+        avg = sum(scores) / len(scores) if scores else 0.0
+        marker = "  ←" if g == winner_gain else ""
+        row += f"  {avg:>5.1f}%{marker}"
+        print(row)
+    print("=" * 65)
+    if dry_run:
+        print(f"Miglior gain: {winner_gain:.2f} (dry-run, non salvato)")
+    else:
+        print(f"Miglior gain: {winner_gain:.2f} — scritto in config.yaml")
+    print()
+
+
+def run_autogain_model_aware(
+    actions_config: ActionsConfig,
+    dry_run: bool = False,
+) -> float:
+    import tempfile
+
+    input_spec = actions_config.audio.input_device
+    source, channels = resolve_capture_source(input_spec)
+    phrase = _SPEECH_TEST_PHRASE
+
+    logger.info(
+        "Autogain model-aware: source=%s channels=%d phrase=%r",
+        source, channels, phrase,
+    )
+
+    stt_backend = get_stt_backend(actions_config.stt.stage2)
+    scaled_wavs = _init_speech_test_wavs()
+    test_duration = 2.0
+
+    WEIGHTS = {"un metro": 1.0, "tre metri": 2.0, "cinque metri": 1.0}
+
+    def _score_one(gain: float, label: str, wav_path: str) -> dict | None:
+        multi, _peaks = _capture_playback_response(source, channels, wav_path, test_duration)
+        if multi.shape[0] < 10:
+            return None
+        score = _score_transcription(phrase, multi, stt_backend, channels)
+        clipping = float(np.sum(np.abs(multi) >= 32767)) / multi.size if multi.size > 0 else 0.0
+        return {"score": score, "clipping": clipping}
+
+    def _test_point(gain: float, label: str) -> dict | None:
+        return _score_one(gain, label, scaled_wavs[label])
+
+    try:
+        all_results: list[dict] = []
+
+        # ── Phase 1: coarse — all gains at all volumes ──────────────────
+        for gain in TEST_GAINS:
+            set_input_gain(None, input_spec, gain)
+            time.sleep(0.3)
+
+            scores: dict[str, dict] = {}
+            any_valid = False
+            for label, _vol, _w in _AUTO_PLAY_VOLUMES:
+                r = _test_point(gain, label)
+                if r is not None:
+                    any_valid = True
+                    scores[label] = r
+
+            if not any_valid:
+                logger.warning("  gain %4.2f: no valid captures — skipping", gain)
+                continue
+
+            wavg = _weighted_score(scores, WEIGHTS)
+            entry = {"gain": gain, "label": "tre metri", "score": wavg, "scores": scores, "weighted_score": wavg}
+            all_results.append(entry)
+
+            logger.info(
+                "  gain %4.2f: media=%.1f%%  vic=%.1f  med=%.1f  lon=%.1f",
+                gain, wavg,
+                scores.get("vicino", {}).get("score", -1),
+                scores.get("medio", {}).get("score", -1),
+                scores.get("lontano", {}).get("score", -1),
+            )
+
+        if not all_results:
+            logger.error("No valid capture results — using default gain 1.0")
+            return 1.0
+
+        def _wavg(gain: float) -> float:
+            entries = [r for r in all_results if r["gain"] == gain]
+            if not entries:
+                return -1.0
+            return entries[0].get("weighted_score", -1.0)
+
+        winner_gain = max(set(r["gain"] for r in all_results), key=_wavg)
+
+        # ── Phase 2: selective — top 2 at near and far ─────────────────
+        ranked = sorted(set(r["gain"] for r in all_results), key=_wavg, reverse=True)
+        top2 = ranked[:2]
+        logger.info("Migliori a medio: %.2f, %.2f", top2[0], top2[1] if len(top2) > 1 else top2[0])
+
+        extra_results: list[dict] = []
+        for di, (dist_key, dist_desc) in enumerate(DISTANCES):
+            label = _DIST_TO_LABEL.get(dist_key, "medio")
+            if label == "medio":
+                continue
+            for gain in top2:
+                set_input_gain(None, input_spec, gain)
+                time.sleep(0.3)
+                r = _test_point(gain, label)
+                if r:
+                    extra_results.append({"gain": gain, "label": dist_key, "score": r["score"], "clipping": r.get("clipping", 0.0)})
+                    logger.info("  %-12s gain %4.2f: score %5.1f%%", dist_key, gain, r["score"])
+
+        all_results.extend(extra_results)
+        winner_gain = max(set(r["gain"] for r in all_results), key=_wavg)
+
+        # ── Phase 3: refinement ────────────────────────────────────────
+        fine_gains = _compute_fine_gains(winner_gain)
+        if fine_gains:
+            coarse_winner_score = _wavg(winner_gain)
+            logger.info("Refining: step 0.1 around %.2f → %s", winner_gain, fine_gains)
+            for gain in fine_gains:
+                set_input_gain(None, input_spec, gain)
+                time.sleep(0.3)
+                r = _test_point(gain, "lontano")
+                if r and r["score"] > coarse_winner_score:
+                    logger.info("  refine %4.2f improved: %.1f → %.1f", gain, coarse_winner_score, r["score"])
+                    winner_gain = gain
+                    coarse_winner_score = r["score"]
+
+        # ── Phase 4: confirmation ──────────────────────────────────────
+        set_input_gain(None, input_spec, winner_gain)
+        time.sleep(0.3)
+        r_confirm = _test_point(winner_gain, "medio")
+        if r_confirm:
+            orig_score = r_confirm["score"]
+            for r in all_results:
+                if r["gain"] == winner_gain and "scores" in r and "medio" in r["scores"]:
+                    orig_score = r["scores"]["medio"]["score"]
+                    break
+            if orig_score > 0:
+                deviation = abs(r_confirm["score"] - orig_score) / orig_score
+                if deviation > 0.20:
+                    logger.warning("Confirmation deviates %.0f%% — retrying", deviation * 100)
+                    time.sleep(0.5)
+                    r_confirm2 = _test_point(winner_gain, "medio")
+                    if r_confirm2:
+                        deviation2 = abs(r_confirm2["score"] - orig_score) / orig_score
+                        if deviation2 > 0.20:
+                            logger.warning("Confirmation still deviates %.0f%% — fallback to 1.0", deviation2 * 100)
+                            winner_gain = 1.0
+
+        # ── Save ───────────────────────────────────────────────────────
+        if not dry_run:
+            _save_gain_to_config(winner_gain)
+
+        _print_model_aware_summary(all_results, winner_gain, dry_run)
+        logger.info("Autogain model-aware complete — best gain: %.2f", winner_gain)
+        return winner_gain
+
+    finally:
+        for p in list(scaled_wavs.values()):
+            try:
+                os.unlink(p)
+            except OSError:
+                pass
+
+
+def main_calibrate() -> None:
+    """CLI: calibra il gain del microfono usando trascrizione STT col backend attuale."""
+    parser = argparse.ArgumentParser(
+        description="Calibra il gain del microfono usando trascrizione STT col backend attuale."
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Mostra risultati senza scrivere config.yaml",
+    )
+    args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s %(message)s",
+    )
+    logging.getLogger().setLevel(logging.INFO)
+    for name in ["urllib3", "httpcore", "httpx", "livekit"]:
+        logging.getLogger(name).setLevel(logging.ERROR)
+
+    load_secrets("conf/secrets.yaml")
+    config = load_config("conf/config.yaml")
+    if config is None:
+        print("Error: Could not load conf/config.yaml", file=sys.stderr)
+        sys.exit(1)
+
+    print(f"Calibrazione microfono (model-aware) — {len(TEST_GAINS)} gain, frase: {_SPEECH_TEST_PHRASE!r}")
+    print(f"WAV: {_SPEECH_TEST_WAV}")
+    print(f"(dry-run: {'sì' if args.dry_run else 'no'})")
+    print()
+
+    run_autogain_model_aware(config, dry_run=args.dry_run)
+
+
 def main_auto() -> None:
     """CLI: test microfono e imposta il gain migliore (senza interazione)."""
     import argparse
