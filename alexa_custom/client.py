@@ -846,11 +846,14 @@ def main() -> None:
     output_spec = config.audio.output_device if config is not None else None
     output_volume = config.audio.output_volume if config is not None else 0.5
     input_gain = config.audio.input_gain if config is not None else 1.0
-    from alexa_custom.audio_hw import load_input_gain_state
+    from alexa_custom.audio_hw import load_input_gain_state, load_volume_state
 
     _state_gain = load_input_gain_state()
     if _state_gain is not None:
         input_gain = _state_gain
+    _state_vol = load_volume_state()
+    if _state_vol is not None:
+        output_volume = _state_vol
     room = os.environ.get("LIVEKIT_ROOM", "")
 
     # Optional display controller

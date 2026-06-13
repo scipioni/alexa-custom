@@ -521,15 +521,12 @@ def _single_stage_loop(
                 if command
                 else None
             )
-            has_start_listening = (
-                temp_trigger is not None
-                and any(a.type == "start_listening" for a in temp_trigger.actions)
+            has_start_listening = temp_trigger is not None and any(
+                a.type == "start_listening" for a in temp_trigger.actions
             )
             if not has_start_listening:
                 phrases_str = get_wake_up_phrases(config)
-                logger.info(
-                    f"sleeping... wait for wake up {phrases_str}"
-                )
+                logger.info(f"sleeping... wait for wake up {phrases_str}")
                 backend.reset()
                 continue
 
@@ -825,9 +822,7 @@ def _recognition_loop(
                         )
                 elif wake_match and is_stt_sleeping():
                     phrases_str = get_wake_up_phrases(config)
-                    logger.info(
-                        f"sleeping... wait for wake up {phrases_str}"
-                    )
+                    logger.info(f"sleeping... wait for wake up {phrases_str}")
                 else:
                     logger.debug(
                         "Stage1 KWS hit but keyword %r not in alias_map — ignoring",
@@ -1084,9 +1079,7 @@ def _recognition_loop(
                             continue
                     if _dm_trigger is None and is_stt_sleeping() and vosk_text:
                         phrases_str = get_wake_up_phrases(config)
-                        logger.info(
-                            f"sleeping... wait for wake up {phrases_str}"
-                        )
+                        logger.info(f"sleeping... wait for wake up {phrases_str}")
                 _drain_pipe(proc)
                 _reset_stage1_state()
                 stage1.Reset()
@@ -1151,9 +1144,7 @@ def _recognition_loop(
                             )
                     elif wake_match and is_stt_sleeping():
                         phrases_str = get_wake_up_phrases(config)
-                        logger.info(
-                            f"sleeping... wait for wake up {phrases_str}"
-                        )
+                        logger.info(f"sleeping... wait for wake up {phrases_str}")
             else:
                 partial = stage1_backend.partial_text().strip()
                 if partial and on_stt_event:
@@ -1284,9 +1275,7 @@ def _wake_detected(
             has_start_listening = any(a.type == "start_listening" for a in trig.actions)
             if not has_start_listening:
                 phrases_str = get_wake_up_phrases(config)
-                logger.info(
-                    f"sleeping... wait for wake up {phrases_str}"
-                )
+                logger.info(f"sleeping... wait for wake up {phrases_str}")
                 return None
 
         if trig is not None and not is_stt_sleeping():
