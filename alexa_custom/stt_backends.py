@@ -52,6 +52,7 @@ class VoskSTT(STTBackend):
             if grammar
             else vosk.KaldiRecognizer(model, sample_rate)
         )
+        self._rec.SetWords(True)
 
     @property
     def model(self) -> vosk.Model:
@@ -86,6 +87,7 @@ class VoskSTT(STTBackend):
                 if grammar
                 else vosk.KaldiRecognizer(self._model, self._sample_rate)
             )
+            self._rec.SetWords(True)
 
 
 class SherpaOnnxSTT(STTBackend):
@@ -364,9 +366,33 @@ def _grammar_json(groups: list[WakeWordGroup]) -> str:
     return _phrases_to_grammar(phrases)
 
 
+def _grammar_json_all(
+    wake_words: list[WakeWordGroup], triggers: list["Trigger"]
+) -> str:
+    """Build a grammar string encompassing wake words and action triggers."""
+    phrases = []
+    # Add wake words and their specific triggers
+    for g in wake_words:
+        phrases.append(g.word)
+        phrases.extend(g.aliases)
+        for t in g.triggers:
+            phrases.append(t.phrase)
+            phrases.extend(t.aliases)
+    
+    # Add global triggers
+    for t in triggers:
+        phrases.append(t.phrase)
+        phrases.extend(t.aliases)
+        
+    # Optional: deduplicate
+    phrases = list(set(phrases))
+    return _phrases_to_grammar(phrases)
+
+
 def get_stt_backend(
     cfg: STTStage1Config | STTStage2Config,
     keywords: list[str] | None = None,
+    grammar: str | None = None,
 ) -> STTBackend:
     if cfg.backend == "sherpa-onnx":
         model_path = cfg.model_path or _SHERPA_MODEL_PATH
@@ -383,7 +409,7 @@ def get_stt_backend(
             )
         return SherpaOnnxSTT(model_path)
     vosk_path = cfg.model_path or _MODEL_PATH
-    return VoskSTT(_load_model(vosk_path))
+    return VoskSTT(_load_model(vosk_path), grammar=grammar)
 
 
 def _vosk_confidence(words: list[dict], mode: str) -> float:
@@ -405,16 +431,37 @@ def _vosk_check_result(
     confidence: float,
     confidence_mode: str,
     rms_threshold: float,
-) -> "WakeWordGroup | None":
-    """Process a completed Vosk stage-1 result and return the matched WakeWordGroup or None."""
+) -> tuple["WakeWordGroup | None", str]:
+    """Process a Vosk stage-1 result and return (matched WakeWordGroup, inline_cmd)."""
     text = result.get("text", "").strip()
     words = result.get("result", [])
-    conf = _vosk_confidence(words, confidence_mode)
+    
+    from alexa_custom.stt import _extract_wake_command
+    wake_match, inline_cmd = (
+        _extract_wake_command(text, alias_map, fuzzy=False)
+        if text
+        else (None, "")
+    )
+    
+    if not wake_match:
+        return None, ""
+        
+    # We only care about the confidence of the wake word part.
+    # The wake word text is text minus inline_cmd.
+    wake_text_len = len(text) - len(inline_cmd)
+    wake_text = text[:wake_text_len].strip()
+    wake_word_count = len(wake_text.split())
+    
+    wake_words_data = words[:wake_word_count] if words else []
+    conf = _vosk_confidence(wake_words_data, confidence_mode)
+    
     logger.debug("Stage1 result: %r conf=%.2f (mode=%s)", text, conf, confidence_mode)
-    wake_match = alias_map.get(normalize_text(text))
-    if wake_match is None or conf < confidence:
-        return None
+    
+    if conf < confidence:
+        return None, ""
+        
     if _rms_level(trigger_chunk) < rms_threshold:
         logger.debug("Stage1 RMS gate rejected %r (quiet chunk)", text)
-        return None
-    return wake_match
+        return None, ""
+        
+    return wake_match, inline_cmd
