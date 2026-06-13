@@ -139,11 +139,17 @@ tasks:
   setup:
     desc: Install the alexa-custom systemd user service and enable it
     cmds:
-      - sudo ln -sf /usr/share/zoneinfo/Europe/Rome /etc/localtime
-      - mkdir -p ~/.config/systemd/user
-      - cp setup/alexa-custom.service ~/.config/systemd/user/alexa-custom.service
-      - systemctl --user daemon-reload
-      - systemctl --user enable alexa-custom
+      - |
+        # Generate it_IT.UTF-8 locale only on Arduino board
+        if grep -q "Arduino" /sys/firmware/devicetree/base/model 2>/dev/null; then
+          sudo sed -i '/^# *it_IT.UTF-8/s/^# *//' /etc/locale.gen
+          sudo locale-gen it_IT.UTF-8
+          sudo timedatectl set-timezone Europe/Rome
+          mkdir -p ~/.config/systemd/user
+          cp setup/alexa-custom.service ~/.config/systemd/user/alexa-custom.service
+          systemctl --user daemon-reload
+          systemctl --user enable alexa-custom
+        fi
       - |
         echo ""
         echo "Service installed. Useful commands:"
