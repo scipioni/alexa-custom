@@ -48,18 +48,24 @@ triggers:
       - type: set_volume
         mode: absolute
         value: 0.1
+      - type: say
+        text: "volume basso"
 
   - phrase: "volume medio"
     actions:
       - type: set_volume
         mode: absolute
         value: 0.5
+      - type: say
+        text: "volume medio"
 
   - phrase: "volume alto"
     actions:
       - type: set_volume
         mode: absolute
         value: 0.9
+      - type: say
+        text: "volume alto"
   
   - phrase: "alza il volume"
     actions:
