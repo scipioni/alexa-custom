@@ -764,8 +764,11 @@
       transition: max-height 0.3s ease, opacity 0.3s ease, padding 0.3s ease;
       max-height: none;
       flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
       opacity: 1;
-      overflow-y: auto;
+      overflow: hidden;
     }
     #history-section.collapsed #hist-content { max-height: 0; opacity: 0; }
     #hist-toggle-icon {
@@ -1009,8 +1012,13 @@
       border-radius: 1px;
       background: var(--nomatch);
       box-shadow: 0 0 5px var(--nomatch);
-      pointer-events: none;
+      pointer-events: auto;
       transition: bottom 0.3s ease;
+    }
+    .rms-line.adaptive {
+      background: var(--info);
+      box-shadow: 0 0 5px var(--info);
+      cursor: help;
     }
     .seg-v {
       width: 100%;
@@ -1663,6 +1671,20 @@
           renderParts(); break;
         case 'volume_update': {
           setVU('mic', m.mic||0); setVU('spk', m.spk||0);
+          
+          if (m.adaptive) {
+            const rmsLine = document.getElementById('mic-rms-line');
+            if (rmsLine && m.rms_threshold !== undefined) {
+              const rmsCount = Math.sqrt(Math.max(0, Math.min(1, m.rms_threshold))) * 20;
+              rmsLine.style.bottom = (rmsCount / 20 * 100).toFixed(1) + '%';
+              rmsLine.classList.add('adaptive');
+              rmsLine.title = `Adaptive RMS: ${m.rms_threshold.toFixed(3)}`;
+            }
+            if (m.confidence !== undefined && m.confidence !== null) {
+                // optionally show confidence
+            }
+          }
+          
           const wave = document.querySelector('#hero .stt-wave');
           if (wave && m.mic > 0) {
             const hasActive = wave.classList.contains('wv-active');
@@ -2265,7 +2287,11 @@
       canvas._roCleanup = () => ro.disconnect();
 
       const ctx = canvas.getContext('2d');
-      let hov = null, prevTs = performance.now();
+      let hov = null, prevTs = performance.now(), _gLight = false;
+      // Theme-aware text color helper — called per-draw, checked each frame.
+      function _tc(alpha) {
+        return _gLight ? `rgba(15,23,42,${alpha})` : `rgba(255,255,255,${alpha})`;
+      }
 
       function drawGlobalsContainer(n) {
         const flash = _flashVal(n.id);
@@ -2328,7 +2354,7 @@
         ctx.beginPath(); _rrect(ctx, x, y, w, h, 5);
         ctx.fillStyle = flash > 0.05
           ? col + Math.round(flash * 44).toString(16).padStart(2,'0')
-          : 'rgba(255,255,255,0.05)';
+          : _tc(0.05);
         ctx.fill();
         ctx.shadowBlur = 0;
         ctx.fillStyle  = col;
@@ -2355,19 +2381,19 @@
         const maxCh     = Math.floor((leftW - 16 - ICONS_W) / 6.2);
         ctx.textBaseline = 'middle';
         // Primary phrase
-        ctx.fillStyle = isHov || flash > 0.3 ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.80)';
+        ctx.fillStyle = isHov || flash > 0.3 ? _tc(0.95) : _tc(0.80);
         ctx.font = '12px system-ui,sans-serif';
         ctx.textAlign = 'left';
         ctx.fillText(n.label.length > maxCh ? n.label.slice(0, maxCh-1)+'…' : n.label, x + 10, lblY);
         // Action icons — right-aligned inside the left section
         ctx.font = '13px sans-serif';
         ctx.textAlign = 'left';
-        ctx.fillStyle = 'rgba(255,255,255,0.70)';
+        ctx.fillStyle = _tc(0.70);
         const iconsStartX = x + leftW - 4 - icons.length * ICON_STEP;
         icons.forEach((ic, i) => ctx.fillText(ic, iconsStartX + i * ICON_STEP, lblY));
         // Aliases
         if (aliases.length) {
-          ctx.fillStyle = isHov ? 'rgba(255,255,255,0.60)' : 'rgba(255,255,255,0.45)';
+          ctx.fillStyle = isHov ? _tc(0.60) : _tc(0.45);
           ctx.font = '12px system-ui,sans-serif';
           ctx.textAlign = 'left';
           aliases.forEach((a, i) => {
@@ -2392,7 +2418,7 @@
           const askY0 = n.y - askContentH / 2;
           // Question text
           ctx.font = 'italic 11px system-ui,sans-serif';
-          ctx.fillStyle = 'rgba(255,255,255,0.55)';
+          ctx.fillStyle = _tc(0.55);
           ctx.textAlign = 'left';
           const qText  = askAction.params?.text || '';
           const qMaxCh = Math.floor((AW - 14) / 5.5);
@@ -2408,7 +2434,7 @@
             ctx.fillStyle = col + '99';
             ctx.textAlign = 'left';
             ctx.fillText(isLast ? '└' : '├', AX + 8, rY);
-            ctx.fillStyle = 'rgba(255,255,255,0.75)';
+            ctx.fillStyle = _tc(0.75);
             const rLabel = r.phrase || '';
             ctx.fillText(rLabel.length > rMaxCh ? rLabel.slice(0, rMaxCh-1)+'…' : rLabel, AX + 18, rY);
             ctx.font = '11px sans-serif';
@@ -2448,6 +2474,7 @@
 
       function frame(ts) {
         const dt = Math.min((ts - prevTs) / 1000, 0.05); prevTs = ts;
+        _gLight = document.documentElement.getAttribute('data-theme') === 'light';
         const W = canvas.width / dpr, H = canvas.height / dpr;
         ctx.save(); ctx.scale(dpr, dpr);
         ctx.clearRect(0, 0, W, H);
@@ -2639,8 +2666,17 @@
           _cancelPartialClear();
           _lastWake = text;
           if (text === '(reply)') {
+            const _phrases = (m.phrases || []);
+            const _chips = _phrases.map(p =>
+              '<span style="display:inline-block;padding:1px 7px;border-radius:10px;'
+              + 'background:rgba(96,165,250,0.15);border:1px solid rgba(96,165,250,0.35);'
+              + 'color:#93c5fd;font-size:12px;font-weight:500">' + esc(p) + '</span>'
+            ).join('');
             _setHeroContent(_sttWave('wv-listen')
-              + '<span class="hero-text"><span class="hero-muted">speak now…</span></span>');
+              + '<span class="hero-text">'
+              + '<span style="font-size:10px;letter-spacing:.06em;color:var(--muted);margin-right:4px">GRAMMAR</span>'
+              + (_chips || '<span class="hero-muted">speak now…</span>')
+              + '</span>');
           } else {
             _setHeroContent(_sttWave('wv-listen')
               + '<span class="hero-text">'
@@ -3200,9 +3236,17 @@
             <span class="form-hint">1.0 = normale, 2.0 = doppio volume</span>
           </div>
           <div class="form-group">
-            <label>Soglia Silenzio (RMS)</label>
+            <label>Soglia Silenzio (RMS fisso)</label>
             <input type="number" id="input-rms-threshold" step="0.01" min="0" max="1" value="0.02">
             <span class="form-hint">Più basso = più sensibile (0.02 default)</span>
+          </div>
+          <div class="form-group">
+            <label>Adattamento Rumore di Fondo (RMS Adattivo)</label>
+            <div class="toggle-group">
+              <input type="checkbox" id="input-adaptive-rms">
+              <span>Abilita (sovrascrive RMS fisso)</span>
+            </div>
+            <span class="form-hint">Regola automaticamente la soglia in base al rumore della stanza.</span>
           </div>
         </div>
       `;
@@ -3234,6 +3278,7 @@
       document.getElementById('input-stt-confidence').value = config.stt?.stage1?.confidence || '';
       document.getElementById('input-input-gain').value = config.audio?.input_gain != null ? config.audio.input_gain : '';
       document.getElementById('input-rms-threshold').value = config.stt?.stage1?.rms_threshold != null ? config.stt.stage1.rms_threshold : '';
+      document.getElementById('input-adaptive-rms').checked = !!config.stt?.stage1?.adaptive_rms;
       document.getElementById('input-tts-backend').value = config.tts?.backend || 'piper';
       document.getElementById('input-tts-voice').value = config.tts?.voice || '';
     }
@@ -3281,6 +3326,7 @@
         };
         const rmsThreshold = parseFloat(document.getElementById('input-rms-threshold').value);
         if (!isNaN(rmsThreshold)) result.stt.stage1.rms_threshold = rmsThreshold;
+        result.stt.stage1.adaptive_rms = document.getElementById('input-adaptive-rms').checked;
       }
 
       const inputGain = parseFloat(document.getElementById('input-input-gain').value);

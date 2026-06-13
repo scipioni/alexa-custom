@@ -105,6 +105,8 @@ class STTStage1Config:
     confidence_mode: str = "first"
     vad_silence_ms: int = 500
     rms_threshold: float = 0.02
+    adaptive_rms: bool = False
+    adaptive_rms_margin: float = 0.01
     min_speech_ms: int = 200
     vosk_grammar: bool = True
     keyword_spotter: bool = False
@@ -498,6 +500,8 @@ def _parse_stt_stage1_config(raw: dict) -> STTStage1Config:
         confidence_mode=confidence_mode,
         vad_silence_ms=_get_int(raw, "vad_silence_ms", 500),
         rms_threshold=_get_float(raw, "rms_threshold", 0.02),
+        adaptive_rms=bool(raw.get("adaptive_rms", False)),
+        adaptive_rms_margin=_get_float(raw, "adaptive_rms_margin", 0.01),
         min_speech_ms=_get_int(raw, "min_speech_ms", 300),
         vosk_grammar=bool(raw.get("vosk_grammar", True)),
         keyword_spotter=bool(raw.get("keyword_spotter", False)),
