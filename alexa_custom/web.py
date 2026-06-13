@@ -174,10 +174,23 @@ class WebServer:
 
         loop.call_soon_threadsafe(_put)
 
-    def _update_pending_vu(self, mic: float, spk: float) -> None:
+    def _update_pending_vu(
+        self,
+        mic: float,
+        spk: float,
+        rms_threshold: float | None = None,
+        confidence: float | None = None,
+        adaptive: bool | None = None,
+    ) -> None:
         """Must run on the event loop (via call_soon_threadsafe)."""
         self._pending_vu["mic"] = mic
         self._pending_vu["spk"] = spk
+        if rms_threshold is not None:
+            self._pending_vu["rms_threshold"] = rms_threshold
+        if confidence is not None:
+            self._pending_vu["confidence"] = confidence
+        if adaptive is not None:
+            self._pending_vu["adaptive"] = adaptive
 
     # ── callbacks (same signatures as tui.py) ────────────────────────────────
 
@@ -250,6 +263,9 @@ class WebServer:
                         self._update_pending_vu,
                         data.get("mic", 0.0),
                         self._pending_vu.get("spk", 0.0),
+                        data.get("rms_threshold"),
+                        data.get("confidence"),
+                        data.get("adaptive"),
                     )
                 except Exception:
                     pass
@@ -648,8 +664,19 @@ class WebServer:
             await asyncio.sleep(0.25)
             spk = max(self._pending_vu.get("spk", 0.0), get_playback_level())
             mic = self._pending_vu.get("mic", 0.0)
+            rms_threshold = self._pending_vu.get("rms_threshold")
+            confidence = self._pending_vu.get("confidence")
+            adaptive = self._pending_vu.get("adaptive")
+
             if (self._pending_vu or spk > 0) and self._clients:
-                await self._broadcast({"type": "volume_update", "mic": mic, "spk": spk})
+                msg = {"type": "volume_update", "mic": mic, "spk": spk}
+                if rms_threshold is not None:
+                    msg["rms_threshold"] = rms_threshold
+                if confidence is not None:
+                    msg["confidence"] = confidence
+                if adaptive is not None:
+                    msg["adaptive"] = adaptive
+                await self._broadcast(msg)
                 self._pending_vu.clear()
 
     async def _prune_clients_loop(self) -> None:
@@ -659,21 +686,30 @@ class WebServer:
 
     async def _system_stats_loop(self) -> None:
         cpu_count = os.cpu_count() or 1
+        from alexa_custom.audio_hw import get_output_volume
         while True:
             await asyncio.sleep(2)
             try:
                 load1, load5, load15 = os.getloadavg()
             except OSError:
                 load1 = load5 = load15 = 0.0
-            await self._broadcast(
-                {
-                    "type": "system_stats",
-                    "load1": load1,
-                    "load5": load5,
-                    "load15": load15,
-                    "cpu_count": cpu_count,
-                }
-            )
+            
+            try:
+                vol = get_output_volume()
+            except Exception:
+                vol = None
+
+            msg = {
+                "type": "system_stats",
+                "load1": load1,
+                "load5": load5,
+                "load15": load15,
+                "cpu_count": cpu_count,
+            }
+            if vol is not None:
+                msg["output_volume"] = vol
+
+            await self._broadcast(msg)
 
     async def _asset_watcher_loop(
         self, watch_paths: list[Path], interval: float = 1.0

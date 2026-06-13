@@ -50,7 +50,8 @@ def _make_listen_fn(
         start_after_playback: bool = False,
     ) -> str:
         if on_stt_event:
-            on_stt_event("wake", {"word": "(reply)", "timeout": timeout})
+            on_stt_event("wake", {"word": "(reply)", "timeout": timeout,
+                                  "phrases": phrases or []})
         return await asyncio.to_thread(
             capture_transcript,
             proc,
