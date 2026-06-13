@@ -169,7 +169,8 @@ tasks:
     cmds:
       - mkdir -p conf/actions
       - cp conf.example/actions/system.yaml conf/actions/system.yaml
-      - echo "System actions updated. Restart the daemon: systemctl --user restart alexa-client"
+      - |
+        echo "System actions updated. Restart the daemon: systemctl --user restart alexa-client"
 
   audio:setup:
     desc: Set NewPie USB default sink/source persistently, unmute hardware, install PCM restore service, and disable USB autosuspend
