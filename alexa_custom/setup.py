@@ -14,7 +14,7 @@ _SHERPA_MODELS = {
         "models/it/kroko_128l",
 =======
     "ita": (
-        "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-fast-conformer-ctc-be-de-en-es-fr-hr-it-pl-ru-uk-20k-int8/resolve/main",
+        "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-fast-conformer-ctc-be-de-en-es-fr-hr-it-pl-ru-uk-20k/resolve/main",
         "models/sherpa-onnx/zipformer2-ctc-it",
 >>>>>>> 84a06b1 (feat: switch sherpa-onnx to NeMo FastConformer CTC with model_variant config)
     ),
