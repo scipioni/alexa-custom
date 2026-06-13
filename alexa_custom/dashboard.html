@@ -1783,6 +1783,10 @@
               }
             }
           }
+          if (m.input_gain != null) {
+            const el = document.getElementById('mic-gain');
+            if (el) el.textContent = '×' + m.input_gain.toFixed(1);
+          }
           break;
         }
         case 'error': setSt('Error: ' + (m.msg||'unknown'), null); break;

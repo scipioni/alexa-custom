@@ -1081,6 +1081,115 @@ async def handle_start_listening(
         on_stt_event("listening", {"wake_words": wake_words})
 
 
+def _calibration_winner(scores: dict[float, float]) -> float:
+    """Return the gain with the highest score, preferring the lower gain on ties."""
+    return min(scores, key=lambda g: (-scores[g], g))
+
+
+def _calibration_round2_gains(winner: float, gain_low: float, gain_high: float) -> list[float]:
+    """Return two probe gains zooming into the neighbourhood around the Round 1 winner."""
+    half_step = (gain_high - gain_low) / 6.0
+    return [max(0.0, winner - half_step), winner + half_step]
+
+
+@registry.register("calibrate_input_gain")
+async def handle_calibrate_input_gain(
+    action: ActionEntry,
+    listen_fn: Callable[[float], Awaitable[str]] | None = None,
+    **_,
+):
+    """Adaptive 5-probe mic gain calibration.
+
+    Example YAML:
+        - type: calibrate_input_gain
+          params:
+            sentence: "uno due tre quattro cinque"
+            gain_low: 0.4
+            gain_mid: 0.7
+            gain_high: 1.2
+            listen_timeout: 6.0
+            settle_ms: 500
+    """
+    from alexa_custom.audio_hw import (
+        get_input_gain,
+        save_input_gain_config,
+        set_input_gain,
+    )
+    from alexa_custom.tts import get_engine
+
+    if listen_fn is None:
+        logger.warning("calibrate_input_gain: no listen_fn available — skipping")
+        return
+
+    sentence = action.params.get("sentence", "uno due tre quattro cinque")
+    gain_low = float(action.params.get("gain_low", 0.4))
+    gain_mid = float(action.params.get("gain_mid", 0.7))
+    gain_high = float(action.params.get("gain_high", 1.2))
+    listen_timeout = float(action.params.get("listen_timeout", 6.0))
+    settle_ms = float(action.params.get("settle_ms", 500))
+    settle_s = settle_ms / 1000.0
+
+    scores: dict[float, float] = {}
+    probe_num = 0
+
+    logger.info("calibrate_input_gain: starting calibration (sentence=%r)", sentence)
+    await asyncio.to_thread(
+        get_engine().say,
+        "Iniziamo la calibrazione. Ripeti ogni frase che sento.",
+        "it-IT",
+    )
+
+    async def _probe(gain: float) -> None:
+        nonlocal probe_num
+        probe_num += 1
+        label = f"prova {probe_num} di 5: {sentence}"
+        logger.info("calibrate_input_gain: probe %d gain=%.2f", probe_num, gain)
+        await asyncio.to_thread(set_input_gain, None, None, gain)
+        await asyncio.sleep(settle_s)
+        await asyncio.to_thread(get_engine().say, label, "it-IT")
+        transcript = await listen_fn(listen_timeout)
+        score = get_similarity_score(
+            normalize_text(transcript or ""),
+            normalize_text(sentence),
+            "levenshtein",
+        )
+        logger.info(
+            "calibrate_input_gain: gain=%.2f score=%.1f transcript=%r",
+            gain,
+            score,
+            transcript,
+        )
+        scores[gain] = score
+
+    # Round 1 — bracket
+    for g in [gain_low, gain_mid, gain_high]:
+        await _probe(g)
+
+    r1_winner = _calibration_winner(scores)
+
+    # Round 2 — zoom
+    for g in _calibration_round2_gains(r1_winner, gain_low, gain_high):
+        await _probe(g)
+
+    best_gain = _calibration_winner(scores)
+    logger.info(
+        "calibrate_input_gain: best gain=%.2f (score=%.1f), all scores=%s",
+        best_gain,
+        scores[best_gain],
+        {f"{g:.2f}": f"{s:.1f}" for g, s in sorted(scores.items())},
+    )
+
+    await asyncio.to_thread(set_input_gain, None, None, best_gain)
+    save_input_gain_config(best_gain)
+
+    pct = int(round(best_gain * 100))
+    await asyncio.to_thread(
+        get_engine().say,
+        f"Calibrazione completata. Guadagno impostato a {pct} percento.",
+        "it-IT",
+    )
+
+
 async def _run_action(
     action: ActionEntry,
     telegram_client: TelegramClient,
