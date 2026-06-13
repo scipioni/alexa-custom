@@ -90,7 +90,7 @@ class AudioConfig:
         default_factory=lambda: {"usb": 48000, "bluetooth": 16000, "internal": 48000}
     )
     post_playback_ms: int = 100
-    tone_preroll_ms: int = 300
+    tone_preroll_ms: int = 50
     webrtc: AudioWebRTCConfig = field(default_factory=AudioWebRTCConfig)
 
 
@@ -133,7 +133,7 @@ class STTConfig:
 class TTSConfig:
     backend: str = "piper"
     voice: str = "it_IT-paola-medium"
-    preroll_ms: int = 300
+    preroll_ms: int = 100
 
 
 _VALID_MODES = {"two-stage", "single-stage"}
@@ -477,7 +477,7 @@ def _parse_audio_config(raw: dict) -> AudioConfig:
         input_gain=input_gain,
         sample_rates=sample_rates,
         post_playback_ms=int(raw.get("post_playback_ms", 100)),
-        tone_preroll_ms=int(raw.get("tone_preroll_ms", 300)),
+        tone_preroll_ms=int(raw.get("tone_preroll_ms", 50)),
         webrtc=webrtc,
     )
 
@@ -545,7 +545,7 @@ def _parse_tts_config(raw: dict) -> TTSConfig:
     return TTSConfig(
         backend=backend,
         voice=str(raw.get("voice", "it_IT-paola-medium")),
-        preroll_ms=int(raw.get("preroll_ms", 400)),
+        preroll_ms=int(raw.get("preroll_ms", 100)),
     )
 
 
