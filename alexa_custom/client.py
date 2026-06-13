@@ -858,7 +858,8 @@ def main() -> None:
         os.environ.setdefault("ALEXA_DISPLAY_I2C_ADDR", hex(dc.i2c_address))
         os.environ.setdefault("ALEXA_DISPLAY_I2C_WIDTH", str(dc.i2c_width))
         os.environ.setdefault("ALEXA_DISPLAY_I2C_HEIGHT", str(dc.i2c_height))
-        backend = get_display_backend(dc.backend)
+        os.environ.setdefault("ALEXA_DISPLAY_TRANSPORT", dc.transport)
+        backend = get_display_backend(dc.backend, dc.transport)
         display_controller = DisplayController(backend)
         logger.info(
             "Display feedback enabled (backend=%s)",
