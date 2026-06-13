@@ -2114,7 +2114,8 @@
         const wwNode = { id: `w${wi}`, type: 'wake', label: w.word,
                          aliases: w.aliases || [], wi,
                          x: PAD, y: curY, w: WW_W, h: bh,
-                         usesGlobals: trigs.length === 0 && globals.length > 0 };
+                         usesGlobals: trigs.length === 0 && globals.length > 0,
+                         skipUnmatched: !!w.skip_unmatched_inline };
         nodes.push(wwNode);
 
         if (trigs.length > 0) {
@@ -2308,6 +2309,14 @@
         ctx.stroke();
         ctx.fillStyle = col;
         ctx.fillText(wwStr, wwBX + WB_PAD_X, wwBY + WB_H / 2);
+        // skip_unmatched_inline indicator — small ⊘ in top-right corner
+        if (n.skipUnmatched) {
+          ctx.font = '11px system-ui,sans-serif';
+          ctx.textAlign = 'right'; ctx.textBaseline = 'top';
+          ctx.fillStyle = col + '99';
+          ctx.fillText('⊘', n.x + n.w - 5, n.y + 4);
+          ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+        }
         // Aliases — same badge chip style
         if (n.aliases.length) {
           ctx.font = '11px system-ui,sans-serif';
@@ -2655,6 +2664,11 @@
       const h = document.getElementById('hero');
       h.classList.remove('llm-thinking');
       switch (state) {
+        case 'sleeping':
+          _cancelPartialClear();
+          _setHeroContent('<span class="hero-icon hero-muted" style="color:var(--muted);font-size:24px">💤</span>'
+            + '<span class="hero-text hero-muted">Sleeping — say "start listening" to wake</span>');
+          break;
         case 'listening':
           _cancelPartialClear();
           clearReplyDim();
@@ -3189,10 +3203,14 @@
 
       let html = '<div style="display: flex; flex-direction: column; gap: 8px;">';
       currentConfig.wake_words.forEach((ww, index) => {
+        const skipBadge = ww.skip_unmatched_inline
+          ? `<span class="ww-skip-badge" title="Standalone wake with no inline command is silently ignored"><span class="ww-skip-badge-icon">⊘</span>skip unmatched</span>`
+          : '';
         html += `
           <div style="display: flex; align-items: center; gap: 8px; background: var(--surface); padding: 8px; border-radius: 6px; border: 1px solid var(--border);">
             <span style="color: var(--info); font-weight: 500;">${ww.word}</span>
             ${ww.aliases && ww.aliases.length > 0 ? `<span style="font-size: 12px; color: var(--muted);">(${ww.aliases.join(', ')})</span>` : ''}
+            ${skipBadge}
             <button onclick="removeWakeWord(${index})" style="margin-left: auto; background: rgba(248,113,113,0.2); border: none; color: #f87171; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">✕</button>
           </div>
         `;

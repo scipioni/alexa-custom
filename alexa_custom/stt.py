@@ -106,6 +106,19 @@ _STAGE1_RMS_THRESHOLD = float(os.environ.get("STT_STAGE1_RMS_THRESHOLD", "0.02")
 _STAGE1_MIN_SPEECH_MS = int(os.environ.get("STT_STAGE1_MIN_SPEECH_MS", "200"))
 
 
+_stt_sleeping = False
+
+
+def set_stt_sleeping(sleeping: bool) -> None:
+    global _stt_sleeping
+    logger.info(f"STT: set sleeping state to {sleeping}")
+    _stt_sleeping = sleeping
+
+
+def is_stt_sleeping() -> bool:
+    return _stt_sleeping
+
+
 def run_stt_worker(
     config: ActionsConfig | Callable[[], ActionsConfig],
     stop_event: threading.Event,
@@ -481,6 +494,29 @@ def _single_stage_loop(
             backend.reset()
             continue
 
+        if is_stt_sleeping():
+            temp_triggers = _resolve_triggers(wake_group, config.triggers)
+            temp_trigger = (
+                match_trigger(
+                    command,
+                    temp_triggers,
+                    algorithm=config.recognition.matching_algorithm,
+                    threshold=config.recognition.matching_threshold,
+                )
+                if command
+                else None
+            )
+            has_start_listening = (
+                temp_trigger is not None
+                and any(a.type == "start_listening" for a in temp_trigger.actions)
+            )
+            if not has_start_listening:
+                logger.info(
+                    f"STT: ignored single-stage command '{command}' because STT is sleeping"
+                )
+                backend.reset()
+                continue
+
         logger.info(f"Single-stage: wake='{wake_group.word}' command='{command}'")
         if on_stt_event:
             on_stt_event("wake", {"word": wake_group.word, "timeout": 0})
@@ -740,7 +776,7 @@ def _recognition_loop(
             if stage1_backend.accept_waveform(data):
                 keyword = stage1_backend.text()
                 wake_match = alias_map.get(normalize_text(keyword))
-                if wake_match:
+                if wake_match and not is_stt_sleeping():
                     logger.debug(f"Stage1 KWS hit: {keyword!r}")
                     _wake_detected(
                         wake_group=wake_match,
@@ -789,7 +825,7 @@ def _recognition_loop(
 
             if partial and config.recognition.partial_matching:
                 intent_result = _match_full_intent(partial, alias_map, intent_map)
-                if intent_result is not None:
+                if intent_result is not None and not is_stt_sleeping():
                     intent_key = (intent_result[0].word, intent_result[1].phrase)
                     if intent_key == _partial_stable_key:
                         _partial_stable_reads += 1
@@ -893,7 +929,7 @@ def _recognition_loop(
                     else (None, "")
                 )
 
-            if wake_match is not None:
+            if wake_match is not None and not is_stt_sleeping():
                 if wake_match.skip_unmatched_inline:
                     if not inline_cmd:
                         logger.debug(
@@ -1054,7 +1090,7 @@ def _recognition_loop(
                 if text:
                     logger.debug(f"Stage1 result (sherpa/{trigger_src}): {text!r}")
                     wake_match = _approx_wake_match(text, alias_map)
-                    if wake_match:
+                    if wake_match and not is_stt_sleeping():
                         _wake_detected(
                             wake_group=wake_match,
                             proc=proc,
@@ -1090,6 +1126,29 @@ def _recognition_loop(
                 partial = stage1_backend.partial_text().strip()
                 if partial and on_stt_event:
                     on_stt_event("transcribing", {"text": partial})
+
+
+def _follow_up_active(trigger: "Trigger | None", config: ActionsConfig) -> bool:
+    """Return whether a follow-up window should open after dispatching *trigger*.
+
+    Per-trigger follow_up override takes precedence over the global flag.
+    llm_chat-only triggers manage their own multi-turn loop, so we suppress the
+    outer follow-up window for them to avoid double-looping.
+    """
+    if not config.recognition.follow_up and (
+        trigger is None or trigger.follow_up is None
+    ):
+        return False
+    if trigger is not None and trigger.follow_up is not None:
+        explicit = trigger.follow_up
+    else:
+        explicit = config.recognition.follow_up
+    if not explicit:
+        return False
+    # Suppress for llm_chat-only triggers — they run their own conversation loop.
+    if trigger is not None and all(a.type == "llm_chat" for a in trigger.actions):
+        return False
+    return True
 
 
 def _wake_detected(
@@ -1164,79 +1223,153 @@ def _wake_detected(
         _play_timeout()
         return
 
-    if mqtt_client:
-        payload = json.dumps(
-            {"text": transcript, "wake_word": wake_group.word, "timestamp": time.time()}
-        )
-        mqtt_client.publish_threadsafe(
-            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/command",
-            payload,
-            loop=loop,
-        )
-
-    if pre_trigger is not None:
-        trigger = pre_trigger
-    else:
-        triggers = _resolve_triggers(wake_group, config.triggers)
-        trigger = match_trigger(
-            transcript,
-            triggers,
-            algorithm=config.recognition.matching_algorithm,
-            threshold=config.recognition.matching_threshold,
-        )
-    if trigger is None:
-        if on_stt_event:
-            on_stt_event("nomatch", {"transcript": transcript})
-        if config.llm and config.llm.fallback_on_no_match:
-            _fb_trigger = Trigger(
-                phrase="__llm_fallback__",
-                actions=[ActionEntry(type="llm_chat", params={})],
+    def _handle_command(
+        cmd: str, forced_trigger: "Trigger | None" = None
+    ) -> "Trigger | None":
+        """Match and dispatch one command turn. Returns the matched trigger or None."""
+        if mqtt_client:
+            payload = json.dumps(
+                {"text": cmd, "wake_word": wake_group.word, "timestamp": time.time()}
             )
-            try:
-                _dloop.run_until_complete(
-                    dispatch(
-                        _fb_trigger,
-                        telegram_client,
-                        livekit_connect_fn,
-                        livekit_connected=livekit_connected_flag.is_set(),
-                        listen_fn=_listen_fn,
-                        on_stt_event=on_stt_event,
-                        actions_config=config,
-                        wake_word=wake_group.word,
-                        transcript=transcript,
-                        mqtt_client=mqtt_client,
-                    )
-                )
-            except Exception as e:
-                logger.error("LLM fallback error: %s", e)
-            _drain_pipe(proc)
-            backend.reset()
+            mqtt_client.publish_threadsafe(
+                f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/command",
+                payload,
+                loop=loop,
+            )
+
+        if forced_trigger is not None:
+            trig = forced_trigger
         else:
-            _play_timeout()
-        return
-
-    metrics.inc("commands_matched")
-    if on_stt_event:
-        on_stt_event("matched", {"transcript": transcript, "trigger": trigger.phrase})
-
-    connected = livekit_connected_flag.is_set()
-    try:
-        _dloop.run_until_complete(
-            dispatch(
-                trigger,
-                telegram_client,
-                livekit_connect_fn,
-                livekit_connected=connected,
-                listen_fn=_listen_fn,
-                on_stt_event=on_stt_event,
-                actions_config=config,
-                wake_word=wake_group.word,
-                transcript=transcript,
-                mqtt_client=mqtt_client,
+            triggers = _resolve_triggers(wake_group, config.triggers)
+            trig = match_trigger(
+                cmd,
+                triggers,
+                algorithm=config.recognition.matching_algorithm,
+                threshold=config.recognition.matching_threshold,
             )
+
+        if trig is not None and is_stt_sleeping():
+            has_start_listening = any(a.type == "start_listening" for a in trig.actions)
+            if not has_start_listening:
+                logger.info(
+                    f"STT: ignored trigger '{trig.phrase}' because STT is sleeping"
+                )
+                return None
+
+        if trig is None:
+            if on_stt_event:
+                on_stt_event("nomatch", {"transcript": cmd})
+            if config.llm and config.llm.fallback_on_no_match:
+                _fb_trigger = Trigger(
+                    phrase="__llm_fallback__",
+                    actions=[ActionEntry(type="llm_chat", params={})],
+                )
+                try:
+                    assert _dloop is not None
+                    _dloop.run_until_complete(
+                        dispatch(
+                            _fb_trigger,
+                            telegram_client,
+                            livekit_connect_fn,
+                            livekit_connected=livekit_connected_flag.is_set(),
+                            listen_fn=_listen_fn,
+                            on_stt_event=on_stt_event,
+                            actions_config=config,
+                            wake_word=wake_group.word,
+                            transcript=cmd,
+                            mqtt_client=mqtt_client,
+                        )
+                    )
+                except Exception as e:
+                    logger.error("LLM fallback error: %s", e)
+                _drain_pipe(proc)
+                backend.reset()
+            else:
+                _play_timeout()
+            return None
+
+        metrics.inc("commands_matched")
+        if on_stt_event:
+            on_stt_event("matched", {"transcript": cmd, "trigger": trig.phrase})
+
+        if trig.wake_words == []:
+            try:
+                play_wake_beep(config.recognition.wake_tone)
+            except Exception as e:
+                logger.debug(f"Direct match beep failed: {e}")
+
+        try:
+            assert _dloop is not None
+            _dloop.run_until_complete(
+                dispatch(
+                    trig,
+                    telegram_client,
+                    livekit_connect_fn,
+                    livekit_connected=livekit_connected_flag.is_set(),
+                    listen_fn=_listen_fn,
+                    on_stt_event=on_stt_event,
+                    actions_config=config,
+                    wake_word=wake_group.word,
+                    transcript=cmd,
+                    mqtt_client=mqtt_client,
+                )
+            )
+        except Exception as e:
+            logger.error(f"Action dispatch failed: {e}")
+
+        return trig
+
+    matched_trigger = _handle_command(transcript, forced_trigger=pre_trigger)
+
+    # Follow-up conversation loop: re-listen without requiring the wake word.
+    turns = 0
+    while (
+        _follow_up_active(matched_trigger, config)
+        and not livekit_connected_flag.is_set()
+        and turns < config.recognition.follow_up_max_turns
+    ):
+        turns += 1
+        _drain_pipe(proc)
+        try:
+            play_wake_beep(config.recognition.follow_up_tone)
+        except Exception as e:
+            logger.debug(f"Follow-up tone failed: {e}")
+        if mqtt_client:
+            mqtt_client.publish_threadsafe(
+                f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
+                "listening",
+                loop=loop,
+            )
+        if on_stt_event:
+            on_stt_event(
+                "listening", {"wake_words": [g.word for g in config.wake_words]}
+            )
+
+        follow_up_transcript = capture_transcript(
+            proc,
+            channels,
+            backend,
+            config.recognition.follow_up_timeout,
+            stop_event,
+            on_stt_event,
+            flush_ms=config.stt.flush_ms,
+            vad_silence_ms=vad_silence_ms,
         )
-    except Exception as e:
-        logger.error(f"Action dispatch failed: {e}")
+        if not follow_up_transcript:
+            logger.debug("Follow-up: silence — closing window")
+            break
+
+        from alexa_custom.llm import is_exit_phrase
+
+        exit_phrases = config.llm.exit_phrases if config.llm else None
+        if is_exit_phrase(follow_up_transcript, exit_phrases):
+            logger.debug(
+                "Follow-up: exit phrase '%s' — closing window", follow_up_transcript
+            )
+            break
+
+        logger.info("Follow-up turn %d: '%s'", turns, follow_up_transcript)
+        matched_trigger = _handle_command(follow_up_transcript)
 
 
 def start_stt_thread(

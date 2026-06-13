@@ -73,6 +73,32 @@ recognition:
   mode: two-stage           # two-stage (default) or single-stage
   command_timeout: 3.0      # seconds to listen for a command after wake word
   wake_tone: wake           # tone on wake: wake | startup | success | error | info | warning | none
+
+  # Follow-up conversation mode (default: off)
+  # When enabled, after a matched command the system re-opens a listening window
+  # WITHOUT requiring the wake word again. The window closes on silence, an exit
+  # phrase ("basta", "grazie", …), or after follow_up_max_turns consecutive turns.
+  follow_up: false          # master switch
+  follow_up_timeout: 4.0    # seconds of silence before the window closes
+  follow_up_max_turns: 5    # maximum consecutive follow-up turns
+  follow_up_tone: info      # subtle chime played when the follow-up window opens
+```
+
+Individual triggers can override the global switch:
+
+```yaml
+triggers:
+  - phrase: "buonanotte"
+    follow_up: false        # force-close after this command even when follow_up is globally on
+    actions:
+      - type: say
+        text: "Buonanotte!"
+
+  - phrase: "che ore sono"
+    follow_up: true         # always open a follow-up window for this command
+    actions:
+      - type: say
+        text: "Sono le ..."
 ```
 
 ### STT — Speech-to-Text
