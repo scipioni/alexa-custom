@@ -246,7 +246,7 @@ wake_triggers:
             - phrase: "si"
               actions:
                 - type: say
-                  text: "Sto chiamando l'assitenza"
+                  text: "Sto chiamando l'assistenza"
                 - type: livekit_join
                 - type: telegram
                   text: "Collegati con casa <room>"
