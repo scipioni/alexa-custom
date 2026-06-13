@@ -39,6 +39,7 @@ from alexa_custom.stt_backends import (
     _vosk_check_result,
     _phrases_to_grammar,
     _grammar_json,
+    _grammar_json_all,
 )
 from alexa_custom.stt_phonetics import (
     _approx_wake_match,
@@ -153,7 +154,14 @@ def run_stt_worker(
             f"STT stage1 backend ({current_config.stt.stage1.backend}) loaded in {time.monotonic() - t0:.1f}s"
         )
         t0 = time.monotonic()
-        stage2_backend = get_stt_backend(current_config.stt.stage2)
+        stage2_grammar = (
+            _grammar_json_all(current_config.wake_words, current_config.triggers)
+            if current_config.stt.stage2.vosk_grammar
+            else None
+        )
+        stage2_backend = get_stt_backend(
+            current_config.stt.stage2, grammar=stage2_grammar
+        )
         logger.info(
             f"STT stage2 backend ({current_config.stt.stage2.backend}) loaded in {time.monotonic() - t0:.1f}s"
         )
@@ -164,10 +172,22 @@ def run_stt_worker(
     stage1_key = (
         current_config.stt.stage1.backend,
         current_config.stt.stage1.model_path,
+        current_config.stt.stage1.vosk_grammar,
+        hash((
+            tuple(g.word for g in current_config.wake_words),
+            tuple(t.phrase for g in current_config.wake_words for t in g.triggers),
+            tuple(t.phrase for t in current_config.triggers)
+        )) if current_config.stt.stage1.vosk_grammar else 0,
     )
     stage2_key = (
         current_config.stt.stage2.backend,
         current_config.stt.stage2.model_path,
+        current_config.stt.stage2.vosk_grammar,
+        hash((
+            tuple(g.word for g in current_config.wake_words),
+            tuple(t.phrase for g in current_config.wake_words for t in g.triggers),
+            tuple(t.phrase for t in current_config.triggers)
+        )) if current_config.stt.stage2.vosk_grammar else 0,
     )
 
     _dispatch_loop = asyncio.new_event_loop()
@@ -183,10 +203,21 @@ def run_stt_worker(
             new_stage1_key = (
                 current_config.stt.stage1.backend,
                 current_config.stt.stage1.model_path,
+                current_config.stt.stage1.vosk_grammar,
+                hash((
+            tuple(g.word for g in current_config.wake_words),
+            tuple(t.phrase for g in current_config.wake_words for t in g.triggers),
+            tuple(t.phrase for t in current_config.triggers)
+        )) if current_config.stt.stage1.vosk_grammar else 0,
             )
             new_stage2_key = (
                 current_config.stt.stage2.backend,
                 current_config.stt.stage2.model_path,
+                current_config.stt.stage2.vosk_grammar,
+                hash((
+                    tuple(g.word for g in current_config.wake_words),
+                    tuple(t.phrase for t in current_config.triggers)
+                )) if current_config.stt.stage2.vosk_grammar else 0,
             )
 
             if new_stage1_key != stage1_key:
@@ -208,7 +239,14 @@ def run_stt_worker(
 
             if new_stage2_key != stage2_key:
                 try:
-                    stage2_backend = get_stt_backend(current_config.stt.stage2)
+                    stage2_grammar = (
+                        _grammar_json_all(current_config.wake_words, current_config.triggers)
+                        if current_config.stt.stage2.vosk_grammar
+                        else None
+                    )
+                    stage2_backend = get_stt_backend(
+                        current_config.stt.stage2, grammar=stage2_grammar
+                    )
                     stage2_key = new_stage2_key
                     logger.info("STT stage2 backend reloaded after config change")
                 except RuntimeError as e:
@@ -504,7 +542,7 @@ def _recognition_loop(
     def _make_stage1_recognizer() -> "vosk.KaldiRecognizer":
         if vosk_use_grammar:
             rec = vosk.KaldiRecognizer(
-                vosk_model, 16000, _grammar_json(config.wake_words)
+                vosk_model, 16000, _grammar_json_all(config.wake_words, config.triggers)
             )
         else:
             rec = vosk.KaldiRecognizer(vosk_model, 16000)
@@ -660,7 +698,7 @@ def _recognition_loop(
             if on_stt_event and partial:
                 on_stt_event("transcribing", {"text": partial})
 
-            if partial and config.recognition.partial_matching and not vosk_use_grammar:
+            if partial and config.recognition.partial_matching:
                 intent_result = _match_full_intent(partial, alias_map, intent_map)
                 if intent_result is not None:
                     intent_key = (intent_result[0].word, intent_result[1].phrase)
@@ -747,7 +785,7 @@ def _recognition_loop(
 
             inline_cmd = ""
             if vosk_use_grammar:
-                wake_match = _vosk_check_result(
+                wake_match, inline_cmd = _vosk_check_result(
                     data,
                     result,
                     alias_map,

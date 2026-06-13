@@ -106,7 +106,7 @@ class STTStage1Config:
     vad_silence_ms: int = 500
     rms_threshold: float = 0.02
     min_speech_ms: int = 200
-    vosk_grammar: bool = False
+    vosk_grammar: bool = True
     keyword_spotter: bool = False
     keywords_score: float = 1.0
     keywords_threshold: float = 0.25
@@ -116,6 +116,7 @@ class STTStage1Config:
 class STTStage2Config:
     backend: str = "vosk"
     model_path: str | None = None
+    vosk_grammar: bool = True
 
 
 @dataclass
@@ -498,7 +499,7 @@ def _parse_stt_stage1_config(raw: dict) -> STTStage1Config:
         vad_silence_ms=_get_int(raw, "vad_silence_ms", 500),
         rms_threshold=_get_float(raw, "rms_threshold", 0.02),
         min_speech_ms=_get_int(raw, "min_speech_ms", 300),
-        vosk_grammar=bool(raw.get("vosk_grammar", False)),
+        vosk_grammar=bool(raw.get("vosk_grammar", True)),
         keyword_spotter=bool(raw.get("keyword_spotter", False)),
         keywords_score=_get_float(raw, "keywords_score", 1.0),
         keywords_threshold=_get_float(raw, "keywords_threshold", 0.25),
@@ -515,6 +516,7 @@ def _parse_stt_stage2_config(raw: dict) -> STTStage2Config:
     return STTStage2Config(
         backend=backend,
         model_path=str(model_path_raw) if model_path_raw else None,
+        vosk_grammar=bool(raw.get("vosk_grammar", True)),
     )
 
 

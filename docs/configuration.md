@@ -85,12 +85,12 @@ stt:
     backend: vosk           # vosk | sherpa-onnx
 
     # Vocabulary mode (Vosk only)
-    vosk_grammar: false     # false = free-vocabulary (default, recommended)
-                            #   Vosk decodes the full language; unrelated speech is
-                            #   genuinely rejected; confidence scores are absolute.
-                            # true = grammar mode: restricts decoder to wake-word
-                            #   vocabulary only; lower CPU but no real reject path —
-                            #   every segment is forced onto the nearest wake phrase.
+    vosk_grammar: true      # true = grammar mode (default, recommended)
+                            #   restricts decoder to wake-word vocabulary only;
+                            #   lower CPU and higher accuracy for small models.
+                            # false = free-vocabulary: Vosk decodes the full language;
+                            #   unrelated speech is genuinely rejected; confidence
+                            #   scores are absolute.
 
     # Confidence gating (grammar mode only — ignored in free-vocab mode)
     confidence: 0.65        # minimum token confidence to accept wake word (0–1)
@@ -106,12 +106,13 @@ stt:
 
   stage2:                   # command recognition after wake word
     backend: vosk           # can use a higher-accuracy backend than stage1
+    vosk_grammar: true      # restrict Vosk to command vocabulary (grammar mode)
     # model_path: models/it/kroko_128l
 ```
 
 #### Inline command pass-through
 
-In free-vocabulary mode (`vosk_grammar: false`), if the user speaks the wake word and a command in a single utterance — e.g. *"ehi galileo chiama mario"* — stage-1 extracts the trailing text and passes it directly to stage-2 dispatch, skipping the capture phase entirely. This eliminates one round-trip and makes same-breath commands instantaneous.
+If the user speaks the wake word and a command in a single utterance — e.g. *"ehi galileo chiama mario"* — stage-1 extracts the trailing text and passes it directly to stage-2 dispatch, skipping the capture phase entirely. This eliminates one round-trip and makes same-breath commands instantaneous.
 
 ### TTS — Text-to-Speech
 

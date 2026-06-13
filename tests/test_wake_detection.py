@@ -117,14 +117,14 @@ class TestVoskCheckResult:
     def test_basic_wake_detected(self, alias_map):
         chunk = _make_pcm(0.05)
         result = _result("ehi galileo", [0.9, 0.9])
-        match = _vosk_check_result(chunk, result, alias_map, 0.65, "first", 0.02)
+        match, _ = _vosk_check_result(chunk, result, alias_map, 0.65, "first", 0.02)
         assert match is not None
         assert match.word == "ehi galileo"
 
     def test_rms_gate_rejects_quiet_chunk(self, alias_map):
         chunk = _make_pcm(0.005)  # below threshold 0.02
         result = _result("ehi galileo", [0.9, 0.9])
-        match = _vosk_check_result(chunk, result, alias_map, 0.65, "first", 0.02)
+        match, _ = _vosk_check_result(chunk, result, alias_map, 0.65, "first", 0.02)
         assert match is None
 
     def test_rms_gate_disabled_at_zero(self, alias_map):
@@ -136,49 +136,49 @@ class TestVoskCheckResult:
     def test_first_mode_ignores_weak_second_token(self, alias_map):
         chunk = _make_pcm(0.05)
         result = _result("ehi galileo", [0.90, 0.10])
-        match = _vosk_check_result(chunk, result, alias_map, 0.65, "first", 0.02)
+        match, _ = _vosk_check_result(chunk, result, alias_map, 0.65, "first", 0.02)
         assert match is not None  # first mode: 0.90 >= 0.65 → passes
 
     def test_min_mode_rejects_weak_discriminative_token(self, alias_map):
         chunk = _make_pcm(0.05)
         result = _result("ehi galileo", [0.90, 0.10])
-        match = _vosk_check_result(chunk, result, alias_map, 0.65, "min", 0.02)
+        match, _ = _vosk_check_result(chunk, result, alias_map, 0.65, "min", 0.02)
         assert match is None  # min mode: min(0.90, 0.10) = 0.10 < 0.65 → rejected
 
     def test_mean_mode_rejects_average_below_threshold(self, alias_map):
         chunk = _make_pcm(0.05)
         result = _result("ehi galileo", [0.90, 0.30])  # mean = 0.60 < 0.65
-        match = _vosk_check_result(chunk, result, alias_map, 0.65, "mean", 0.02)
+        match, _ = _vosk_check_result(chunk, result, alias_map, 0.65, "mean", 0.02)
         assert match is None
 
     def test_mean_mode_accepts_average_above_threshold(self, alias_map):
         chunk = _make_pcm(0.05)
         result = _result("ehi galileo", [0.90, 0.50])  # mean = 0.70 >= 0.65
-        match = _vosk_check_result(chunk, result, alias_map, 0.65, "mean", 0.02)
+        match, _ = _vosk_check_result(chunk, result, alias_map, 0.65, "mean", 0.02)
         assert match is not None
 
     def test_non_wake_text_returns_none(self, alias_map):
         chunk = _make_pcm(0.05)
         result = _result("buongiorno", [0.95])
-        match = _vosk_check_result(chunk, result, alias_map, 0.65, "first", 0.02)
+        match, _ = _vosk_check_result(chunk, result, alias_map, 0.65, "first", 0.02)
         assert match is None
 
     def test_empty_text_returns_none(self, alias_map):
         chunk = _make_pcm(0.05)
         result = {"text": "", "result": []}
-        match = _vosk_check_result(chunk, result, alias_map, 0.65, "first", 0.02)
+        match, _ = _vosk_check_result(chunk, result, alias_map, 0.65, "first", 0.02)
         assert match is None
 
     def test_confidence_exactly_at_threshold_passes(self, alias_map):
         chunk = _make_pcm(0.05)
         result = _result("ehi galileo", [0.65, 0.65])
-        match = _vosk_check_result(chunk, result, alias_map, 0.65, "min", 0.02)
+        match, _ = _vosk_check_result(chunk, result, alias_map, 0.65, "min", 0.02)
         assert match is not None
 
     def test_confidence_just_below_threshold_rejected(self, alias_map):
         chunk = _make_pcm(0.05)
         result = _result("ehi galileo", [0.64, 0.64])
-        match = _vosk_check_result(chunk, result, alias_map, 0.65, "min", 0.02)
+        match, _ = _vosk_check_result(chunk, result, alias_map, 0.65, "min", 0.02)
         assert match is None
 
 

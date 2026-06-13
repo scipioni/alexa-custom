@@ -85,16 +85,15 @@ test set; once real ambient clips are added the number will be more meaningful.
 ### Vocabulary mode and the eval harness
 
 The harness scores clips against the same Vosk recognizer configuration used
-at runtime.  The `vosk_grammar` setting (default: `false`) affects how results
+at runtime.  The `vosk_grammar` setting (default: `true`) affects how results
 are interpreted:
 
-- **`vosk_grammar: false` (free-vocabulary, default)**: Vosk decodes freely;
-  the harness uses `_approx_wake_match` (fuzzy word-overlap) to check whether
-  the transcript contains the wake phrase.  This is the live-session path and
-  the most representative eval mode.
-- **`vosk_grammar: true` (grammar mode)**: Vosk is restricted to the wake-word
+- **`vosk_grammar: true` (grammar mode, default)**: Vosk is restricted to the wake-word
   vocabulary; the harness uses exact alias-map lookup and confidence gating.
   Confidence and confidence-mode flags only have effect in this mode.
+- **`vosk_grammar: false` (free-vocabulary)**: Vosk decodes freely;
+  the harness uses `_approx_wake_match` (fuzzy word-overlap) to check whether
+  the transcript contains the wake phrase.
 
 ### Sweep findings (TTS corpus)
 

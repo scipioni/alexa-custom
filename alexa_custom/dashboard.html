@@ -499,6 +499,21 @@
     .abadge-llm      { background: rgba(167,139,250,0.13); color: var(--llm); }
     .abadge-other    { background: rgba(100,116,139,0.10); color: var(--muted); }
 
+    /* ── trigger graph view ─────────────────────────────────────────────── */
+    .trig-view-toggle { display: flex; gap: 3px; }
+    .trig-view-btn {
+      padding: 2px 8px; font-size: 10px; line-height: 1.6;
+      border-radius: 4px; border: 1px solid var(--border);
+      background: transparent; color: var(--muted); cursor: pointer;
+      transition: border-color 0.15s, color 0.15s, background 0.15s;
+    }
+    .trig-view-btn.active { border-color: var(--info); color: var(--text); background: rgba(96,165,250,0.08); }
+    .trig-view-btn:hover  { border-color: var(--info); color: var(--text); }
+    #ww-graph-wrap   { display: none; flex: 1; min-height: 0; overflow-y: auto; }
+    #ww-graph-canvas { display: block; width: 100%; }
+    #ww-tree-panel.graph-mode #ww-graph-wrap  { display: block; }
+    #ww-tree-panel.graph-mode #ww-tree-content { display: none; }
+
     .trig-replies { border-left: 1px solid var(--border); margin-left: 10px; padding-left: 6px; margin-bottom: 2px; }
 
     .atrig { transition: opacity 0.2s; }
@@ -1381,8 +1396,9 @@
       </div>
 
       <div class="panel" id="ww-tree-panel">
-        <div class="panel-hdr">TRIGGERS</div>
+        <div class="panel-hdr">TRIGGERS<div class="trig-view-toggle"><button id="view-list-btn" class="trig-view-btn active" onclick="setTrigView('list')" title="List view">≡ list</button><button id="view-graph-btn" class="trig-view-btn" onclick="setTrigView('graph')" title="Graph view">⬡ graph</button></div></div>
         <div id="ww-tree-content"></div>
+        <div id="ww-graph-wrap"><canvas id="ww-graph-canvas"></canvas></div>
       </div>
 
       <div class="panel" id="log-panel">
@@ -1672,6 +1688,7 @@
           if (s === 'wake' && m.word && m.word !== '(reply)') {
             _lastWakeWord = m.word;
             updateInteraction(m.word, '');
+            _graphFlashByWord(m.word);
           }
           if (s === 'partial') {
             updateInteraction(_lastWakeWord, m.text);
@@ -1682,6 +1699,7 @@
             addHistory(_lastWakeWord, m.transcript||'', m.trigger||'');
             updateInteraction(_lastWakeWord, (m.transcript||'') + ' → ' + (m.trigger||''), true);
             highlightTrigger(m.trigger||'', isReply);
+            _graphFlashByPhrase(m.trigger||'');
             clearReplyDim();
             _lastWakeWord = '';
           }
@@ -1970,6 +1988,12 @@
 
     function renderActions(cfg) {
       if (!cfg) return;
+      if (document.getElementById('ww-tree-panel')?.classList.contains('graph-mode'))
+        renderGraph(cfg);
+      if (!_graphViewInited) {
+        _graphViewInited = true;
+        if (localStorage.getItem('trigView') !== 'list') setTrigView('graph');
+      }
 
       function trigRows(triggers, global) {
         const extra = global ? ' atrig-global' : '';
@@ -2036,6 +2060,462 @@
         if (modelEl) modelEl.textContent = llm.model.split('/').pop();
       }
     }
+
+    // ── Trigger graph view ────────────────────────────────────────────────
+
+    let _graphAnimId = null, _graphNodes = [], _graphFlashMap = {};
+    let _graphViewInited = false;
+
+    const _G_ACOLOR = {
+      say: '#60a5fa', shell: '#facc15', livekit: '#4ade80', telegram: '#7dd3fc',
+      mqtt: '#fb923c', ask: '#a78bfa', tone: '#94a3b8', log: '#94a3b8',
+      llm: '#a78bfa', set_volume: '#94a3b8',
+    };
+
+    function _gActionColor(actions) {
+      const t = ((actions||[])[0]||{}).type||'';
+      for (const [k,c] of Object.entries(_G_ACOLOR)) if (t.startsWith(k)) return c;
+      return '#64748b';
+    }
+
+    const _G_ICON = {
+      say: '💬', shell: '⚙️', livekit: '📞', telegram: '✈️',
+      mqtt: '📡', ask: '❓', tone: '🔔', log: '📋',
+      llm: '🤖', set_volume: '🔊',
+    };
+    function _gActionIcon(actions) {
+      const t = ((actions||[])[0]||{}).type||'';
+      for (const [k,v] of Object.entries(_G_ICON)) if (t.startsWith(k)) return v;
+      return '▸';
+    }
+    function _gActionIcons(actions) {
+      const seen = new Set();
+      return (actions||[]).map(a => {
+        const t = (a.type||'');
+        for (const [k,v] of Object.entries(_G_ICON)) {
+          if (t.startsWith(k)) { if (seen.has(k)) return null; seen.add(k); return v; }
+        }
+        if (!seen.has('?')) { seen.add('?'); return '▸'; }
+        return null;
+      }).filter(Boolean);
+    }
+
+    function setTrigView(mode) {
+      const panel = document.getElementById('ww-tree-panel');
+      localStorage.setItem('trigView', mode);
+      document.getElementById('view-list-btn').classList.toggle('active', mode === 'list');
+      document.getElementById('view-graph-btn').classList.toggle('active', mode === 'graph');
+      if (mode === 'graph') {
+        panel.classList.add('graph-mode');
+        const wrap = document.getElementById('ww-graph-wrap');
+        if (wrap) wrap.scrollTop = 0;
+        renderGraph(_cfg);
+      } else {
+        panel.classList.remove('graph-mode');
+        _stopGraph();
+      }
+    }
+
+    function _stopGraph() {
+      if (_graphAnimId) { cancelAnimationFrame(_graphAnimId); _graphAnimId = null; }
+      const c = document.getElementById('ww-graph-canvas');
+      if (c && c._roCleanup) { c._roCleanup(); c._roCleanup = null; }
+    }
+
+    function _buildGraphData(cfg, canvasW) {
+      if (!cfg) return { nodes: [], edges: [], totalH: 200 };
+      const nodes = [], edges = [];
+      // Layout constants
+      const PAD = 6, WW_W = 148, WW_PAD = 9, LINE_H = 17, GAP = 46;
+      const TR_X = PAD + WW_W + GAP;
+      const TR_W = Math.max(130, canvasW - TR_X - PAD);
+      const TR_H = 32, ITEM_GAP = 7, GROUP_GAP = 22;
+
+      const wws    = cfg.wake_words      || [];
+      const globals = cfg.global_triggers || [];
+
+      function boxH(w) {
+        return WW_PAD * 2 + (1 + (w.aliases||[]).length) * LINE_H;
+      }
+      // Trigger pill height: max of left-section (phrase+aliases) and right-section (ask panel).
+      function trigH(t) {
+        const aliasH = TR_H + (t.aliases||[]).length * 15;
+        const ask = (t.actions||[]).find(a => a.type === 'ask');
+        if (!ask) return aliasH;
+        const askH = 12 + 13 + (ask.on_reply||[]).length * 13; // V_PAD + LINE_Q + n*LINE_R
+        return Math.max(aliasH, askH);
+      }
+
+      const globalUserNodes = [];
+      let curY = PAD;
+
+      wws.forEach((w, wi) => {
+        const trigs = w.triggers || [];
+        const bh    = boxH(w);
+        const wwNode = { id: `w${wi}`, type: 'wake', label: w.word,
+                         aliases: w.aliases || [], wi,
+                         x: PAD, y: curY, w: WW_W, h: bh,
+                         usesGlobals: trigs.length === 0 && globals.length > 0 };
+        nodes.push(wwNode);
+
+        if (trigs.length > 0) {
+          const trigsH = trigs.reduce((s, t) => s + trigH(t), 0) + (trigs.length - 1) * ITEM_GAP;
+          const groupH = Math.max(bh, trigsH);
+          wwNode.y = curY;
+          const trig0Y = curY;
+          let ty = trig0Y;
+          trigs.forEach((t, ti) => {
+            const h = trigH(t);
+            nodes.push({ id: `t${wi}_${ti}`, type: 'trig', label: t.phrase,
+                         aliases: t.aliases || [],
+                         actions: t.actions, x: TR_X, y: ty + h / 2, w: TR_W, h });
+            edges.push({ from: `w${wi}`, to: `t${wi}_${ti}`,
+                         parts: [0.12, 0.52, 0.84].map(t0 => ({ t: t0 })) });
+            ty += h + ITEM_GAP;
+          });
+          curY += groupH + GROUP_GAP;
+        } else {
+          globalUserNodes.push(wwNode);
+          curY += bh + ITEM_GAP;
+        }
+      });
+
+      if (globals.length > 0) {
+        if (globalUserNodes.length > 0) curY += GROUP_GAP;
+
+        // Grid layout inside a single container rectangle.
+        const CONT_PAD = 10, COLS = 3, GRID_GAP_X = 8, GRID_GAP_Y = 6, TITLE_H = 18;
+        const contX  = TR_X;
+        const contW  = Math.max(180, canvasW - TR_X - PAD);
+        const cellW  = Math.floor((contW - CONT_PAD * 2 - (COLS - 1) * GRID_GAP_X) / COLS);
+        const cellH  = globals.reduce((m, t) => Math.max(m, trigH(t)), TR_H);
+        const rows   = Math.ceil(globals.length / COLS);
+        const contH  = TITLE_H + CONT_PAD + rows * cellH + (rows - 1) * GRID_GAP_Y + CONT_PAD;
+        const globsY0 = curY;
+
+        nodes.push({ id: 'globals-container', type: 'globals-container',
+                     x: contX, y: globsY0, w: contW, h: contH });
+
+        globals.forEach((t, gi) => {
+          const col = gi % COLS, row = Math.floor(gi / COLS);
+          const cx  = contX + CONT_PAD + col * (cellW + GRID_GAP_X);
+          const cy  = globsY0 + TITLE_H + CONT_PAD + row * (cellH + GRID_GAP_Y) + cellH / 2;
+          nodes.push({ id: `g${gi}`, type: 'global', label: t.phrase,
+                       aliases: t.aliases || [],
+                       actions: t.actions, x: cx, y: cy, w: cellW, h: cellH });
+        });
+
+        // Re-centre global-user wake boxes alongside the container; one edge each.
+        if (globalUserNodes.length > 0) {
+          const stackH = globalUserNodes.reduce((s, n) => s + n.h, 0)
+                         + (globalUserNodes.length - 1) * ITEM_GAP;
+          let wy = globsY0 + Math.max(0, (contH - stackH) / 2);
+          globalUserNodes.forEach(n => { n.y = wy; wy += n.h + ITEM_GAP; });
+          globalUserNodes.forEach(wn =>
+            edges.push({ from: wn.id, to: 'globals-container', isGlobal: true,
+                         parts: [0.12, 0.52, 0.84].map(t0 => ({ t: t0 })) })
+          );
+        }
+        curY = globsY0 + contH + PAD;
+      } else {
+        curY += PAD;
+      }
+
+      return { nodes, edges, totalH: curY };
+    }
+
+    function _rrect(ctx, x, y, w, h, r) {
+      if (ctx.roundRect) { ctx.roundRect(x, y, w, h, r); return; }
+      ctx.moveTo(x+r,y); ctx.lineTo(x+w-r,y); ctx.arcTo(x+w,y,x+w,y+r,r);
+      ctx.lineTo(x+w,y+h-r); ctx.arcTo(x+w,y+h,x+w-r,y+h,r);
+      ctx.lineTo(x+r,y+h); ctx.arcTo(x,y+h,x,y+h-r,r);
+      ctx.lineTo(x,y+r); ctx.arcTo(x,y,x+r,y,r); ctx.closePath();
+    }
+
+    function _bezPt(ax, ay, bx, by, t) {
+      const cx = (ax+bx)/2, u = 1-t;
+      return { x: u*u*u*ax+3*u*u*t*cx+3*u*t*t*cx+t*t*t*bx,
+               y: u*u*u*ay+3*u*u*t*ay+3*u*t*t*by+t*t*t*by };
+    }
+
+    function renderGraph(cfg) {
+      if (!cfg) return;
+      const canvas = document.getElementById('ww-graph-canvas');
+      if (!canvas || !canvas.offsetParent) return;
+      _stopGraph();
+
+      const dpr = devicePixelRatio || 1;
+      let built = _buildGraphData(cfg, canvas.offsetWidth);
+      _graphNodes = built.nodes;
+      let nodeById = Object.fromEntries(built.nodes.map(n => [n.id, n]));
+
+      function resize() {
+        const W = canvas.offsetWidth;
+        built = _buildGraphData(cfg, W);
+        _graphNodes = built.nodes;
+        nodeById = Object.fromEntries(built.nodes.map(n => [n.id, n]));
+        canvas.width = W * dpr;
+        canvas.height = Math.max(built.totalH, 180) * dpr;
+        canvas.style.height = Math.max(built.totalH, 180) + 'px';
+      }
+      resize();
+
+      const ro = new ResizeObserver(resize);
+      ro.observe(canvas);
+      canvas._roCleanup = () => ro.disconnect();
+
+      const ctx = canvas.getContext('2d');
+      let hov = null, prevTs = performance.now();
+
+      function drawGlobalsContainer(n) {
+        const flash = _flashVal(n.id);
+        const isHov = hov === n.id;
+        const col   = '#60a5fa';
+        ctx.save();
+        ctx.shadowColor = col;
+        ctx.shadowBlur  = flash > 0.05 ? flash * 24 : (isHov ? 8 : 0);
+        ctx.beginPath(); _rrect(ctx, n.x, n.y, n.w, n.h, 7);
+        ctx.fillStyle = 'rgba(96,165,250,0.04)'; ctx.fill();
+        ctx.strokeStyle = isHov || flash > 0.3 ? col + 'aa' : col + '38';
+        ctx.lineWidth = 1; ctx.stroke();
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = col + '80';
+        ctx.font = 'bold 10px system-ui,sans-serif';
+        ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+        ctx.fillText('GLOBAL TRIGGERS', n.x + 10, n.y + 9);
+        ctx.restore();
+      }
+
+      function drawWake(n) {
+        const flash = _flashVal(n.id);
+        const isHov  = hov === n.id;
+        const col    = n.usesGlobals ? '#60a5fa' : '#fb923c';
+        ctx.save();
+        ctx.shadowColor = col;
+        ctx.shadowBlur  = flash > 0.05 ? flash * 32 : (isHov ? 14 : 5);
+        ctx.beginPath(); _rrect(ctx, n.x, n.y, n.w, n.h, 5);
+        ctx.fillStyle = col + (flash > 0.1 ? Math.round(flash * 52).toString(16).padStart(2,'0') : '0e');
+        ctx.fill();
+        ctx.strokeStyle = flash > 0.1 ? col : (isHov ? col : col + 'bb');
+        ctx.lineWidth   = flash > 0.1 ? 2 + flash : (isHov ? 2 : 1.5);
+        ctx.stroke();
+        ctx.shadowBlur  = 0;
+        // Primary word
+        const WW_PAD = 9, LINE_H = 17;
+        ctx.fillStyle = col;
+        ctx.font = 'bold 12px system-ui,sans-serif';
+        ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+        ctx.fillText(n.label.toUpperCase(), n.x + WW_PAD, n.y + WW_PAD + LINE_H * 0.5);
+        // Aliases
+        if (n.aliases.length) {
+          ctx.fillStyle = col + '99';
+          ctx.font = '11px system-ui,sans-serif';
+          n.aliases.forEach((a, i) =>
+            ctx.fillText(a, n.x + WW_PAD, n.y + WW_PAD + LINE_H * (i + 1.5))
+          );
+        }
+        ctx.restore();
+      }
+
+      function drawTrig(n) {
+        const flash = _flashVal(n.id);
+        const isHov = hov === n.id;
+        const col   = _gActionColor(n.actions);
+        const x = n.x, y = n.y - n.h / 2, w = n.w, h = n.h;
+        ctx.save();
+        ctx.shadowColor = col;
+        ctx.shadowBlur  = flash > 0.05 ? flash * 28 : (isHov ? 10 : 0);
+        ctx.beginPath(); _rrect(ctx, x, y, w, h, 5);
+        ctx.fillStyle = flash > 0.05
+          ? col + Math.round(flash * 44).toString(16).padStart(2,'0')
+          : 'rgba(255,255,255,0.05)';
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.fillStyle  = col;
+        ctx.fillRect(x, y, 3 + flash * 2, h);   // accent bar widens on flash
+        ctx.beginPath(); _rrect(ctx, x, y, w, h, 5);
+        ctx.strokeStyle = flash > 0.05 ? col + 'ee' : (isHov ? col + 'cc' : col + '55');
+        ctx.lineWidth   = flash > 0.05 ? 1.5 + flash : 1;
+        ctx.lineWidth   = 1; ctx.stroke();
+        const aliases   = n.aliases || [];
+        const askAction = (n.actions||[]).find(a => a.type === 'ask');
+        const replies   = askAction?.on_reply || [];
+        const LINE_M = 16, LINE_A = 14;
+        const LINE_Q = 13, LINE_R = 13;
+        // Left section width; ask panel only shown when pill is wide enough.
+        const LEFT_W = 155;
+        const hasAsk = !!(askAction && w > LEFT_W + 50);
+        const leftW  = hasAsk ? LEFT_W : w;
+        // Phrase + aliases centred in full pill height (left section).
+        const topH = LINE_M + aliases.length * LINE_A;
+        const lblY = n.y - topH / 2 + LINE_M / 2;
+        const icons     = _gActionIcons(n.actions);
+        const ICON_STEP = 15;
+        const ICONS_W   = icons.length > 0 ? icons.length * ICON_STEP + 4 : 0;
+        const maxCh     = Math.floor((leftW - 16 - ICONS_W) / 6.2);
+        ctx.textBaseline = 'middle';
+        // Primary phrase
+        ctx.fillStyle = isHov || flash > 0.3 ? 'rgba(255,255,255,0.95)' : 'rgba(255,255,255,0.80)';
+        ctx.font = '12px system-ui,sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(n.label.length > maxCh ? n.label.slice(0, maxCh-1)+'…' : n.label, x + 10, lblY);
+        // Action icons — right-aligned inside the left section
+        ctx.font = '13px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillStyle = 'rgba(255,255,255,0.70)';
+        const iconsStartX = x + leftW - 4 - icons.length * ICON_STEP;
+        icons.forEach((ic, i) => ctx.fillText(ic, iconsStartX + i * ICON_STEP, lblY));
+        // Aliases
+        if (aliases.length) {
+          ctx.fillStyle = isHov ? 'rgba(255,255,255,0.60)' : 'rgba(255,255,255,0.45)';
+          ctx.font = '12px system-ui,sans-serif';
+          ctx.textAlign = 'left';
+          aliases.forEach((a, i) => {
+            const ay = lblY + LINE_M / 2 + LINE_A / 2 + i * LINE_A;
+            ctx.fillText(a.length > maxCh ? a.slice(0, maxCh-1)+'…' : a, x + 10, ay);
+          });
+        }
+        // Ask panel — right section of the pill
+        if (hasAsk) {
+          const AX = x + LEFT_W;
+          const AW = w - LEFT_W;
+          // Tinted background (right portion only, clipped by outer pill shape)
+          ctx.fillStyle = col + '0c';
+          ctx.fillRect(AX, y + 1, AW - 1, h - 2);
+          // Vertical separator
+          ctx.strokeStyle = col + '55';
+          ctx.lineWidth = 0.5;
+          ctx.setLineDash([]);
+          ctx.beginPath(); ctx.moveTo(AX, y + 5); ctx.lineTo(AX, y + h - 5); ctx.stroke();
+          // Ask content centred in the pill height
+          const askContentH = LINE_Q + replies.length * LINE_R;
+          const askY0 = n.y - askContentH / 2;
+          // Question text
+          ctx.font = 'italic 11px system-ui,sans-serif';
+          ctx.fillStyle = 'rgba(255,255,255,0.55)';
+          ctx.textAlign = 'left';
+          const qText  = askAction.params?.text || '';
+          const qMaxCh = Math.floor((AW - 14) / 5.5);
+          ctx.fillText(qText.length > qMaxCh ? qText.slice(0, qMaxCh-1)+'…' : qText, AX + 8, askY0 + LINE_Q / 2);
+          // Reply branches
+          replies.forEach((r, i) => {
+            const rY    = askY0 + LINE_Q + LINE_R * (i + 0.5);
+            const isLast = i === replies.length - 1;
+            const rIcons = _gActionIcons(r.actions || []);
+            const rIconsW = rIcons.length * 13;
+            const rMaxCh  = Math.floor((AW - 26 - rIconsW) / 5.8);
+            ctx.font = '11px system-ui,sans-serif';
+            ctx.fillStyle = col + '99';
+            ctx.textAlign = 'left';
+            ctx.fillText(isLast ? '└' : '├', AX + 8, rY);
+            ctx.fillStyle = 'rgba(255,255,255,0.75)';
+            const rLabel = r.phrase || '';
+            ctx.fillText(rLabel.length > rMaxCh ? rLabel.slice(0, rMaxCh-1)+'…' : rLabel, AX + 18, rY);
+            ctx.font = '11px sans-serif';
+            ctx.textAlign = 'left';
+            const riX = x + w - 5 - rIcons.length * 13;
+            rIcons.forEach((ic, j) => ctx.fillText(ic, riX + j * 13, rY));
+          });
+        }
+        ctx.restore();
+      }
+
+      function drawEdge(e, dt) {
+        const a = nodeById[e.from], b = nodeById[e.to];
+        if (!a || !b) return;
+        const ax = a.x + a.w, ay = a.y + a.h / 2;
+        // Container: enter its left-centre; pill: enter its left-centre (y is already centre)
+        const bx = b.x;
+        const by = b.type === 'globals-container' ? b.y + b.h / 2 : b.y;
+        const cx = (ax + bx) / 2;
+        const col = e.isGlobal ? '#60a5fa' : _gActionColor(b.actions);
+        ctx.beginPath();
+        ctx.moveTo(ax, ay); ctx.bezierCurveTo(cx, ay, cx, by, bx, by);
+        ctx.strokeStyle = col + (e.isGlobal ? '55' : '55');
+        ctx.lineWidth   = 1.5; ctx.stroke();
+        if (e.parts) {
+          e.parts.forEach(p => {
+            p.t = (p.t + dt * 0.28) % 1;
+            const pt    = _bezPt(ax, ay, bx, by, p.t);
+            const alpha = Math.round(180 * Math.sin(p.t * Math.PI)).toString(16).padStart(2,'0');
+            ctx.beginPath(); ctx.arc(pt.x, pt.y, 2, 0, Math.PI * 2);
+            ctx.fillStyle = col + alpha;
+            ctx.shadowColor = col; ctx.shadowBlur = 7;
+            ctx.fill(); ctx.shadowBlur = 0;
+          });
+        }
+      }
+
+      function frame(ts) {
+        const dt = Math.min((ts - prevTs) / 1000, 0.05); prevTs = ts;
+        const W = canvas.width / dpr, H = canvas.height / dpr;
+        ctx.save(); ctx.scale(dpr, dpr);
+        ctx.clearRect(0, 0, W, H);
+
+        // Draw order: container bg → edges → trigger pills → wake boxes (on top)
+        built.nodes.filter(n => n.type === 'globals-container').forEach(n => drawGlobalsContainer(n));
+        built.edges.forEach(e => drawEdge(e, dt));
+        built.nodes.filter(n => n.type === 'trig' || n.type === 'global').forEach(n => drawTrig(n));
+        built.nodes.filter(n => n.type === 'wake').forEach(n => drawWake(n));
+
+        ctx.restore();
+        _graphAnimId = requestAnimationFrame(frame);
+      }
+
+      canvas.onmousemove = e => {
+        const r = canvas.getBoundingClientRect(), mx = e.clientX-r.left, my = e.clientY-r.top;
+        hov = null;
+        let contHov = null;
+        for (const n of built.nodes) {
+          if (n.type === 'wake') {
+            if (mx >= n.x && mx <= n.x+n.w && my >= n.y && my <= n.y+n.h) { hov = n.id; break; }
+          } else if (n.type === 'globals-container') {
+            // Container hover is a fallback — individual pills inside take priority
+            if (mx >= n.x && mx <= n.x+n.w && my >= n.y && my <= n.y+n.h) contHov = n.id;
+          } else if (mx >= n.x && mx <= n.x+n.w && my >= n.y-n.h/2 && my <= n.y+n.h/2) {
+            hov = n.id; break;
+          }
+        }
+        if (!hov) hov = contHov;
+        canvas.style.cursor = hov ? 'pointer' : 'default';
+      };
+      canvas.onmouseleave = () => { hov = null; canvas.style.cursor = 'default'; };
+      _graphAnimId = requestAnimationFrame(frame);
+    }
+
+    function _flashVal(id) {
+      const e = _graphFlashMap[id];
+      if (!e) return 0;
+      const now = performance.now();
+      const rem  = e.end - now;
+      if (rem <= 0) { delete _graphFlashMap[id]; return 0; }
+      const elapsed = (now - e.start) / 1000;
+      return 0.65 + 0.35 * Math.sin(elapsed * Math.PI * 2 * 0.5); // 0.5 Hz, range [0.30, 1.0]
+    }
+
+    function _graphFlash(id, durationMs) {
+      const now = performance.now();
+      _graphFlashMap[id] = { start: now, end: now + (durationMs || 2500) };
+    }
+
+    function _graphFlashByPhrase(phrase) {
+      const norm = phrase.toLowerCase().trim();
+      for (const n of _graphNodes) {
+        if (n.label && n.label.toLowerCase().trim() === norm) {
+          _graphFlash(n.id, 2500);
+          if (n.type === 'global') _graphFlash('globals-container', 2500);
+        }
+      }
+    }
+
+    function _graphFlashByWord(word) {
+      const ms   = ((_cfg?.recognition?.command_timeout || _cfg?.command_timeout || 3) * 1000);
+      const norm = word.toLowerCase().trim();
+      for (const n of _graphNodes)
+        if (n.type === 'wake' && n.label.toLowerCase().trim() === norm) _graphFlash(n.id, ms);
+    }
+
+    // ── end graph view ────────────────────────────────────────────────────
 
     const _micRmsBuf = [];
     const _RMS_WIN = 40;
