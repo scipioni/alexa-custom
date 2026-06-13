@@ -139,6 +139,7 @@ tasks:
   setup:
     desc: Install the alexa-custom systemd user service and enable it
     cmds:
+      - sudo ln -sf /usr/share/zoneinfo/Europe/Rome /etc/localtime
       - mkdir -p ~/.config/systemd/user
       - cp setup/alexa-custom.service ~/.config/systemd/user/alexa-custom.service
       - systemctl --user daemon-reload
