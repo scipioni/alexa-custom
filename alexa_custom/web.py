@@ -689,7 +689,7 @@ class WebServer:
 
     async def _system_stats_loop(self) -> None:
         cpu_count = os.cpu_count() or 1
-        from alexa_custom.audio_hw import get_output_volume
+        from alexa_custom.audio_hw import get_input_gain, get_output_volume
 
         while True:
             await asyncio.sleep(2)
@@ -703,6 +703,11 @@ class WebServer:
             except Exception:
                 vol = None
 
+            try:
+                gain = get_input_gain()
+            except Exception:
+                gain = None
+
             msg = {
                 "type": "system_stats",
                 "load1": load1,
@@ -712,6 +717,8 @@ class WebServer:
             }
             if vol is not None:
                 msg["output_volume"] = vol
+            if gain is not None:
+                msg["input_gain"] = gain
 
             await self._broadcast(msg)
 

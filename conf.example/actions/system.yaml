@@ -156,3 +156,13 @@ triggers:
       - type: say
         text: "Sono sveglia, pronta ad ascoltare!"
 
+  - phrase: "calibra microfono"
+    wake_words: [default]
+    actions:
+      - type: calibrate_input_gain
+        sentence: "uno due tre quattro cinque"
+        gain_low: 0.2
+        gain_mid: 1.5
+        gain_high: 3.0
+        listen_timeout: 6.0
+        settle_ms: 500
