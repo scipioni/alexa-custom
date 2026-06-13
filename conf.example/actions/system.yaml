@@ -138,3 +138,21 @@ triggers:
           city: "Verona"        # Default fallback city if not spoken in the transcript
           days: "oggi"      # Default fallback day ("oggi" / "domani") if not spoken in the transcript
 
+  - phrase: "dormi"
+    wake_words: [default]
+    aliases:
+      - "smetti di ascoltare"
+    actions:
+      - type: say
+        text: "Va bene, vado a dormire. Dì 'svégliati adesso' per riattivarmi."
+      - type: stop_listening
+
+  - phrase: "svegliati adesso"
+    wake_words: []
+    aliases:
+      - "attiva ascolto"
+    actions:
+      - type: start_listening
+      - type: say
+        text: "Sono sveglia, pronta ad ascoltare!"
+
