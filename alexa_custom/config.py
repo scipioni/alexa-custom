@@ -35,6 +35,7 @@ class Trigger:
     aliases: list[str] = field(default_factory=list)
     patterns: list[str] = field(default_factory=list)
     wake_words: list[str] | None = None  # None=global, []=direct, [ids]=scoped
+    follow_up: bool | None = None  # None=inherit global, True/False=override
 
 
 @dataclass
@@ -156,6 +157,10 @@ class RecognitionConfig:
     matching_threshold: float = 70.0
     reply_matching_algorithm: str = "levenshtein"
     reply_matching_threshold: float = 80.0
+    follow_up: bool = False
+    follow_up_timeout: float = 4.0
+    follow_up_max_turns: int = 5
+    follow_up_tone: str = "info"
 
 
 @dataclass
@@ -359,6 +364,11 @@ def _parse_triggers(raw_triggers: list[Any], path_prefix: str) -> list[Trigger]:
             raise ConfigError(f"config:{path_prefix}[{i}].wake_words must be a list")
         else:
             wake_words_val = [str(w) for w in raw_wake_words if w is not None]
+        raw_follow_up = t.get("follow_up")
+        if raw_follow_up is None:
+            follow_up_val: bool | None = None
+        else:
+            follow_up_val = bool(raw_follow_up)
         triggers.append(
             Trigger(
                 phrase=phrase,
@@ -366,6 +376,7 @@ def _parse_triggers(raw_triggers: list[Any], path_prefix: str) -> list[Trigger]:
                 aliases=aliases,
                 patterns=patterns,
                 wake_words=wake_words_val,
+                follow_up=follow_up_val,
             )
         )
     return triggers
@@ -597,6 +608,10 @@ def _parse_recognition_config(raw: dict) -> RecognitionConfig:
         matching_threshold=_get_float(raw, "matching_threshold", 70.0),
         reply_matching_algorithm=reply_algo,
         reply_matching_threshold=_get_float(raw, "reply_matching_threshold", 80.0),
+        follow_up=bool(raw.get("follow_up", False)),
+        follow_up_timeout=_get_float(raw, "follow_up_timeout", 4.0),
+        follow_up_max_turns=_get_int(raw, "follow_up_max_turns", 5),
+        follow_up_tone=str(raw.get("follow_up_tone", "info")),
     )
 
 
