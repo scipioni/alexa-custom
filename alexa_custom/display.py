@@ -671,11 +671,19 @@ class GpioLedDisplay(DisplayBackend):
 _BRIDGE_CMD_DEFAULT = os.environ.get("ALEXA_DISPLAY_CMD", "uart_bridge")
 _ROUTER_HOST = os.environ.get("ALEXA_DISPLAY_HOST", "127.0.0.1")
 _ROUTER_PORT = int(os.environ.get("ALEXA_DISPLAY_PORT", "7501"))
+_ROUTER_UNIX_SOCKET = os.environ.get(
+    "ALEXA_DISPLAY_UNIX_SOCKET", "/var/run/arduino-router.sock"
+)
+_BRIDGE_TRANSPORT = os.environ.get("ALEXA_DISPLAY_TRANSPORT", "auto")
 
 
 class _BridgeClient:
     def __init__(
-        self, host: str | None = None, port: int | None = None, cmd: str | None = None
+        self,
+        host: str | None = None,
+        port: int | None = None,
+        cmd: str | None = None,
+        unix_socket: str | None = None,
     ) -> None:
         self._lock = threading.Lock()
         self._pending: dict[int, threading.Event] = {}
@@ -684,6 +692,7 @@ class _BridgeClient:
         self._stop = threading.Event()
         self._sock: Any = None
         self._proc: subprocess.Popen | None = None
+        self._unix_socket = unix_socket or _ROUTER_UNIX_SOCKET
 
         if cmd:
             logger.debug("[display] Bridge subprocess: %s", cmd)
@@ -696,11 +705,18 @@ class _BridgeClient:
         else:
             import socket
 
-            h = host or _ROUTER_HOST
-            p = port or _ROUTER_PORT
-            self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self._sock.settimeout(5.0)
-            self._sock.connect((h, p))
+            if self._unix_socket and os.path.exists(self._unix_socket):
+                h = None
+                p = None
+                self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+                self._sock.settimeout(5.0)
+                self._sock.connect(self._unix_socket)
+            else:
+                h = host or _ROUTER_HOST
+                p = port or _ROUTER_PORT
+                self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                self._sock.settimeout(5.0)
+                self._sock.connect((h, p))
             self._sock.settimeout(0.05)
 
         self._reader = threading.Thread(target=self._reader_loop, daemon=True)
@@ -723,9 +739,14 @@ class _BridgeClient:
             return
         import socket
 
-        self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._sock.settimeout(5.0)
-        self._sock.connect((_ROUTER_HOST, _ROUTER_PORT))
+        if self._unix_socket and os.path.exists(self._unix_socket):
+            self._sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self._sock.settimeout(5.0)
+            self._sock.connect(self._unix_socket)
+        else:
+            self._sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self._sock.settimeout(5.0)
+            self._sock.connect((_ROUTER_HOST, _ROUTER_PORT))
         self._sock.settimeout(0.05)
 
     def _handle_response(self, obj: list) -> None:
@@ -825,8 +846,11 @@ class BridgeDisplay(DisplayBackend):
         host: str | None = None,
         port: int | None = None,
         cmd: str | None = None,
+        unix_socket: str | None = None,
     ) -> None:
-        self._client = _BridgeClient(host=host, port=port, cmd=cmd)
+        self._client = _BridgeClient(
+            host=host, port=port, cmd=cmd, unix_socket=unix_socket
+        )
         if not self._client.ping():
             raise RuntimeError("Bridge ping failed")
 
@@ -1033,12 +1057,50 @@ class I2cOledDisplay(DisplayBackend):
 # ── Factory ───────────────────────────────────────────────────────────
 
 
-def get_display_backend(backend: str = "auto") -> DisplayBackend:
+def get_display_backend(
+    backend: str = "auto", transport: str = "auto"
+) -> DisplayBackend:
 
     if backend == "mock":
         return MockDisplay()
 
     if backend in ("bridge", "auto"):
+        transport = os.environ.get("ALEXA_DISPLAY_TRANSPORT", _BRIDGE_TRANSPORT)
+
+        if transport == "subprocess":
+            cmd = os.environ.get("ALEXA_DISPLAY_CMD", _BRIDGE_CMD_DEFAULT)
+            if shutil.which(cmd.split()[0]) if " " in cmd else shutil.which(cmd):
+                try:
+                    logger.debug("[display] Bridge subprocess: %s", cmd)
+                    return BridgeDisplay(cmd=cmd)
+                except Exception:
+                    logger.warning("[display] Bridge subprocess unavailable")
+            else:
+                logger.warning("[display] Bridge command not found: %s", cmd)
+            return MockDisplay()
+
+        if transport == "unix":
+            unix_sock = os.environ.get("ALEXA_DISPLAY_UNIX_SOCKET", _ROUTER_UNIX_SOCKET)
+            if os.path.exists(unix_sock):
+                try:
+                    logger.debug("[display] Bridge Unix socket: %s", unix_sock)
+                    return BridgeDisplay(unix_socket=unix_sock)
+                except Exception:
+                    logger.warning("[display] Bridge Unix socket unavailable")
+            else:
+                logger.warning("[display] Bridge Unix socket not found: %s", unix_sock)
+            return MockDisplay()
+
+        if transport == "tcp":
+            host = os.environ.get("ALEXA_DISPLAY_HOST", _ROUTER_HOST)
+            port = int(os.environ.get("ALEXA_DISPLAY_PORT", str(_ROUTER_PORT)))
+            try:
+                logger.debug("[display] Bridge TCP: %s:%d", host, port)
+                return BridgeDisplay(host=host, port=port)
+            except Exception:
+                logger.warning("[display] Bridge TCP unavailable")
+            return MockDisplay()
+
         cmd = os.environ.get("ALEXA_DISPLAY_CMD", _BRIDGE_CMD_DEFAULT)
         if shutil.which(cmd.split()[0]) if " " in cmd else shutil.which(cmd):
             try:
@@ -1047,7 +1109,18 @@ def get_display_backend(backend: str = "auto") -> DisplayBackend:
             except Exception:
                 if backend == "bridge":
                     logger.warning(
-                        "[display] Bridge subprocess unavailable — trying TCP"
+                        "[display] Bridge subprocess unavailable — trying Unix socket"
+                    )
+
+        unix_sock = os.environ.get("ALEXA_DISPLAY_UNIX_SOCKET", _ROUTER_UNIX_SOCKET)
+        if os.path.exists(unix_sock):
+            try:
+                logger.debug("[display] Trying bridge Unix socket: %s", unix_sock)
+                return BridgeDisplay(unix_socket=unix_sock)
+            except Exception:
+                if backend == "bridge":
+                    logger.warning(
+                        "[display] Bridge Unix socket unavailable — trying TCP"
                     )
 
         try:
