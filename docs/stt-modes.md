@@ -88,7 +88,7 @@ Triggers without `patterns` behave exactly as before this feature existed.
 
 ## Speaking patterns
 
-The wake-word detection in stage 1 supports three interaction styles.
+The wake-word detection in stage 1 supports three interaction styles. These modes work seamlessly whether `vosk_grammar` is enabled or not, because in grammar mode the system compiles both your wake words and command triggers into the allowed vocabulary.
 
 ### Mode 1 — wake word → beep → command (separate utterances)
 
