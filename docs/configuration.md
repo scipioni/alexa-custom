@@ -8,7 +8,7 @@ conf/
   secrets.yaml         credentials — git-ignored, restart required on change
   actions/
     system.yaml        startup message + system-level triggers (loaded first)
-    user.yaml          your custom triggers (or any *.yaml file)
+    user.yaml          your custom wake words and triggers (or any *.yaml file)
     learned.yaml       auto-created by the llm_learn action
 ```
 
@@ -63,6 +63,8 @@ wake_words:
     # aliases: ["ehi galileo", "hey galileo"]
   - word: assistente
 ```
+
+Additional wake word groups can also be defined in `conf/actions/*.yaml` files (e.g. `conf/actions/user.yaml`) via the same `wake_words:` key. Groups are merged in file-load order; duplicate ids (same `id:` or `word:`) are skipped with a warning.
 
 ### Recognition
 
@@ -236,17 +238,49 @@ on_startup:
     text: Sistema pronto
     lang: it-IT
 
+# Optional: define extra wake word groups in any action file.
+# Groups whose id already exists in conf/config.yaml are skipped.
+wake_words:
+  - word: "aiuto"
+    id: help
+    aliases: ["aiutami"]
+
 triggers:
+  # No wake_words field → global (active after any wake word)
   - phrase: che ora è
     actions:
       - type: shell
         command: date "+Sono le %H e %M"
         capture: true         # speak the command output via TTS
 
+  # wake_words: [global] — explicit global, identical to absent
   - phrase: manda messaggio
+    wake_words: [global]
     actions:
       - type: telegram
         message: Chiamata in arrivo
+
+  # wake_words: [] — direct match (fires from stage-1 STT, no wake word needed)
+  - phrase: chiama Stefano
+    wake_words: []
+    actions:
+      - type: livekit_join
+
+  # wake_words: [id] — scoped to one wake word group
+  - phrase: chiama assistenza
+    wake_words: [help]
+    actions:
+      - type: livekit_join
+
+  # wake_words: [id1, id2] — scoped to multiple groups
+  - phrase: accendi la luce
+    wake_words: [galileo, help]
+    patterns:
+      - "accend* * luc*"
+    actions:
+      - type: mqtt_publish
+        topic: home/light/set
+        payload: "ON"
 
   # Word-glob patterns: matched before fuzzy phrase scoring.
   # A pattern hit is definitive — it selects this trigger immediately.
@@ -264,15 +298,16 @@ triggers:
       - type: log
         params:
           message: "luci on"
-
-wake_triggers:               # triggers bound to a specific wake word
-  galileo:
-    - phrase: chiama stefano
-      actions:
-        - type: livekit_join
 ```
 
-`wake_triggers` are merged per wake word across all action files. Triggers not bound to a wake word are global (match after any wake word).
+Triggers are routed by the `wake_words` field at load time:
+
+| `wake_words` value | Behaviour |
+|-------------------|-----------|
+| absent (default)  | global — active after any wake word |
+| `[global]`        | same as absent, explicit |
+| `[]`              | direct match — fires from stage-1 STT without a wake word |
+| `[id1, id2]`      | scoped — active only after the named wake word group(s) |
 
 ### Action types
 
@@ -306,7 +341,9 @@ wake_triggers:               # triggers bound to a specific wake word
 The old root-level `config.yaml` with a top-level `env:` block is no longer supported. To migrate:
 
 1. Move credentials from the old `env:` block into `conf/secrets.yaml`.
-2. Move `triggers:` and `wake_triggers:` into `conf/actions/user.yaml`.
-3. Move the remaining settings (audio, stt, tts, mqtt, etc.) into `conf/config.yaml` using the nested block format shown above.
+2. Move `triggers:` into `conf/actions/user.yaml`. Replace any `direct_match: true` flags with `wake_words: []`.
+3. Move `wake_triggers:` entries into `conf/actions/user.yaml` as triggers with a `wake_words: [<id>]` field.
+4. Move extra wake word groups from `conf/user.yaml` (if it exists) into a `wake_words:` key in `conf/actions/user.yaml`, then delete `conf/user.yaml`.
+5. Move the remaining settings (audio, stt, tts, mqtt, etc.) into `conf/config.yaml` using the nested block format shown above.
 
-See `conf.example/config.yaml` and `conf.example/secrets.yaml` for the full structure.
+See `conf.example/config.yaml`, `conf.example/secrets.yaml`, and `conf.example/actions/user.yaml` for the full structure.

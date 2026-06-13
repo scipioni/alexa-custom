@@ -221,6 +221,7 @@ def run_stt_worker(
                             for t in g.triggers
                         ),
                         tuple(t.phrase for t in current_config.triggers),
+                        tuple(t.phrase for t in current_config.direct_triggers),
                     )
                 )
                 if current_config.stt.stage1.vosk_grammar
@@ -596,7 +597,11 @@ def _recognition_loop(
     def _make_stage1_recognizer() -> "vosk.KaldiRecognizer":
         if vosk_use_grammar:
             rec = vosk.KaldiRecognizer(
-                vosk_model, 16000, _grammar_json_all(config.wake_words, config.triggers)
+                vosk_model,
+                16000,
+                _grammar_json_all(
+                    config.wake_words, config.triggers, config.direct_triggers
+                ),
             )
         else:
             rec = vosk.KaldiRecognizer(vosk_model, 16000)
@@ -652,6 +657,8 @@ def _recognition_loop(
             stage1_backend.reset()
             _reset_stage1_state()
 
+    _dispatch_ended_at: list[float] = [0.0]
+
     for data in _iter_gated_audio(
         proc,
         channels,
@@ -659,6 +666,7 @@ def _recognition_loop(
         on_playback_end=_on_playback_end,
         name="two-stage",
         post_playback_ms=config.audio.post_playback_ms,
+        dispatch_ended_at=_dispatch_ended_at,
     ):
         if data is None:
             continue
@@ -751,6 +759,7 @@ def _recognition_loop(
                         vad_silence_ms=_eff_vad_ms,
                     )
                     _drain_pipe(proc)
+                    _dispatch_ended_at[0] = time.monotonic()
                     if on_stt_event:
                         on_stt_event(
                             "listening",
@@ -812,6 +821,7 @@ def _recognition_loop(
                                 vad_silence_ms=_eff_vad_ms,
                             )
                             _drain_pipe(proc)
+                            _dispatch_ended_at[0] = time.monotonic()
                             if on_stt_event:
                                 on_stt_event(
                                     "listening",
@@ -940,6 +950,7 @@ def _recognition_loop(
                     f"was_gated={was_gated}"
                 )
                 _drain_pipe(proc)
+                _dispatch_ended_at[0] = time.monotonic()
                 _reset_stage1_state()
                 stage1 = _make_stage1_recognizer()
                 if on_stt_event:
@@ -955,13 +966,23 @@ def _recognition_loop(
                     )
             else:
                 if vosk_use_grammar and vosk_text and config.wake_words:
-                    _direct_triggers = [t for t in config.triggers if t.direct_match]
+                    _direct_triggers = config.direct_triggers
                     if _direct_triggers:
-                        _dm_trigger = match_trigger(
-                            vosk_text,
-                            _direct_triggers,
-                            algorithm=config.recognition.matching_algorithm,
-                            threshold=config.recognition.matching_threshold,
+                        _vosk_words = len(vosk_text.split())
+                        _dm_candidates = [
+                            t
+                            for t in _direct_triggers
+                            if _vosk_words >= len(normalize_text(t.phrase).split())
+                        ]
+                        _dm_trigger = (
+                            match_trigger(
+                                vosk_text,
+                                _dm_candidates,
+                                algorithm=config.recognition.matching_algorithm,
+                                threshold=config.recognition.matching_threshold,
+                            )
+                            if _dm_candidates
+                            else None
                         )
                         if _dm_trigger is not None:
                             logger.info(
@@ -987,8 +1008,10 @@ def _recognition_loop(
                                 dispatch_loop=dispatch_loop,
                                 vad_silence_ms=_eff_vad_ms,
                                 pre_transcript=vosk_text,
+                                pre_trigger=_dm_trigger,
                             )
                             _drain_pipe(proc)
+                            _dispatch_ended_at[0] = time.monotonic()
                             if on_stt_event:
                                 on_stt_event(
                                     "listening",
@@ -1049,6 +1072,7 @@ def _recognition_loop(
                             vad_silence_ms=_eff_vad_ms,
                         )
                         _drain_pipe(proc)
+                        _dispatch_ended_at[0] = time.monotonic()
                         stage1_last_speech_t = 0.0
                         stage1_speech_ms = 0.0
                         if on_stt_event:
@@ -1084,24 +1108,33 @@ def _wake_detected(
     dispatch_loop: asyncio.AbstractEventLoop | None = None,
     vad_silence_ms: int | None = None,
     pre_transcript: str = "",
+    pre_trigger: "Trigger | None" = None,
 ) -> None:
-    logger.info(f"Wake word detected: '{wake_group.word}'")
-    metrics.inc("wake_detections")
-    if on_stt_event:
-        on_stt_event(
-            "wake",
-            {"word": wake_group.word, "timeout": config.recognition.command_timeout},
-        )
+    if pre_trigger is not None:
+        logger.info(f"Direct trigger: '{pre_trigger.phrase}'")
+        if on_stt_event:
+            on_stt_event("direct", {"phrase": pre_trigger.phrase})
+    else:
+        logger.info(f"Wake word detected: '{wake_group.word}'")
+        metrics.inc("wake_detections")
+        if on_stt_event:
+            on_stt_event(
+                "wake",
+                {
+                    "word": wake_group.word,
+                    "timeout": config.recognition.command_timeout,
+                },
+            )
+        try:
+            play_wake_beep(config.recognition.wake_tone)
+        except Exception as e:
+            logger.debug(f"Wake beep failed: {e}")
     if mqtt_client:
         mqtt_client.publish_threadsafe(
             f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
             "listening",
             loop=loop,
         )
-    try:
-        play_wake_beep(config.recognition.wake_tone)
-    except Exception as e:
-        logger.debug(f"Wake beep failed: {e}")
 
     if pre_transcript:
         logger.info(f"Inline command from stage-1: '{pre_transcript}'")
@@ -1141,13 +1174,16 @@ def _wake_detected(
             loop=loop,
         )
 
-    triggers = _resolve_triggers(wake_group, config.triggers)
-    trigger = match_trigger(
-        transcript,
-        triggers,
-        algorithm=config.recognition.matching_algorithm,
-        threshold=config.recognition.matching_threshold,
-    )
+    if pre_trigger is not None:
+        trigger = pre_trigger
+    else:
+        triggers = _resolve_triggers(wake_group, config.triggers)
+        trigger = match_trigger(
+            transcript,
+            triggers,
+            algorithm=config.recognition.matching_algorithm,
+            threshold=config.recognition.matching_threshold,
+        )
     if trigger is None:
         if on_stt_event:
             on_stt_event("nomatch", {"transcript": transcript})

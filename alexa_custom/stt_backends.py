@@ -373,7 +373,9 @@ def _grammar_json(groups: list[WakeWordGroup]) -> str:
 
 
 def _grammar_json_all(
-    wake_words: list[WakeWordGroup], triggers: list["Trigger"]
+    wake_words: list[WakeWordGroup],
+    triggers: list["Trigger"],
+    direct_triggers: list["Trigger"] | None = None,
 ) -> str:
     """Build a grammar string encompassing wake words and action triggers."""
     phrases = []
@@ -390,7 +392,11 @@ def _grammar_json_all(
         phrases.append(t.phrase)
         phrases.extend(t.aliases)
 
-    # Optional: deduplicate
+    # Add direct-match triggers (wake_words: [])
+    for t in direct_triggers or []:
+        phrases.append(t.phrase)
+        phrases.extend(t.aliases)
+
     phrases = list(set(phrases))
     return _phrases_to_grammar(phrases)
 

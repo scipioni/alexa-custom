@@ -806,7 +806,7 @@ class WebServer:
             "phrase": t.phrase,
             "aliases": t.aliases,
             "actions": WebServer._serialize_action_list(t.actions),
-            "direct_match": t.direct_match,
+            "direct_match": t.wake_words is not None and len(t.wake_words) == 0,
         }
 
     @staticmethod
@@ -847,7 +847,10 @@ class WebServer:
 
         result: dict[str, Any] = {
             "wake_words": ww,
-            "global_triggers": [self._serialize_trigger(t) for t in config.triggers],
+            "global_triggers": [
+                self._serialize_trigger(t)
+                for t in config.triggers + config.direct_triggers
+            ],
         }
 
         if config.recognition is not None:

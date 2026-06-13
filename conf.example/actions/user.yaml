@@ -1,69 +1,62 @@
-# conf/actions/user.yaml — user-defined triggers
+# conf/actions/user.yaml — user-defined triggers and wake words
 #
 # Edit freely. This file is hot-reloaded every ~config_poll_interval seconds.
 # The learning agent (llm_learn) appends new commands to conf/actions/learned.yaml.
 #
 # Schema:
-#   triggers:        global fallback triggers (active for all wake words)
-#   wake_triggers:   per-wake-word trigger lists (keyed by wake word string)
+#   wake_words:      extra wake word groups (merged with conf/config.yaml)
+#   triggers:        flat list of triggers; scope set via optional 'wake_words' field:
+#                      absent            → active after any wake word (global)
+#                      wake_words: []    → direct match (no wake word required)
+#                      wake_words: [id]  → active only after the named wake word group
 
 # ---------------------------------------------------------------------------
-# Global triggers — active for every wake word group
+# Extra wake word groups (optional)
+# Define groups here instead of a separate conf/user.yaml file.
+# Groups whose id already exists in conf/config.yaml are skipped.
+# ---------------------------------------------------------------------------
+wake_words:
+  - word: "aiuto"
+    id: help          # stable key used in wake_words trigger scoping (defaults to word)
+    aliases:
+      - "aiutami"
+    skip_unmatched_inline: true
+
+# ---------------------------------------------------------------------------
+# Triggers — active for every wake word group (no wake_words field = global)
 # ---------------------------------------------------------------------------
 triggers:
-  - phrase: "test"
-    actions:
-      - type: log
-        message: "command recognition working"
+  # - phrase: "test"
+  #   wake_words: [help]
+  #   actions:
+  #     - type: log
+  #       message: "command recognition working"
 
-  - phrase: "di qualcosa"
-    actions:
-      - type: say
-        text: "Ciao dal sistema vocale"
-        lang: "it-IT"
+  # - phrase: "di qualcosa"
+  #   actions:
+  #     - type: say
+  #       text: "Ciao dal sistema vocale"
+  #       lang: "it-IT"
 
-  - phrase: "che tempo farà domani ?"
-    direct_match: true
-    patterns:
-      - "che tempo * domani"
-    actions:
-      - type: meteo
-        params:
-          city: "Verona"        # Default fallback city if not spoken in the transcript
-          days: "domani"      # Default fallback day ("oggi" / "domani") if not spoken in the transcript
-          lang: "it-IT"       # Language for spoken feedback ("it-IT" or "en-US")
-          # Custom coordinates can be specified directly to bypass city lookup:
-          # latitude: 41.8919
-          # longitude: 12.5113
 
-  - phrase: "che tempo farà oggi ?"
-    direct_match: true
-    patterns:
-      - "che tempo * oggi"
-    actions:
-      - type: meteo
-        params:
-          city: "Verona"        # Default fallback city if not spoken in the transcript
-          days: "oggi"      # Default fallback day ("oggi" / "domani") if not spoken in the transcript
+  # - phrase: "suona"
+  #   actions:
+  #     - type: tone
+  #       name: info
 
-  - phrase: "suona"
-    actions:
-      - type: tone
-        name: info
+  # - phrase: "aggiorna"
+  #   actions:
+  #     - type: shell
+  #       command: "systemctl --user restart alexa-client"
 
-  - phrase: "aggiorna"
-    actions:
-      - type: shell
-        command: "systemctl --user restart alexa-client"
+  # - phrase: "connettiti"
+  #   actions:
+  #     - type: livekit_join
 
-  - phrase: "connettiti"
-    actions:
-      - type: livekit_join
-
-  - phrase: "manda messaggio"
-    actions:
-      - type: telegram
-        text: "Messaggio vocale ricevuto"
+  # - phrase: "manda messaggio"
+  #   actions:
+  #     - type: telegram
+  #       text: "Messaggio vocale ricevuto"
 
   - phrase: "accendi la luce"
     patterns:
@@ -84,74 +77,74 @@ triggers:
 #   luci       = token letterale — abbinato foneticamente (luce ≈ luci)
 # ---------------------------------------------------------------------------
 
-  # Luci
-  - phrase: "spegni le luci"
-    patterns:
-      - "spegn* * luc*"
-    actions:
-      - type: mqtt_publish
-        topic: "home/light/set"
-        payload: "OFF"
+  # # Luci
+  # - phrase: "spegni le luci"
+  #   patterns:
+  #     - "spegn* * luc*"
+  #   actions:
+  #     - type: mqtt_publish
+  #       topic: "home/light/set"
+  #       payload: "OFF"
 
-  # Riscaldamento
-  - phrase: "alza il riscaldamento"
-    patterns:
-      - "alz* * riscaldament*"
-      - "aumenta * temperatura"
-      - "ho * freddo"
-    actions:
-      - type: mqtt_publish
-        topic: "home/climate/heat"
-        payload: "UP"
+  # # Riscaldamento
+  # - phrase: "alza il riscaldamento"
+  #   patterns:
+  #     - "alz* * riscaldament*"
+  #     - "aumenta * temperatura"
+  #     - "ho * freddo"
+  #   actions:
+  #     - type: mqtt_publish
+  #       topic: "home/climate/heat"
+  #       payload: "UP"
 
-  - phrase: "abbassa il riscaldamento"
-    patterns:
-      - "abbass* * riscaldament*"
-      - "diminuisc* * temperatura"
-      - "ho * caldo"
-    actions:
-      - type: mqtt_publish
-        topic: "home/climate/heat"
-        payload: "DOWN"
+  # - phrase: "abbassa il riscaldamento"
+  #   patterns:
+  #     - "abbass* * riscaldament*"
+  #     - "diminuisc* * temperatura"
+  #     - "ho * caldo"
+  #   actions:
+  #     - type: mqtt_publish
+  #       topic: "home/climate/heat"
+  #       payload: "DOWN"
 
-  # Tapparelle
-  - phrase: "alza le tapparelle"
-    patterns:
-      - "alz* * tapparell*"
-      - "apr* * tapparell*"
-    actions:
-      - type: mqtt_publish
-        topic: "home/shutters"
-        payload: "UP"
+  # # Tapparelle
+  # - phrase: "alza le tapparelle"
+  #   patterns:
+  #     - "alz* * tapparell*"
+  #     - "apr* * tapparell*"
+  #   actions:
+  #     - type: mqtt_publish
+  #       topic: "home/shutters"
+  #       payload: "UP"
 
-  - phrase: "abbassa le tapparelle"
-    patterns:
-      - "abbass* * tapparell*"
-      - "chiud* * tapparell*"
-    actions:
-      - type: mqtt_publish
-        topic: "home/shutters"
-        payload: "DOWN"
+  # - phrase: "abbassa le tapparelle"
+  #   patterns:
+  #     - "abbass* * tapparell*"
+  #     - "chiud* * tapparell*"
+  #   actions:
+  #     - type: mqtt_publish
+  #       topic: "home/shutters"
+  #       payload: "DOWN"
 
-  # Televisione
-  - phrase: "accendi la tv"
-    patterns:
-      - "accend* * tv"
-      - "accend* * televisor*"
-      - "mett* * tv"
-    actions:
-      - type: mqtt_publish
-        topic: "home/tv"
-        payload: "ON"
+  # # Televisione
+  # - phrase: "accendi la tv"
+  #   patterns:
+  #     - "accend* * tv"
+  #     - "accend* * televisor*"
+  #     - "mett* * tv"
+  #   actions:
+  #     - type: mqtt_publish
+  #       topic: "home/tv"
+  #       payload: "ON"
 
-  - phrase: "spegni la tv"
-    patterns:
-      - "spegn* * tv"
-      - "spegn* * televisor*"
-    actions:
-      - type: mqtt_publish
-        topic: "home/tv"
-        payload: "OFF"
+  # - phrase: "spegni la tv"
+  #   patterns:
+  #     - "spegn* * tv"
+  #     - "spegn* * televisor*"
+  #   actions:
+  #     - type: mqtt_publish
+  #       topic: "home/tv"
+  #       payload: "OFF"
 
 # ---------------------------------------------------------------------------
 # Assistenza anziani — pattern ampi per massimizzare il riconoscimento
@@ -160,101 +153,102 @@ triggers:
 # positivo raro che perdere una richiesta di aiuto reale.
 # ---------------------------------------------------------------------------
 
-  # Emergenza medica
-  - phrase: "chiama il medico"
-    patterns:
-      - "chiam* * medico"
-      - "ho * bisogno * medico"
-      - "serve * medico"
-    actions:
-      - type: telegram
-        text: "⚠️ Richiesta di aiuto: chiamare il medico"
-      - type: say
-        text: "Sto avvisando i tuoi familiari."
+  # # Emergenza medica
+  # - phrase: "chiama il medico"
+  #   patterns:
+  #     - "chiam* * medico"
+  #     - "ho * bisogno * medico"
+  #     - "serve * medico"
+  #   actions:
+  #     - type: telegram
+  #       text: "⚠️ Richiesta di aiuto: chiamare il medico"
+  #     - type: say
+  #       text: "Sto avvisando i tuoi familiari."
 
-  - phrase: "chiama i soccorsi"
-    patterns:
-      - "chiam* * carabinier*"
-      - "chiam* * polizia"
-      - "chiam* * emergenza"
-      - "chiam* * soccorso"
-    actions:
-      - type: telegram
-        text: "🚨 Emergenza: richiesta aiuto urgente"
-      - type: say
-        text: "Sto chiamando i soccorsi."
+  # - phrase: "chiama i soccorsi"
+  #   patterns:
+  #     - "chiam* * carabinier*"
+  #     - "chiam* * polizia"
+  #     - "chiam* * emergenza"
+  #     - "chiam* * soccorso"
+  #   actions:
+  #     - type: telegram
+  #       text: "🚨 Emergenza: richiesta aiuto urgente"
+  #     - type: say
+  #       text: "Sto chiamando i soccorsi."
 
-  # Non sto bene
-  - phrase: "non sto bene"
-    patterns:
-      - "non * bene"
-      - "sto * male"
-      - "mi * male"
-    actions:
-      - type: telegram
-        text: "⚠️ Non si sente bene"
-      - type: say
-        text: "Ho avvisato i tuoi familiari. Come posso aiutarti?"
+  # # Non sto bene
+  # - phrase: "non sto bene"
+  #   patterns:
+  #     - "non * bene"
+  #     - "sto * male"
+  #     - "mi * male"
+  #   actions:
+  #     - type: telegram
+  #       text: "⚠️ Non si sente bene"
+  #     - type: say
+  #       text: "Ho avvisato i tuoi familiari. Come posso aiutarti?"
 
-  # Caduta
-  - phrase: "sono caduto"
-    patterns:
-      - "son* cadat*"
-      - "son* cadut*"
-      - "mi son* fat* male"
-    actions:
-      - type: telegram
-        text: "🚨 Possibile caduta — verificare immediatamente"
-      - type: say
-        text: "Avviso i tuoi familiari. Cerca di non muoverti."
+  # # Caduta
+  # - phrase: "sono caduto"
+  #   patterns:
+  #     - "son* cadat*"
+  #     - "son* cadut*"
+  #     - "mi son* fat* male"
+  #   actions:
+  #     - type: telegram
+  #       text: "🚨 Possibile caduta — verificare immediatamente"
+  #     - type: say
+  #       text: "Avviso i tuoi familiari. Cerca di non muoverti."
 
-  # Chiamata familiare
-  - phrase: "chiama la famiglia"
-    patterns:
-      - "chiam* * figli*"
-      - "chiam* * famiglia"
-      - "voglio * parlar* * figli*"
-    actions:
-      - type: livekit_join
+  # # Chiamata familiare
+  # - phrase: "chiama la famiglia"
+  #   patterns:
+  #     - "chiam* * figli*"
+  #     - "chiam* * famiglia"
+  #     - "voglio * parlar* * figli*"
+  #   actions:
+  #     - type: livekit_join
 
-  # Medicine
-  - phrase: "ho preso le medicine"
-    patterns:
-      - "pres* * medicin*"
-      - "pres* * farmac*"
-      - "pres* * pastiglie"
-    actions:
-      - type: mqtt_publish
-        topic: "care/medication/taken"
-        payload: "true"
-      - type: say
-        text: "Perfetto, ho segnato che hai preso le medicine."
+  # # Medicine
+  # - phrase: "ho preso le medicine"
+  #   patterns:
+  #     - "pres* * medicin*"
+  #     - "pres* * farmac*"
+  #     - "pres* * pastiglie"
+  #   actions:
+  #     - type: mqtt_publish
+  #       topic: "care/medication/taken"
+  #       payload: "true"
+  #     - type: say
+  #       text: "Perfetto, ho segnato che hai preso le medicine."
 
-  - phrase: "non ho preso le medicine"
-    patterns:
-      - "non * pres* * medicin*"
-      - "dimentica* * medicin*"
-    actions:
-      - type: say
-        text: "Ti ricordo di prendere le medicine adesso."
-      - type: mqtt_publish
-        topic: "care/medication/missed"
-        payload: "true"
+  # - phrase: "non ho preso le medicine"
+  #   patterns:
+  #     - "non * pres* * medicin*"
+  #     - "dimentica* * medicin*"
+  #   actions:
+  #     - type: say
+  #       text: "Ti ricordo di prendere le medicine adesso."
+  #     - type: mqtt_publish
+  #       topic: "care/medication/missed"
+  #       payload: "true"
 
-  # Check-in benessere
-  - phrase: "sto bene grazie"
-    patterns:
-      - "sto * bene"
-      - "mi sent* * bene"
-      - "tutto * bene"
-    actions:
-      - type: mqtt_publish
-        topic: "care/checkin/status"
-        payload: "ok"
-      - type: say
-        text: "Sono contento. Buona giornata!"
+  # # Check-in benessere
+  # - phrase: "sto bene grazie"
+  #   patterns:
+  #     - "sto * bene"
+  #     - "mi sent* * bene"
+  #     - "tutto * bene"
+  #   actions:
+  #     - type: mqtt_publish
+  #       topic: "care/checkin/status"
+  #       payload: "ok"
+  #     - type: say
+  #       text: "Sono contento. Buona giornata!"
+  
   - phrase: "chiama Stefano"
-    direct_match: true
+    wake_words: []
     actions:
       - type: ask
         text: "Vuoi chiamare stefano?"
@@ -276,31 +270,28 @@ triggers:
           - type: say
             text: "Non ho capito"
 
-# ---------------------------------------------------------------------------
-# Per-wake-word triggers
-# ---------------------------------------------------------------------------
-wake_triggers:
-  help:
-    - phrase: "chiama assistenza"
-      aliases: ["chiama","aiuto"]
-      actions:
-        - type: ask
-          text: "Vuoi chiamare assistenza ?"
-          lang: "it-IT"
-          timeout: 5.0
-          on_reply:
-            - phrase: "si"
-              actions:
-                - type: say
-                  text: "Sto chiamando l'assistenza"
-                - type: livekit_join
-                - type: telegram
-                  text: "Collegati con casa <room>"
-            - phrase: "no"
-              actions:
-                - type: say
-                  text: "Chiamata annullata"
-          on_else:
-            - type: say
-              text: "Non ho capito"
+  # Trigger scoped to the 'help' wake word group only
+  - phrase: "chiama assistenza"
+    wake_words: [help]
+    aliases: ["chiama","aiuto"]
+    actions:
+      - type: ask
+        text: "Vuoi chiamare assistenza ?"
+        lang: "it-IT"
+        timeout: 5.0
+        on_reply:
+          - phrase: "si"
+            actions:
+              - type: say
+                text: "Sto chiamando l'assistenza"
+              - type: livekit_join
+              - type: telegram
+                text: "Collegati con casa <room>"
+          - phrase: "no"
+            actions:
+              - type: say
+                text: "Chiamata annullata"
+        on_else:
+          - type: say
+            text: "Non ho capito"
 

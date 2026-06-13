@@ -149,16 +149,35 @@ setup/            systemd service unit
 
 ## Configuration
 
-Single `config.yaml` — hot-reloaded while the daemon is running:
+Split across two locations — both hot-reloaded while the daemon is running:
 
+`conf/config.yaml` — system settings and wake words:
 ```yaml
-env:
-  LIVEKIT_URL: wss://...
-  LIVEKIT_API_KEY: ...
-wake_words: [galileo]
-command_timeout: 3.0
+wake_words:
+  - word: galileo
+    id: galileo
+recognition:
+  command_timeout: 3.0
+```
+
+`conf/actions/user.yaml` — triggers (and optional extra wake word groups):
+```yaml
+wake_words:           # optional extra groups (merged with config.yaml)
+  - word: "aiuto"
+    id: help
+
 triggers:
-  - phrase: "chiama"
+  - phrase: "chiama"             # no wake_words → global (after any wake word)
+    actions:
+      - type: livekit_join
+
+  - phrase: "chiama Stefano"
+    wake_words: []               # direct match — fires without wake word
+    actions:
+      - type: livekit_join
+
+  - phrase: "chiama assistenza"
+    wake_words: [help]           # scoped to the 'help' wake word group only
     actions:
       - type: livekit_join
 ```
