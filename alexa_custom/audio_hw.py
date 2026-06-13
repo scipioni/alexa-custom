@@ -45,38 +45,63 @@ _UDEV_PATH = "/etc/udev/rules.d/89-alsa-usb-volume.rules"
 _STATE_FILE = "conf/state.yaml"
 
 
-def save_volume_config(volume: float) -> None:
-    """Save volume to state.yaml for persistence across restarts."""
+def _load_state_file() -> dict:
+    """Read conf/state.yaml, return empty dict on any error."""
+    import yaml
+
+    state_file = Path(_STATE_FILE)
+    if not state_file.exists():
+        return {}
+    try:
+        with open(state_file) as f:
+            return yaml.safe_load(f) or {}
+    except Exception as e:
+        logger.warning("Failed to read %s: %s", _STATE_FILE, e)
+        return {}
+
+
+def _save_state_file(state: dict) -> None:
+    """Write dict to conf/state.yaml."""
+    import yaml
+
     state_file = Path(_STATE_FILE)
     state_file.parent.mkdir(parents=True, exist_ok=True)
-
     try:
-        import yaml
-
-        state = {"output_volume": volume}
         with open(state_file, "w") as f:
             yaml.safe_dump(state, f)
-        logger.info(f"Saved volume to {_STATE_FILE}: {volume:.0%}")
-
     except Exception as e:
-        logger.warning("Failed to save volume to %s: %s", _STATE_FILE, e)
+        logger.warning("Failed to write %s: %s", _STATE_FILE, e)
+
+
+def save_volume_config(volume: float) -> None:
+    """Save output volume to state.yaml for persistence across restarts."""
+    state = _load_state_file()
+    state["output_volume"] = volume
+    _save_state_file(state)
+    logger.info(f"Saved volume to {_STATE_FILE}: {volume:.0%}")
 
 
 def load_volume_state() -> float | None:
-    """Load persisted volume from state.yaml, returns None if no state file."""
-    state_file = Path(_STATE_FILE)
-    if not state_file.exists():
-        return None
-    try:
-        import yaml
+    """Load persisted output volume from state.yaml, returns None if absent."""
+    volume = _load_state_file().get("output_volume")
+    if volume is not None and 0.0 <= volume <= 1.0:
+        return float(volume)
+    return None
 
-        with open(state_file) as f:
-            state = yaml.safe_load(f) or {}
-        volume = state.get("output_volume")
-        if volume is not None and 0.0 <= volume <= 1.0:
-            return volume
-    except Exception as e:
-        logger.warning("Failed to load volume from %s: %s", _STATE_FILE, e)
+
+def save_input_gain_config(gain: float) -> None:
+    """Save calibrated input gain to state.yaml for persistence across restarts."""
+    state = _load_state_file()
+    state["input_gain"] = gain
+    _save_state_file(state)
+    logger.info(f"Saved input gain to {_STATE_FILE}: {gain:.2f}")
+
+
+def load_input_gain_state() -> float | None:
+    """Load persisted input gain from state.yaml, returns None if absent."""
+    gain = _load_state_file().get("input_gain")
+    if gain is not None and gain >= 0.0:
+        return float(gain)
     return None
 
 
@@ -92,6 +117,10 @@ def configure(cfg) -> None:
     state_vol = load_volume_state()
     if state_vol is not None:
         _state.output_volume = state_vol
+
+    state_gain = load_input_gain_state()
+    if state_gain is not None:
+        _state.input_gain = state_gain
 
 
 def get_output_volume() -> float:

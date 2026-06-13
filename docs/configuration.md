@@ -349,6 +349,28 @@ Triggers are routed by the `wake_words` field at load time:
 | `log` | `message` | Log a message (debug use) |
 | `llm_ask` | — | Send the spoken command to the LLM and speak the reply |
 | `llm_learn` | — | Interactive voice wizard to teach a new trigger |
+| `calibrate_input_gain` | — | Adaptive 5-probe mic gain calibration (see below) |
+
+### `calibrate_input_gain`
+
+Interactive calibration that finds the optimal microphone input gain without manual tuning. The agent speaks a sentence and the user repeats it; STT accuracy is scored at each gain level. After 5 probes (3 bracket + 2 zoom) the best gain is applied and saved to `conf/state.yaml`.
+
+```yaml
+triggers:
+  - phrase: "calibra microfono"
+    wake_words: []
+    actions:
+      - type: calibrate_input_gain
+        params:
+          sentence: "uno due tre quattro cinque"   # phrase user repeats (default)
+          gain_low: 0.4      # lower bound of probe range (default)
+          gain_mid: 0.7      # middle probe (default)
+          gain_high: 1.2     # upper bound of probe range (default)
+          listen_timeout: 6.0  # seconds to wait for user speech per probe (default)
+          settle_ms: 500     # ms to wait after each gain change (default)
+```
+
+The calibrated gain persists across restarts and overrides `config.yaml`'s `audio.input_gain` on next startup.
 
 ---
 
