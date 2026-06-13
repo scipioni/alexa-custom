@@ -34,6 +34,7 @@ class Trigger:
     actions: list[ActionEntry]
     aliases: list[str] = field(default_factory=list)
     patterns: list[str] = field(default_factory=list)
+    direct_match: bool = False
 
 
 @dataclass
@@ -345,8 +346,15 @@ def _parse_triggers(raw_triggers: list[Any], path_prefix: str) -> list[Trigger]:
         if not isinstance(raw_patterns, list):
             raise ConfigError(f"config:{path_prefix}[{i}].patterns must be a list")
         patterns = [str(p) for p in raw_patterns if p]
+        direct_match = bool(t.get("direct_match", False))
         triggers.append(
-            Trigger(phrase=phrase, actions=actions, aliases=aliases, patterns=patterns)
+            Trigger(
+                phrase=phrase,
+                actions=actions,
+                aliases=aliases,
+                patterns=patterns,
+                direct_match=direct_match,
+            )
         )
     return triggers
 
