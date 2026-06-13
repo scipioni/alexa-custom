@@ -247,6 +247,23 @@ triggers:
       - type: telegram
         message: Chiamata in arrivo
 
+  # Word-glob patterns: matched before fuzzy phrase scoring.
+  # A pattern hit is definitive — it selects this trigger immediately.
+  # Token syntax:
+  #   foo*       matches a transcript word that STARTS WITH "foo"
+  #              (accend* → accendi / accenda / accendere / …)
+  #   *          (standalone) matches any number of intervening words, including zero
+  #   literal    matched phonetically — "luci" still fires if STT hears "luce"
+  # Tokens are aligned in order; there is no "any order" operator.
+  - phrase: accendi le luci        # fuzzy fallback phrase (still used if no pattern matches)
+    patterns:
+      - "accend* * luci"           # accendi / accenda / accendere … <any words> … luci / luce
+      - "accend* luci"             # no gap: "accendimi luci"
+    actions:
+      - type: log
+        params:
+          message: "luci on"
+
 wake_triggers:               # triggers bound to a specific wake word
   galileo:
     - phrase: chiama stefano

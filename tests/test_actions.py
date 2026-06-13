@@ -2,7 +2,9 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from alexa_custom.actions import (
     ActionRegistry,
+    _match_glob_pattern,
     _run_action,
+    _trigger_matches_patterns,
     italian_phonetic,
     match_trigger,
 )
@@ -461,3 +463,108 @@ class TestSetVolumeFromTranscript:
             mock_set.assert_called_once()
             call_vol = mock_set.call_args[0][2]
             assert abs(call_vol - 0.0) < 0.001
+
+
+# ── word-glob pattern matching ───────────────────────────────────────────────
+
+
+def _pattern_trigger(phrase: str, patterns: list[str]) -> Trigger:
+    return Trigger(phrase=phrase, actions=[], patterns=patterns)
+
+
+class TestGlobPatternMatching:
+    # 4.1 prefix wildcard + word gap
+    def test_prefix_wildcard_with_gap(self):
+        assert _match_glob_pattern("accend* * luci", "accendi le luci del salotto")
+
+    def test_prefix_wildcard_direct(self):
+        assert _match_glob_pattern("accend* * luci", "accendimi le luci")
+
+    # 4.2 standalone * matches single word and zero words
+    def test_gap_matches_single_word(self):
+        assert _match_glob_pattern("accend* * luci", "accendi le luci")
+
+    def test_gap_matches_zero_words(self):
+        assert _match_glob_pattern("accend* * luci", "accendi luci")
+
+    def test_gap_matches_many_words(self):
+        assert _match_glob_pattern("accend* * luci", "accenda per favore tutte le luci")
+
+    # 4.3 phonetic tolerance on literal token
+    def test_phonetic_tolerance_luce_matches_luci(self):
+        assert _match_glob_pattern("accend* * luci", "accendi le luce")
+
+    # 4.4 order enforcement
+    def test_wrong_order_does_not_match(self):
+        assert not _match_glob_pattern("accend* * luci", "luci accendi")
+
+    def test_wrong_order_reversed(self):
+        assert not _match_glob_pattern("spegn* * luci", "luci spegni per favore")
+
+    # extra: pattern with no wildcards
+    def test_literal_pattern_exact(self):
+        assert _match_glob_pattern("chiama", "chiama")
+
+    def test_literal_pattern_no_match(self):
+        assert not _match_glob_pattern("chiama", "spegni le luci")
+
+    # 4.5 precedence: pattern hit wins over higher-scoring fuzzy trigger
+    def test_pattern_takes_precedence_over_fuzzy(self):
+        trigger_a = _trigger("accendi le luci")
+        trigger_b = _pattern_trigger("spegni tutto", ["accend* * luci"])
+        result = match_trigger("accendi le luci del salotto", [trigger_a, trigger_b])
+        assert result is trigger_b
+
+    # 4.6 backward compatibility: no patterns → fuzzy as today
+    def test_no_patterns_fuzzy_still_works(self):
+        triggers = [_trigger("chiama"), _trigger("saluta")]
+        result = match_trigger("chiama", triggers)
+        assert result is not None
+        assert result.phrase == "chiama"
+
+    def test_no_patterns_below_threshold_returns_none(self):
+        triggers = [_trigger("chiama")]
+        assert match_trigger("xyz", triggers) is None
+
+    # _trigger_matches_patterns wrapper
+    def test_trigger_matches_patterns_true(self):
+        t = _pattern_trigger("luci", ["accend* * luci"])
+        assert _trigger_matches_patterns(t, "accendi le luci")
+
+    def test_trigger_matches_patterns_false(self):
+        t = _pattern_trigger("luci", ["accend* * luci"])
+        assert not _trigger_matches_patterns(t, "luci accendi")
+
+    def test_trigger_no_patterns_false(self):
+        t = _trigger("chiama")
+        assert not _trigger_matches_patterns(t, "chiama")
+
+
+class TestGlobPatternConfig:
+    # 4.7 config parsing
+    def test_patterns_absent_defaults_to_empty_list(self):
+        from alexa_custom.config import _parse_triggers
+
+        raw = [{"phrase": "chiama", "actions": [{"type": "log"}]}]
+        triggers = _parse_triggers(raw, "test")
+        assert triggers[0].patterns == []
+
+    def test_patterns_parsed_correctly(self):
+        from alexa_custom.config import _parse_triggers
+
+        raw = [
+            {
+                "phrase": "luci",
+                "actions": [{"type": "log"}],
+                "patterns": ["accend* * luci", "spegn* * luci"],
+            }
+        ]
+        triggers = _parse_triggers(raw, "test")
+        assert triggers[0].patterns == ["accend* * luci", "spegn* * luci"]
+
+    def test_patterns_non_list_raises_config_error(self):
+        from alexa_custom.config import ConfigError, _parse_triggers
+
+        raw = [{"phrase": "luci", "actions": [{"type": "log"}], "patterns": "accend*"}]
+        with pytest.raises(ConfigError, match="patterns must be a list"):
+            _parse_triggers(raw, "test")
