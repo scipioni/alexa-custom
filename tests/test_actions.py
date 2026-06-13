@@ -7,8 +7,22 @@ from alexa_custom.actions import (
     _trigger_matches_patterns,
     italian_phonetic,
     match_trigger,
+    normalize_text,
 )
 from alexa_custom.config import ActionEntry, Trigger
+
+
+# ── normalize_text() ────────────────────────────────────────────────────────
+
+
+class TestNormalizeText:
+    def test_strip_punctuation(self):
+        assert normalize_text("che tempo farà domani?") == "che tempo fara domani"
+        assert normalize_text("ciao! come va...") == "ciao come va"
+        assert normalize_text("test (con parentesi)") == "test con parentesi"
+
+    def test_lowercase_and_diacritics(self):
+        assert normalize_text("Sì, Còmé nò") == "si come no"
 
 
 # ── italian_phonetic() ───────────────────────────────────────────────────────
@@ -568,3 +582,201 @@ class TestGlobPatternConfig:
         raw = [{"phrase": "luci", "actions": [{"type": "log"}], "patterns": "accend*"}]
         with pytest.raises(ConfigError, match="patterns must be a list"):
             _parse_triggers(raw, "test")
+
+
+class TestMeteoAction:
+    @pytest.mark.asyncio
+    @patch("alexa_custom.tts.get_engine")
+    @patch("httpx.AsyncClient")
+    async def test_meteo_action_success_italian_tomorrow(
+        self, mock_client_class, mock_get_engine
+    ):
+        mock_engine = MagicMock()
+        mock_get_engine.return_value = mock_engine
+
+        # Mock httpx client response
+        mock_client = AsyncMock()
+        mock_client_class.return_value.__aenter__.return_value = mock_client
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "daily": {
+                "time": ["2026-06-13", "2026-06-14"],
+                "weather_code": [0, 3],
+                "temperature_2m_max": [25.4, 21.2],
+                "temperature_2m_min": [14.3, 12.1],
+            }
+        }
+        mock_client.get.return_value = mock_resp
+
+        action = ActionEntry(
+            type="meteo", params={"city": "Milano", "days": "domani", "lang": "it-IT"}
+        )
+
+        await _run_action(
+            action,
+            telegram_client=MagicMock(),
+            livekit_connect_fn=None,
+            livekit_connected=False,
+            transcript="che tempo fa a Milano domani?",
+        )
+
+        mock_engine.say.assert_called_once()
+        spoken_text = mock_engine.say.call_args[0][0]
+        assert "Milano" in spoken_text
+        assert "coperto" in spoken_text.lower()
+        assert "12" in spoken_text  # min temp rounded (12.1 -> 12)
+        assert "21" in spoken_text  # max temp rounded (21.2 -> 21)
+
+    @pytest.mark.asyncio
+    @patch("alexa_custom.tts.get_engine")
+    @patch("httpx.AsyncClient")
+    async def test_meteo_action_success_italian_today(
+        self, mock_client_class, mock_get_engine
+    ):
+        mock_engine = MagicMock()
+        mock_get_engine.return_value = mock_engine
+
+        mock_client = AsyncMock()
+        mock_client_class.return_value.__aenter__.return_value = mock_client
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "daily": {
+                "time": ["2026-06-13", "2026-06-14"],
+                "weather_code": [0, 3],
+                "temperature_2m_max": [25.4, 21.2],
+                "temperature_2m_min": [14.3, 12.1],
+            }
+        }
+        mock_client.get.return_value = mock_resp
+
+        action = ActionEntry(type="meteo", params={"lang": "it-IT"})
+
+        await _run_action(
+            action,
+            telegram_client=MagicMock(),
+            livekit_connect_fn=None,
+            livekit_connected=False,
+            transcript="che tempo fa a torino oggi?",
+        )
+
+        mock_engine.say.assert_called_once()
+        spoken_text = mock_engine.say.call_args[0][0]
+        assert "Torino" in spoken_text
+        assert "cielo sereno" in spoken_text
+        assert "14" in spoken_text  # min temp rounded (14.3 -> 14)
+        assert "25" in spoken_text  # max temp rounded (25.4 -> 25)
+
+    @pytest.mark.asyncio
+    @patch("alexa_custom.tts.get_engine")
+    @patch("httpx.AsyncClient")
+    async def test_meteo_action_success_english(
+        self, mock_client_class, mock_get_engine
+    ):
+        mock_engine = MagicMock()
+        mock_get_engine.return_value = mock_engine
+
+        mock_client = AsyncMock()
+        mock_client_class.return_value.__aenter__.return_value = mock_client
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "daily": {
+                "time": ["2026-06-13", "2026-06-14"],
+                "weather_code": [61, 3],
+                "temperature_2m_max": [18.1, 21.2],
+                "temperature_2m_min": [9.9, 12.1],
+            }
+        }
+        mock_client.get.return_value = mock_resp
+
+        action = ActionEntry(type="meteo", params={"lang": "en-US", "city": "Florence"})
+
+        await _run_action(
+            action,
+            telegram_client=MagicMock(),
+            livekit_connect_fn=None,
+            livekit_connected=False,
+            transcript="what is the weather today?",
+        )
+
+        mock_engine.say.assert_called_once()
+        spoken_text = mock_engine.say.call_args[0][0]
+        assert "Florence" in spoken_text
+        assert "slight rain" in spoken_text.lower()
+        assert "10" in spoken_text  # min temp rounded (9.9 -> 10)
+        assert "18" in spoken_text  # max temp rounded (18.1 -> 18)
+
+    @pytest.mark.asyncio
+    @patch("alexa_custom.tts.get_engine")
+    @patch("httpx.AsyncClient")
+    async def test_meteo_action_api_failure(self, mock_client_class, mock_get_engine):
+        mock_engine = MagicMock()
+        mock_get_engine.return_value = mock_engine
+
+        mock_client = AsyncMock()
+        mock_client_class.return_value.__aenter__.return_value = mock_client
+        mock_client.get.side_effect = Exception("Connection timed out")
+
+        action = ActionEntry(type="meteo", params={"lang": "it-IT"})
+
+        await _run_action(
+            action,
+            telegram_client=MagicMock(),
+            livekit_connect_fn=None,
+            livekit_connected=False,
+            transcript="meteo roma",
+        )
+
+        mock_engine.say.assert_called_once()
+        spoken_text = mock_engine.say.call_args[0][0]
+        assert "Spiacente, impossibile recuperare le informazioni meteo" in spoken_text
+
+    @pytest.mark.asyncio
+    @patch("alexa_custom.tts.get_engine")
+    @patch("httpx.AsyncClient")
+    async def test_meteo_action_language_fallback_from_config(
+        self, mock_client_class, mock_get_engine
+    ):
+        mock_engine = MagicMock()
+        mock_get_engine.return_value = mock_engine
+
+        mock_client = AsyncMock()
+        mock_client_class.return_value.__aenter__.return_value = mock_client
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "daily": {
+                "time": ["2026-06-13", "2026-06-14"],
+                "weather_code": [0, 3],
+                "temperature_2m_max": [25.4, 21.2],
+                "temperature_2m_min": [14.3, 12.1],
+            }
+        }
+        mock_client.get.return_value = mock_resp
+
+        # No lang param in action entry
+        action = ActionEntry(type="meteo", params={"city": "Milano"})
+
+        # Setup mock actions_config
+        mock_wake_word_group = MagicMock()
+        mock_wake_word_group.word = "alexa"
+        mock_wake_word_group.lang = "en-US"
+        mock_config = MagicMock()
+        mock_config.wake_words = [mock_wake_word_group]
+
+        await _run_action(
+            action,
+            telegram_client=MagicMock(),
+            livekit_connect_fn=None,
+            livekit_connected=False,
+            transcript="weather forecast for Milano",
+            actions_config=mock_config,
+            wake_word="alexa",
+        )
+
+        mock_engine.say.assert_called_once()
+        spoken_text = mock_engine.say.call_args[0][0]
+        # Since it successfully resolved en-US from wake-word group config, it should speak in English!
+        assert "Milano tomorrow the weather will be" in spoken_text

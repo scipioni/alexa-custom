@@ -157,9 +157,7 @@ def test_restore_hw_pcm_calls_amixer_when_newpie_found():
     ):
         audio_hw._restore_hw_pcm()
 
-        amixer_calls = [
-            c for c in mock_run.call_args_list if c[0][0][0] == "amixer"
-        ]
+        amixer_calls = [c for c in mock_run.call_args_list if c[0][0][0] == "amixer"]
         assert len(amixer_calls) == 1
         amixer_cmd = amixer_calls[0][0][0]
         assert "amixer" in amixer_cmd
