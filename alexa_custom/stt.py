@@ -864,6 +864,7 @@ def _recognition_loop(
             stage1_speech_ms = 0.0
 
             inline_cmd = ""
+            vosk_text = result.get("text", "").strip()
             if vosk_use_grammar:
                 wake_match, inline_cmd = _vosk_check_result(
                     data,
@@ -874,7 +875,7 @@ def _recognition_loop(
                     rms_gate,
                 )
             else:
-                text = result.get("text", "").strip()
+                text = vosk_text
                 logger.debug("Stage1 Vosk free-vocab result: %r", text)
                 wake_match, inline_cmd = (
                     _extract_wake_command(text, alias_map, fuzzy=False)
@@ -953,11 +954,54 @@ def _recognition_loop(
                         loop=loop,
                     )
             else:
-                backlog = _drain_pipe(proc)
-                if backlog:
-                    logger.debug(
-                        f"two-stage: drained {backlog} backlog bytes after segment"
-                    )
+                if vosk_use_grammar and vosk_text and config.wake_words:
+                    _direct_triggers = [t for t in config.triggers if t.direct_match]
+                    if _direct_triggers:
+                        _dm_trigger = match_trigger(
+                            vosk_text,
+                            _direct_triggers,
+                            algorithm=config.recognition.matching_algorithm,
+                            threshold=config.recognition.matching_threshold,
+                        )
+                        if _dm_trigger is not None:
+                            logger.info(
+                                "Direct-match trigger: %r -> %r",
+                                vosk_text,
+                                _dm_trigger.phrase,
+                            )
+                            _reset_stage1_state()
+                            stage1 = _make_stage1_recognizer()
+                            _wake_detected(
+                                wake_group=config.wake_words[0],
+                                proc=proc,
+                                channels=channels,
+                                backend=stage2_backend,
+                                config=config,
+                                stop_event=stop_event,
+                                telegram_client=telegram_client,
+                                livekit_connect_fn=livekit_connect_fn,
+                                livekit_connected_flag=livekit_connected_flag,
+                                on_stt_event=on_stt_event,
+                                mqtt_client=mqtt_client,
+                                loop=loop,
+                                dispatch_loop=dispatch_loop,
+                                vad_silence_ms=_eff_vad_ms,
+                                pre_transcript=vosk_text,
+                            )
+                            _drain_pipe(proc)
+                            if on_stt_event:
+                                on_stt_event(
+                                    "listening",
+                                    {"wake_words": [g.word for g in config.wake_words]},
+                                )
+                            if mqtt_client:
+                                mqtt_client.publish_threadsafe(
+                                    f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
+                                    "idle",
+                                    loop=loop,
+                                )
+                            continue
+                _drain_pipe(proc)
                 _reset_stage1_state()
                 stage1.Reset()
         else:
