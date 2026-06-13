@@ -1132,8 +1132,53 @@ def _score_transcription(expected_phrase: str, multi: np.ndarray, stt_backend, c
     return score
 
 
+def _ensure_test_wav(path: str) -> str:
+    if os.path.isfile(path):
+        return path
+    from alexa_custom.tts import PIPER_VOICES_DIR
+    logger.info("Test WAV not found at %s — generating via Piper TTS", path)
+    try:
+        from piper import PiperVoice
+    except ImportError:
+        raise RuntimeError(
+            f"Test WAV {path} not found and Piper TTS is not available. "
+            f"Place a WAV of '{_SPEECH_TEST_PHRASE}' at {path} or install Piper TTS."
+        )
+    voice_name = "it_IT-paola-medium"
+    voice_path = PIPER_VOICES_DIR / f"{voice_name}.onnx"
+    if not voice_path.is_file():
+        raise RuntimeError(
+            f"Piper voice {voice_name} not found at {voice_path} and test WAV {path} is missing. "
+            f"Run 'alexa-setup --piper-voice {voice_name}' then retry, or place a WAV at {path}."
+        )
+    voice = PiperVoice.load(str(voice_path))
+    cfg = getattr(voice, "config", None)
+    sr = int(getattr(cfg, "sample_rate", None) or getattr(voice, "sample_rate", 22050))
+    buffers: list[np.ndarray] = []
+    for chunk in voice.synthesize(_SPEECH_TEST_PHRASE):
+        arr = getattr(chunk, "audio_int16_array", None)
+        if arr is None:
+            raw = getattr(chunk, "audio_int16_bytes", None) or bytes(chunk)
+            arr = np.frombuffer(raw, dtype=np.int16)
+        buffers.append(arr)
+    audio = np.concatenate(buffers)
+    if sr != 16000:
+        from scipy import signal
+        target_len = int(len(audio) * 16000 / sr)
+        audio = signal.resample(audio, target_len).astype(np.int16)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with _wave.open(path, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(16000)
+        wf.writeframes(audio.tobytes())
+    logger.info("Test WAV generated at %s (%d samples)", path, len(audio))
+    return path
+
+
 def _init_speech_test_wavs() -> dict[str, str]:
     import tempfile
+    _ensure_test_wav(_SPEECH_TEST_WAV)
     scaled_wavs: dict[str, str] = {}
     try:
         for label, vol, _w in _AUTO_PLAY_VOLUMES:
