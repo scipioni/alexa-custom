@@ -830,6 +830,7 @@ class WebServer:
             "aliases": t.aliases,
             "actions": WebServer._serialize_action_list(t.actions),
             "direct_match": t.wake_words is not None and len(t.wake_words) == 0,
+            "sleeping_only": any(a.type == "start_listening" for a in t.actions),
         }
 
     @staticmethod
