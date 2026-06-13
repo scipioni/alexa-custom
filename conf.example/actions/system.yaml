@@ -51,8 +51,7 @@ triggers:
   - phrase: "riavvia"
     wake_words: [default]
     actions:
-      - type: shell
-        command: "systemctl --user restart alexa-client"
+      - type: restart
 
   - phrase: "chatta con me"
     wake_words: [default]

@@ -780,3 +780,21 @@ class TestMeteoAction:
         spoken_text = mock_engine.say.call_args[0][0]
         # Since it successfully resolved en-US from wake-word group config, it should speak in English!
         assert "Milano tomorrow the weather will be" in spoken_text
+
+
+@pytest.mark.asyncio
+async def test_restart_action():
+    action = ActionEntry(type="restart", params={})
+    with patch("os.execv") as mock_execv, patch("asyncio.sleep") as mock_sleep:
+        await _run_action(
+            action,
+            telegram_client=MagicMock(),
+            livekit_connect_fn=None,
+            livekit_connected=False,
+        )
+        mock_sleep.assert_called_once_with(0.5)
+        mock_execv.assert_called_once()
+        args = mock_execv.call_args[0]
+        assert len(args) == 2
+        assert "python" in args[0]
+

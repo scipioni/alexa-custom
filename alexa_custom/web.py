@@ -276,7 +276,11 @@ class WebServer:
             self._state["stt_text"] = ", ".join(data.get("wake_words", []))
         elif event == "sleeping":
             self._state["stt_state"] = "sleeping"
-            self._state["stt_text"] = "Sleeping"
+            wake_up = data.get("wake_up_phrase")
+            if wake_up:
+                self._state["stt_text"] = f"sleeping... wait for wake up {wake_up}"
+            else:
+                self._state["stt_text"] = "Sleeping"
         elif event in (
             "transcribing",
             "wake",

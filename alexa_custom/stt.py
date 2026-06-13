@@ -109,6 +109,21 @@ _STAGE1_MIN_SPEECH_MS = int(os.environ.get("STT_STAGE1_MIN_SPEECH_MS", "200"))
 _stt_sleeping = False
 
 
+def get_wake_up_phrases(config: ActionsConfig) -> str:
+    wake_up_phrases = []
+    for t in getattr(config, "direct_triggers", []):
+        if any(a.type == "start_listening" for a in t.actions):
+            wake_up_phrases.append(t.phrase)
+    for t in getattr(config, "triggers", []):
+        if any(a.type == "start_listening" for a in t.actions):
+            wake_up_phrases.append(t.phrase)
+    for g in getattr(config, "wake_words", []):
+        for t in g.triggers:
+            if any(a.type == "start_listening" for a in t.actions):
+                wake_up_phrases.append(t.phrase)
+    return ", ".join(sorted(list(set(wake_up_phrases))))
+
+
 def set_stt_sleeping(sleeping: bool) -> None:
     global _stt_sleeping
     logger.info(f"STT: set sleeping state to {sleeping}")
@@ -511,8 +526,9 @@ def _single_stage_loop(
                 and any(a.type == "start_listening" for a in temp_trigger.actions)
             )
             if not has_start_listening:
+                phrases_str = get_wake_up_phrases(config)
                 logger.info(
-                    f"STT: ignored single-stage command '{command}' because STT is sleeping"
+                    f"sleeping... wait for wake up {phrases_str}"
                 )
                 backend.reset()
                 continue
@@ -807,6 +823,11 @@ def _recognition_loop(
                             "idle",
                             loop=loop,
                         )
+                elif wake_match and is_stt_sleeping():
+                    phrases_str = get_wake_up_phrases(config)
+                    logger.info(
+                        f"sleeping... wait for wake up {phrases_str}"
+                    )
                 else:
                     logger.debug(
                         "Stage1 KWS hit but keyword %r not in alias_map — ignoring",
@@ -1003,6 +1024,7 @@ def _recognition_loop(
             else:
                 if vosk_use_grammar and vosk_text and config.wake_words:
                     _direct_triggers = config.direct_triggers
+                    _dm_trigger = None
                     if _direct_triggers:
                         _vosk_words = len(vosk_text.split())
                         _dm_candidates = [
@@ -1060,6 +1082,11 @@ def _recognition_loop(
                                     loop=loop,
                                 )
                             continue
+                    if _dm_trigger is None and is_stt_sleeping() and vosk_text:
+                        phrases_str = get_wake_up_phrases(config)
+                        logger.info(
+                            f"sleeping... wait for wake up {phrases_str}"
+                        )
                 _drain_pipe(proc)
                 _reset_stage1_state()
                 stage1.Reset()
@@ -1122,6 +1149,11 @@ def _recognition_loop(
                                 "idle",
                                 loop=loop,
                             )
+                    elif wake_match and is_stt_sleeping():
+                        phrases_str = get_wake_up_phrases(config)
+                        logger.info(
+                            f"sleeping... wait for wake up {phrases_str}"
+                        )
             else:
                 partial = stage1_backend.partial_text().strip()
                 if partial and on_stt_event:
@@ -1251,8 +1283,9 @@ def _wake_detected(
         if trig is not None and is_stt_sleeping():
             has_start_listening = any(a.type == "start_listening" for a in trig.actions)
             if not has_start_listening:
+                phrases_str = get_wake_up_phrases(config)
                 logger.info(
-                    f"STT: ignored trigger '{trig.phrase}' because STT is sleeping"
+                    f"sleeping... wait for wake up {phrases_str}"
                 )
                 return None
 
