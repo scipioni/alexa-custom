@@ -3256,11 +3256,47 @@
             <input type="number" id="input-matching-threshold" step="1" min="0" max="100">
           </div>
           <div class="form-group">
+            <label>Matching Algorithm</label>
+            <select id="input-matching-algorithm">
+              <option value="token_set_ratio">token_set_ratio</option>
+              <option value="levenshtein">levenshtein</option>
+              <option value="ratio">ratio</option>
+            </select>
+          </div>
+          <div class="form-group">
             <label>Partial Matching</label>
             <select id="input-partial-matching">
               <option value="true">Enabled</option>
               <option value="false">Disabled</option>
             </select>
+          </div>
+          <div class="form-group">
+            <label>Reply Matching Algorithm <span class="form-hint" style="display:inline">(ask action)</span></label>
+            <select id="input-reply-matching-algorithm">
+              <option value="levenshtein">levenshtein</option>
+              <option value="token_set_ratio">token_set_ratio</option>
+              <option value="ratio">ratio</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Reply Matching Threshold (%) <span class="form-hint" style="display:inline">(ask action)</span></label>
+            <input type="number" id="input-reply-matching-threshold" step="1" min="0" max="100">
+          </div>
+          <div class="form-group">
+            <label>Follow-up Mode</label>
+            <select id="input-follow-up">
+              <option value="false">Disabled</option>
+              <option value="true">Enabled</option>
+            </select>
+            <span class="form-hint">Continue conversation after a trigger fires</span>
+          </div>
+          <div class="form-group">
+            <label>Follow-up Timeout (seconds)</label>
+            <input type="number" id="input-follow-up-timeout" step="0.5" min="0.5">
+          </div>
+          <div class="form-group">
+            <label>Follow-up Max Turns</label>
+            <input type="number" id="input-follow-up-max-turns" step="1" min="1" max="20">
           </div>
         </div>
       `;
@@ -3285,6 +3321,11 @@
       container.innerHTML += `
         <div class="form-section">
           <h3>Microfono</h3>
+          <div class="form-group">
+            <label>Output Volume (0–1)</label>
+            <input type="number" id="input-output-volume" step="0.05" min="0" max="1">
+            <span class="form-hint">Volume altoparlante (0 = muto, 1 = massimo)</span>
+          </div>
           <div class="form-group">
             <label>Input Gain (× moltiplicatore)</label>
             <input type="number" id="input-input-gain" step="0.1" min="0" max="10" value="1.0">
@@ -3326,14 +3367,21 @@
         </div>
       `;
 
-      document.getElementById('input-command-timeout').value = config.recognition?.command_timeout || '';
-      document.getElementById('input-matching-threshold').value = config.recognition?.matching_threshold || '';
-      document.getElementById('input-partial-matching').value = config.recognition?.partial_matching ? 'true' : 'false';
+      document.getElementById('input-command-timeout').value = config.recognition?.command_timeout ?? '';
+      document.getElementById('input-matching-threshold').value = config.recognition?.matching_threshold ?? '';
+      document.getElementById('input-matching-algorithm').value = config.recognition?.matching_algorithm || 'token_set_ratio';
+      document.getElementById('input-partial-matching').value = config.recognition?.partial_matching !== false ? 'true' : 'false';
+      document.getElementById('input-reply-matching-algorithm').value = config.recognition?.reply_matching_algorithm || 'levenshtein';
+      document.getElementById('input-reply-matching-threshold').value = config.recognition?.reply_matching_threshold ?? '';
+      document.getElementById('input-follow-up').value = config.recognition?.follow_up ? 'true' : 'false';
+      document.getElementById('input-follow-up-timeout').value = config.recognition?.follow_up_timeout ?? '';
+      document.getElementById('input-follow-up-max-turns').value = config.recognition?.follow_up_max_turns ?? '';
       document.getElementById('input-stt-backend').value = config.stt?.stage1?.backend || 'vosk';
-      document.getElementById('input-stt-confidence').value = config.stt?.stage1?.confidence || '';
-      document.getElementById('input-input-gain').value = config.audio?.input_gain != null ? config.audio.input_gain : '';
-      document.getElementById('input-rms-threshold').value = config.stt?.stage1?.rms_threshold != null ? config.stt.stage1.rms_threshold : '';
+      document.getElementById('input-stt-confidence').value = config.stt?.stage1?.confidence ?? '';
+      document.getElementById('input-rms-threshold').value = config.stt?.stage1?.rms_threshold ?? '';
       document.getElementById('input-adaptive-rms').value = config.stt?.stage1?.adaptive_rms !== false ? 'true' : 'false';
+      document.getElementById('input-output-volume').value = config.audio?.output_volume ?? '';
+      document.getElementById('input-input-gain').value = config.audio?.input_gain ?? '';
       document.getElementById('input-tts-backend').value = config.tts?.backend || 'piper';
       document.getElementById('input-tts-voice').value = config.tts?.voice || '';
     }
@@ -3363,12 +3411,21 @@
       if (!isNaN(commandTimeout)) {
         result.recognition = {
           command_timeout: commandTimeout,
-          partial_matching: document.getElementById('input-partial-matching').value === 'true'
+          matching_algorithm: document.getElementById('input-matching-algorithm').value,
+          partial_matching: document.getElementById('input-partial-matching').value === 'true',
+          reply_matching_algorithm: document.getElementById('input-reply-matching-algorithm').value,
+          follow_up: document.getElementById('input-follow-up').value === 'true',
         };
-        // Only include if it parses — a NaN would serialize to JSON null, which
-        // breaks the daemon's float() coercion on cold start.
+        // Only include numeric fields if they parse — NaN serializes to JSON null
+        // which breaks the daemon's float() coercion on cold start.
         const matchingThreshold = parseFloat(document.getElementById('input-matching-threshold').value);
         if (!isNaN(matchingThreshold)) result.recognition.matching_threshold = matchingThreshold;
+        const replyThreshold = parseFloat(document.getElementById('input-reply-matching-threshold').value);
+        if (!isNaN(replyThreshold)) result.recognition.reply_matching_threshold = replyThreshold;
+        const followUpTimeout = parseFloat(document.getElementById('input-follow-up-timeout').value);
+        if (!isNaN(followUpTimeout)) result.recognition.follow_up_timeout = followUpTimeout;
+        const followUpMaxTurns = parseInt(document.getElementById('input-follow-up-max-turns').value, 10);
+        if (!isNaN(followUpMaxTurns)) result.recognition.follow_up_max_turns = followUpMaxTurns;
       }
 
       const confidence = parseFloat(document.getElementById('input-stt-confidence').value);
@@ -3376,20 +3433,20 @@
         result.stt = {
           stage1: {
             backend: document.getElementById('input-stt-backend').value,
-            confidence: confidence
+            confidence: confidence,
+            adaptive_rms: document.getElementById('input-adaptive-rms').value === 'true',
           }
         };
         const rmsThreshold = parseFloat(document.getElementById('input-rms-threshold').value);
         if (!isNaN(rmsThreshold)) result.stt.stage1.rms_threshold = rmsThreshold;
-        result.stt.stage1.adaptive_rms = document.getElementById('input-adaptive-rms').value === 'true';
       }
 
+      result.audio = {};
+      const outputVolume = parseFloat(document.getElementById('input-output-volume').value);
+      if (!isNaN(outputVolume)) result.audio.output_volume = outputVolume;
       const inputGain = parseFloat(document.getElementById('input-input-gain').value);
-      if (!isNaN(inputGain)) {
-        result.audio = {
-          input_gain: inputGain
-        };
-      }
+      if (!isNaN(inputGain)) result.audio.input_gain = inputGain;
+      if (!Object.keys(result.audio).length) delete result.audio;
 
       const ttsBackend = document.getElementById('input-tts-backend').value;
       if (ttsBackend) {
