@@ -17,11 +17,15 @@ from alexa_custom.config import ActionEntry, Trigger
 logger = logging.getLogger(__name__)
 
 
+_PUNCT_CHARS = "?!.,;:()[]{}#"
+
+
 def normalize_text(text: str) -> str:
-    """Lowercase and remove diacritics (e.g., 'sì' -> 'si')."""
+    """Lowercase, remove punctuation, and remove diacritics (e.g., 'sì' -> 'si')."""
     if not text:
         return ""
-    nfd = unicodedata.normalize("NFD", text.lower())
+    text_clean = "".join(c for c in text if c not in _PUNCT_CHARS)
+    nfd = unicodedata.normalize("NFD", text_clean.lower())
     stripped = "".join(c for c in nfd if not unicodedata.combining(c))
     return unicodedata.normalize("NFC", stripped).strip()
 
@@ -766,6 +770,291 @@ async def handle_llm_learn(
         wake_word=wake_word,
     )
     await wizard.run(listen_fn, say_fn)
+
+
+ITALIAN_CITIES: dict[str, tuple[float, float]] = {
+    "roma": (41.8919, 12.5113),
+    "milano": (45.4642, 9.1900),
+    "napoli": (40.8518, 14.2681),
+    "torino": (45.0703, 7.6869),
+    "palermo": (38.1157, 13.3615),
+    "genova": (44.4056, 8.9463),
+    "bologna": (44.4949, 11.3426),
+    "firenze": (43.7696, 11.2558),
+    "bari": (41.1171, 16.8719),
+    "venezia": (45.4408, 12.3155),
+    "verona": (45.4384, 10.9916),
+    "messina": (38.1938, 15.5540),
+    "padova": (45.4064, 11.8760),
+    "trieste": (45.6495, 13.7768),
+    "brescia": (45.5416, 10.2118),
+    "parma": (44.8015, 10.3279),
+    "prato": (43.8777, 11.1022),
+    "modena": (44.6471, 10.9252),
+    "reggio calabria": (38.1144, 15.6500),
+    "reggio emilia": (44.6982, 10.6312),
+    "perugia": (43.1107, 12.3908),
+    "ravenna": (44.4184, 12.2035),
+    "livorno": (43.5485, 10.3106),
+    "cagliari": (39.2238, 9.1217),
+    "foggia": (41.4622, 15.5446),
+    "rimini": (44.0594, 12.5684),
+    "salerno": (40.6780, 14.7594),
+    "ferrara": (44.8381, 11.6198),
+    "sassari": (40.7259, 8.5556),
+    "latina": (41.4676, 12.9036),
+    "giugliano in campania": (40.9317, 14.1956),
+    "monza": (45.5845, 9.2744),
+    "siracusa": (37.0755, 15.2866),
+    "pescara": (42.4618, 14.2185),
+    "bergamo": (45.6983, 9.6773),
+    "forli": (44.2227, 12.0409),
+    "trento": (46.0679, 11.1211),
+    "vicenza": (45.5480, 11.5494),
+    "terni": (42.5638, 12.6414),
+    "bolzano": (46.4908, 11.3398),
+    "novara": (45.4468, 8.6214),
+    "piacenza": (45.0526, 9.6930),
+    "ancona": (43.6158, 13.5189),
+    "andria": (41.2263, 16.2974),
+    "arezzo": (43.4631, 11.8780),
+    "udine": (46.0711, 13.2446),
+    "cesena": (44.1396, 12.2431),
+    "lecce": (40.3515, 18.1751),
+}
+
+WMO_INTERPRETATION: dict[int, str] = {
+    0: "Cielo sereno",
+    1: "Prevalentemente sereno",
+    2: "Parzialmente nuvoloso",
+    3: "Coperto",
+    45: "Nebbia",
+    48: "Nebbia brinante",
+    51: "Pioggerella leggera",
+    53: "Pioggerella moderata",
+    55: "Pioggerella fitta",
+    56: "Pioggerella gelida leggera",
+    57: "Pioggerella gelida fitta",
+    61: "Pioggia debole",
+    63: "Pioggia moderata",
+    65: "Pioggia forte",
+    66: "Pioggia gelida debole",
+    67: "Pioggia gelida forte",
+    71: "Nevicata debole",
+    73: "Nevicata moderata",
+    75: "Nevicata forte",
+    77: "Neve in grani",
+    80: "Rovesci di pioggia deboli",
+    81: "Rovesci di pioggia moderati",
+    82: "Rovesci di pioggia violenti",
+    85: "Rovesci di neve deboli",
+    86: "Rovesci di neve forti",
+    95: "Temporale",
+    96: "Temporale con grandine debole",
+    99: "Temporale con grandine forte",
+}
+
+WMO_INTERPRETATION_EN: dict[int, str] = {
+    0: "Clear sky",
+    1: "Mainly clear",
+    2: "Partly cloudy",
+    3: "Overcast",
+    45: "Fog",
+    48: "Depositing rime fog",
+    51: "Light drizzle",
+    53: "Moderate drizzle",
+    55: "Dense drizzle",
+    56: "Light freezing drizzle",
+    57: "Dense freezing drizzle",
+    61: "Slight rain",
+    63: "Moderate rain",
+    65: "Heavy rain",
+    66: "Light freezing rain",
+    67: "Heavy freezing rain",
+    71: "Slight snow fall",
+    73: "Moderate snow fall",
+    75: "Heavy snow fall",
+    77: "Snow grains",
+    80: "Slight rain showers",
+    81: "Moderate rain showers",
+    82: "Violent rain showers",
+    85: "Slight snow showers",
+    86: "Heavy snow showers",
+    95: "Thunderstorm",
+    96: "Thunderstorm with slight hail",
+    99: "Thunderstorm with heavy hail",
+}
+
+
+@registry.register("meteo")
+async def handle_meteo(
+    action: ActionEntry,
+    mqtt_client: MQTTClient | None,
+    transcript: str | None = None,
+    actions_config=None,
+    wake_word: str | None = None,
+    **_,
+) -> None:
+    latitude = action.params.get("latitude")
+    longitude = action.params.get("longitude")
+    city_name = action.params.get("city")
+    days_param = action.params.get("days")
+
+    lang = action.params.get("lang")
+    if not lang:
+        lang = "it-IT"
+        if (
+            wake_word
+            and actions_config
+            and hasattr(actions_config, "wake_words")
+            and actions_config.wake_words
+        ):
+            for grp in actions_config.wake_words:
+                if grp.word == wake_word:
+                    lang = grp.lang
+                    break
+
+    is_it = lang.lower().startswith("it")
+
+    # Resolve coordinates and city name
+    if latitude is None or longitude is None:
+        resolved_coords = None
+        if transcript:
+            norm_t = normalize_text(transcript)
+            # Find largest matching city name to avoid sub-string collisions
+            sorted_cities = sorted(ITALIAN_CITIES.keys(), key=len, reverse=True)
+            for city in sorted_cities:
+                pattern = r"\b" + re.escape(city) + r"\b"
+                if re.search(pattern, norm_t):
+                    city_name = city
+                    resolved_coords = ITALIAN_CITIES[city]
+                    break
+
+        if resolved_coords is None and city_name:
+            norm_param_city = normalize_text(city_name)
+            if norm_param_city in ITALIAN_CITIES:
+                resolved_coords = ITALIAN_CITIES[norm_param_city]
+
+        if resolved_coords is not None:
+            latitude, longitude = resolved_coords
+        else:
+            # Absolute fallback to Rome
+            city_name = city_name or "Roma"
+            latitude, longitude = ITALIAN_CITIES["roma"]
+    else:
+        city_name = city_name or "la tua posizione"
+
+    # Resolve forecast day (0 = today, 1 = tomorrow)
+    day_index = 1
+    day_label = "domani" if is_it else "tomorrow"
+
+    if transcript:
+        norm_t = normalize_text(transcript)
+        if "domani" in norm_t or "tomorrow" in norm_t:
+            day_index = 1
+            day_label = "domani" if is_it else "tomorrow"
+        elif "oggi" in norm_t or "today" in norm_t:
+            day_index = 0
+            day_label = "oggi" if is_it else "today"
+        elif days_param is not None:
+            if str(days_param).lower() in ["oggi", "today", "0"]:
+                day_index = 0
+                day_label = "oggi" if is_it else "today"
+            else:
+                day_index = 1
+                day_label = "domani" if is_it else "tomorrow"
+    elif days_param is not None:
+        if str(days_param).lower() in ["oggi", "today", "0"]:
+            day_index = 0
+            day_label = "oggi" if is_it else "today"
+        else:
+            day_index = 1
+            day_label = "domani" if is_it else "tomorrow"
+
+    display_city = city_name.title() if city_name else "Roma"
+
+    url = "https://api.open-meteo.com/v1/forecast"
+    params = {
+        "latitude": latitude,
+        "longitude": longitude,
+        "daily": "weather_code,temperature_2m_max,temperature_2m_min",
+        "timezone": "auto",
+        "forecast_days": 2,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(url, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as e:
+        logger.error(f"Open-Meteo API request failed: {e}")
+        fail_msg = (
+            "Spiacente, impossibile recuperare le informazioni meteo al momento."
+            if is_it
+            else "Sorry, I cannot retrieve weather information at the moment."
+        )
+        from alexa_custom.tts import get_engine
+
+        if mqtt_client:
+            await mqtt_client.publish(
+                f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
+                "speaking",
+            )
+        await asyncio.to_thread(get_engine().say, fail_msg, lang)
+        if mqtt_client:
+            await mqtt_client.publish(
+                f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
+                "idle",
+            )
+        return
+
+    daily = data.get("daily", {})
+    weather_codes = daily.get("weather_code", [])
+    temp_maxs = daily.get("temperature_2m_max", [])
+    temp_mins = daily.get("temperature_2m_min", [])
+
+    if (
+        len(weather_codes) > day_index
+        and len(temp_maxs) > day_index
+        and len(temp_mins) > day_index
+    ):
+        code = weather_codes[day_index]
+        t_max = temp_maxs[day_index]
+        t_min = temp_mins[day_index]
+
+        t_max_int = int(round(t_max))
+        t_min_int = int(round(t_min))
+
+        if is_it:
+            desc = WMO_INTERPRETATION.get(code, "tempo variabile")
+            weather_msg = (
+                f"A {display_city} {day_label} il tempo sarà: {desc.lower()}. "
+                f"La temperatura minima sarà di {t_min_int} gradi, e la massima di {t_max_int} gradi."
+            )
+        else:
+            desc = WMO_INTERPRETATION_EN.get(code, "variable weather")
+            weather_msg = (
+                f"In {display_city} {day_label} the weather will be: {desc.lower()}. "
+                f"The minimum temperature will be {t_min_int} degrees, and the maximum will be {t_max_int} degrees."
+            )
+
+        logger.info(f"[meteo action] Saying: {weather_msg}")
+        from alexa_custom.tts import get_engine
+
+        if mqtt_client:
+            await mqtt_client.publish(
+                f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
+                "speaking",
+            )
+        await asyncio.to_thread(get_engine().say, weather_msg, lang)
+        if mqtt_client:
+            await mqtt_client.publish(
+                f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
+                "idle",
+            )
+    else:
+        logger.warning("Open-Meteo API returned incomplete daily data")
 
 
 async def _run_action(

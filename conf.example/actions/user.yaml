@@ -22,6 +22,30 @@ triggers:
         text: "Ciao dal sistema vocale"
         lang: "it-IT"
 
+  - phrase: "che tempo farà domani ?"
+    direct_match: true
+    patterns:
+      - "che tempo * domani"
+    actions:
+      - type: meteo
+        params:
+          city: "Verona"        # Default fallback city if not spoken in the transcript
+          days: "domani"      # Default fallback day ("oggi" / "domani") if not spoken in the transcript
+          lang: "it-IT"       # Language for spoken feedback ("it-IT" or "en-US")
+          # Custom coordinates can be specified directly to bypass city lookup:
+          # latitude: 41.8919
+          # longitude: 12.5113
+
+  - phrase: "che tempo farà oggi ?"
+    direct_match: true
+    patterns:
+      - "che tempo * oggi"
+    actions:
+      - type: meteo
+        params:
+          city: "Verona"        # Default fallback city if not spoken in the transcript
+          days: "oggi"      # Default fallback day ("oggi" / "domani") if not spoken in the transcript
+
   - phrase: "suona"
     actions:
       - type: tone
@@ -229,6 +253,28 @@ triggers:
         payload: "ok"
       - type: say
         text: "Sono contento. Buona giornata!"
+  - phrase: "chiama Stefano"
+    direct_match: true
+    actions:
+      - type: ask
+        text: "Vuoi chiamare stefano?"
+        lang: "it-IT"
+        timeout: 5.0
+        on_reply:
+          - phrase: "si"
+            actions:
+              - type: say
+                text: "Sto chiamando Stefano"
+              - type: livekit_join
+              - type: telegram
+                text: "Collegati con casa <room>"
+          - phrase: "no"
+            actions:
+              - type: say
+                text: "Chiamata annullata"
+        on_else:
+          - type: say
+            text: "Non ho capito"
 
 # ---------------------------------------------------------------------------
 # Per-wake-word triggers
