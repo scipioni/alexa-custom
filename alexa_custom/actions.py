@@ -1065,6 +1065,7 @@ async def handle_stop_listening(
     **_,
 ):
     from alexa_custom.stt import set_stt_sleeping
+
     logger.info("Action: stop_listening — putting assistant to sleep")
     set_stt_sleeping(True)
     if on_stt_event:
@@ -1092,10 +1093,13 @@ async def handle_start_listening(
     **_,
 ):
     from alexa_custom.stt import set_stt_sleeping
+
     logger.info("Action: start_listening — waking up assistant")
     set_stt_sleeping(False)
     if on_stt_event:
-        wake_words = [g.word for g in actions_config.wake_words] if actions_config else []
+        wake_words = (
+            [g.word for g in actions_config.wake_words] if actions_config else []
+        )
         on_stt_event("listening", {"wake_words": wake_words})
 
 
@@ -1105,6 +1109,7 @@ async def handle_restart(action: ActionEntry, **_):
     await asyncio.sleep(0.5)
     import os
     import sys
+
     os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
@@ -1113,7 +1118,9 @@ def _calibration_winner(scores: dict[float, float]) -> float:
     return min(scores, key=lambda g: (-scores[g], g))
 
 
-def _calibration_round2_gains(winner: float, gain_low: float, gain_high: float) -> list[float]:
+def _calibration_round2_gains(
+    winner: float, gain_low: float, gain_high: float
+) -> list[float]:
     """Return two probe gains zooming into the neighbourhood around the Round 1 winner."""
     half_step = (gain_high - gain_low) / 6.0
     return [max(0.0, winner - half_step), winner + half_step]
@@ -1138,7 +1145,6 @@ async def handle_calibrate_input_gain(
             settle_ms: 500
     """
     from alexa_custom.audio_hw import (
-        get_input_gain,
         save_input_gain_config,
         set_input_gain,
     )

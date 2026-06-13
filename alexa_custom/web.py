@@ -537,10 +537,19 @@ class WebServer:
                 if threshold is not None and not (0 <= threshold <= 100):
                     return False, "reply_matching_threshold must be between 0 and 100"
             _valid_algos = {"token_set_ratio", "levenshtein", "ratio"}
-            if "matching_algorithm" in rec and rec["matching_algorithm"] not in _valid_algos:
+            if (
+                "matching_algorithm" in rec
+                and rec["matching_algorithm"] not in _valid_algos
+            ):
                 return False, f"Invalid matching_algorithm: {rec['matching_algorithm']}"
-            if "reply_matching_algorithm" in rec and rec["reply_matching_algorithm"] not in _valid_algos:
-                return False, f"Invalid reply_matching_algorithm: {rec['reply_matching_algorithm']}"
+            if (
+                "reply_matching_algorithm" in rec
+                and rec["reply_matching_algorithm"] not in _valid_algos
+            ):
+                return (
+                    False,
+                    f"Invalid reply_matching_algorithm: {rec['reply_matching_algorithm']}",
+                )
 
         if "stt" in config:
             stt = config["stt"]

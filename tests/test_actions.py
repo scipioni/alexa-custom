@@ -797,4 +797,3 @@ async def test_restart_action():
         args = mock_execv.call_args[0]
         assert len(args) == 2
         assert "python" in args[0]
-
