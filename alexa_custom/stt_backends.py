@@ -7,7 +7,7 @@ import numpy as np
 import vosk
 from abc import ABC, abstractmethod
 
-from alexa_custom.config import STTStage1Config, STTStage2Config, WakeWordGroup
+from alexa_custom.config import STTStage1Config, STTStage2Config, WakeWordGroup, Trigger
 
 from alexa_custom.actions import normalize_text
 from alexa_custom.stt_gating import _rms_level
@@ -358,7 +358,13 @@ def _load_model(model_path: str = _MODEL_PATH) -> vosk.Model:
 
 def _phrases_to_grammar(phrases: list[str]) -> str:
     """Convert a list of phrases to a Vosk grammar JSON string."""
-    return json.dumps(phrases + ["[unk]"])
+    normalized = []
+    for p in phrases:
+        norm = normalize_text(p)
+        if norm:
+            normalized.append(norm)
+    normalized = sorted(list(set(normalized)))
+    return json.dumps(normalized + ["[unk]"])
 
 
 def _grammar_json(groups: list[WakeWordGroup]) -> str:
