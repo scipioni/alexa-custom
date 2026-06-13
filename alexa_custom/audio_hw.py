@@ -121,13 +121,14 @@ def get_default_card_name() -> str:
 def _restore_hw_pcm(card: int | None = None) -> None:
     """Restore ALSA hardware PCM to 100% after any pulsectl interaction.
 
-    Resolves the NewPie card dynamically unless `card` is explicitly passed
-    (for test overrides).  When no NewPie is connected the call is a no-op.
+    Resolves the ALSA card dynamically based on the configured card_name, unless `card` is explicitly passed
+    (for test overrides). When no matching card is connected the call is a no-op.
     """
     if card is None:
-        result = _find_alsa_card("NewPie")
+        card_name = get_default_card_name()
+        result = _find_alsa_card(card_name)
         if result is None:
-            logger.debug("_restore_hw_pcm: no NewPie found, skipping")
+            logger.debug(f"_restore_hw_pcm: no {card_name} found, skipping")
             return
         card_index, _ = result
     else:

@@ -6,6 +6,7 @@ import os
 import select
 import subprocess
 import threading
+import time
 import numpy as np
 from typing import Iterator, Callable
 
@@ -173,6 +174,7 @@ def _iter_gated_audio(
     stop_event: threading.Event,
     on_playback_end: Callable[[], None] | None = None,
     name: str = "stt",
+    post_playback_ms: float = 100.0,
 ) -> Iterator[bytes | None]:
     """Yield downmixed mono chunks; yield None once per playback-end drain.
 
@@ -182,6 +184,8 @@ def _iter_gated_audio(
     """
     was_playing = False
     _stall_logged = False
+    playback_ended_at = 0.0
+    post_playback_s = post_playback_ms / 1000.0
     assert proc.stdout is not None
     while not stop_event.is_set():
         raw_data = _read_with_timeout(proc.stdout, _CHUNK * channels, 2.0)
@@ -203,9 +207,13 @@ def _iter_gated_audio(
             logger.debug("%s: playback ended — draining pipe and resetting", name)
             _drain_pipe(proc)
             was_playing = False
+            playback_ended_at = time.monotonic()
             if on_playback_end is not None:
                 on_playback_end()
             yield None
+            continue
+
+        if time.monotonic() - playback_ended_at < post_playback_s:
             continue
 
         yield _apply_input_gain(_downmix_to_mono(raw_data, channels))
