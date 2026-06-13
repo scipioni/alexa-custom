@@ -279,7 +279,11 @@ wake_words:
         # Check that documented numeric and boolean fields match defaults.
         # These are the fields most likely to drift in a copy-paste edit.
         checks = [
-            ("command_timeout", example.recognition.command_timeout, minimal.recognition.command_timeout),
+            (
+                "command_timeout",
+                example.recognition.command_timeout,
+                minimal.recognition.command_timeout,
+            ),
             ("output_volume", example.audio.output_volume, minimal.audio.output_volume),
             ("input_gain", example.audio.input_gain, minimal.audio.input_gain),
         ]

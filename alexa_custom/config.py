@@ -33,6 +33,7 @@ class Trigger:
     phrase: str
     actions: list[ActionEntry]
     aliases: list[str] = field(default_factory=list)
+    patterns: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -336,7 +337,13 @@ def _parse_triggers(raw_triggers: list[Any], path_prefix: str) -> list[Trigger]:
         if not isinstance(raw_aliases, list):
             raise ConfigError(f"config:{path_prefix}[{i}].aliases must be a list")
         aliases = [str(a) for a in raw_aliases if a]
-        triggers.append(Trigger(phrase=phrase, actions=actions, aliases=aliases))
+        raw_patterns = t.get("patterns", [])
+        if not isinstance(raw_patterns, list):
+            raise ConfigError(f"config:{path_prefix}[{i}].patterns must be a list")
+        patterns = [str(p) for p in raw_patterns if p]
+        triggers.append(
+            Trigger(phrase=phrase, actions=actions, aliases=aliases, patterns=patterns)
+        )
     return triggers
 
 
