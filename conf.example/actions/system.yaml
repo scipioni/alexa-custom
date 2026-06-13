@@ -24,7 +24,7 @@ triggers:
       - "che giorno è oggi"
     actions:
       - type: say
-        text: "$(LC_TIME=it_IT.UTF-8 date +'Oggi è %A %d %B %Y')"
+        text: "$(LC_ALL=it_IT.UTF-8 date +'Oggi è %A %d %B %Y')"
 
   - phrase: "riavvia"
     actions:
