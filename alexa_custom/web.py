@@ -992,6 +992,7 @@ class WebServer:
 
         app = web.Application()
         app.router.add_get("/", self._handle_index)
+        app.router.add_static("/static/", Path(__file__).parent / "static")
         app.router.add_get("/ws", self._handle_ws)
         app.router.add_get("/api/config", self._handle_config_get)
         app.router.add_post("/api/config", self._handle_config_update)
@@ -1011,7 +1012,11 @@ class WebServer:
         stats_task = asyncio.create_task(self._system_stats_loop())
         watchdog_task: asyncio.Task | None = None
 
-        all_watch = list(watch_paths or []) + [_DASHBOARD_PATH]
+        all_watch = list(watch_paths or []) + [
+            _DASHBOARD_PATH,
+            Path(__file__).parent / "static" / "dashboard.css",
+            Path(__file__).parent / "static" / "dashboard.js",
+        ]
         asyncio.create_task(self._asset_watcher_loop(all_watch))
 
         if stt_params and "config" in stt_params:
