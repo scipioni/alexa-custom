@@ -1927,21 +1927,22 @@
     function _actionBadge(label) {
       if (!label) return '';
       const l = label.toLowerCase();
-      if (l.startsWith('say:'))          return '<span class="abadge abadge-say">say</span>';
-      if (l.startsWith('shell:'))        return '<span class="abadge abadge-shell">shell</span>';
+      if (l.startsWith('say'))           return '<span class="abadge abadge-say">say</span>';
+      if (l.startsWith('shell'))         return '<span class="abadge abadge-shell">shell</span>';
       if (l.startsWith('livekit'))       return '<span class="abadge abadge-livekit">livekit</span>';
       if (l.startsWith('telegram'))      return '<span class="abadge abadge-telegram">tg</span>';
-      if (l.startsWith('mqtt:'))         return '<span class="abadge abadge-mqtt">mqtt</span>';
-      if (l.startsWith('ask:'))          return '<span class="abadge abadge-ask">ask</span>';
+      if (l.startsWith('mqtt'))          return '<span class="abadge abadge-mqtt">mqtt</span>';
+      if (l.startsWith('ask'))           return '<span class="abadge abadge-ask">ask</span>';
       if (l.startsWith('tone'))          return '<span class="abadge abadge-tone">tone</span>';
-      if (l.startsWith('log:'))          return '<span class="abadge abadge-log">log</span>';
+      if (l.startsWith('log'))           return '<span class="abadge abadge-log">log</span>';
       if (l.startsWith('llm'))           return '<span class="abadge abadge-llm">llm</span>';
+      if (l.startsWith('set_volume'))    return '<span class="abadge abadge-other">vol</span>';
       const short = label.length > 9 ? label.slice(0, 9) + '…' : label;
       return '<span class="abadge abadge-other">' + esc(short) + '</span>';
     }
 
     function _badges(actions) {
-      return (actions || []).map(a => _actionBadge(a.label)).join('');
+      return (actions || []).map(a => _actionBadge(a.type)).join('');
     }
 
     function renderTrigTree(actions) {

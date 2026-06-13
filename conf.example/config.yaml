@@ -11,8 +11,8 @@
 # Per-group triggers (wake_triggers in action files) override the global list.
 # ---------------------------------------------------------------------------
 wake_words:
-  - word: "ascolta assistente"
-    aliases: ["ehi galileo", "ehi sofia"]
+  - word: "ehi assistente"
+    aliases: ["ascolta assistente", "ehi galileo", "ehi sofia"]
   # For emergency-style wake words prefer multi-word phrases so a single
   # utterance in normal conversation does not trigger the assistant.
   # - word: "aiuto aiuto"
