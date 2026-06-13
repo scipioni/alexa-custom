@@ -501,19 +501,8 @@
     .abadge-other    { background: rgba(100,116,139,0.10); color: var(--muted); }
 
     /* ── trigger graph view ─────────────────────────────────────────────── */
-    .trig-view-toggle { display: flex; gap: 3px; }
-    .trig-view-btn {
-      padding: 2px 8px; font-size: 10px; line-height: 1.6;
-      border-radius: 4px; border: 1px solid var(--border);
-      background: transparent; color: var(--muted); cursor: pointer;
-      transition: border-color 0.15s, color 0.15s, background 0.15s;
-    }
-    .trig-view-btn.active { border-color: var(--info); color: var(--text); background: rgba(96,165,250,0.08); }
-    .trig-view-btn:hover  { border-color: var(--info); color: var(--text); }
-    #ww-graph-wrap   { display: none; flex: 1; min-height: 0; overflow-y: auto; }
+    #ww-graph-wrap   { display: block; flex: 1; min-height: 0; overflow-y: auto; }
     #ww-graph-canvas { display: block; width: 100%; }
-    #ww-tree-panel.graph-mode #ww-graph-wrap  { display: block; }
-    #ww-tree-panel.graph-mode #ww-tree-content { display: none; }
 
     .trig-replies { border-left: 1px solid var(--border); margin-left: 10px; padding-left: 6px; margin-bottom: 2px; }
 
@@ -1415,8 +1404,7 @@
       </div>
 
       <div class="panel" id="ww-tree-panel">
-        <div class="panel-hdr">TRIGGERS<div class="trig-view-toggle"><button id="view-list-btn" class="trig-view-btn active" onclick="setTrigView('list')" title="List view">≡ list</button><button id="view-graph-btn" class="trig-view-btn" onclick="setTrigView('graph')" title="Graph view">⬡ graph</button></div></div>
-        <div id="ww-tree-content"></div>
+        <div class="panel-hdr">TRIGGERS</div>
         <div id="ww-graph-wrap"><canvas id="ww-graph-canvas"></canvas></div>
       </div>
 
@@ -2022,60 +2010,9 @@
 
     function renderActions(cfg) {
       if (!cfg) return;
-      if (document.getElementById('ww-tree-panel')?.classList.contains('graph-mode'))
-        renderGraph(cfg);
+      renderGraph(cfg);
       if (!_graphViewInited) {
         _graphViewInited = true;
-        if (localStorage.getItem('trigView') !== 'list') setTrigView('graph');
-      }
-
-      function trigRows(triggers, global) {
-        const extra = global ? ' atrig-global' : '';
-        return (triggers || []).map(t =>
-          '<div class="atrig' + extra + '"><div class="trig-row">'
-          + '<span class="trig-phrase">' + esc(t.phrase) + _aliases(t.aliases) + '</span>'
-          + '<span class="trig-badges">' + _badges(t.actions) + '</span>'
-          + '</div>' + renderTrigTree(t.actions) + '</div>'
-        ).join('');
-      }
-
-      const tree = document.getElementById('ww-tree-content');
-      if (tree) {
-        let h = '';
-
-        function wwCard(w) {
-          const aliases = (w.aliases || []).join(', ');
-          const hasTriggers = w.triggers && w.triggers.length;
-          const hasGlobals = cfg.global_triggers && cfg.global_triggers.length;
-          return '<div class="ww-group">'
-            + '<div class="ww-card" data-word="' + esc(w.word) + '" data-aliases="' + esc((w.aliases||[]).join(',')) + '">'
-            + '<div class="ww-node-hdr">'
-            + '<div class="ww-node-hdr-left">'
-            + '<span class="ww-node-dot"></span>'
-            + '<span class="ww-node-word">' + esc(w.word) + '</span>'
-            + (aliases ? '<span class="ww-node-alias">· ' + esc(aliases) + '</span>' : '')
-            + (w.skip_unmatched_inline ? '<span class="ww-skip-badge" title="skip_unmatched_inline: unrecognised inline commands are silently ignored"><span class="ww-skip-badge-icon">⊘</span>strict</span>' : '')
-            + (!hasTriggers && hasGlobals ? '<span class="ww-global-badge" title="uses global triggers">↓ global</span>' : '')
-            + '</div>'
-            + '<div class="ainteract"></div>'
-            + '</div>'
-            + (hasTriggers
-                ? '<div class="ww-node-triggers">' + trigRows(w.triggers) + '</div>'
-                : '')
-            + '</div>'
-            + '</div>';
-        }
-
-        (cfg.wake_words || []).forEach(w => { h += wwCard(w); });
-
-        if (cfg.global_triggers && cfg.global_triggers.length) {
-          h += '<div class="ww-global-sep">global triggers</div>';
-          h += '<div class="ww-node-triggers" style="margin-left:0;border-left:none;padding-left:2px">'
-            + trigRows(cfg.global_triggers, true)
-            + '</div>';
-        }
-
-        tree.innerHTML = h;
       }
 
       // LLM section — render in monitoring column
@@ -2134,21 +2071,7 @@
       }).filter(Boolean);
     }
 
-    function setTrigView(mode) {
-      const panel = document.getElementById('ww-tree-panel');
-      localStorage.setItem('trigView', mode);
-      document.getElementById('view-list-btn').classList.toggle('active', mode === 'list');
-      document.getElementById('view-graph-btn').classList.toggle('active', mode === 'graph');
-      if (mode === 'graph') {
-        panel.classList.add('graph-mode');
-        const wrap = document.getElementById('ww-graph-wrap');
-        if (wrap) wrap.scrollTop = 0;
-        renderGraph(_cfg);
-      } else {
-        panel.classList.remove('graph-mode');
-        _stopGraph();
-      }
-    }
+
 
     function _stopGraph() {
       if (_graphAnimId) { cancelAnimationFrame(_graphAnimId); _graphAnimId = null; }
