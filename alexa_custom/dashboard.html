@@ -608,6 +608,11 @@
       align-items: center;
       gap: 6px;
     }
+    .he-bot {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
     .hts {
       font-size: 9px;
       color: var(--muted);
@@ -640,9 +645,8 @@
       line-height: 1.35;
       flex: 1;
       min-width: 0;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
+      white-space: normal;
+      word-break: break-word;
     }
     .htrig {
       display: inline-flex; align-items: center; gap: 4px;
@@ -2854,12 +2858,8 @@
         + (wake ? '<span class="hwk">' + esc(wake) + '</span>' : '<span></span>')
         + '<span class="hts">' + ts + '</span>'
         + '</div>'
-        + (transcript || hasTrig
-            ? '<div class="he-mid">'
-              + (transcript ? '<span class="hcmd">"' + esc(transcript) + '"</span>' : '')
-              + (hasTrig ? '<span class="' + (trigger.includes('✗') ? 'hnomatch' : 'htrig') + '">' + esc(trigger) + '</span>' : '')
-              + '</div>'
-            : ''));
+        + (transcript ? '<div class="he-mid"><span class="hcmd">"' + esc(transcript) + '"</span></div>' : '')
+        + (hasTrig ? '<div class="he-bot"><span class="' + (trigger.includes('✗') ? 'hnomatch' : 'htrig') + '">' + esc(trigger) + '</span></div>' : ''));
     }
 
     function addHistoryLLM(transcript, reply) {

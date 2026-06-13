@@ -39,6 +39,11 @@ tasks:
     cmds:
       - PYTHONPATH={{.PYTHONPATH}} python3 alexa_custom/client.py {{.CLI_ARGS}}
 
+  start:
+    desc: Start alexa-client with hot-reload enabled
+    cmds:
+      - alexa-client --hot-reload
+
   release:patch:
     desc: Bump patch version (x.y.Z+1), commit and tag
     cmds:
