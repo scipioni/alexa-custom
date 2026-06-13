@@ -161,6 +161,9 @@ class RecognitionConfig:
     follow_up_timeout: float = 4.0
     follow_up_max_turns: int = 5
     follow_up_tone: str = "info"
+    # Maximum seconds a single dispatched turn may run on the STT thread.
+    # Covers TTS + LLM + livekit connect backoff (≤30s) — keep well above that.
+    dispatch_timeout: float = 90.0
 
 
 @dataclass
@@ -612,6 +615,7 @@ def _parse_recognition_config(raw: dict) -> RecognitionConfig:
         follow_up_timeout=_get_float(raw, "follow_up_timeout", 4.0),
         follow_up_max_turns=_get_int(raw, "follow_up_max_turns", 5),
         follow_up_tone=str(raw.get("follow_up_tone", "info")),
+        dispatch_timeout=_get_float(raw, "dispatch_timeout", 90.0),
     )
 
 

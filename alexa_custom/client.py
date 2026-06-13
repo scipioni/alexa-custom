@@ -43,6 +43,20 @@ from alexa_custom.livekit_audio import (  # noqa: F401
 RECONNECT_DELAY = 5  # seconds between reconnect attempts
 
 
+def _stt_heartbeat_fresh(
+    stt_heartbeat_ref: "list[float] | None",
+    heartbeat_freshness: float,
+) -> bool:
+    """Return True when the STT heartbeat is recent enough to justify a watchdog ping.
+
+    Returns True unconditionally when STT is not running or no freshness threshold
+    is configured (watchdog_sec <= ping_interval).
+    """
+    if stt_heartbeat_ref is None or heartbeat_freshness <= 0.0:
+        return True
+    return (time.monotonic() - stt_heartbeat_ref[0]) < heartbeat_freshness
+
+
 async def _graceful_shutdown(
     stt_stop: threading.Event | None,
     mqtt_client,
@@ -510,20 +524,18 @@ async def _async_main(
         await asyncio.sleep(0.5)
 
         logger.info(f"Executing {len(actions_config.on_startup)} startup action(s)")
-        from alexa_custom.actions import TelegramClient, _run_action
+        from alexa_custom.actions import ActionContext, TelegramClient, _run_action
 
         # We don't have a connect_fn or connected_flag here in a way that _run_action
         # can use for livekit_join safely during early startup, but we can pass None.
         telegram_client = TelegramClient()
+        _startup_ctx = ActionContext(
+            telegram_client=telegram_client,
+            mqtt_client=mqtt_client,
+        )
         for action in actions_config.on_startup:
             try:
-                await _run_action(
-                    action,
-                    telegram_client=telegram_client,
-                    livekit_connect_fn=None,
-                    livekit_connected=False,
-                    mqtt_client=mqtt_client,
-                )
+                await _run_action(action, _startup_ctx)
             except Exception as e:
                 logger.error(f"Startup action {action.type} failed: {e}")
 
@@ -605,8 +617,33 @@ async def _async_main(
     last_watchdog_ping = 0.0
     watchdog_interval = 10.0  # ping every 10 seconds
 
+    # Compute STT heartbeat freshness threshold from systemd's WatchdogSec.
+    # If the STT thread stamps more than `_heartbeat_freshness` seconds ago, the
+    # ping is withheld so systemd restarts a deaf/hung assistant.
+    _watchdog_usec = int(os.environ.get("WATCHDOG_USEC", "0"))
+    _watchdog_sec = _watchdog_usec / 1_000_000 if _watchdog_usec > 0 else 0.0
+    _heartbeat_freshness = (
+        _watchdog_sec - watchdog_interval if _watchdog_sec > watchdog_interval else 0.0
+    )
+
+    # Grab a reference to the STT heartbeat holder so the ping loop can read it
+    # without importing inside the hot path. Only gate when STT is running
+    # (indicated by stt_ready_event being provided by the caller).
+    _stt_heartbeat_ref: list[float] | None = None
+    if stt_ready_event is not None:
+        from alexa_custom.stt import _stt_heartbeat as _imported_hb
+
+        _stt_heartbeat_ref = _imported_hb
+
     # Send initial systemd notification to signal startup complete.
     if use_watchdog:
+        if _watchdog_sec > 0:
+            logger.info(
+                "Watchdog: WatchdogSec=%.0fs ping_interval=%.0fs heartbeat_freshness=%.0fs",
+                _watchdog_sec,
+                watchdog_interval,
+                _heartbeat_freshness if _heartbeat_freshness > 0 else float("inf"),
+            )
         sd_notify("READY=1")
         last_watchdog_ping = time.time()
 
@@ -614,9 +651,20 @@ async def _async_main(
         while not stop_event.is_set():
             # Periodically ping systemd watchdog to prevent auto-restart.
             # Only ping if enabled (Type=notify + WatchdogSec in systemd unit).
+            # Ping is gated on STT heartbeat freshness: a hung STT thread stops
+            # stamping, the heartbeat goes stale, and systemd triggers a restart.
             if use_watchdog and (time.time() - last_watchdog_ping) >= watchdog_interval:
-                sd_notify("WATCHDOG=1")
-                last_watchdog_ping = time.time()
+                if _stt_heartbeat_fresh(_stt_heartbeat_ref, _heartbeat_freshness):
+                    sd_notify("WATCHDOG=1")
+                    last_watchdog_ping = time.time()
+                else:
+                    heartbeat_age = time.monotonic() - (_stt_heartbeat_ref or [0.0])[0]
+                    logger.warning(
+                        "Watchdog: STT heartbeat stale (%.0fs old, threshold=%.0fs)"
+                        " — withholding ping",
+                        heartbeat_age,
+                        _heartbeat_freshness,
+                    )
 
             # On-demand mode: wait for STT to signal a connect trigger.
             if connect_trigger is not None:
