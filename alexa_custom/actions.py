@@ -1058,12 +1058,30 @@ async def handle_meteo(
 
 
 @registry.register("stop_listening")
-async def handle_stop_listening(action: ActionEntry, on_stt_event: Callable[[str, dict], None] | None = None, **_):
+async def handle_stop_listening(
+    action: ActionEntry,
+    on_stt_event: Callable[[str, dict], None] | None = None,
+    actions_config=None,
+    **_,
+):
     from alexa_custom.stt import set_stt_sleeping
     logger.info("Action: stop_listening — putting assistant to sleep")
     set_stt_sleeping(True)
     if on_stt_event:
-        on_stt_event("sleeping", {})
+        wake_up_phrases = []
+        if actions_config:
+            for t in getattr(actions_config, "direct_triggers", []):
+                if any(a.type == "start_listening" for a in t.actions):
+                    wake_up_phrases.append(t.phrase)
+            for t in getattr(actions_config, "triggers", []):
+                if any(a.type == "start_listening" for a in t.actions):
+                    wake_up_phrases.append(t.phrase)
+            for g in getattr(actions_config, "wake_words", []):
+                for t in g.triggers:
+                    if any(a.type == "start_listening" for a in t.actions):
+                        wake_up_phrases.append(t.phrase)
+        phrases_str = ", ".join(sorted(list(set(wake_up_phrases))))
+        on_stt_event("sleeping", {"wake_up_phrase": phrases_str})
 
 
 @registry.register("start_listening")
@@ -1079,6 +1097,15 @@ async def handle_start_listening(
     if on_stt_event:
         wake_words = [g.word for g in actions_config.wake_words] if actions_config else []
         on_stt_event("listening", {"wake_words": wake_words})
+
+
+@registry.register("restart")
+async def handle_restart(action: ActionEntry, **_):
+    logger.info("Action: restart — restarting application...")
+    await asyncio.sleep(0.5)
+    import os
+    import sys
+    os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
 def _calibration_winner(scores: dict[float, float]) -> float:
