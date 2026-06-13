@@ -34,7 +34,8 @@ task lint          # ruff check + format --check
 task format        # ruff format
 task fix           # ruff fix + format + test
 task run           # run alexa-client directly
-task setup         # install systemd user service
+task setup              # install systemd user service
+task setup:actions      # copy system actions from conf.example to conf (after pull)
 ```
 
 Manual entry points:
