@@ -1057,6 +1057,30 @@ async def handle_meteo(
         logger.warning("Open-Meteo API returned incomplete daily data")
 
 
+@registry.register("stop_listening")
+async def handle_stop_listening(action: ActionEntry, on_stt_event: Callable[[str, dict], None] | None = None, **_):
+    from alexa_custom.stt import set_stt_sleeping
+    logger.info("Action: stop_listening — putting assistant to sleep")
+    set_stt_sleeping(True)
+    if on_stt_event:
+        on_stt_event("sleeping", {})
+
+
+@registry.register("start_listening")
+async def handle_start_listening(
+    action: ActionEntry,
+    on_stt_event: Callable[[str, dict], None] | None = None,
+    actions_config=None,
+    **_,
+):
+    from alexa_custom.stt import set_stt_sleeping
+    logger.info("Action: start_listening — waking up assistant")
+    set_stt_sleeping(False)
+    if on_stt_event:
+        wake_words = [g.word for g in actions_config.wake_words] if actions_config else []
+        on_stt_event("listening", {"wake_words": wake_words})
+
+
 async def _run_action(
     action: ActionEntry,
     telegram_client: TelegramClient,
