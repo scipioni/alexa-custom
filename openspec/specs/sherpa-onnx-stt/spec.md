@@ -43,26 +43,15 @@ If `from_zipformer2_ctc` is not available in the installed `sherpa_onnx` version
 - **THEN** the system logs a warning and falls through to `from_paraformer()`
 
 ### Requirement: Model download
-The system SHALL download the sherpa-onnx Italian Paraformer model via `alexa-setup --sherpa-onnx` and store it under `models/sherpa-onnx/`.
+The system SHALL download the sherpa-onnx NeMo FastConformer CTC model via `alexa-setup --sherpa-onnx` and store it under `models/sherpa-onnx/nemo-ctc-it/`.
 
 #### Scenario: Model download
 - **WHEN** the user runs `alexa-setup --sherpa-onnx`
-- **THEN** the sherpa-onnx Paraformer-ita ONNX model is downloaded to `models/sherpa-onnx/`
+- **THEN** the NeMo CTC ONNX model and tokens are downloaded to `models/sherpa-onnx/nemo-ctc-it/`
 
 #### Scenario: Missing model at startup
-- **WHEN** `stt.backend: sherpa-onnx` is configured but the model is not present
-- **THEN** the system logs an error and exits with a non-zero status
-
-### Requirement: Equivalent recognition behavior
-The sherpa-onnx backend SHALL produce partial and final text results equivalent to the Vosk backend for the same audio input.
-
-#### Scenario: Partial results during speech
-- **WHEN** audio is being captured with sherpa-onnx backend active
-- **THEN** partial transcription text is available via `recognizer.text` property after each AcceptWaveform call
-
-#### Scenario: Final result after silence
-- **WHEN** the VAD detects end of speech
-- **THEN** `recognizer.text` returns the final transcribed text
+- **WHEN** `stt.backend: sherpa-onnx` or `stt.stage<N>.backend: nemo-offline` is configured but the model is not present
+- **THEN** the system logs an error with guidance to run `alexa-setup --sherpa-onnx` and exits with a non-zero status
 
 ### Requirement: Backend-agnostic trigger matching
 The wake word and command trigger matching logic SHALL remain identical regardless of which STT backend is active.
