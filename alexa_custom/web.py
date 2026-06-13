@@ -532,6 +532,15 @@ class WebServer:
                 threshold = rec["matching_threshold"]
                 if threshold is not None and not (0 <= threshold <= 100):
                     return False, "matching_threshold must be between 0 and 100"
+            if "reply_matching_threshold" in rec:
+                threshold = rec["reply_matching_threshold"]
+                if threshold is not None and not (0 <= threshold <= 100):
+                    return False, "reply_matching_threshold must be between 0 and 100"
+            _valid_algos = {"token_set_ratio", "levenshtein", "ratio"}
+            if "matching_algorithm" in rec and rec["matching_algorithm"] not in _valid_algos:
+                return False, f"Invalid matching_algorithm: {rec['matching_algorithm']}"
+            if "reply_matching_algorithm" in rec and rec["reply_matching_algorithm"] not in _valid_algos:
+                return False, f"Invalid reply_matching_algorithm: {rec['reply_matching_algorithm']}"
 
         if "stt" in config:
             stt = config["stt"]
@@ -871,7 +880,13 @@ class WebServer:
             result["recognition"] = {
                 "command_timeout": config.recognition.command_timeout,
                 "matching_threshold": config.recognition.matching_threshold,
+                "matching_algorithm": config.recognition.matching_algorithm,
                 "partial_matching": config.recognition.partial_matching,
+                "reply_matching_algorithm": config.recognition.reply_matching_algorithm,
+                "reply_matching_threshold": config.recognition.reply_matching_threshold,
+                "follow_up": config.recognition.follow_up,
+                "follow_up_timeout": config.recognition.follow_up_timeout,
+                "follow_up_max_turns": config.recognition.follow_up_max_turns,
             }
 
         if config.stt is not None:
@@ -880,6 +895,7 @@ class WebServer:
                     "backend": config.stt.stage1.backend,
                     "confidence": config.stt.stage1.confidence,
                     "rms_threshold": config.stt.stage1.rms_threshold,
+                    "adaptive_rms": config.stt.stage1.adaptive_rms,
                 }
             }
 
