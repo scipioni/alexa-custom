@@ -266,11 +266,12 @@ triggers:
     wake_words: []
     actions:
       - type: ask
-        text: "Vuoi chiamare stefano?"
+        text: "Vuoi chiamare Stefano?"
         lang: "it-IT"
         timeout: 5.0
         on_reply:
           - phrase: "si"
+            aliases: ["sì", "si si", "sì sì", "va bene", "certo", "ok", "dai"]
             actions:
               - type: say
                 text: "Sto chiamando Stefano"
@@ -278,6 +279,7 @@ triggers:
               - type: telegram
                 text: "Collegati con casa <room>"
           - phrase: "no"
+            aliases: ["no no", "no grazie", "annulla"]
             actions:
               - type: say
                 text: "Chiamata annullata"
@@ -296,6 +298,7 @@ triggers:
         timeout: 5.0
         on_reply:
           - phrase: "si"
+            aliases: ["sì", "si si", "sì sì", "va bene", "certo", "ok", "dai"]
             actions:
               - type: say
                 text: "Sto chiamando l'assistenza"
@@ -303,6 +306,7 @@ triggers:
               - type: telegram
                 text: "Collegati con casa <room>"
           - phrase: "no"
+            aliases: ["no no", "no grazie", "annulla"]
             actions:
               - type: say
                 text: "Chiamata annullata"
