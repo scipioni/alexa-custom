@@ -1289,6 +1289,14 @@ def _wake_detected(
                 )
                 return None
 
+        if trig is not None and not is_stt_sleeping():
+            if any(a.type == "start_listening" for a in trig.actions):
+                logger.info(
+                    "start_listening trigger '%s' ignored: system is already awake",
+                    trig.phrase,
+                )
+                return None
+
         if trig is None:
             if on_stt_event:
                 on_stt_event("nomatch", {"transcript": cmd})
