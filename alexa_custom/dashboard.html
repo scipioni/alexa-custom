@@ -199,7 +199,7 @@
     /* ── three-column main grid ─────────────────────────────────────────── */
     #main {
       display: grid;
-      grid-template-columns: 240px 1fr 252px;
+      grid-template-columns: 1fr 252px;
       gap: 8px;
       min-height: 0;
       margin: 8px 12px 0;
@@ -207,10 +207,11 @@
     }
 
     .hist-col {
-      display: flex;
+      display: none;
       flex-direction: column;
       gap: 8px;
       min-height: 0;
+      height: 100%;
     }
 
     .center-col {
@@ -772,7 +773,7 @@
     #history-section { flex: 1; min-height: 0; }
     #hist-content {
       transition: max-height 0.3s ease, opacity 0.3s ease, padding 0.3s ease;
-      max-height: none;
+      max-height: 2000px;
       flex: 1;
       min-height: 0;
       display: flex;
@@ -1387,11 +1388,11 @@
     /* ── responsive: narrow screens ───────────────────────────────────────── */
     @media (max-width: 800px) {
       #main {
-        grid-template-columns: 1fr;
-        grid-template-rows: auto 1fr auto;
+        grid-template-columns: 1fr !important;
+        grid-template-rows: auto 1fr auto !important;
       }
-      #monitoring-section { display: none; }
-      .hist-col { display: none; }
+      #monitoring-section { display: none !important; }
+      .hist-col { display: none !important; }
     }
   </style>
 </head>
@@ -1404,15 +1405,6 @@
     </div>
 
   <div id="main">
-
-    <div class="hist-col">
-      <div class="panel" id="history-section">
-        <div class="panel-hdr clickable" onclick="toggleHistory()">HISTORY <span style="margin-right:auto"></span><button onclick="event.stopPropagation();clearHistory()">clear</button><span id="hist-toggle-icon">▾</span></div>
-        <div id="hist-content">
-          <div id="hl"></div>
-        </div>
-      </div>
-    </div>
 
     <div class="center-col">
       <div id="hero">
@@ -1432,6 +1424,15 @@
         <div class="panel-hdr clickable" onclick="toggleLog()">LOGS <span style="margin-right:auto"></span><button onclick="event.stopPropagation();clearLogs()">clear</button><span id="log-toggle-icon">▾</span></div>
         <div id="log-content">
           <div id="le"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="hist-col" style="display: none;">
+      <div class="panel" id="history-section">
+        <div class="panel-hdr">HISTORY <span style="margin-right:auto"></span><button onclick="event.stopPropagation();clearHistory()">clear</button></div>
+        <div id="hist-content">
+          <div id="hl"></div>
         </div>
       </div>
     </div>
@@ -2788,7 +2789,27 @@
     }
 
     function clearLogs()    { document.getElementById('le').innerHTML = ''; }
-    function clearHistory() { document.getElementById('hl').innerHTML = ''; }
+
+    function updateHistoryVisibility() {
+      const hl = document.getElementById('hl');
+      const histCol = document.querySelector('.hist-col');
+      const main = document.getElementById('main');
+      if (hl && histCol && main) {
+        const hasItems = hl.children.length > 0;
+        if (hasItems) {
+          histCol.style.display = 'flex';
+          main.style.gridTemplateColumns = '1fr 240px 252px';
+        } else {
+          histCol.style.display = 'none';
+          main.style.gridTemplateColumns = '1fr 252px';
+        }
+      }
+    }
+
+    function clearHistory() {
+      document.getElementById('hl').innerHTML = '';
+      updateHistoryVisibility();
+    }
 
     const MAX_HIST = 60;
     function _hePush(html) {
@@ -2799,6 +2820,7 @@
       d.innerHTML = html;
       el.insertBefore(d, el.firstChild);
       while (el.children.length > MAX_HIST) el.removeChild(el.lastChild);
+      updateHistoryVisibility();
     }
 
     function addHistoryWake(word) {
@@ -3041,14 +3063,11 @@
         const sec = document.getElementById('monitoring-section');
         if (sec) sec.classList.add('collapsed');
       }
-      if (localStorage.getItem('history-collapsed') === '1') {
-        const sec = document.getElementById('history-section');
-        if (sec) sec.classList.add('collapsed');
-      }
       if (localStorage.getItem('log-collapsed') === '1') {
         const sec = document.getElementById('log-panel');
         if (sec) sec.classList.add('collapsed');
       }
+      updateHistoryVisibility();
     })();
 
     connect();
