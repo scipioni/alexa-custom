@@ -2,21 +2,10 @@
 #
 # Copy to conf/config.yaml and edit as needed.
 # Credentials (LiveKit, Telegram, LLM, MQTT passwords) go in conf/secrets.yaml.
-# Per-user additions (extra wake words) go in conf/user.yaml (see user.yaml.example).
+# Custom triggers and extra wake words go in conf/actions/user.yaml.
 # This file is hot-reloaded every ~system.config_poll_interval seconds.
 
-# ---------------------------------------------------------------------------
-# Wake words (required)
-# Each group listens for its 'word' and optional 'aliases'.
-# Per-group triggers (wake_triggers in action files) override the global list.
-# ---------------------------------------------------------------------------
-wake_words:
-  - word: "ehi assistente"
-    aliases: ["ascolta assistente", "ehi galileo", "ehi sofia"]
-  # For emergency-style wake words prefer multi-word phrases so a single
-  # utterance in normal conversation does not trigger the assistant.
-  # - word: "aiuto aiuto"
-  #   aliases: ["aiutami", "mi serve aiuto"]
+
 
 # ---------------------------------------------------------------------------
 # Recognition

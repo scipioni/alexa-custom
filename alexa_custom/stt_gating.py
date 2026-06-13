@@ -175,12 +175,18 @@ def _iter_gated_audio(
     on_playback_end: Callable[[], None] | None = None,
     name: str = "stt",
     post_playback_ms: float = 100.0,
+    dispatch_ended_at: list[float] | None = None,
 ) -> Iterator[bytes | None]:
     """Yield downmixed mono chunks; yield None once per playback-end drain.
 
     Handles parec-exit (returns), read stalls, and playback-gate filtering.
     After TTS ends, drains the pipe backlog, calls on_playback_end to reset
     backend state, and yields None so the caller can issue a continue.
+
+    dispatch_ended_at: single-element list[float] shared with the recognition
+    loop. After a synchronous dispatch (_wake_detected), the loop sets
+    dispatch_ended_at[0] = time.monotonic() so the hold-off fires even when
+    the iterator was blocked during playback and never saw was_playing=True.
     """
     was_playing = False
     _stall_logged = False
@@ -213,7 +219,8 @@ def _iter_gated_audio(
             yield None
             continue
 
-        if time.monotonic() - playback_ended_at < post_playback_s:
+        _external_ended = dispatch_ended_at[0] if dispatch_ended_at else 0.0
+        if time.monotonic() - max(playback_ended_at, _external_ended) < post_playback_s:
             continue
 
         yield _apply_input_gain(_downmix_to_mono(raw_data, channels))

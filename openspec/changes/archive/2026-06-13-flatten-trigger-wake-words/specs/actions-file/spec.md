@@ -1,9 +1,4 @@
-# Capability: Actions File
-
-## Purpose
-Manage learned and user-defined triggers in a separate actions file to decouple them from the main configuration.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: actions.yaml schema with global and per-wake-word triggers
 Each action file in `conf/actions/` SHALL support the following top-level keys:
@@ -29,22 +24,8 @@ The `wake_triggers` top-level key is no longer supported. The `direct_match` fie
 - **WHEN** any action file contains a `wake_triggers:` top-level key
 - **THEN** the key is ignored with a warning log; triggers within it are not loaded
 
-## Removed Requirements
+## REMOVED Requirements
 
 ### Requirement: direct_match flag on trigger entries
 **Reason**: Replaced by `wake_words: []` semantics. The `direct_match: true` flag was a per-trigger boolean that caused stage-1 firing; `wake_words: []` is the canonical replacement.
 **Migration**: Replace `direct_match: true` on a trigger with `wake_words: []`. Remove the `direct_match` key entirely from all trigger entries.
-
-### Requirement: Atomic writes to learn_file
-`ActionsFileStore.save()` SHALL write to a temporary file in the same directory as `learn_file` and atomically rename it over the target path. This applies to `conf/actions/learned.yaml` by default.
-
-#### Scenario: Concurrent hot-reload during write to learned.yaml
-- **WHEN** the learning agent writes a new command while the hot-reload watcher polls
-- **THEN** the watcher reads either the old complete file or the new complete file — never a partial write
-
-### Requirement: learn_file auto-created on first write
-If the `learn_file` does not exist when the `llm_learn` action writes a new command, the system SHALL create the file with appropriate YAML structure (header comment + triggers list).
-
-#### Scenario: learned.yaml created on first llm_learn
-- **WHEN** `llm_learn` is triggered for the first time and `conf/actions/learned.yaml` does not exist
-- **THEN** the file is created with the new trigger as its first entry; no error is raised

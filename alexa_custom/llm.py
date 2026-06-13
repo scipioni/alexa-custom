@@ -414,20 +414,14 @@ class ActionsFileStore:
             return d
 
         trigger_dict = _trigger_to_dict(trigger)
-
         if wake_word:
-            if "wake_triggers" not in doc:
-                doc["wake_triggers"] = CommentedMap()
-            wt = doc["wake_triggers"]
-            if wake_word not in wt:
-                wt[wake_word] = CommentedSeq()
-            entries = wt[wake_word]
-            entries.append(trigger_dict)
-        else:
-            if "triggers" not in doc:
-                doc["triggers"] = CommentedSeq()
-            entries = doc["triggers"]
-            entries.append(trigger_dict)
+            ww_seq = CommentedSeq()
+            ww_seq.append(wake_word)
+            trigger_dict["wake_words"] = ww_seq
+
+        if "triggers" not in doc:
+            doc["triggers"] = CommentedSeq()
+        doc["triggers"].append(trigger_dict)
 
         import io
 
