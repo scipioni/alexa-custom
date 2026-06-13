@@ -35,6 +35,15 @@ _SHERRPA_FILES = [
     "tokens.txt",
 ]
 
+# Alternative models (uncomment to use):
+# _SHERPA_MODELS["nemo_ctc"] = (
+#     "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-fast-conformer-ctc-be-de-en-es-fr-hr-it-pl-ru-uk-20k/resolve/main",
+#     "models/sherpa-onnx/nemo-ctc-it",
+# )
+# _SHERRPA_FILES = ["model.onnx", "tokens.txt"]
+# Note: the NeMo model above lacks ONNX metadata required by from_nemo_ctc().
+# Use the export script at addons/nemo-export/ to add metadata.
+
 
 def download_sherpa_onnx(model: str = "kroko_128l", force: bool = False) -> None:
     if model not in _SHERPA_MODELS:
