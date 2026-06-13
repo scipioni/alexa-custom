@@ -15,7 +15,13 @@ if TYPE_CHECKING:
     from alexa_custom.mqtt import MQTTClient
 
 from alexa_custom import metrics
-from alexa_custom.actions import TelegramClient, dispatch, match_trigger, normalize_text
+from alexa_custom.actions import (
+    ActionContext,
+    TelegramClient,
+    dispatch,
+    match_trigger,
+    normalize_text,
+)
 from alexa_custom.audio import play_wake_beep
 from alexa_custom.config import (
     ActionEntry,
@@ -93,6 +99,7 @@ __all__ = [
     "_match_full_intent",
     "capture_transcript",
     "start_stt_thread",
+    "_stt_heartbeat",
 ]
 
 logger = logging.getLogger(__name__)
@@ -107,6 +114,11 @@ _STAGE1_MIN_SPEECH_MS = int(os.environ.get("STT_STAGE1_MIN_SPEECH_MS", "200"))
 
 
 _stt_sleeping = False
+
+# Heartbeat stamped by the recognition loops on every iteration.
+# The main async loop (client.py) gates systemd WATCHDOG=1 pings on freshness.
+# Single-element list so writes are atomic under the GIL.
+_stt_heartbeat: list[float] = [0.0]
 
 
 def get_wake_up_phrases(config: ActionsConfig) -> str:
@@ -146,6 +158,8 @@ def run_stt_worker(
     stt_ready_event: threading.Event | None = None,
 ) -> None:
     """Entry point for the STT daemon thread."""
+    _stt_heartbeat[0] = time.monotonic()
+
     _get_config: Callable[[], ActionsConfig]
     if callable(config) and not isinstance(config, ActionsConfig):
         _get_config = config  # type: ignore[assignment]
@@ -283,7 +297,7 @@ def run_stt_worker(
                     logger.info("STT stage1 backend reloaded after config change")
                 except RuntimeError as e:
                     logger.error(f"STT stage1 backend reload failed: {e}")
-                    time.sleep(2)
+                    stop_event.wait(2)
                     continue
 
             if new_stage2_key != stage2_key:
@@ -302,7 +316,7 @@ def run_stt_worker(
                     logger.info("STT stage2 backend reloaded after config change")
                 except RuntimeError as e:
                     logger.error(f"STT stage2 backend reload failed: {e}")
-                    time.sleep(2)
+                    stop_event.wait(2)
                     continue
 
             proc: subprocess.Popen | None = None
@@ -328,7 +342,7 @@ def run_stt_worker(
                 )
             except Exception as e:
                 logger.error(f"STT error: {e}", exc_info=True)
-                time.sleep(2)
+                stop_event.wait(2)
             else:
                 # loop_fn returned without raising: capture ended (e.g. parec EOF
                 # on mic unplug / pipewire restart). start_capture() succeeds even
@@ -433,6 +447,15 @@ def _single_stage_loop(
     )
     _dloop = dispatch_loop
     assert _dloop is not None, "dispatch_loop must be provided to _single_stage_loop"
+    _ctx = ActionContext(
+        telegram_client=telegram_client,
+        livekit_connect_fn=livekit_connect_fn,
+        livekit_connected=livekit_connected_flag.is_set(),
+        listen_fn=_listen_fn,
+        mqtt_client=mqtt_client,
+        on_stt_event=on_stt_event,
+        actions_config=config,
+    )
 
     _adaptive_rms = config.stt.stage1.adaptive_rms
     _adaptive_rms_margin = config.stt.stage1.adaptive_rms_margin
@@ -447,6 +470,7 @@ def _single_stage_loop(
         name="single-stage",
         post_playback_ms=config.audio.post_playback_ms,
     ):
+        _stt_heartbeat[0] = time.monotonic()
         if data is None:
             continue
 
@@ -561,19 +585,22 @@ def _single_stage_loop(
                     actions=[ActionEntry(type="llm_chat", params={})],
                 )
                 try:
+                    _ctx.livekit_connected = livekit_connected_flag.is_set()
                     _dloop.run_until_complete(
-                        dispatch(
-                            _fb_trigger,
-                            telegram_client,
-                            livekit_connect_fn,
-                            livekit_connected=livekit_connected_flag.is_set(),
-                            listen_fn=_listen_fn,
-                            on_stt_event=on_stt_event,
-                            actions_config=config,
-                            wake_word=wake_group.word,
-                            transcript=command,
-                            mqtt_client=mqtt_client,
+                        asyncio.wait_for(
+                            dispatch(
+                                _fb_trigger,
+                                _ctx,
+                                wake_word=wake_group.word,
+                                transcript=command,
+                            ),
+                            timeout=config.recognition.dispatch_timeout,
                         )
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "LLM fallback dispatch timed out after %.0fs",
+                        config.recognition.dispatch_timeout,
                     )
                 except Exception as e:
                     logger.error("LLM fallback error: %s", e)
@@ -587,20 +614,14 @@ def _single_stage_loop(
         if on_stt_event:
             on_stt_event("matched", {"transcript": command, "trigger": trigger.phrase})
 
-        connected = livekit_connected_flag.is_set()
         try:
+            _ctx.livekit_connected = livekit_connected_flag.is_set()
             _dloop.run_until_complete(
-                dispatch(
-                    trigger,
-                    telegram_client,
-                    livekit_connect_fn,
-                    livekit_connected=connected,
-                    listen_fn=_listen_fn,
-                    on_stt_event=on_stt_event,
-                    actions_config=config,
-                    wake_word=wake_group.word,
-                    transcript=command,
-                    mqtt_client=mqtt_client,
+                asyncio.wait_for(
+                    dispatch(
+                        trigger, _ctx, wake_word=wake_group.word, transcript=command
+                    ),
+                    timeout=config.recognition.dispatch_timeout,
                 )
             )
             _drain_pipe(proc)
@@ -609,6 +630,13 @@ def _single_stage_loop(
                 on_stt_event(
                     "listening", {"wake_words": [g.word for g in config.wake_words]}
                 )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Dispatch timed out after %.0fs — resetting and resuming",
+                config.recognition.dispatch_timeout,
+            )
+            _drain_pipe(proc)
+            backend.reset()
         except Exception as e:
             logger.error(f"Action dispatch failed: {e}")
 
@@ -717,6 +745,7 @@ def _recognition_loop(
         post_playback_ms=config.audio.post_playback_ms,
         dispatch_ended_at=_dispatch_ended_at,
     ):
+        _stt_heartbeat[0] = time.monotonic()
         if data is None:
             continue
 
@@ -1239,6 +1268,18 @@ def _wake_detected(
         proc, channels, backend, stop_event, on_stt_event, vad_silence_ms
     )
     _dloop = dispatch_loop
+    if _dloop is None:
+        logger.error("_wake_detected: dispatch_loop is None — cannot dispatch actions")
+        return
+    _ctx = ActionContext(
+        telegram_client=telegram_client,
+        livekit_connect_fn=livekit_connect_fn,
+        livekit_connected=livekit_connected_flag.is_set(),
+        listen_fn=_listen_fn,
+        mqtt_client=mqtt_client,
+        on_stt_event=on_stt_event,
+        actions_config=config,
+    )
 
     if not transcript:
         if on_stt_event:
@@ -1295,20 +1336,22 @@ def _wake_detected(
                     actions=[ActionEntry(type="llm_chat", params={})],
                 )
                 try:
-                    assert _dloop is not None
+                    _ctx.livekit_connected = livekit_connected_flag.is_set()
                     _dloop.run_until_complete(
-                        dispatch(
-                            _fb_trigger,
-                            telegram_client,
-                            livekit_connect_fn,
-                            livekit_connected=livekit_connected_flag.is_set(),
-                            listen_fn=_listen_fn,
-                            on_stt_event=on_stt_event,
-                            actions_config=config,
-                            wake_word=wake_group.word,
-                            transcript=cmd,
-                            mqtt_client=mqtt_client,
+                        asyncio.wait_for(
+                            dispatch(
+                                _fb_trigger,
+                                _ctx,
+                                wake_word=wake_group.word,
+                                transcript=cmd,
+                            ),
+                            timeout=config.recognition.dispatch_timeout,
                         )
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "LLM fallback dispatch timed out after %.0fs",
+                        config.recognition.dispatch_timeout,
                     )
                 except Exception as e:
                     logger.error("LLM fallback error: %s", e)
@@ -1329,21 +1372,20 @@ def _wake_detected(
                 logger.debug(f"Direct match beep failed: {e}")
 
         try:
-            assert _dloop is not None
+            _ctx.livekit_connected = livekit_connected_flag.is_set()
             _dloop.run_until_complete(
-                dispatch(
-                    trig,
-                    telegram_client,
-                    livekit_connect_fn,
-                    livekit_connected=livekit_connected_flag.is_set(),
-                    listen_fn=_listen_fn,
-                    on_stt_event=on_stt_event,
-                    actions_config=config,
-                    wake_word=wake_group.word,
-                    transcript=cmd,
-                    mqtt_client=mqtt_client,
+                asyncio.wait_for(
+                    dispatch(trig, _ctx, wake_word=wake_group.word, transcript=cmd),
+                    timeout=config.recognition.dispatch_timeout,
                 )
             )
+        except asyncio.TimeoutError:
+            logger.warning(
+                "Dispatch timed out after %.0fs — resetting and resuming",
+                config.recognition.dispatch_timeout,
+            )
+            _drain_pipe(proc)
+            backend.reset()
         except Exception as e:
             logger.error(f"Action dispatch failed: {e}")
 

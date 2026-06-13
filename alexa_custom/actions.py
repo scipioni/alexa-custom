@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import os
 import re
@@ -15,6 +16,23 @@ if TYPE_CHECKING:
 from alexa_custom.config import ActionEntry, Trigger
 
 logger = logging.getLogger(__name__)
+
+
+@dataclasses.dataclass
+class ActionContext:
+    """Carries all call-site dependencies for dispatch() / _run_action().
+
+    Collapsing these into one object means future deadline / cancellation
+    fields are a one-field change rather than a six-site edit.
+    """
+
+    telegram_client: TelegramClient
+    livekit_connect_fn: Callable[[], Awaitable[None]] | None = None
+    livekit_connected: bool = False
+    listen_fn: Callable[..., Awaitable[str]] | None = None
+    mqtt_client: MQTTClient | None = None
+    on_stt_event: Callable[[str, dict], None] | None = None
+    actions_config: object | None = None  # ActionsConfig, avoids circular import
 
 
 _PUNCT_CHARS = "?!.,;:()[]{}#"
@@ -242,13 +260,8 @@ _MAX_DISPATCH_DEPTH = 10
 
 async def dispatch(
     trigger: Trigger,
-    telegram_client: TelegramClient,
-    livekit_connect_fn: Callable[[], Awaitable[None]] | None,
-    livekit_connected: bool = False,
-    listen_fn: Callable[[float], Awaitable[str]] | None = None,
-    mqtt_client: MQTTClient | None = None,
-    on_stt_event: Callable[[str, dict], None] | None = None,
-    actions_config=None,
+    ctx: ActionContext,
+    *,
     wake_word: str | None = None,
     transcript: str | None = None,
 ) -> None:
@@ -263,18 +276,7 @@ async def dispatch(
         return
     try:
         for action in trigger.actions:
-            await _run_action(
-                action,
-                telegram_client,
-                livekit_connect_fn,
-                livekit_connected,
-                listen_fn,
-                mqtt_client,
-                on_stt_event,
-                actions_config=actions_config,
-                wake_word=wake_word,
-                transcript=transcript,
-            )
+            await _run_action(action, ctx, wake_word=wake_word, transcript=transcript)
     finally:
         _dispatch_depth -= 1
 
@@ -390,9 +392,7 @@ async def handle_say(action: ActionEntry, mqtt_client: MQTTClient | None, **_):
 @registry.register("ask")
 async def handle_ask(
     action: ActionEntry,
-    telegram_client: TelegramClient,
-    livekit_connect_fn: Callable[[], Awaitable[None]] | None,
-    livekit_connected: bool,
+    ctx: ActionContext,
     listen_fn: Callable[[float], Awaitable[str]] | None,
     mqtt_client: MQTTClient | None,
     on_stt_event: Callable[[str, dict], None] | None,
@@ -473,13 +473,7 @@ async def handle_ask(
                 )
             await dispatch(
                 reply_trigger,
-                telegram_client,
-                livekit_connect_fn,
-                livekit_connected,
-                listen_fn,
-                mqtt_client,
-                on_stt_event,
-                actions_config=actions_config,
+                ctx,
                 wake_word=wake_word,
                 transcript=transcript,
             )
@@ -488,17 +482,7 @@ async def handle_ask(
             if on_stt_event:
                 on_stt_event("nomatch", {"transcript": transcript})
             for else_action in action.on_else:
-                await _run_action(
-                    else_action,
-                    telegram_client,
-                    livekit_connect_fn,
-                    livekit_connected,
-                    listen_fn,
-                    mqtt_client,
-                    on_stt_event,
-                    actions_config=actions_config,
-                    wake_word=wake_word,
-                )
+                await _run_action(else_action, ctx, wake_word=wake_word)
         else:
             logger.info(f"No reply trigger matched '{transcript}' and no on_else")
             if on_stt_event:
@@ -509,17 +493,7 @@ async def handle_ask(
     elif action.on_else:
         logger.info("No transcript received (timeout), running on_else")
         for else_action in action.on_else:
-            await _run_action(
-                else_action,
-                telegram_client,
-                livekit_connect_fn,
-                livekit_connected,
-                listen_fn,
-                mqtt_client,
-                on_stt_event,
-                actions_config=actions_config,
-                wake_word=wake_word,
-            )
+            await _run_action(else_action, ctx, wake_word=wake_word)
     else:
         logger.info("No transcript received (timeout) and no on_else")
         if on_stt_event:
@@ -1225,26 +1199,22 @@ async def handle_calibrate_input_gain(
 
 async def _run_action(
     action: ActionEntry,
-    telegram_client: TelegramClient,
-    livekit_connect_fn: Callable[[], Awaitable[None]] | None,
-    livekit_connected: bool,
-    listen_fn: Callable[[float], Awaitable[str]] | None = None,
-    mqtt_client: MQTTClient | None = None,
-    on_stt_event: Callable[[str, dict], None] | None = None,
-    actions_config=None,
+    ctx: ActionContext,
+    *,
     wake_word: str | None = None,
     transcript: str | None = None,
 ) -> None:
     await registry.execute(
         action.type,
         action=action,
-        telegram_client=telegram_client,
-        livekit_connect_fn=livekit_connect_fn,
-        livekit_connected=livekit_connected,
-        listen_fn=listen_fn,
-        mqtt_client=mqtt_client,
-        on_stt_event=on_stt_event,
-        actions_config=actions_config,
+        ctx=ctx,
+        telegram_client=ctx.telegram_client,
+        livekit_connect_fn=ctx.livekit_connect_fn,
+        livekit_connected=ctx.livekit_connected,
+        listen_fn=ctx.listen_fn,
+        mqtt_client=ctx.mqtt_client,
+        on_stt_event=ctx.on_stt_event,
+        actions_config=ctx.actions_config,
         wake_word=wake_word,
         transcript=transcript,
     )

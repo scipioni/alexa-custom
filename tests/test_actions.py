@@ -1,6 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from alexa_custom.actions import (
+    ActionContext,
     ActionRegistry,
     _match_glob_pattern,
     _run_action,
@@ -122,12 +123,12 @@ async def test_run_action_dispatch():
     with patch(
         "alexa_custom.actions.registry.execute", new_callable=AsyncMock
     ) as mock_execute:
-        await _run_action(
-            mock_action,
+        ctx = ActionContext(
             telegram_client=MagicMock(),
             livekit_connect_fn=AsyncMock(),
             livekit_connected=False,
         )
+        await _run_action(mock_action, ctx)
 
         mock_execute.assert_called_once()
         args, kwargs = mock_execute.call_args
@@ -220,15 +221,19 @@ class TestConfigurableMatching:
         # Under levenshtein threshold of 90.0, "chiamare" should fail to match "chiama"!
         mock_listen_fn = AsyncMock(return_value="chiamare")
 
+        _ctx = ActionContext(
+            telegram_client=MagicMock(),
+            livekit_connect_fn=AsyncMock(),
+            listen_fn=mock_listen_fn,
+            actions_config=config,
+        )
         with patch(
             "alexa_custom.actions.dispatch", new_callable=AsyncMock
         ) as mock_dispatch:
             with patch("alexa_custom.tts.get_engine"):
                 await handle_ask(
                     action,
-                    telegram_client=MagicMock(),
-                    livekit_connect_fn=AsyncMock(),
-                    livekit_connected=False,
+                    ctx=_ctx,
                     listen_fn=mock_listen_fn,
                     mqtt_client=None,
                     on_stt_event=None,
@@ -238,15 +243,19 @@ class TestConfigurableMatching:
 
         # Let's verify that with an exact match "chiama" -> 100% -> should match!
         mock_listen_fn_exact = AsyncMock(return_value="chiama")
+        _ctx_exact = ActionContext(
+            telegram_client=MagicMock(),
+            livekit_connect_fn=AsyncMock(),
+            listen_fn=mock_listen_fn_exact,
+            actions_config=config,
+        )
         with patch(
             "alexa_custom.actions.dispatch", new_callable=AsyncMock
         ) as mock_dispatch_exact:
             with patch("alexa_custom.tts.get_engine"):
                 await handle_ask(
                     action,
-                    telegram_client=MagicMock(),
-                    livekit_connect_fn=AsyncMock(),
-                    livekit_connected=False,
+                    ctx=_ctx_exact,
                     listen_fn=mock_listen_fn_exact,
                     mqtt_client=None,
                     on_stt_event=None,
@@ -615,9 +624,7 @@ class TestMeteoAction:
 
         await _run_action(
             action,
-            telegram_client=MagicMock(),
-            livekit_connect_fn=None,
-            livekit_connected=False,
+            ActionContext(telegram_client=MagicMock()),
             transcript="che tempo fa a Milano domani?",
         )
 
@@ -655,9 +662,7 @@ class TestMeteoAction:
 
         await _run_action(
             action,
-            telegram_client=MagicMock(),
-            livekit_connect_fn=None,
-            livekit_connected=False,
+            ActionContext(telegram_client=MagicMock()),
             transcript="che tempo fa a torino oggi?",
         )
 
@@ -695,9 +700,7 @@ class TestMeteoAction:
 
         await _run_action(
             action,
-            telegram_client=MagicMock(),
-            livekit_connect_fn=None,
-            livekit_connected=False,
+            ActionContext(telegram_client=MagicMock()),
             transcript="what is the weather today?",
         )
 
@@ -723,9 +726,7 @@ class TestMeteoAction:
 
         await _run_action(
             action,
-            telegram_client=MagicMock(),
-            livekit_connect_fn=None,
-            livekit_connected=False,
+            ActionContext(telegram_client=MagicMock()),
             transcript="meteo roma",
         )
 
@@ -768,11 +769,8 @@ class TestMeteoAction:
 
         await _run_action(
             action,
-            telegram_client=MagicMock(),
-            livekit_connect_fn=None,
-            livekit_connected=False,
+            ActionContext(telegram_client=MagicMock(), actions_config=mock_config),
             transcript="weather forecast for Milano",
-            actions_config=mock_config,
             wake_word="alexa",
         )
 
@@ -786,12 +784,7 @@ class TestMeteoAction:
 async def test_restart_action():
     action = ActionEntry(type="restart", params={})
     with patch("os.execv") as mock_execv, patch("asyncio.sleep") as mock_sleep:
-        await _run_action(
-            action,
-            telegram_client=MagicMock(),
-            livekit_connect_fn=None,
-            livekit_connected=False,
-        )
+        await _run_action(action, ActionContext(telegram_client=MagicMock()))
         mock_sleep.assert_called_once_with(0.5)
         mock_execv.assert_called_once()
         args = mock_execv.call_args[0]
