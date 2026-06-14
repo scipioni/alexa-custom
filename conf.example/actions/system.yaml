@@ -32,22 +32,28 @@ wake_words:
 # Global triggers — active for every wake word group
 # ---------------------------------------------------------------------------
 triggers:
-  - phrase: "che ora è"
+  - phrase: "che ore sono ?"
     wake_words: []
     aliases:
-      - "che ore sono"
+      - "che ora è ?"
     actions:
       - type: say
         text: "$(date +'Sono le %H e %M')"
 
-  - phrase: "che giorno è"
+  - phrase: "che giorno è ?"
+    patterns:
+      - "che giorno è *"
     wake_words: []
-    aliases:
-      - "che giorno è oggi"
     actions:
       - type: say
         text: "$(LC_ALL=it_IT.UTF-8 date +'Oggi è %A %d %B %Y')"
-
+  
+  - phrase: "dimmi qualcosa"
+    wake_words: [default]
+    actions:
+      - type: say
+        text: "$(fortune ../docs)"
+  
   - phrase: "riavvia"
     wake_words: [default]
     actions:
@@ -65,10 +71,10 @@ triggers:
     actions:
       - type: llm_learn
 
-  - phrase: "volume al"
-    wake_words: [default]
-    actions:
-      - type: set_volume_from_transcript
+#  - phrase: "volume al"
+#    wake_words: [default]
+#    actions:
+#      - type: set_volume_from_transcript
 
   - phrase: "volume basso"
     wake_words: [default]
@@ -156,6 +162,15 @@ triggers:
       - type: start_listening
       - type: say
         text: "Sono sveglia, pronta ad ascoltare!"
+
+  - phrase: "come sta il sistema"
+    wake_words: [default]
+    patterns:
+      - "come * sistema"
+      - "stato * sistema"
+      - "temperatura"
+    actions:
+      - type: system_info
 
   - phrase: "calibra microfono"
     wake_words: [default]

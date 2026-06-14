@@ -1055,6 +1055,107 @@ async def handle_start_listening(
         on_stt_event("listening", {"wake_words": wake_words})
 
 
+def _read_system_vitals() -> dict:
+    import glob
+
+    vitals: dict = {}
+
+    # CPU temperature — max across all thermal zones
+    try:
+        temps = []
+        for path in glob.glob("/sys/class/thermal/thermal_zone*/temp"):
+            try:
+                with open(path) as f:
+                    temps.append(int(f.read().strip()))
+            except (OSError, ValueError):
+                pass
+        if temps:
+            vitals["temp_c"] = max(temps) // 1000
+    except Exception:
+        pass
+
+    # Load average — 1-minute value
+    try:
+        with open("/proc/loadavg") as f:
+            vitals["load"] = float(f.read().split()[0])
+    except Exception:
+        pass
+
+    # Free memory — MemAvailable in kB
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    vitals["free_kb"] = int(line.split()[1])
+                    break
+    except Exception:
+        pass
+
+    # Uptime in seconds
+    try:
+        with open("/proc/uptime") as f:
+            vitals["uptime_s"] = float(f.read().split()[0])
+    except Exception:
+        pass
+
+    return vitals
+
+
+def _format_system_info_italian(vitals: dict) -> str:
+    parts = []
+
+    if "temp_c" in vitals:
+        parts.append(f"temperatura {vitals['temp_c']} gradi")
+
+    if "load" in vitals:
+        parts.append(f"carico {vitals['load']:.1f}")
+
+    if "free_kb" in vitals:
+        free_gb = vitals["free_kb"] / (1024 * 1024)
+        if free_gb >= 1.0:
+            parts.append(f"memoria libera {free_gb:.0f} gigabyte")
+        else:
+            free_mb = vitals["free_kb"] // 1024
+            parts.append(f"memoria libera {free_mb} megabyte")
+
+    if "uptime_s" in vitals:
+        secs = int(vitals["uptime_s"])
+        days, secs = divmod(secs, 86400)
+        hours, secs = divmod(secs, 3600)
+        minutes = secs // 60
+        units = []
+        if days:
+            units.append(f"{'un' if days == 1 else str(days)} {'giorno' if days == 1 else 'giorni'}")
+        if hours and len(units) < 2:
+            units.append(f"{'un' if hours == 1 else str(hours)} {'ora' if hours == 1 else 'ore'}")
+        if minutes and len(units) < 2:
+            units.append(f"{minutes} {'minuto' if minutes == 1 else 'minuti'}")
+        if units:
+            parts.append("attivo da " + " e ".join(units))
+
+    if not parts:
+        return "Dati di sistema non disponibili."
+    return "Il sistema: " + ", ".join(parts) + "."
+
+
+@registry.register("system_info")
+async def handle_system_info(action: ActionEntry, mqtt_client: "MQTTClient | None" = None, **_):
+    from alexa_custom.tts import get_engine
+
+    vitals = await asyncio.to_thread(_read_system_vitals)
+    text = _format_system_info_italian(vitals)
+    logger.info("system_info: %s", text)
+    if mqtt_client:
+        await mqtt_client.publish(
+            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "speaking"
+        )
+    await asyncio.to_thread(get_engine().say, text, "it-IT")
+    if mqtt_client:
+        await mqtt_client.publish(
+            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "idle"
+        )
+
+
 @registry.register("restart")
 async def handle_restart(action: ActionEntry, **_):
     logger.info("Action: restart — restarting application...")
