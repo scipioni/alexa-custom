@@ -11,6 +11,8 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+from contextlib import contextmanager
+
 import numpy as np
 import pulsectl
 
@@ -20,10 +22,14 @@ _input_gain_lock = threading.Lock()
 
 
 <<<<<<< HEAD
+<<<<<<< HEAD
 @contextmanager
 def pulse_session(name: str):
     """Open a pulsectl connection that always restores the NewPie PCM on exit."""
 =======
+=======
+@contextmanager
+>>>>>>> 5929c11 (fix: add missing @contextmanager decorator to pulse_session)
 def pulse_session(name: str):
     """Open a pulsectl connection that always restores the NewPie PCM on exit.
 
