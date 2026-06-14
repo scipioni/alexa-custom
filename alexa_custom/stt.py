@@ -712,10 +712,10 @@ def _recognition_loop(
     _adaptive_rms_margin = config.stt.stage1.adaptive_rms_margin
     _noise_floor_buffer: list[float] = []
 
-    # Rolling audio buffer for trigger dumps (last ~8 s at 16kHz mono s16le)
+    # Rolling audio buffer for trigger dumps (last ~8 s at 16 kHz s16le)
     _dump_dir = config.dump_triggers_dir
     _audio_buf: collections.deque[bytes] = collections.deque(
-        maxlen=int(8 * 16000 * 2 / 4096) + 1
+        maxlen=int(8 * 16000 * 2 * channels / 4096) + 1
     )
 
     alias_map = _build_alias_map(config.wake_words)
