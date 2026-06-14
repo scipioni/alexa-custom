@@ -503,7 +503,10 @@ def get_stt_backend(
                 keywords_score=cfg.keywords_score,
                 keywords_threshold=cfg.keywords_threshold,
             )
-        return SherpaOnnxSTT(model_path, model_variant=cfg.model_variant)
+        model_variant = cfg.model_variant
+        if cfg.backend == "nemo-offline" and model_variant == "auto":
+            model_variant = "nemo_ctc"
+        return SherpaOnnxSTT(model_path, model_variant=model_variant)
     vosk_path = cfg.model_path or _MODEL_PATH
     return VoskSTT(_load_model(vosk_path))
 
