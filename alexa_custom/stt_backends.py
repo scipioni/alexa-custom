@@ -126,6 +126,7 @@ class SherpaOnnxSTT(STTBackend):
         model_dir: str = _SHERPA_MODEL_PATH,
         hotwords: list[str] | None = None,
         hotwords_score: float = 1.5,
+        num_threads: int = 2,
     ):
         import sherpa_onnx
         import tempfile
@@ -180,7 +181,7 @@ class SherpaOnnxSTT(STTBackend):
                 encoder=encoder_int8 if os.path.exists(encoder_int8) else encoder,
                 decoder=decoder_int8 if os.path.exists(decoder_int8) else decoder,
                 joiner=joiner_int8 if os.path.exists(joiner_int8) else joiner,
-                num_threads=4,
+                num_threads=num_threads,
                 decoding_method=decoding_method,
                 hotwords_file=hotwords_file,
                 hotwords_score=hotwords_score if hotwords_file else 0.0,
@@ -199,7 +200,7 @@ class SherpaOnnxSTT(STTBackend):
                 self._delegate = sherpa_onnx.OnlineRecognizer.from_zipformer2_ctc(
                     tokens=tokens,
                     model=model_onnx,
-                    num_threads=4,
+                    num_threads=num_threads,
                     sample_rate=16000,
                     feature_dim=80,
                     provider="cpu",
@@ -237,17 +238,22 @@ class SherpaOnnxSTT(STTBackend):
 
     def accept_waveform(self, data: bytes) -> bool:
         samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
-        rms = float(np.sqrt(np.mean(samples**2)))
         self._stream.accept_waveform(sample_rate=16000, waveform=samples)
         while self._delegate.is_ready(self._stream):
             self._delegate.decode_stream(self._stream)
         endpoint = self._delegate.is_endpoint(self._stream)
+        # RMS is only used for the debug logs below; skip the reduction entirely
+        # when debug logging is off (this runs on every chunk, always-on).
+        _debug = logger.isEnabledFor(logging.DEBUG)
         partial = self._delegate.get_result(self._stream)
         partial = partial.strip() if isinstance(partial, str) else partial.text.strip()
         if partial != self._last_partial:
-            logger.debug("sherpa partial: %r  rms=%.4f", partial, rms)
+            if _debug:
+                rms = float(np.sqrt(np.mean(samples**2)))
+                logger.debug("sherpa partial: %r  rms=%.4f", partial, rms)
             self._last_partial = partial
-        if endpoint:
+        if endpoint and _debug:
+            rms = float(np.sqrt(np.mean(samples**2)))
             logger.debug("sherpa endpoint fired: %r  rms=%.4f", partial, rms)
         return endpoint
 
@@ -357,6 +363,7 @@ class SherpaKeywordSpotter(STTBackend):
         keywords: list[str],
         keywords_score: float = 1.0,
         keywords_threshold: float = 0.25,
+        num_threads: int = 2,
     ) -> None:
         import sherpa_onnx
         import tempfile
@@ -409,7 +416,7 @@ class SherpaKeywordSpotter(STTBackend):
             decoder=decoder_int8 if os.path.exists(decoder_int8) else decoder,
             joiner=joiner_int8 if os.path.exists(joiner_int8) else joiner,
             keywords_file=self._kw_file.name,
-            num_threads=2,
+            num_threads=num_threads,
             sample_rate=16000,
             feature_dim=80,
             keywords_score=keywords_score,
@@ -571,7 +578,10 @@ def get_stt_backend(
         return SherpaOnnxSTT(
             model_dir=model_path,
             hotwords=keywords,
-            hotwords_score=cfg.hotwords_score if isinstance(cfg, STTStage1Config) else 1.5,
+            hotwords_score=cfg.hotwords_score
+            if isinstance(cfg, STTStage1Config)
+            else 1.5,
+            num_threads=cfg.num_threads,
         )
     if cfg.backend == "sherpa-onnx":
         model_path = cfg.model_path or _SHERPA_MODEL_PATH
@@ -585,8 +595,9 @@ def get_stt_backend(
                 keywords=keywords,
                 keywords_score=cfg.keywords_score,
                 keywords_threshold=cfg.keywords_threshold,
+                num_threads=cfg.num_threads,
             )
-        return SherpaOnnxSTT(model_path)
+        return SherpaOnnxSTT(model_path, num_threads=cfg.num_threads)
     vosk_path = cfg.model_path or _MODEL_PATH
     return VoskSTT(_load_model(vosk_path), grammar=grammar)
 
