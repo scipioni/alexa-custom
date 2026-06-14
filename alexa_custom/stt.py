@@ -1425,17 +1425,27 @@ def _recognition_loop(
                 if text:
                     logger.debug(f"Stage1 result (sherpa/{trigger_src}): {text!r}")
 
-                    # Direct-match triggers (wake_words: []) — checked before wake words
-                    _dm_trigger = (
-                        match_trigger(
-                            text,
-                            config.direct_triggers,
-                            algorithm=config.recognition.matching_algorithm,
-                            threshold=config.recognition.matching_threshold,
+                    # Direct-match triggers (wake_words: []) — checked before wake words.
+                    # Filter to candidates whose phrase is no longer than the transcript
+                    # so a single-token noise artifact can't score 100 via token_set_ratio
+                    # against a multi-word trigger (e.g. 'e' → 'che ora è').
+                    _dm_trigger = None
+                    if config.direct_triggers:
+                        _sherpa_words = len(normalize_text(text).split())
+                        _dm_candidates = [
+                            t for t in config.direct_triggers
+                            if _sherpa_words >= len(normalize_text(t.phrase).split())
+                        ]
+                        _dm_trigger = (
+                            match_trigger(
+                                text,
+                                _dm_candidates,
+                                algorithm=config.recognition.matching_algorithm,
+                                threshold=config.recognition.matching_threshold,
+                            )
+                            if _dm_candidates
+                            else None
                         )
-                        if config.direct_triggers
-                        else None
-                    )
 
                     wake_match = _approx_wake_match(text, alias_map)
 
