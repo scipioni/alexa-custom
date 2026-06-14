@@ -182,7 +182,7 @@
           }
           if (s === 'matched') {
             const isReply = !_lastWakeWord;
-            addHistory(_lastWakeWord, m.transcript||'', m.trigger||'');
+            addHistory(_lastWakeWord, m.transcript||'', m.trigger||'', m.score);
             updateInteraction(_lastWakeWord, (m.transcript||'') + ' → ' + (m.trigger||''), true);
             highlightTrigger(m.trigger||'', isReply);
             _graphFlashByPhrase(m.trigger||'');
@@ -192,7 +192,7 @@
           if (s === 'nomatch') {
             clearReplyDim();
             const txt = m.transcript || m.text || '';
-            addHistory(_lastWakeWord, txt, '✗ no match');
+            addHistory(_lastWakeWord, txt, '✗ no match', m.score);
             if (_lastWakeWord) {
               updateInteraction(_lastWakeWord, (txt ? '"'+txt+'" ' : '') + '✗ no match', true);
             }
@@ -1362,15 +1362,19 @@
         + '</div>');
     }
 
-    function addHistory(wake, transcript, trigger) {
+    function addHistory(wake, transcript, trigger, score) {
       const ts = new Date().toTimeString().slice(0, 8);
-      const hasTrig = trigger && trigger !== transcript;
+      const hasTrig = !!trigger;
+      let scoreStr = '';
+      if (score !== undefined && score !== null) {
+        scoreStr = ' <span class="hscore" style="opacity: 0.7; font-weight: normal; margin-left: 4px;">(' + Math.round(score) + '%)</span>';
+      }
       _hePush('<div class="he-top">'
         + (wake ? '<span class="hwk">' + esc(wake) + '</span>' : '<span></span>')
         + '<span class="hts">' + ts + '</span>'
         + '</div>'
         + (transcript ? '<div class="he-mid"><span class="hcmd">"' + esc(transcript) + '"</span></div>' : '')
-        + (hasTrig ? '<div class="he-bot"><span class="' + (trigger.includes('✗') ? 'hnomatch' : 'htrig') + '">' + esc(trigger) + '</span></div>' : ''));
+        + (hasTrig ? '<div class="he-bot"><span class="' + (trigger.includes('✗') ? 'hnomatch' : 'htrig') + '">' + esc(trigger) + scoreStr + '</span></div>' : ''));
     }
 
     function addHistoryLLM(transcript, reply) {

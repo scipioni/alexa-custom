@@ -18,6 +18,38 @@ For the target hardware (Arduino Uno Q, Snapdragon 801, CPU-only), **Vosk remain
 
 ---
 
+## Rejecting background speech / false positives
+
+This is the single most important reason to prefer the **KeywordSpotter** over Vosk grammar mode for stage-1.
+
+**Why Vosk grammar mode false-fires on TV / background chatter:** in grammar mode (`stage1.vosk_grammar: true`) the decoder is constrained to the wake-word vocabulary. The grammar built by `_phrases_to_grammar` (`stt_backends.py:359`) *does* append the `[unk]` sink token — the canonical "none of the above" escape hatch — so clearly-unrelated audio can decode to `[unk]` instead of being forced onto a phrase. But `[unk]` is a single, flat-weighted catch-all: for audio that is *acoustically close* to a wake word (a TV, a conversation in the room), the decoder still scores the real phrase higher than the generic `[unk]` and picks it, reporting high confidence. `[unk]` rejects clearly-unrelated speech but not near-misses — which is the false-positive class most often seen.
+
+Because of this, the grammar-mode defense must be layered rather than relying on `[unk]` alone:
+
+- `[unk]` in the grammar (already present) — rejects clearly-unrelated audio
+- `confidence_mode: min` plus a higher `confidence` floor — catches the near-miss that `[unk]` lets through, since a forced match scores poorly on at least one token
+- free-vocabulary or the KeywordSpotter — removes the forced-choice pressure entirely (preferred when CPU allows)
+
+**Why the KeywordSpotter does not:** it is a streaming keyword detector, not a recogniser. Audio that is not a configured keyword simply produces no result — non-keyword speech is rejected by construction. This solves the false-positive class *and* keeps continuous CPU low, which is why it is the recommended always-on stage-1 on the Uno Q.
+
+The detection-score floor is **`keywords_threshold`** (default `0.25`). Raising it in `0.05` steps is the primary knob for suppressing false fires; watch the web dashboard while tuning, and back off if real wake words start being missed.
+
+### Decoy phrases — staying in Vosk grammar mode
+
+If you must stay in Vosk grammar mode (e.g. to avoid running a sherpa encoder continuously) you can absorb known false-positive phrases with **decoy triggers** — a trigger whose phrase is something the TV/room actually says, with empty actions:
+
+```yaml
+triggers:
+  - phrase: "telegiornale"   # something the background audio produces
+    actions: []              # matches the grammar, dispatches nothing
+```
+
+All trigger phrases are added to the stage-1 grammar (`_grammar_json_all`), so the decoy gives the decoder a well-scoring alternative to land on instead of the wake word; because the decoy text contains no wake word, `_extract_wake_command` returns no match and nothing fires.
+
+**Caveat:** this is whack-a-mole — it only catches phrases you have already observed and must be maintained by hand. Free-vocabulary (`vosk_grammar: false`) or the KeywordSpotter both reject unrelated speech *generically* with no decoy list to maintain, and are preferred whenever CPU allows.
+
+---
+
 ## Supported Model Architectures
 
 Model type is **auto-detected** from the files present in the model directory:
@@ -162,12 +194,15 @@ The wake word contains characters outside the model's BPE vocabulary. Use simple
 
 ### High CPU on Uno Q
 
-Switch stage-1 to Vosk (grammar-constrained) and keep sherpa-onnx only for stage-2:
+**Thread counts are currently hardcoded** in `stt_backends.py`: the KeywordSpotter runs at `num_threads=2`, the full `OnlineRecognizer` (open-vocab) at `num_threads=4`. The full recogniser will use all four cores while it runs — acceptable for stage-2 (brief, post-wake) but heavy for always-on stage-1. The KeywordSpotter at 2 threads is the conservative continuous path; dropping it to 1 thread is the most impactful continuous-CPU lever, but requires making `num_threads` config-driven first.
+
+**Hybrid fallback** — if the kroko encoder (~147 MB int8) is too heavy to run continuously, keep sherpa-onnx only for stage-2 and use Vosk for the always-on stage-1. Prefer **free-vocabulary** Vosk for stage-1 (`vosk_grammar: false`) over grammar mode — it is slightly heavier than grammar mode but rejects background/TV speech generically (see *Rejecting background speech* above), whereas grammar mode is the configuration most prone to false fires:
 
 ```yaml
 stt:
   stage1:
     backend: vosk
+    vosk_grammar: false   # generically rejects unrelated speech; grammar mode false-fires
   stage2:
     backend: sherpa-onnx
     model_path: models/it/kroko_128l

@@ -20,6 +20,7 @@ from alexa_custom.actions import (
     TelegramClient,
     dispatch,
     match_trigger,
+    match_trigger_with_score,
     normalize_text,
 )
 from alexa_custom.audio import play_wake_beep
@@ -146,6 +147,40 @@ def is_stt_sleeping() -> bool:
     return _stt_sleeping
 
 
+def _get_stage1_key(cfg: ActionsConfig) -> tuple:
+    return (
+        cfg.stt.stage1.backend,
+        cfg.stt.stage1.model_path,
+        cfg.stt.stage1.vosk_grammar,
+        hash(
+            (
+                tuple(g.word for g in cfg.wake_words),
+                tuple(t.phrase for g in cfg.wake_words for t in g.triggers),
+                tuple(t.phrase for t in cfg.triggers),
+                tuple(t.phrase for t in cfg.direct_triggers),
+            )
+        )
+        if cfg.stt.stage1.vosk_grammar
+        else 0,
+    )
+
+
+def _get_stage2_key(cfg: ActionsConfig) -> tuple:
+    return (
+        cfg.stt.stage2.backend,
+        cfg.stt.stage2.model_path,
+        cfg.stt.stage2.vosk_grammar,
+        hash(
+            (
+                tuple(g.word for g in cfg.wake_words),
+                tuple(t.phrase for t in cfg.triggers),
+            )
+        )
+        if cfg.stt.stage2.vosk_grammar
+        else 0,
+    )
+
+
 def run_stt_worker(
     config: ActionsConfig | Callable[[], ActionsConfig],
     stop_event: threading.Event,
@@ -197,7 +232,9 @@ def run_stt_worker(
         )
         t0 = time.monotonic()
         stage2_grammar = (
-            _grammar_json_all(current_config.wake_words, current_config.triggers)
+            _grammar_json_all(
+                current_config.wake_words, current_config.triggers, label="stage-2"
+            )
             if current_config.stt.stage2.vosk_grammar
             else None
         )
@@ -211,34 +248,8 @@ def run_stt_worker(
         logger.error(f"STT backend creation failed: {e}")
         return
 
-    stage1_key = (
-        current_config.stt.stage1.backend,
-        current_config.stt.stage1.model_path,
-        current_config.stt.stage1.vosk_grammar,
-        hash(
-            (
-                tuple(g.word for g in current_config.wake_words),
-                tuple(t.phrase for g in current_config.wake_words for t in g.triggers),
-                tuple(t.phrase for t in current_config.triggers),
-            )
-        )
-        if current_config.stt.stage1.vosk_grammar
-        else 0,
-    )
-    stage2_key = (
-        current_config.stt.stage2.backend,
-        current_config.stt.stage2.model_path,
-        current_config.stt.stage2.vosk_grammar,
-        hash(
-            (
-                tuple(g.word for g in current_config.wake_words),
-                tuple(t.phrase for g in current_config.wake_words for t in g.triggers),
-                tuple(t.phrase for t in current_config.triggers),
-            )
-        )
-        if current_config.stt.stage2.vosk_grammar
-        else 0,
-    )
+    stage1_key = _get_stage1_key(current_config)
+    stage2_key = _get_stage2_key(current_config)
 
     _dispatch_loop = asyncio.new_event_loop()
     try:
@@ -250,38 +261,8 @@ def run_stt_worker(
                 else _recognition_loop
             )
 
-            new_stage1_key = (
-                current_config.stt.stage1.backend,
-                current_config.stt.stage1.model_path,
-                current_config.stt.stage1.vosk_grammar,
-                hash(
-                    (
-                        tuple(g.word for g in current_config.wake_words),
-                        tuple(
-                            t.phrase
-                            for g in current_config.wake_words
-                            for t in g.triggers
-                        ),
-                        tuple(t.phrase for t in current_config.triggers),
-                        tuple(t.phrase for t in current_config.direct_triggers),
-                    )
-                )
-                if current_config.stt.stage1.vosk_grammar
-                else 0,
-            )
-            new_stage2_key = (
-                current_config.stt.stage2.backend,
-                current_config.stt.stage2.model_path,
-                current_config.stt.stage2.vosk_grammar,
-                hash(
-                    (
-                        tuple(g.word for g in current_config.wake_words),
-                        tuple(t.phrase for t in current_config.triggers),
-                    )
-                )
-                if current_config.stt.stage2.vosk_grammar
-                else 0,
-            )
+            new_stage1_key = _get_stage1_key(current_config)
+            new_stage2_key = _get_stage2_key(current_config)
 
             if new_stage1_key != stage1_key:
                 try:
@@ -304,7 +285,9 @@ def run_stt_worker(
                 try:
                     stage2_grammar = (
                         _grammar_json_all(
-                            current_config.wake_words, current_config.triggers
+                            current_config.wake_words,
+                            current_config.triggers,
+                            label="stage-2",
                         )
                         if current_config.stt.stage2.vosk_grammar
                         else None
@@ -570,7 +553,7 @@ def _single_stage_loop(
             continue
 
         triggers = _resolve_triggers(wake_group, config.triggers)
-        trigger = match_trigger(
+        trigger, score = match_trigger_with_score(
             command,
             triggers,
             algorithm=config.recognition.matching_algorithm,
@@ -578,7 +561,7 @@ def _single_stage_loop(
         )
         if trigger is None:
             if on_stt_event:
-                on_stt_event("nomatch", {"transcript": command})
+                on_stt_event("nomatch", {"transcript": command, "score": score})
             if config.llm and config.llm.fallback_on_no_match:
                 _fb_trigger = Trigger(
                     phrase="__llm_fallback__",
@@ -612,7 +595,10 @@ def _single_stage_loop(
 
         metrics.inc("commands_matched")
         if on_stt_event:
-            on_stt_event("matched", {"transcript": command, "trigger": trigger.phrase})
+            on_stt_event(
+                "matched",
+                {"transcript": command, "trigger": trigger.phrase, "score": score},
+            )
 
         try:
             _ctx.livekit_connected = livekit_connected_flag.is_set()
@@ -673,11 +659,28 @@ def _recognition_loop(
 
     def _make_stage1_recognizer() -> "vosk.KaldiRecognizer":
         if vosk_use_grammar:
+            # Wake-gated command phrases (scoped + global triggers) are only
+            # needed in stage-1 for single-breath "wake + command" partial
+            # matching. With partial_matching off they only widen the
+            # false-positive surface, so keep the grammar to wake words +
+            # direct-match triggers.
+            include_wake_gated = config.recognition.partial_matching
+            logger.info(
+                "Stage-1 grammar scope: %s (partial_matching=%s)",
+                "wake words + all trigger phrases"
+                if include_wake_gated
+                else "wake words + direct-match triggers only",
+                config.recognition.partial_matching,
+            )
             rec = vosk.KaldiRecognizer(
                 vosk_model,
                 16000,
                 _grammar_json_all(
-                    config.wake_words, config.triggers, config.direct_triggers
+                    config.wake_words,
+                    config.triggers,
+                    config.direct_triggers,
+                    include_wake_gated=include_wake_gated,
+                    label="stage-1",
                 ),
             )
         else:
@@ -1301,11 +1304,12 @@ def _wake_detected(
                 loop=loop,
             )
 
+        score = 100.0
         if forced_trigger is not None:
             trig = forced_trigger
         else:
             triggers = _resolve_triggers(wake_group, config.triggers)
-            trig = match_trigger(
+            trig, score = match_trigger_with_score(
                 cmd,
                 triggers,
                 algorithm=config.recognition.matching_algorithm,
@@ -1329,7 +1333,7 @@ def _wake_detected(
 
         if trig is None:
             if on_stt_event:
-                on_stt_event("nomatch", {"transcript": cmd})
+                on_stt_event("nomatch", {"transcript": cmd, "score": score})
             if config.llm and config.llm.fallback_on_no_match:
                 _fb_trigger = Trigger(
                     phrase="__llm_fallback__",
@@ -1363,7 +1367,9 @@ def _wake_detected(
 
         metrics.inc("commands_matched")
         if on_stt_event:
-            on_stt_event("matched", {"transcript": cmd, "trigger": trig.phrase})
+            on_stt_event(
+                "matched", {"transcript": cmd, "trigger": trig.phrase, "score": score}
+            )
 
         if trig.wake_words == []:
             try:
