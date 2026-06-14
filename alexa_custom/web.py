@@ -845,11 +845,9 @@ class WebServer:
     # ── logging ───────────────────────────────────────────────────────────────
 
     def _install_log_handler(self) -> None:
-        root = logging.getLogger()
-        root.setLevel(logging.DEBUG)
         self._handler = _WebLogHandler(self)
         self._handler.setLevel(logging.DEBUG)
-        root.addHandler(self._handler)
+        logging.getLogger().addHandler(self._handler)
 
     def _uninstall_log_handler(self) -> None:
         if self._handler:
