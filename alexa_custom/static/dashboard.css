@@ -592,7 +592,9 @@
     .he-bot {
       display: flex;
       align-items: center;
+      flex-wrap: wrap;
       gap: 6px;
+      max-width: 100%;
     }
     .hts {
       font-size: 9px;
@@ -631,7 +633,10 @@
     }
     .htrig {
       display: inline-flex; align-items: center; gap: 4px;
-      flex-shrink: 0;
+      max-width: 100%;
+      box-sizing: border-box;
+      white-space: normal;
+      word-break: break-word;
       font-size: 10px; font-weight: 600;
       color: var(--match);
       background: rgba(74,222,128,0.09);
@@ -642,7 +647,10 @@
     .htrig::before { content: '→'; opacity: 0.6; margin-right: 2px; }
     .hnomatch {
       display: inline-flex; align-items: center; gap: 4px;
-      flex-shrink: 0;
+      max-width: 100%;
+      box-sizing: border-box;
+      white-space: normal;
+      word-break: break-word;
       font-size: 10px; font-weight: 600;
       color: var(--nomatch);
       background: rgba(248,113,113,0.09);

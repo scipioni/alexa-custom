@@ -356,49 +356,74 @@ def _load_model(model_path: str = _MODEL_PATH) -> vosk.Model:
     return vosk.Model(model_path)
 
 
-def _phrases_to_grammar(phrases: list[str]) -> str:
-    """Convert a list of phrases to a Vosk grammar JSON string."""
+def _phrases_to_grammar(phrases: list[str], label: str = "grammar") -> str:
+    """Convert a list of phrases to a Vosk grammar JSON string.
+
+    ``label`` names the consumer (e.g. ``"stage-1"`` / ``"stage-2"``) so the
+    log line identifies exactly which recognizer the tokens belong to.
+    """
     normalized = []
     for p in phrases:
         norm = normalize_text(p)
         if norm:
             normalized.append(norm)
     normalized = sorted(list(set(normalized)))
-    return json.dumps(normalized + ["[unk]"])
+    grammar_tokens = normalized + ["[unk]"]
+    logger.info(
+        "%s grammar: %d tokens %s",
+        label,
+        len(grammar_tokens),
+        grammar_tokens,
+    )
+    return json.dumps(grammar_tokens)
 
 
-def _grammar_json(groups: list[WakeWordGroup]) -> str:
+def _grammar_json(groups: list[WakeWordGroup], label: str = "grammar") -> str:
     phrases = [p for g in groups for p in [g.word] + g.aliases]
-    return _phrases_to_grammar(phrases)
+    return _phrases_to_grammar(phrases, label=label)
 
 
 def _grammar_json_all(
     wake_words: list[WakeWordGroup],
     triggers: list["Trigger"],
     direct_triggers: list["Trigger"] | None = None,
+    include_wake_gated: bool = True,
+    label: str = "grammar",
 ) -> str:
-    """Build a grammar string encompassing wake words and action triggers."""
+    """Build a grammar string encompassing wake words and action triggers.
+
+    ``include_wake_gated`` controls whether command phrases that only fire
+    *after* a wake word (per-group scoped triggers and global triggers) are
+    injected. These are needed in stage-1 only to support single-breath
+    "wake + command" partial matching; with ``partial_matching`` disabled they
+    serve no purpose in stage-1 and only widen the false-positive surface, so
+    pass ``False`` to keep the grammar to wake words + direct-match triggers.
+    """
     phrases = []
-    # Add wake words and their specific triggers
+    # Add wake words and (only when wake-gated phrases are wanted) their
+    # scoped triggers
     for g in wake_words:
         phrases.append(g.word)
         phrases.extend(g.aliases)
-        for t in g.triggers:
+        if include_wake_gated:
+            for t in g.triggers:
+                phrases.append(t.phrase)
+                phrases.extend(t.aliases)
+
+    # Add global triggers (active after any wake word)
+    if include_wake_gated:
+        for t in triggers:
             phrases.append(t.phrase)
             phrases.extend(t.aliases)
 
-    # Add global triggers
-    for t in triggers:
-        phrases.append(t.phrase)
-        phrases.extend(t.aliases)
-
-    # Add direct-match triggers (wake_words: [])
+    # Add direct-match triggers (wake_words: []) — these fire from stage-1
+    # without a wake word, so they are always required in the grammar.
     for t in direct_triggers or []:
         phrases.append(t.phrase)
         phrases.extend(t.aliases)
 
     phrases = list(set(phrases))
-    return _phrases_to_grammar(phrases)
+    return _phrases_to_grammar(phrases, label=label)
 
 
 def get_stt_backend(

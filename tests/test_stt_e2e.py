@@ -450,3 +450,75 @@ class TestVoskGrammar:
         # "caffè" -> "caffe"
         # "sì" -> "si"
         assert parsed == ["caffe", "che ora e", "si", "[unk]"]
+
+    def test_phrases_to_grammar_logging(self, caplog):
+        from alexa_custom.stt_backends import _phrases_to_grammar
+        import logging
+
+        phrases = ["Che ora è", "caffè", "sì"]
+        with caplog.at_level(logging.INFO, logger="alexa_custom.stt_backends"):
+            _phrases_to_grammar(phrases, label="stage-1")
+
+        # Log line names the stage, the token count, and the exact token list
+        # (including the [unk] sink).
+        assert any(
+            "stage-1 grammar:" in record.message
+            and "4 tokens" in record.message
+            and "che ora e" in record.message
+            and "caffe" in record.message
+            and "[unk]" in record.message
+            for record in caplog.records
+        )
+
+    def _grammar_fixtures(self):
+        from alexa_custom.config import Trigger, WakeWordGroup
+
+        wake = WakeWordGroup(
+            word="ehi assistente",
+            aliases=["ehi galileo"],
+            triggers=[
+                Trigger(phrase="scoped command", actions=[], wake_words=["help"])
+            ],
+        )
+        global_trigger = Trigger(phrase="accendi la luce", actions=[], wake_words=None)
+        direct_trigger = Trigger(phrase="chiama stefano", actions=[], wake_words=[])
+        return wake, global_trigger, direct_trigger
+
+    def test_grammar_all_includes_wake_gated_by_default(self):
+        from alexa_custom.stt_backends import _grammar_json_all
+        import json
+
+        wake, global_trigger, direct_trigger = self._grammar_fixtures()
+        parsed = json.loads(
+            _grammar_json_all([wake], [global_trigger], [direct_trigger])
+        )
+
+        # Default (partial-matching) grammar: wake words, aliases, scoped +
+        # global trigger phrases, direct triggers, and [unk].
+        assert "ehi assistente" in parsed
+        assert "ehi galileo" in parsed
+        assert "scoped command" in parsed
+        assert "accendi la luce" in parsed
+        assert "chiama stefano" in parsed
+        assert "[unk]" in parsed
+
+    def test_grammar_all_excludes_wake_gated_when_disabled(self):
+        from alexa_custom.stt_backends import _grammar_json_all
+        import json
+
+        wake, global_trigger, direct_trigger = self._grammar_fixtures()
+        parsed = json.loads(
+            _grammar_json_all(
+                [wake], [global_trigger], [direct_trigger], include_wake_gated=False
+            )
+        )
+
+        # Wake words and direct-match triggers remain; wake-gated command
+        # phrases (scoped + global) are dropped to shrink the false-positive
+        # surface. [unk] is always present.
+        assert "ehi assistente" in parsed
+        assert "ehi galileo" in parsed
+        assert "chiama stefano" in parsed
+        assert "[unk]" in parsed
+        assert "scoped command" not in parsed
+        assert "accendi la luce" not in parsed
