@@ -215,19 +215,19 @@ def _trigger_matches_patterns(
     )
 
 
-def match_trigger(
+def match_trigger_with_score(
     transcript: str,
     triggers: list[Trigger],
     threshold: float = _TRIGGER_THRESHOLD,
     algorithm: str = "token_set_ratio",
-) -> Trigger | None:
+) -> tuple[Trigger | None, float]:
     # Pattern match is definitive: first trigger whose patterns match wins.
     for trigger in triggers:
         if trigger.patterns and _trigger_matches_patterns(
             trigger, transcript, algorithm, threshold
         ):
             logger.info(f"Matched trigger '{trigger.phrase}' (glob pattern)")
-            return trigger
+            return trigger, 100.0
 
     # Fuzzy fallback: best phonetic similarity score above threshold.
     best: Trigger | None = None
@@ -249,9 +249,19 @@ def match_trigger(
             best = trigger
     if best is not None and best_score >= threshold:
         logger.info(f"Matched trigger '{best.phrase}' (score={best_score:.0f})")
-        return best
+        return best, best_score
     logger.debug(f"No trigger matched '{transcript}' (best score={best_score:.0f})")
-    return None
+    return None, best_score
+
+
+def match_trigger(
+    transcript: str,
+    triggers: list[Trigger],
+    threshold: float = _TRIGGER_THRESHOLD,
+    algorithm: str = "token_set_ratio",
+) -> Trigger | None:
+    trigger, _ = match_trigger_with_score(transcript, triggers, threshold, algorithm)
+    return trigger
 
 
 _dispatch_depth = 0
@@ -458,7 +468,7 @@ async def handle_ask(
             algo = actions_config.recognition.reply_matching_algorithm
             threshold = actions_config.recognition.reply_matching_threshold
 
-        reply_trigger = match_trigger(
+        reply_trigger, reply_score = match_trigger_with_score(
             transcript,
             action.on_reply,
             threshold=threshold,
@@ -469,7 +479,11 @@ async def handle_ask(
             if on_stt_event:
                 on_stt_event(
                     "matched",
-                    {"transcript": transcript, "trigger": reply_trigger.phrase},
+                    {
+                        "transcript": transcript,
+                        "trigger": reply_trigger.phrase,
+                        "score": reply_score,
+                    },
                 )
             await dispatch(
                 reply_trigger,
@@ -480,13 +494,13 @@ async def handle_ask(
         elif action.on_else:
             logger.info(f"No reply trigger matched '{transcript}', running on_else")
             if on_stt_event:
-                on_stt_event("nomatch", {"transcript": transcript})
+                on_stt_event("nomatch", {"transcript": transcript, "score": reply_score})
             for else_action in action.on_else:
                 await _run_action(else_action, ctx, wake_word=wake_word)
         else:
             logger.info(f"No reply trigger matched '{transcript}' and no on_else")
             if on_stt_event:
-                on_stt_event("nomatch", {"transcript": transcript})
+                on_stt_event("nomatch", {"transcript": transcript, "score": reply_score})
             from alexa_custom.audio import play_timeout_beep
 
             await asyncio.to_thread(play_timeout_beep)
