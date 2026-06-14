@@ -11,7 +11,6 @@ import sys
 from alexa_custom.audio_hw import (
     _pw_device_resolved,
     _pw_device_index,
-    _UDEV_PATH,
     _STATE_FILE,
     configure,
     get_output_volume,
@@ -34,9 +33,12 @@ from alexa_custom.audio_hw import (
     set_input_gain,
     enforce_audio_state,
     check_newpie_ready,
+    _find_alsa_card,
+)
+from alexa_custom.audio_diagnostic import (
+    _UDEV_PATH,
     list_devices,
     list_env_devices,
-    _find_alsa_card,
     _usb_ids_for_alsa_card,
     setup_audio,
     speakerphone,
@@ -90,9 +92,9 @@ __all__ = [
     "set_input_gain",
     "enforce_audio_state",
     "check_newpie_ready",
+    "_find_alsa_card",
     "list_devices",
     "list_env_devices",
-    "_find_alsa_card",
     "_usb_ids_for_alsa_card",
     "setup_audio",
     "audio_doctor",

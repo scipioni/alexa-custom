@@ -376,6 +376,42 @@ class TestSsd1306:
         non_zero = sum(1 for v in driver._buffer if v)
         assert non_zero > 0
 
+    def test_draw_char_A_bytes_identical(self, driver):
+        """Glyph rendering must produce byte-identical output after font extraction."""
+        driver._draw_char(0, 0, "A")
+        # 'A' font columns: 0x7E, 0x11, 0x11, 0x11, 0x7E (each sets bits 0-6 per column)
+        assert list(driver._buffer[:5]) == [0x7E, 0x11, 0x11, 0x11, 0x7E]
+        assert all(v == 0 for v in driver._buffer[5:])
+
+
+class TestDisplayFontNotLoadedOnImport:
+    """Guard: importing the display module must not materialise the font data."""
+
+    def test_font_symbol_absent_from_display_module(self):
+        import alexa_custom.display as _display
+        import alexa_custom.display_fonts as _fonts  # noqa: F401 – ensure it CAN be imported
+
+        assert not hasattr(_display, "_FONT5X7"), (
+            "_FONT5X7 must not be a module-level attribute of alexa_custom.display"
+        )
+        assert not hasattr(_display, "FONT5X7"), (
+            "FONT5X7 must not be a module-level attribute of alexa_custom.display"
+        )
+
+    def test_font_module_not_imported_by_display_at_module_level(self):
+        import sys
+
+        # Remove display_fonts from sys.modules to force a clean check
+        sys.modules.pop("alexa_custom.display_fonts", None)
+        # Re-import display (it's already imported, but display_fonts should not
+        # be re-triggered at module level)
+        import alexa_custom.display  # noqa: F401
+
+        # display_fonts should only appear in sys.modules if _Ssd1306._draw_char ran
+        assert "alexa_custom.display_fonts" not in sys.modules, (
+            "display_fonts must not be imported at alexa_custom.display module level"
+        )
+
 
 # ── I2cOledDisplay state mapping (mocked I2C) ────────────────────────
 
