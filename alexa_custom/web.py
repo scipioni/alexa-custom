@@ -28,6 +28,9 @@ class _WebLogHandler(logging.Handler):
         self._server = server
 
     def emit(self, record: logging.LogRecord) -> None:
+        if record.levelno < logging.INFO:
+            if not (record.name and record.name.startswith("alexa_custom")):
+                return
         ts = datetime.fromtimestamp(record.created).strftime("%H:%M:%S")
         self._server._enqueue(
             "log",
