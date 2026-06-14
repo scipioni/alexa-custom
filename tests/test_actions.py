@@ -141,13 +141,13 @@ async def test_run_action_dispatch():
 
 class TestConfigurableMatching:
     def test_levenshtein_distance(self):
-        from alexa_custom.actions import levenshtein_distance
+        from rapidfuzz.distance import Levenshtein as _lev
 
-        assert levenshtein_distance("si", "si") == 0
-        assert levenshtein_distance("si", "se") == 1
-        assert levenshtein_distance("si", "si grazie") == 7
-        assert levenshtein_distance("ciao", "miao") == 1
-        assert levenshtein_distance("", "abc") == 3
+        assert _lev.distance("si", "si") == 0
+        assert _lev.distance("si", "se") == 1
+        assert _lev.distance("si", "si grazie") == 7
+        assert _lev.distance("ciao", "miao") == 1
+        assert _lev.distance("", "abc") == 3
 
     def test_get_similarity_score_all_algorithms(self):
         from alexa_custom.actions import get_similarity_score

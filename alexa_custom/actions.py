@@ -96,58 +96,23 @@ class TelegramClient:
 _TRIGGER_THRESHOLD = 70.0
 
 
-def levenshtein_distance(s1: str, s2: str) -> int:
-    """Calculate the Levenshtein distance between two strings using dynamic programming."""
-    if len(s1) < len(s2):
-        return levenshtein_distance(s2, s1)
-    if len(s2) == 0:
-        return len(s1)
-
-    previous_row = list(range(len(s2) + 1))
-    for i, c1 in enumerate(s1):
-        current_row = [i + 1]
-        for j, c2 in enumerate(s2):
-            insertions = previous_row[j + 1] + 1
-            deletions = current_row[j] + 1
-            substitutions = previous_row[j] + (0 if c1 == c2 else 1)
-            current_row.append(min(insertions, deletions, substitutions))
-        previous_row = current_row
-    return previous_row[-1]
+from rapidfuzz import fuzz as _fuzz
+from rapidfuzz.distance import Levenshtein as _lev
 
 
 def get_similarity_score(a: str, b: str, algorithm: str) -> float:
     """Calculate a similarity score (0.0 - 100.0) between two strings based on algorithm."""
     if not a or not b:
         return 0.0
-
-    # 1. Try using rapidfuzz
-    try:
-        from rapidfuzz import fuzz as _fuzz
-        from rapidfuzz.distance import Levenshtein as _lev
-
-        if algorithm == "levenshtein":
-            max_len = max(len(a), len(b))
-            if max_len == 0:
-                return 100.0
-            dist = _lev.distance(a, b)
-            return (1.0 - (dist / max_len)) * 100.0
-        elif algorithm == "ratio":
-            return _fuzz.ratio(a, b)
-        else:  # "token_set_ratio"
-            return _fuzz.token_set_ratio(a, b)
-
-    # 2. Fall back if rapidfuzz is not installed
-    except ImportError:
-        if algorithm == "levenshtein":
-            max_len = max(len(a), len(b))
-            if max_len == 0:
-                return 100.0
-            dist = levenshtein_distance(a, b)
-            return (1.0 - (dist / max_len)) * 100.0
-        else:  # "ratio" or "token_set_ratio" fallback
-            import difflib
-
-            return difflib.SequenceMatcher(None, a, b).ratio() * 100.0
+    if algorithm == "levenshtein":
+        max_len = max(len(a), len(b))
+        if max_len == 0:
+            return 100.0
+        return (1.0 - (_lev.distance(a, b) / max_len)) * 100.0
+    elif algorithm == "ratio":
+        return _fuzz.ratio(a, b)
+    else:  # "token_set_ratio"
+        return _fuzz.token_set_ratio(a, b)
 
 
 def _match_glob_pattern(
