@@ -103,8 +103,10 @@ class WebServer:
         extra_event_cb: Callable | None = None,
         extra_stt_event_cb: Callable | None = None,
         hot_reload: bool = False,
+        conf_dir: Path = Path("conf"),
     ) -> None:
         self._port = port
+        self._conf_dir = Path(conf_dir)
         self._output_volume = output_volume
         self._input_gain = input_gain
         self._cpu_limit = cpu_limit
@@ -386,7 +388,7 @@ class WebServer:
         try:
             from alexa_custom.config import load_config
 
-            config_obj = load_config("conf/config.yaml")
+            config_obj = load_config(self._conf_dir / "config.yaml")
             config_dict = self._serialize_config(config_obj)
             return web.json_response(config_dict)
         except Exception as e:
@@ -395,7 +397,8 @@ class WebServer:
 
     async def _handle_config_update(self, request: web.Request) -> web.Response:
         """Update configuration via POST with partial updates"""
-        temp_path = Path("conf/config.yaml.tmp")
+        config_path = self._conf_dir / "config.yaml"
+        temp_path = self._conf_dir / "config.yaml.tmp"
         try:
             data = await request.json()
 
@@ -405,20 +408,20 @@ class WebServer:
 
             from alexa_custom.config import load_config
 
-            current_config = load_config("conf/config.yaml")
+            current_config = load_config(config_path)
             current_dict = self._serialize_config(current_config)
             merged_config = self._merge_configs(current_dict, data)
             merged_config = self._strip_action_derived(merged_config)
 
-            raw = yaml.load(Path("conf/config.yaml"))
+            raw = yaml.load(config_path)
             if raw is None:
                 raw = {}
             self._deep_update_raw(raw, merged_config)
 
             try:
-                with _file_lock(Path("conf/config.yaml"), exclusive=True):
+                with _file_lock(config_path, exclusive=True):
                     yaml.dump(raw, temp_path)
-                    temp_path.replace(Path("conf/config.yaml"))
+                    temp_path.replace(config_path)
             except IOError as e:
                 logger.error("Failed to acquire config file lock: %s", e)
                 return web.json_response(
@@ -427,10 +430,10 @@ class WebServer:
                 )
 
             if self._config_manager:
-                self._config_manager._reload(Path("conf/config.yaml"))
+                self._config_manager._reload(config_path)
 
             # Return updated config so UI syncs without a separate fetch
-            updated_config = load_config("conf/config.yaml")
+            updated_config = load_config(config_path)
             updated_dict = self._serialize_config(updated_config)
             return web.json_response({"status": "ok", "config": updated_dict})
 
@@ -444,7 +447,8 @@ class WebServer:
         """Replace entire configuration via PUT"""
         from alexa_custom.config import load_config
 
-        temp_path = Path("conf/config.yaml.tmp")
+        config_path = self._conf_dir / "config.yaml"
+        temp_path = self._conf_dir / "config.yaml.tmp"
         try:
             data = await request.json()
 
@@ -452,15 +456,15 @@ class WebServer:
             if not is_valid:
                 return web.json_response({"error": error_msg}, status=400)
 
-            raw = yaml.load(Path("conf/config.yaml"))
+            raw = yaml.load(config_path)
             if raw is None:
                 raw = {}
             self._deep_update_raw(raw, self._strip_action_derived(data))
 
             try:
-                with _file_lock(Path("conf/config.yaml"), exclusive=True):
+                with _file_lock(config_path, exclusive=True):
                     yaml.dump(raw, temp_path)
-                    temp_path.replace(Path("conf/config.yaml"))
+                    temp_path.replace(config_path)
             except IOError as e:
                 logger.error("Failed to acquire config file lock: %s", e)
                 return web.json_response(
@@ -469,10 +473,10 @@ class WebServer:
                 )
 
             if self._config_manager:
-                self._config_manager._reload(Path("conf/config.yaml"))
+                self._config_manager._reload(config_path)
 
             # Return updated config so UI syncs without a separate fetch
-            updated_config = load_config("conf/config.yaml")
+            updated_config = load_config(config_path)
             updated_dict = self._serialize_config(updated_config)
             return web.json_response({"status": "ok", "config": updated_dict})
 
@@ -1135,6 +1139,7 @@ def run_web(
     shutdown_callback: Callable | None = None,
     extra_event_cb: Callable | None = None,
     extra_stt_event_cb: Callable | None = None,
+    conf_dir: Path = Path("conf"),
 ) -> None:
     server = WebServer(
         port=port,
@@ -1145,6 +1150,7 @@ def run_web(
         extra_event_cb=extra_event_cb,
         extra_stt_event_cb=extra_stt_event_cb,
         hot_reload=hot_reload,
+        conf_dir=conf_dir,
     )
     try:
         asyncio.run(
