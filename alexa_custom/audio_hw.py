@@ -19,9 +19,22 @@ logger = logging.getLogger(__name__)
 _input_gain_lock = threading.Lock()
 
 
+<<<<<<< HEAD
 @contextmanager
 def pulse_session(name: str):
     """Open a pulsectl connection that always restores the NewPie PCM on exit."""
+=======
+def pulse_session(name: str):
+    """Open a pulsectl connection that always restores the NewPie PCM on exit.
+
+    Opening any ``pulsectl.Pulse()`` connection makes pipewire-pulse re-init the
+    ALSA device, resetting the NewPie's hardware PCM mixer to 0% (see the audio
+    notes in AGENTS.md). This wrapper guarantees ``_restore_hw_pcm()`` runs on
+    exit — even when the body raises — so the "never open Pulse() without
+    restoring right after" rule is enforced structurally rather than by
+    convention. Always prefer this over a bare ``pulsectl.Pulse(...)``.
+    """
+>>>>>>> ed7bcc9 (fix: re-add pulse_session context manager to audio_hw.py)
     pulse = pulsectl.Pulse(name)
     try:
         yield pulse
@@ -31,7 +44,10 @@ def pulse_session(name: str):
         finally:
             _restore_hw_pcm()
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> ed7bcc9 (fix: re-add pulse_session context manager to audio_hw.py)
 # State variables managed through configuration
 _POST_PLAYBACK_MS = int(os.environ.get("AUDIO_POST_PLAYBACK_MS", "100"))
 _TONE_PREROLL_MS = int(os.environ.get("AUDIO_TONE_PREROLL_MS", "300"))
