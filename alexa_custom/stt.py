@@ -1442,6 +1442,7 @@ def _recognition_loop(
                                 _dm_candidates,
                                 algorithm=config.recognition.matching_algorithm,
                                 threshold=config.recognition.matching_threshold,
+                                min_word_overlap=1.0,
                             )
                             if _dm_candidates
                             else None
@@ -1501,6 +1502,20 @@ def _recognition_loop(
                         _, _inline_cmd = _extract_wake_command(
                             text, alias_map, fuzzy=True
                         )
+                        # Only trust the extracted inline command if it actually
+                        # matches a known trigger. Open-vocabulary backends often
+                        # append short acoustic artifacts (e.g. "egli", "ei") at
+                        # the tail of the wake word — those would otherwise skip
+                        # stage-2 capture and always fail with "no match".
+                        if _inline_cmd:
+                            _norm_cmd = normalize_text(_inline_cmd)
+                            _inline_cmd_valid = any(
+                                normalize_text(f"{nw} {_norm_cmd}") in intent_map
+                                for nw, grp in alias_map.items()
+                                if grp is wake_match
+                            )
+                            if not _inline_cmd_valid:
+                                _inline_cmd = ""
                         _fire(
                             text,
                             wake_group=wake_match,

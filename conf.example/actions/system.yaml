@@ -52,7 +52,7 @@ triggers:
     wake_words: [default]
     actions:
       - type: say
-        text: "$(fortune ../docs)"
+        text: "$(/usr/games/fortune ../docs)"
   
   - phrase: "riavvia"
     wake_words: [default]
@@ -162,8 +162,8 @@ triggers:
       - type: start_listening
       - type: say
         text: "Sono sveglia, pronta ad ascoltare!"
-
-  - phrase: "come sta il sistema"
+ 
+  - phrase: "come stai"
     wake_words: [default]
     patterns:
       - "come * sistema"
