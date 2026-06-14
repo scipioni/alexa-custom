@@ -25,11 +25,12 @@ from alexa_custom.stt import (
     _match_full_intent,
     _extract_wake_command,
 )
-from alexa_custom.stt_phonetics import build_intent_map, _build_alias_map
+from alexa_custom.stt_phonetics import build_intent_map, _build_alias_map, _approx_wake_match
 from alexa_custom.config import (
     WakeWordGroup,
     Trigger,
     _parse_stt_stage1_config,
+    _parse_recognition_config,
 )  # noqa: F401
 
 
@@ -410,3 +411,153 @@ class TestExtractWakeCommand:
         am = bam([group])
         matched, cmd = _extract_wake_command("ascolta assistente", am, fuzzy=False)
         assert matched is None
+
+
+# ---------------------------------------------------------------------------
+# _approx_wake_match configurable threshold
+# ---------------------------------------------------------------------------
+
+
+class TestApproxWakeMatchThreshold:
+    def _alias_map(self, word: str) -> dict:
+        return _build_alias_map([WakeWordGroup(word=word)])
+
+    def test_single_word_of_two_word_phrase_matches_at_default(self):
+        # "galileo" alone scores 1/2 = 0.5 for "ehi galileo" → matches default 0.5
+        am = self._alias_map("ehi galileo")
+        assert _approx_wake_match("il galileo", am, threshold=0.5) is not None
+
+    def test_single_word_of_two_word_phrase_rejected_at_higher_threshold(self):
+        # 1/2 = 0.5 < 0.7 → no match
+        am = self._alias_map("ehi galileo")
+        assert _approx_wake_match("il galileo", am, threshold=0.7) is None
+
+    def test_both_words_always_match(self):
+        am = self._alias_map("ehi galileo")
+        assert _approx_wake_match("ehi galileo", am, threshold=0.7) is not None
+        assert _approx_wake_match("ehi galileo", am, threshold=1.0) is not None
+
+    def test_extract_wake_command_passes_threshold(self):
+        am = self._alias_map("ehi galileo")
+        # At threshold=0.7, one-word transcript should not match
+        matched, _ = _extract_wake_command("il galileo ciao", am, fuzzy=True, wake_match_threshold=0.7)
+        assert matched is None
+        # At threshold=0.5, it should match
+        matched, _ = _extract_wake_command("il galileo ciao", am, fuzzy=True, wake_match_threshold=0.5)
+        assert matched is not None
+
+
+# ---------------------------------------------------------------------------
+# New config fields: wake_match_threshold, max_partial_words, min_word_overlap
+# ---------------------------------------------------------------------------
+
+
+class TestNewConfigFields:
+    def _stage1_base(self, **kwargs) -> dict:
+        return {"backend": "vosk", **kwargs}
+
+    def _recognition_base(self, **kwargs) -> dict:
+        return {**kwargs}
+
+    def test_wake_match_threshold_default(self):
+        cfg = _parse_stt_stage1_config(self._stage1_base())
+        assert cfg.wake_match_threshold == 0.5
+
+    def test_wake_match_threshold_explicit(self):
+        cfg = _parse_stt_stage1_config(self._stage1_base(wake_match_threshold=0.7))
+        assert cfg.wake_match_threshold == pytest.approx(0.7)
+
+    def test_max_partial_words_default_is_8(self):
+        cfg = _parse_stt_stage1_config(self._stage1_base())
+        assert cfg.max_partial_words == 8
+
+    def test_max_partial_words_explicit_zero_disables(self):
+        cfg = _parse_stt_stage1_config(self._stage1_base(max_partial_words=0))
+        assert cfg.max_partial_words == 0
+
+    def test_min_word_overlap_default(self):
+        cfg = _parse_recognition_config(self._recognition_base())
+        assert cfg.min_word_overlap == pytest.approx(0.0)
+
+    def test_min_word_overlap_explicit(self):
+        cfg = _parse_recognition_config(self._recognition_base(min_word_overlap=0.5))
+        assert cfg.min_word_overlap == pytest.approx(0.5)
+
+    def test_keywords_threshold_default_is_0_35(self):
+        cfg = _parse_stt_stage1_config(self._stage1_base())
+        assert cfg.keywords_threshold == pytest.approx(0.35)
+
+    def test_post_dispatch_cooldown_default(self):
+        cfg = _parse_recognition_config(self._recognition_base())
+        assert cfg.post_dispatch_cooldown_ms == 800
+
+    def test_min_cmd_words_default(self):
+        cfg = _parse_recognition_config(self._recognition_base())
+        assert cfg.min_cmd_words == 1
+
+    def test_min_cmd_words_explicit(self):
+        cfg = _parse_recognition_config(self._recognition_base(min_cmd_words=2))
+        assert cfg.min_cmd_words == 2
+
+
+# ---------------------------------------------------------------------------
+# _approx_wake_match reverse-substring tightening
+# ---------------------------------------------------------------------------
+
+
+class TestApproxWakeMatchSubstring:
+    def _alias_map(self, word: str) -> dict:
+        return _build_alias_map([WakeWordGroup(word=word)])
+
+    def test_short_fragment_does_not_trigger_via_reverse_substring(self):
+        # "gali" is 4 chars but only 4/7 = 57% of "galileo" — below 70% threshold
+        am = self._alias_map("galileo")
+        assert _approx_wake_match("gali", am) is None
+
+    def test_long_enough_fragment_still_matches(self):
+        # "galile" is 6/7 = 86% of "galileo" — above 70% threshold
+        am = self._alias_map("galileo")
+        assert _approx_wake_match("galile", am) is not None
+
+    def test_exact_word_always_matches(self):
+        am = self._alias_map("galileo")
+        assert _approx_wake_match("galileo", am) is not None
+
+
+# ---------------------------------------------------------------------------
+# Per-trigger min_word_overlap override
+# ---------------------------------------------------------------------------
+
+
+class TestPerTriggerMinWordOverlap:
+    def test_per_trigger_override_respected(self):
+        from alexa_custom.actions import match_trigger_with_score
+        from alexa_custom.config import ActionEntry
+
+        tight = Trigger(
+            phrase="chiama stefano",
+            actions=[ActionEntry(type="livekit_join", params={})],
+            min_word_overlap=1.0,
+        )
+        loose = Trigger(
+            phrase="test",
+            actions=[ActionEntry(type="speak", params={})],
+            min_word_overlap=None,
+        )
+
+        # "ciao" shares no phonetic tokens with "chiama stefano" → tight trigger blocked
+        trig, _ = match_trigger_with_score("ciao", [tight, loose], threshold=50.0, min_word_overlap=0.0)
+        assert trig is loose or trig is None  # tight must not win
+
+    def test_per_trigger_override_None_uses_global(self):
+        from alexa_custom.actions import match_trigger_with_score
+        from alexa_custom.config import ActionEntry
+
+        t = Trigger(
+            phrase="che ora e",
+            actions=[ActionEntry(type="speak", params={})],
+            min_word_overlap=None,
+        )
+        # global min_word_overlap=1.0, no phonetic tokens of trigger in "ciao" → blocked
+        trig, _ = match_trigger_with_score("ciao", [t], threshold=50.0, min_word_overlap=1.0)
+        assert trig is None

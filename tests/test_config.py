@@ -372,7 +372,7 @@ stt:
         result = load_config(cfg_path)
         assert result.stt.stage1.keyword_spotter is False
         assert result.stt.stage1.keywords_score == pytest.approx(1.0)
-        assert result.stt.stage1.keywords_threshold == pytest.approx(0.25)
+        assert result.stt.stage1.keywords_threshold == pytest.approx(0.35)
 
     def test_invalid_stage1_backend_raises(self, tmp_path):
         cfg_path = write_file(
