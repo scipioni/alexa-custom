@@ -155,17 +155,29 @@ class SherpaOnnxSTT(STTBackend):
                 decoder=decoder,
             )
         self._stream = self._delegate.create_stream()
+        self._last_partial: str = ""
 
     def accept_waveform(self, data: bytes) -> bool:
         samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+        rms = float(np.sqrt(np.mean(samples**2)))
         self._stream.accept_waveform(sample_rate=16000, waveform=samples)
         while self._delegate.is_ready(self._stream):
             self._delegate.decode_stream(self._stream)
-        return self._delegate.is_endpoint(self._stream)
+        endpoint = self._delegate.is_endpoint(self._stream)
+        partial = self._delegate.get_result(self._stream)
+        partial = partial.strip() if isinstance(partial, str) else partial.text.strip()
+        if partial != self._last_partial:
+            logger.debug("sherpa partial: %r  rms=%.4f", partial, rms)
+            self._last_partial = partial
+        if endpoint:
+            logger.debug("sherpa endpoint fired: %r  rms=%.4f", partial, rms)
+        return endpoint
 
     def text(self) -> str:
         result = self._delegate.get_result(self._stream)
-        return result.strip() if isinstance(result, str) else result.text.strip()
+        text = result.strip() if isinstance(result, str) else result.text.strip()
+        logger.debug("sherpa text(): %r", text)
+        return text
 
     def partial_text(self) -> str:
         result = self._delegate.get_result(self._stream)
@@ -181,10 +193,14 @@ class SherpaOnnxSTT(STTBackend):
             self._delegate.decode_stream(self._stream)
         result = self._delegate.get_result(self._stream)
         text = result.strip() if isinstance(result, str) else result.text.strip()
+        logger.debug("sherpa finalize(): %r", text)
+        self._last_partial = ""
         self._stream = self._delegate.create_stream()
         return text
 
     def reset(self) -> None:
+        logger.debug("sherpa reset() last_partial=%r", self._last_partial)
+        self._last_partial = ""
         self._delegate.reset(self._stream)
 
 
@@ -228,7 +244,15 @@ def _tokenize_keyword(word: str, vocab: dict[str, str]) -> str:
                         first = False
                         break
                 if candidate in vocab:
-                    word_tokens.append(vocab[candidate])
+                    token = vocab[candidate]
+                    # Mid-word positions must not use a word-boundary token
+                    # (▁-prefixed). vocab[stripped] may resolve to the ▁ form
+                    # when no standalone entry exists — using it mid-word injects
+                    # a boundary marker that the acoustic model never emits there,
+                    # causing the KWS to score the sequence at zero.
+                    if not first and token.startswith(_BOUNDARY):
+                        continue
+                    word_tokens.append(token)
                     remaining = remaining[length:]
                     matched = True
                     first = False
@@ -274,10 +298,13 @@ class SherpaKeywordSpotter(STTBackend):
 
         vocab = _load_token_vocab(tokens)
         kw_lines: list[str] = []
+        kw_log: list[str] = []
         for kw in keywords:
-            line = _tokenize_keyword(normalize_text(kw), vocab)
+            norm = normalize_text(kw)
+            line = _tokenize_keyword(norm, vocab)
             if line:
                 kw_lines.append(line)
+                kw_log.append(f"{kw!r} -> [{line}]")
             else:
                 logger.warning(
                     "KWS: keyword %r produced empty token sequence — skipped", kw
@@ -286,6 +313,11 @@ class SherpaKeywordSpotter(STTBackend):
             raise RuntimeError(
                 "KWS: no valid keywords could be tokenised from the wake word list"
             )
+        logger.info(
+            "KWS keywords: %d registered\n%s",
+            len(kw_lines),
+            "\n".join(f"  {entry}" for entry in sorted(kw_log)),
+        )
 
         self._kw_file = tempfile.NamedTemporaryFile(
             mode="w", suffix=".txt", delete=False, prefix="alexa_kws_"
@@ -309,14 +341,35 @@ class SherpaKeywordSpotter(STTBackend):
         self._stream = self._spotter.create_stream()
         self._last_keyword: str = ""
 
+        # Audio dump for debugging: set STT_AUDIO_DUMP=1 to record all audio
+        # fed to the KWS to /tmp/kws_audio_dump.wav for offline inspection.
+        _dump_path = os.environ.get("STT_AUDIO_DUMP")
+        if _dump_path:
+            import wave as _wave
+
+            self._dump_wav = _wave.open(_dump_path, "wb")
+            self._dump_wav.setnchannels(1)
+            self._dump_wav.setsampwidth(2)
+            self._dump_wav.setframerate(16000)
+            logger.info("KWS audio dump enabled → %s", _dump_path)
+        else:
+            self._dump_wav = None
+
     def __del__(self) -> None:
         try:
             if hasattr(self, "_kw_file") and os.path.exists(self._kw_file.name):
                 os.unlink(self._kw_file.name)
         except Exception:
             pass
+        try:
+            if getattr(self, "_dump_wav", None):
+                self._dump_wav.close()
+        except Exception:
+            pass
 
     def accept_waveform(self, data: bytes) -> bool:
+        if self._dump_wav:
+            self._dump_wav.writeframes(data)
         samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
         self._stream.accept_waveform(sample_rate=16000, waveform=samples)
         while self._spotter.is_ready(self._stream):
