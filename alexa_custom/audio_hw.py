@@ -23,8 +23,6 @@ _input_gain_lock = threading.Lock()
 
 @contextmanager
 def pulse_session(name: str):
-    """Open a pulsectl connection that always restores the NewPie PCM on exit."""
-def pulse_session(name: str):
     """Open a pulsectl connection that always restores the NewPie PCM on exit.
 
     Opening any ``pulsectl.Pulse()`` connection makes pipewire-pulse re-init the
