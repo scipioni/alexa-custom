@@ -127,6 +127,7 @@ llm:
 actions:
   dir: conf/actions                         # directory auto-discovered for .yaml files
   learn_file: conf/actions/learned.yaml    # file the llm_learn action appends to
+  # dump_triggers_dir: /tmp/trigger_dumps  # save pre-trigger audio WAV here on every fire
 
 # ---------------------------------------------------------------------------
 # Visual display feedback (Arduino UNO Q only)
