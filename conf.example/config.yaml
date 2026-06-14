@@ -38,7 +38,7 @@ stt:
   #   lower if you speak immediately after the beep, raise if echo retriggers STT
 
   stage1:                  # continuous wake-word detection (low CPU)
-    backend: vosk          # vosk | sherpa-onnx
+    backend: vosk          # vosk | sherpa-onnx | sherpa-hotwords
     # model_path: models/it
     confidence: 0.75       # Vosk minimum confidence (0.0–1.0) to accept wake word
     confidence_mode: min  # how to aggregate per-token confidence: first | min | mean
@@ -54,6 +54,8 @@ stt:
     vosk_grammar: true     # restrict Vosk to wake-word vocabulary (grammar mode)
     #   true  — grammar mode (default): low CPU, forces segments onto nearest phrase.
     #   false — free-vocabulary: full decoder; higher CPU but better at rejecting unrelated speech.
+    # --- sherpa-hotwords options ---
+    # hotwords_score: 1.5  # contextual bias weight (1.0–2.0); raise if wake word is missed
 
   stage2:                  # command recognition after wake
     backend: vosk          # can differ from stage1 for higher accuracy
