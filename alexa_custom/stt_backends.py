@@ -17,6 +17,9 @@ logger = logging.getLogger(__name__)
 _MODEL_PATH = os.environ.get("VOSK_MODEL_PATH", "models/it")
 _SHERPA_MODEL_PATH = os.environ.get("SHERPA_ONNX_PATH", "models/it/kroko_128l")
 _WHISPER_CPP_MODEL_PATH = os.environ.get("WHISPER_CPP_MODEL_PATH", "models/whisper/ggml-base.bin")
+_NEMO_OFFLINE_MODEL_PATH = os.environ.get(
+    "NEMO_OFFLINE_MODEL_PATH", "models/sherpa-onnx/nemo-ctc-it"
+)
 
 
 class STTBackend(ABC):
@@ -486,11 +489,82 @@ def _grammar_json(groups: list[WakeWordGroup]) -> str:
     return _phrases_to_grammar(phrases)
 
 
+class NeMoOfflineSTT(STTBackend):
+    """Stage-2 backend using sherpa-onnx OfflineRecognizer with NeMo CTC models."""
+
+    def __init__(
+        self,
+        model_dir: str = _NEMO_OFFLINE_MODEL_PATH,
+        num_threads: int = 4,
+    ) -> None:
+        import sherpa_onnx
+
+        if not os.path.isdir(model_dir):
+            raise RuntimeError(
+                f"NeMo offline model not found at {model_dir!r}. "
+                f"Run 'alexa-setup --sherpa-onnx nemo-ctc-it' to download it."
+            )
+        model_path = os.path.join(model_dir, "model.onnx")
+        tokens_path = os.path.join(model_dir, "tokens.txt")
+        if not os.path.isfile(model_path):
+            raise RuntimeError(
+                f"model.onnx not found in {model_dir!r}. "
+                f"Run 'alexa-setup --sherpa-onnx nemo-ctc-it' to download it."
+            )
+        if not os.path.isfile(tokens_path):
+            raise RuntimeError(
+                f"tokens.txt not found in {model_dir!r}. "
+                f"Run 'alexa-setup --sherpa-onnx nemo-ctc-it' to download it."
+            )
+        self._recognizer = sherpa_onnx.OfflineRecognizer.from_nemo_ctc(
+            model=str(model_path),
+            tokens=str(tokens_path),
+            num_threads=num_threads,
+            sample_rate=16000,
+            feature_dim=80,
+            decoding_method="greedy_search",
+            provider="cpu",
+        )
+        self._buffer: list[np.ndarray] = []
+        self._result: str = ""
+
+    def accept_waveform(self, data: bytes) -> bool:
+        samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+        self._buffer.append(samples)
+        return False
+
+    def text(self) -> str:
+        return self._result
+
+    def partial_text(self) -> str:
+        return ""
+
+    def reset(self) -> None:
+        self._buffer.clear()
+        self._result = ""
+
+    def finalize(self) -> str:
+        if not self._buffer:
+            return ""
+        audio = np.concatenate(self._buffer)
+        stream = self._recognizer.create_stream()
+        stream.accept_waveform(16000, audio)
+        self._recognizer.decode_stream(stream)
+        self._result = stream.result.text.strip()
+        self._buffer.clear()
+        return self._result
+
+
 def get_stt_backend(
     cfg: STTStage1Config | STTStage2Config,
     keywords: list[str] | None = None,
 ) -> STTBackend:
-    if cfg.backend in ("sherpa-onnx", "nemo-offline"):
+    if cfg.backend == "nemo-offline":
+        if isinstance(cfg, STTStage1Config):
+            raise RuntimeError("nemo-offline backend is not supported for stage-1 (wake word detection)")
+        model_path = cfg.model_path or _NEMO_OFFLINE_MODEL_PATH
+        return NeMoOfflineSTT(model_dir=model_path, num_threads=4)
+    if cfg.backend == "sherpa-onnx":
         model_path = cfg.model_path or _SHERPA_MODEL_PATH
         if isinstance(cfg, STTStage1Config) and cfg.keyword_spotter:
             if not keywords:
@@ -503,10 +577,7 @@ def get_stt_backend(
                 keywords_score=cfg.keywords_score,
                 keywords_threshold=cfg.keywords_threshold,
             )
-        model_variant = cfg.model_variant
-        if cfg.backend == "nemo-offline" and model_variant == "auto":
-            model_variant = "nemo_ctc"
-        return SherpaOnnxSTT(model_path, model_variant=model_variant)
+        return SherpaOnnxSTT(model_path, model_variant=cfg.model_variant)
     vosk_path = cfg.model_path or _MODEL_PATH
     return VoskSTT(_load_model(vosk_path))
 
