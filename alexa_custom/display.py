@@ -61,18 +61,18 @@ STATE_SHORT: dict[str, str] = {
 }
 
 STATE_ICON_IDS: dict[str, int] = {
-    "idle": 0,
-    "listening": 1,
-    "wake": 1,
-    "transcribing": 1,
-    "llm_thinking": 2,
-    "llm_reply": 3,
-    "speaking": 3,
-    "gated": 7,
-    "nomatch": 4,
-    "connected": 5,
-    "disconnected": 6,
-    "starting": 8,
+    "idle": 0,        # smiley face
+    "listening": 1,   # sound wave
+    "wake": 1,        # sound wave
+    "transcribing": 1, # sound wave
+    "llm_thinking": 2, # rotating gear
+    "llm_reply": 3,   # sound wave (same as listening)
+    "speaking": 3,    # sound wave (same as listening)
+    "gated": 7,       # phone handset
+    "nomatch": 4,     # X mark
+    "connected": 5,   # checkmark
+    "disconnected": 6, # blank
+    "starting": 8,    # smiley (same as idle)
 }
 
 STATE_TEXTS: dict[str, str] = {
@@ -338,6 +338,9 @@ class _BridgeClient:
 
     def set_leds(self, r: int, g: int, b: int, r1: int, g1: int, b1: int) -> bool:
         return self.call("set_leds", r, g, b, r1, g1, b1)
+
+    def scroll_text(self, text: str, speed_ms: int = 100) -> bool:
+        return self.call("scroll_text", text, speed_ms)
 
     def clear(self) -> bool:
         return self.call("clear")
