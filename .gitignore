@@ -18,3 +18,4 @@ setup/display_firmware/uart_bridge
 conf.sherpa/
 conf.vosk/
 graphify-out//
+graphify-out/
