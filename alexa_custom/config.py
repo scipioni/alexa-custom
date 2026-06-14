@@ -34,6 +34,10 @@ class Trigger:
     actions: list[ActionEntry]
     aliases: list[str] = field(default_factory=list)
 
+    @property
+    def patterns(self) -> list[str]:
+        return [self.phrase] + self.aliases
+
 
 @dataclass
 class WakeWordGroup:
