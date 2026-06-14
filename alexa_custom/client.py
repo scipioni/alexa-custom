@@ -862,20 +862,17 @@ def main() -> None:
     import argparse
     import threading
 
-    from alexa_custom.config import load_config
-
-    from alexa_custom.config import load_secrets
-
-    secrets = load_secrets("conf/secrets.yaml")
-    config = load_config("conf/config.yaml", secrets=secrets)
-
-    ensure_setup()
-
     from alexa_custom import __version__
 
     parser = argparse.ArgumentParser(description="alexa-custom LiveKit client")
     parser.add_argument(
         "--version", action="version", version=f"alexa-custom {__version__}"
+    )
+    parser.add_argument(
+        "--config",
+        metavar="DIR",
+        default="conf",
+        help="Configuration directory (default: conf)",
     )
     parser.add_argument(
         "--web-port", type=int, default=None, help="Web dashboard port (default: 8080)"
@@ -884,6 +881,15 @@ def main() -> None:
         "--hot-reload", action="store_true", help="Auto-restart on .py file changes"
     )
     args = parser.parse_args()
+
+    conf_dir = Path(args.config)
+
+    from alexa_custom.config import load_config, load_secrets
+
+    secrets = load_secrets(conf_dir / "secrets.yaml")
+    config = load_config(conf_dir / "config.yaml", secrets=secrets)
+
+    ensure_setup()
 
     if args.hot_reload:
         logger.info("Hot-reload enabled (watching alexa_custom/*.py)")
@@ -989,7 +995,8 @@ def main() -> None:
         stt_params=stt_params,
         port=web_port,
         hot_reload=args.hot_reload,
-        watch_paths=[Path("conf")],
+        watch_paths=[conf_dir],
+        conf_dir=conf_dir,
         output_volume=output_volume,
         input_gain=input_gain,
         shutdown_callback=None,
