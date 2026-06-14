@@ -373,10 +373,10 @@ void set_leds(int r1, int g1, int b1, int r2, int g2, int b2) {
   digitalWrite(LED4_B, b2 > 0 ? LOW : HIGH);
 }
 
-void scroll_text(const char* text, int speed_ms) {
+void scroll_text(String text, int speed_ms) {
   scrolling = false;
   _animating = false;
-  render_text_to_buffer(text);
+  render_text_to_buffer(text.c_str());
   scroll_offset = -13;
   scroll_speed_ms = speed_ms > 0 ? speed_ms : 100;
   scroll_last_tick = 0;
