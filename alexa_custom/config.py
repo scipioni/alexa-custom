@@ -114,6 +114,7 @@ class STTStage1Config:
     keyword_spotter: bool = False
     keywords_score: float = 1.0
     keywords_threshold: float = 0.25
+    hotwords_score: float = 1.5
     max_partial_words: int = 0
 
 
@@ -521,9 +522,9 @@ def _parse_audio_config(raw: dict) -> AudioConfig:
 
 def _parse_stt_stage1_config(raw: dict) -> STTStage1Config:
     backend = str(raw.get("backend", "vosk"))
-    if backend not in ("vosk", "sherpa-onnx"):
+    if backend not in ("vosk", "sherpa-onnx", "sherpa-hotwords"):
         raise ConfigError(
-            f"'stt.stage1.backend' must be 'vosk' or 'sherpa-onnx', got {backend!r}"
+            f"'stt.stage1.backend' must be 'vosk', 'sherpa-onnx', or 'sherpa-hotwords', got {backend!r}"
         )
     model_path_raw = raw.get("model_path")
     confidence_mode = str(raw.get("confidence_mode", "first"))
@@ -545,6 +546,7 @@ def _parse_stt_stage1_config(raw: dict) -> STTStage1Config:
         keyword_spotter=bool(raw.get("keyword_spotter", False)),
         keywords_score=_get_float(raw, "keywords_score", 1.0),
         keywords_threshold=_get_float(raw, "keywords_threshold", 0.25),
+        hotwords_score=_get_float(raw, "hotwords_score", 1.5),
         max_partial_words=_get_int(raw, "max_partial_words", 0),
     )
 

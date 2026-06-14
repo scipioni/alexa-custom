@@ -90,9 +90,45 @@ class VoskSTT(STTBackend):
             self._rec.SetWords(True)
 
 
+def _write_bpe_vocab(tokens_path: str) -> str:
+    """Write a bpe.vocab temp file from tokens.txt for ssentencepiece Viterbi tokenization.
+
+    Each token gets score = len(token)^2 (unicode char count).  The quadratic
+    weighting ensures greedy longest-match behaviour: a 2-char token beats two
+    1-char tokens (4 > 1+1), a 4-char token beats two 2-char tokens (16 > 4+4),
+    etc.  This produces tokenization consistent with the BPE model's actual output.
+    """
+    import tempfile
+
+    lines: list[str] = []
+    try:
+        with open(tokens_path) as f:
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) >= 2:
+                    token = parts[0]
+                    score = len(token) ** 2
+                    lines.append(f"{token}\t{score}")
+    except OSError as e:
+        raise RuntimeError(f"Cannot read tokens.txt at {tokens_path!r}: {e}") from e
+
+    tf = tempfile.NamedTemporaryFile(
+        mode="w", suffix=".vocab", delete=False, prefix="alexa_bpevocab_"
+    )
+    tf.write("\n".join(lines) + "\n")
+    tf.close()
+    return tf.name
+
+
 class SherpaOnnxSTT(STTBackend):
-    def __init__(self, model_dir: str = _SHERPA_MODEL_PATH):
+    def __init__(
+        self,
+        model_dir: str = _SHERPA_MODEL_PATH,
+        hotwords: list[str] | None = None,
+        hotwords_score: float = 1.5,
+    ):
         import sherpa_onnx
+        import tempfile
 
         if not os.path.isdir(model_dir):
             raise RuntimeError(
@@ -108,6 +144,36 @@ class SherpaOnnxSTT(STTBackend):
 
         model_onnx = os.path.join(model_dir, "model.onnx")
 
+        # Build hotwords temp file using modeling_unit="bpe" so Sherpa's ssentencepiece
+        # tokenizes each phrase word-by-word, adding ▁ boundaries and running Viterbi.
+        # This avoids the cjkchar SplitUtf8+MergeCharactersIntoWords path which splits
+        # off ▁ and re-merges ASCII letters into strings not found in the symbol table.
+        self._hotwords_tmp: str | None = None
+        self._bpe_vocab_tmp: str | None = None
+        hotwords_file = ""
+        bpe_vocab_file = ""
+        if hotwords:
+            kw_lines = [normalize_text(p) for p in hotwords if normalize_text(p)]
+            if kw_lines:
+                bpe_vocab_file = _write_bpe_vocab(tokens)
+                self._bpe_vocab_tmp = bpe_vocab_file
+                tf = tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".txt", delete=False, prefix="alexa_hw_"
+                )
+                tf.write("\n".join(kw_lines) + "\n")
+                tf.close()
+                self._hotwords_tmp = tf.name
+                hotwords_file = tf.name
+                logger.info(
+                    "sherpa-hotwords: %d phrases registered (score=%.1f)\n%s",
+                    len(kw_lines),
+                    hotwords_score,
+                    "\n".join(f"  {p!r}" for p in sorted(kw_lines)),
+                )
+
+        # modified_beam_search is required when hotwords_file is provided.
+        decoding_method = "modified_beam_search" if hotwords_file else "greedy_search"
+
         if os.path.exists(joiner) or os.path.exists(joiner_int8):
             self._delegate = sherpa_onnx.OnlineRecognizer.from_transducer(
                 tokens=tokens,
@@ -115,7 +181,11 @@ class SherpaOnnxSTT(STTBackend):
                 decoder=decoder_int8 if os.path.exists(decoder_int8) else decoder,
                 joiner=joiner_int8 if os.path.exists(joiner_int8) else joiner,
                 num_threads=4,
-                decoding_method="greedy_search",
+                decoding_method=decoding_method,
+                hotwords_file=hotwords_file,
+                hotwords_score=hotwords_score if hotwords_file else 0.0,
+                modeling_unit="bpe" if hotwords_file else "cjkchar",
+                bpe_vocab=bpe_vocab_file if hotwords_file else "",
                 sample_rate=16000,
                 feature_dim=80,
                 provider="cpu",
@@ -156,6 +226,14 @@ class SherpaOnnxSTT(STTBackend):
             )
         self._stream = self._delegate.create_stream()
         self._last_partial: str = ""
+
+    def __del__(self) -> None:
+        for tmp in (self._hotwords_tmp, self._bpe_vocab_tmp):
+            if tmp:
+                try:
+                    os.unlink(tmp)
+                except OSError:
+                    pass
 
     def accept_waveform(self, data: bytes) -> bool:
         samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
@@ -484,6 +562,17 @@ def get_stt_backend(
     keywords: list[str] | None = None,
     grammar: str | None = None,
 ) -> STTBackend:
+    if cfg.backend == "sherpa-hotwords":
+        model_path = cfg.model_path or _SHERPA_MODEL_PATH
+        if not keywords:
+            raise RuntimeError(
+                "sherpa-hotwords requires at least one wake word in config"
+            )
+        return SherpaOnnxSTT(
+            model_dir=model_path,
+            hotwords=keywords,
+            hotwords_score=cfg.hotwords_score if isinstance(cfg, STTStage1Config) else 1.5,
+        )
     if cfg.backend == "sherpa-onnx":
         model_path = cfg.model_path or _SHERPA_MODEL_PATH
         if isinstance(cfg, STTStage1Config) and cfg.keyword_spotter:
