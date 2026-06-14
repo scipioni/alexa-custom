@@ -285,6 +285,7 @@ class ActionsConfig:
     actions: ActionsDirectoryConfig = field(default_factory=ActionsDirectoryConfig)
     llm: LLMConfig | None = None
     display: DisplayConfig | None = None
+    dump_triggers_dir: str | None = None  # if set, save pre-trigger audio as WAV here
 
 
 # ---------------------------------------------------------------------------
@@ -1063,6 +1064,9 @@ def _parse_actions_config(
                         group_id,
                     )
 
+    dump_triggers_dir_raw = actions_raw.get("dump_triggers_dir")
+    dump_triggers_dir = str(dump_triggers_dir_raw) if dump_triggers_dir_raw else None
+
     return ActionsConfig(
         wake_words=wake_words,
         triggers=global_triggers,
@@ -1078,4 +1082,5 @@ def _parse_actions_config(
         actions=actions_dir_cfg,
         llm=llm,
         display=display,
+        dump_triggers_dir=dump_triggers_dir,
     )

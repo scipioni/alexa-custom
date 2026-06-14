@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import logging
 import os
@@ -179,6 +180,33 @@ def _get_stage2_key(cfg: ActionsConfig) -> tuple:
         if cfg.stt.stage2.vosk_grammar
         else 0,
     )
+
+
+def _dump_trigger_wav(
+    audio_buf: "collections.deque[bytes]",
+    channels: int,
+    label: str,
+    dump_dir: str,
+) -> None:
+    import collections as _c
+    import re
+    import wave
+    from datetime import datetime
+
+    os.makedirs(dump_dir, exist_ok=True)
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    safe = re.sub(r"[^\w\-]", "_", label)[:40]
+    path = os.path.join(dump_dir, f"{ts}_{safe}.wav")
+    try:
+        with wave.open(path, "wb") as wf:
+            wf.setnchannels(channels)
+            wf.setsampwidth(2)
+            wf.setframerate(16000)
+            for chunk in audio_buf:
+                wf.writeframes(chunk)
+        logger.info("Trigger dump: %s", path)
+    except Exception as e:
+        logger.warning("Trigger dump failed: %s", e)
 
 
 def _log_activation_phrases(config: ActionsConfig) -> None:
@@ -684,6 +712,12 @@ def _recognition_loop(
     _adaptive_rms_margin = config.stt.stage1.adaptive_rms_margin
     _noise_floor_buffer: list[float] = []
 
+    # Rolling audio buffer for trigger dumps (last ~8 s at 16kHz mono s16le)
+    _dump_dir = config.dump_triggers_dir
+    _audio_buf: collections.deque[bytes] = collections.deque(
+        maxlen=int(8 * 16000 * 2 / 4096) + 1
+    )
+
     alias_map = _build_alias_map(config.wake_words)
     intent_map = build_intent_map(alias_map, config.triggers)
     is_vosk = isinstance(stage1_backend, VoskSTT)
@@ -775,6 +809,12 @@ def _recognition_loop(
 
     _dispatch_ended_at: list[float] = [0.0]
 
+    def _fire(label: str, **kw) -> None:
+        """Dump pre-trigger audio then call _wake_detected."""
+        if _dump_dir:
+            _dump_trigger_wav(_audio_buf, channels, label, _dump_dir)
+        _wake_detected(**kw)
+
     for data in _iter_gated_audio(
         proc,
         channels,
@@ -804,6 +844,8 @@ def _recognition_loop(
             continue
 
         rms = _rms_level(data)
+        if _dump_dir:
+            _audio_buf.append(data)
 
         # Adaptive RMS tracking
         if _adaptive_rms and not was_gated and stage1_speech_ms == 0:
@@ -892,7 +934,7 @@ def _recognition_loop(
                         keyword,
                         _direct_trigger.phrase,
                     )
-                    _wake_detected(
+                    _fire(_direct_trigger.phrase,
                         wake_group=config.wake_words[0],
                         proc=proc,
                         channels=channels,
@@ -929,7 +971,7 @@ def _recognition_loop(
                         keyword,
                         f" (inline: {_inline_cmd!r})" if _inline_cmd else "",
                     )
-                    _wake_detected(
+                    _fire(keyword,
                         wake_group=wake_match,
                         proc=proc,
                         channels=channels,
@@ -991,7 +1033,7 @@ def _recognition_loop(
                             logger.info("Partial intent fired: %r", partial)
                             _reset_stage1_state()
                             stage1.Reset()
-                            _wake_detected(
+                            _fire(trigger.phrase,
                                 wake_group=wake_group,
                                 proc=proc,
                                 channels=channels,
@@ -1062,7 +1104,7 @@ def _recognition_loop(
                                 )
                                 _reset_stage1_state()
                                 stage1.Reset()
-                                _wake_detected(
+                                _fire(_direct_partial.phrase,
                                     wake_group=config.wake_words[0],
                                     proc=proc,
                                     channels=channels,
@@ -1196,7 +1238,7 @@ def _recognition_loop(
                         _reset_stage1_state()
                         stage1.Reset()
                         continue
-                _wake_detected(
+                _fire(vosk_text,
                     wake_group=wake_match,
                     proc=proc,
                     channels=channels,
@@ -1261,7 +1303,8 @@ def _recognition_loop(
                             )
                             _reset_stage1_state()
                             stage1 = _make_stage1_recognizer()
-                            _wake_detected(
+                            _fire(
+                                _dm_trigger.phrase,
                                 wake_group=config.wake_words[0],
                                 proc=proc,
                                 channels=channels,
@@ -1351,7 +1394,8 @@ def _recognition_loop(
                             text,
                             _dm_trigger.phrase,
                         )
-                        _wake_detected(
+                        _fire(
+                            _dm_trigger.phrase,
                             wake_group=config.wake_words[0],
                             proc=proc,
                             channels=channels,
@@ -1385,7 +1429,8 @@ def _recognition_loop(
                                 loop=loop,
                             )
                     elif wake_match:
-                        _wake_detected(
+                        _fire(
+                            text,
                             wake_group=wake_match,
                             proc=proc,
                             channels=channels,
