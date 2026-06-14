@@ -8,9 +8,13 @@ import zipfile
 from pathlib import Path
 
 _SHERPA_MODELS = {
-    "ita": (
+    "kroko_128l": (
         "https://huggingface.co/hudaiapa88/sherpa-stt-onnx/resolve/main/it/kroko_128l",
         "models/it/kroko_128l",
+    ),
+    "kroko_64l": (
+        "https://huggingface.co/hudaiapa88/sherpa-stt-onnx/resolve/main/it/kroko_64l",
+        "models/it/kroko_64l",
     ),
 }
 _SHERPA_FILES = [
@@ -21,15 +25,15 @@ _SHERPA_FILES = [
 ]
 
 
-def download_sherpa_onnx(lang: str = "ita", force: bool = False) -> None:
-    if lang not in _SHERPA_MODELS:
+def download_sherpa_onnx(model: str = "kroko_128l", force: bool = False) -> None:
+    if model not in _SHERPA_MODELS:
         print(
-            f"Unknown sherpa-onnx language {lang!r}. Available: {', '.join(_SHERPA_MODELS)}",
+            f"Unknown sherpa-onnx model {model!r}. Available: {', '.join(_SHERPA_MODELS)}",
             file=sys.stderr,
         )
         sys.exit(1)
 
-    base_url, dest_path = _SHERPA_MODELS[lang]
+    base_url, dest_path = _SHERPA_MODELS[model]
     dest = Path(dest_path)
 
     if dest.exists() and not force:
@@ -200,8 +204,13 @@ def main() -> None:
     )
     parser.add_argument(
         "--sherpa-onnx",
-        action="store_true",
-        help="Also download the sherpa-onnx kroko Italian transducer model (alternative STT backend)",
+        nargs="?",
+        const="kroko_128l",
+        metavar="MODEL",
+        help=(
+            "Download a sherpa-onnx Italian transducer model. "
+            f"MODEL is one of: {', '.join(_SHERPA_MODELS)} (default: kroko_128l)"
+        ),
     )
     args = parser.parse_args()
 
@@ -210,7 +219,7 @@ def main() -> None:
     if not args.no_piper:
         download_piper_voice(args.piper_voice, force=args.force)
     if args.sherpa_onnx:
-        download_sherpa_onnx(force=args.force)
+        download_sherpa_onnx(model=args.sherpa_onnx, force=args.force)
 
 
 if __name__ == "__main__":
