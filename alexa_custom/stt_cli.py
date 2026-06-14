@@ -209,6 +209,12 @@ def main() -> None:
         description="alexa-stt: STT diagnostic tool (same pipeline as alexa-client)"
     )
     parser.add_argument(
+        "--config",
+        metavar="DIR",
+        default="conf",
+        help="configuration directory (default: conf)",
+    )
+    parser.add_argument(
         "--record", metavar="FILE",
         help="record microphone audio to a WAV file while listening",
     )
@@ -217,6 +223,9 @@ def main() -> None:
         help="replay a previously recorded WAV file instead of using the microphone",
     )
     args = parser.parse_args()
+
+    from pathlib import Path
+    conf_dir = Path(args.config)
 
     logging.basicConfig(
         level=getattr(
@@ -240,10 +249,10 @@ def main() -> None:
     _silent_tts = _SilentTTS()
     _tts_module.get_engine = lambda: _silent_tts
 
-    secrets = load_secrets("conf/secrets.yaml")
-    config = load_config("conf/config.yaml", secrets=secrets)
+    secrets = load_secrets(conf_dir / "secrets.yaml")
+    config = load_config(conf_dir / "config.yaml", secrets=secrets)
     if config is None:
-        print("ERROR: could not load conf/config.yaml", file=sys.stderr)
+        print(f"ERROR: could not load {conf_dir / 'config.yaml'}", file=sys.stderr)
         sys.exit(1)
 
     stop_event = threading.Event()
