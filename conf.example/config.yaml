@@ -56,12 +56,16 @@ stt:
     #   false — free-vocabulary: full decoder; higher CPU but better at rejecting unrelated speech.
     # --- sherpa-hotwords options ---
     # hotwords_score: 1.5  # contextual bias weight (1.0–2.0); raise if wake word is missed
+    # num_threads: 2       # ONNX threads for sherpa backends (ignored by vosk).
+    #   2 leaves headroom for audio I/O + TTS on the quad-core target board;
+    #   raising toward the core count rarely helps A53 inference and starves capture.
 
   stage2:                  # command recognition after wake
     backend: vosk          # can differ from stage1 for higher accuracy
     vosk_grammar: true     # restrict Vosk to command vocabulary (grammar mode)
     # backend: sherpa-onnx
     # model_path: models/it/kroko_128l
+    # num_threads: 2       # ONNX threads for sherpa backends (ignored by vosk)
 
 # ---------------------------------------------------------------------------
 # TTS — text-to-speech

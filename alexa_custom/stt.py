@@ -158,7 +158,9 @@ def _get_stage1_key(cfg: ActionsConfig) -> tuple:
         cfg.stt.stage1.backend,
         cfg.stt.stage1.model_path,
         cfg.stt.stage1.vosk_grammar,
-        cfg.stt.stage1.hotwords_score if cfg.stt.stage1.backend == "sherpa-hotwords" else 0.0,
+        cfg.stt.stage1.hotwords_score
+        if cfg.stt.stage1.backend == "sherpa-hotwords"
+        else 0.0,
         hash(
             (
                 tuple(g.word for g in cfg.wake_words),
@@ -335,7 +337,9 @@ def run_stt_worker(
             if new_stage1_key != stage1_key:
                 try:
                     _kws_keywords = [
-                        p for g in current_config.wake_words for p in [g.word] + g.aliases
+                        p
+                        for g in current_config.wake_words
+                        for p in [g.word] + g.aliases
                     ]
                     for _t in current_config.direct_triggers:
                         _kws_keywords.append(_t.phrase)
@@ -780,6 +784,13 @@ def _recognition_loop(
     _partial_stable_reads: int = 0
     _partial_stable_since: float = 0.0
     _last_partial: str = ""
+    # Cache of the per-partial match results, keyed on the partial string. The
+    # matches are a deterministic function of the partial, so we recompute only
+    # when the partial text changes — the stability counter still advances on
+    # unchanged partials (a stable partial is exactly what it waits for).
+    _eval_partial: str = ""
+    _cached_intent_result: tuple | None = None
+    _cached_direct_partial: "Trigger | None" = None
 
     if on_stt_event:
         on_stt_event(
@@ -796,12 +807,16 @@ def _recognition_loop(
         nonlocal stage1_last_speech_t, stage1_speech_ms
         nonlocal _partial_stable_key, _partial_stable_reads, _partial_stable_since
         nonlocal _last_partial
+        nonlocal _eval_partial, _cached_intent_result, _cached_direct_partial
         stage1_last_speech_t = 0.0
         stage1_speech_ms = 0.0
         _partial_stable_key = None
         _partial_stable_reads = 0
         _partial_stable_since = 0.0
         _last_partial = ""
+        _eval_partial = ""
+        _cached_intent_result = None
+        _cached_direct_partial = None
 
     if is_vosk:
 
@@ -946,7 +961,8 @@ def _recognition_loop(
                         keyword,
                         _direct_trigger.phrase,
                     )
-                    _fire(_direct_trigger.phrase,
+                    _fire(
+                        _direct_trigger.phrase,
                         wake_group=config.wake_words[0],
                         proc=proc,
                         channels=channels,
@@ -983,7 +999,8 @@ def _recognition_loop(
                         keyword,
                         f" (inline: {_inline_cmd!r})" if _inline_cmd else "",
                     )
-                    _fire(keyword,
+                    _fire(
+                        keyword,
                         wake_group=wake_match,
                         proc=proc,
                         channels=channels,
@@ -1024,13 +1041,51 @@ def _recognition_loop(
                 stage1_last_speech_t = time.monotonic()
                 stage1_speech_ms += chunk_ms
 
-            partial = json.loads(stage1.PartialResult()).get("partial", "").strip()
-            if on_stt_event and partial and partial != _last_partial:
-                on_stt_event("transcribing", {"text": partial})
-            _last_partial = partial
+            # Only parse the partial when something consumes it — the JSON
+            # decode runs on every always-on chunk otherwise.
+            _need_partial = (
+                on_stt_event is not None or config.recognition.partial_matching
+            )
+            partial = ""
+            if _need_partial:
+                partial = json.loads(stage1.PartialResult()).get("partial", "").strip()
+                if on_stt_event and partial and partial != _last_partial:
+                    on_stt_event("transcribing", {"text": partial})
+                _last_partial = partial
 
             if partial and config.recognition.partial_matching:
-                intent_result = _match_full_intent(partial, alias_map, intent_map)
+                # Recompute matches only when the partial text changed; reuse
+                # the cached results otherwise (see _eval_partial above).
+                if partial != _eval_partial:
+                    _eval_partial = partial
+                    _cached_intent_result = _match_full_intent(
+                        partial, alias_map, intent_map
+                    )
+                    if _cached_intent_result is None and config.direct_triggers:
+                        _partial_word_count = len(normalize_text(partial).split())
+                        _sized_triggers = [
+                            t
+                            for t in config.direct_triggers
+                            if len(normalize_text(t.phrase).split())
+                            <= _partial_word_count
+                        ]
+                        _cached_direct_partial = (
+                            match_trigger(
+                                partial,
+                                _sized_triggers,
+                                # ratio instead of token_set_ratio: character-level
+                                # similarity prevents token-overlap false positives
+                                # (e.g. "stefano comando il" sharing "stefano" with
+                                # "chiama Stefano" scoring 100 with token_set_ratio).
+                                algorithm="ratio",
+                                threshold=config.recognition.matching_threshold,
+                            )
+                            if _sized_triggers
+                            else None
+                        )
+                    else:
+                        _cached_direct_partial = None
+                intent_result = _cached_intent_result
                 if intent_result is not None and not is_stt_sleeping():
                     intent_key = (intent_result[0].word, intent_result[1].phrase)
                     if intent_key == _partial_stable_key:
@@ -1045,7 +1100,8 @@ def _recognition_loop(
                             logger.info("Partial intent fired: %r", partial)
                             _reset_stage1_state()
                             stage1.Reset()
-                            _fire(trigger.phrase,
+                            _fire(
+                                trigger.phrase,
                                 wake_group=wake_group,
                                 proc=proc,
                                 channels=channels,
@@ -1081,42 +1137,25 @@ def _recognition_loop(
                         _partial_stable_reads = 1
                         _partial_stable_since = time.monotonic()
                 elif config.direct_triggers and not is_stt_sleeping():
-                    _partial_word_count = len(normalize_text(partial).split())
-                    _sized_triggers = [
-                        t
-                        for t in config.direct_triggers
-                        if len(normalize_text(t.phrase).split()) <= _partial_word_count
-                    ]
-                    _direct_partial = (
-                        match_trigger(
-                            partial,
-                            _sized_triggers,
-                            # ratio instead of token_set_ratio: character-level
-                            # similarity prevents token-overlap false positives
-                            # (e.g. "stefano comando il" sharing "stefano" with
-                            # "chiama Stefano" scoring 100 with token_set_ratio).
-                            algorithm="ratio",
-                            threshold=config.recognition.matching_threshold,
-                        )
-                        if _sized_triggers
-                        else None
-                    )
+                    _direct_partial = _cached_direct_partial
                     if _direct_partial:
                         direct_key = ("__direct__", _direct_partial.phrase)
                         if direct_key == _partial_stable_key:
                             _partial_stable_reads += 1
-                            elapsed_ms = (time.monotonic() - _partial_stable_since) * 1000
+                            elapsed_ms = (
+                                time.monotonic() - _partial_stable_since
+                            ) * 1000
                             if (
                                 _partial_stable_reads
                                 >= config.recognition.partial_stability_reads
-                                and elapsed_ms >= config.recognition.partial_stability_ms
+                                and elapsed_ms
+                                >= config.recognition.partial_stability_ms
                             ):
-                                logger.info(
-                                    "Partial direct trigger fired: %r", partial
-                                )
+                                logger.info("Partial direct trigger fired: %r", partial)
                                 _reset_stage1_state()
                                 stage1.Reset()
-                                _fire(_direct_partial.phrase,
+                                _fire(
+                                    _direct_partial.phrase,
                                     wake_group=config.wake_words[0],
                                     proc=proc,
                                     channels=channels,
@@ -1250,7 +1289,8 @@ def _recognition_loop(
                         _reset_stage1_state()
                         stage1.Reset()
                         continue
-                _fire(vosk_text,
+                _fire(
+                    vosk_text,
                     wake_group=wake_match,
                     proc=proc,
                     channels=channels,
@@ -1274,7 +1314,10 @@ def _recognition_loop(
                 _drain_pipe(proc)
                 _dispatch_ended_at[0] = time.monotonic()
                 _reset_stage1_state()
-                stage1 = _make_stage1_recognizer()
+                # Reset() clears decoder state without recompiling the grammar
+                # FST — far cheaper than rebuilding the recognizer, avoiding a
+                # post-command latency spike on the target board.
+                stage1.Reset()
                 if on_stt_event:
                     on_stt_event(
                         "listening",
@@ -1314,7 +1357,7 @@ def _recognition_loop(
                                 _dm_trigger.phrase,
                             )
                             _reset_stage1_state()
-                            stage1 = _make_stage1_recognizer()
+                            stage1.Reset()
                             _fire(
                                 _dm_trigger.phrase,
                                 wake_group=config.wake_words[0],
@@ -1490,19 +1533,35 @@ def _recognition_loop(
                 # One-breath partial firing: if the partial already contains a
                 # recognised wake word + command, fire immediately without waiting
                 # for the endpoint (mirrors vosk's partial_matching behaviour).
-                if partial and config.recognition.partial_matching and not is_stt_sleeping():
-                    intent_result = _match_full_intent(partial, alias_map, intent_map)
+                if (
+                    partial
+                    and config.recognition.partial_matching
+                    and not is_stt_sleeping()
+                ):
+                    # Recompute only when the partial changed (see vosk path).
+                    if partial != _eval_partial:
+                        _eval_partial = partial
+                        _cached_intent_result = _match_full_intent(
+                            partial, alias_map, intent_map
+                        )
+                    intent_result = _cached_intent_result
                     if intent_result is not None:
                         intent_key = (intent_result[0].word, intent_result[1].phrase)
                         if intent_key == _partial_stable_key:
                             _partial_stable_reads += 1
-                            elapsed_ms = (time.monotonic() - _partial_stable_since) * 1000
+                            elapsed_ms = (
+                                time.monotonic() - _partial_stable_since
+                            ) * 1000
                             if (
-                                _partial_stable_reads >= config.recognition.partial_stability_reads
-                                and elapsed_ms >= config.recognition.partial_stability_ms
+                                _partial_stable_reads
+                                >= config.recognition.partial_stability_reads
+                                and elapsed_ms
+                                >= config.recognition.partial_stability_ms
                             ):
                                 wake_group, trigger, inline_cmd = intent_result
-                                logger.info("Partial intent fired (sherpa): %r", partial)
+                                logger.info(
+                                    "Partial intent fired (sherpa): %r", partial
+                                )
                                 _reset_stage1_state()
                                 stage1_backend.reset()
                                 _fire(
@@ -1528,7 +1587,11 @@ def _recognition_loop(
                                 if on_stt_event:
                                     on_stt_event(
                                         "listening",
-                                        {"wake_words": [g.word for g in config.wake_words]},
+                                        {
+                                            "wake_words": [
+                                                g.word for g in config.wake_words
+                                            ]
+                                        },
                                     )
                                 if mqtt_client:
                                     mqtt_client.publish_threadsafe(
@@ -1547,7 +1610,9 @@ def _recognition_loop(
 
                 max_pw = config.stt.stage1.max_partial_words
                 if max_pw > 0 and partial and len(partial.split()) >= max_pw:
-                    logger.debug("stage-1 partial exceeded %d words, resetting stream", max_pw)
+                    logger.debug(
+                        "stage-1 partial exceeded %d words, resetting stream", max_pw
+                    )
                     stage1_backend.reset()
                     _last_partial = ""
 

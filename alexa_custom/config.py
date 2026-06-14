@@ -116,6 +116,9 @@ class STTStage1Config:
     keywords_threshold: float = 0.25
     hotwords_score: float = 1.5
     max_partial_words: int = 0
+    # ONNX intra-op threads for sherpa backends. 2 leaves headroom for audio
+    # I/O and TTS on the quad-core target board; ignored by the Vosk backend.
+    num_threads: int = 2
 
 
 @dataclass
@@ -123,6 +126,8 @@ class STTStage2Config:
     backend: str = "vosk"
     model_path: str | None = None
     vosk_grammar: bool = True
+    # ONNX intra-op threads for sherpa backends; ignored by Vosk.
+    num_threads: int = 2
 
 
 @dataclass
@@ -548,6 +553,7 @@ def _parse_stt_stage1_config(raw: dict) -> STTStage1Config:
         keywords_threshold=_get_float(raw, "keywords_threshold", 0.25),
         hotwords_score=_get_float(raw, "hotwords_score", 1.5),
         max_partial_words=_get_int(raw, "max_partial_words", 0),
+        num_threads=_get_int(raw, "num_threads", 2),
     )
 
 
@@ -562,6 +568,7 @@ def _parse_stt_stage2_config(raw: dict) -> STTStage2Config:
         backend=backend,
         model_path=str(model_path_raw) if model_path_raw else None,
         vosk_grammar=bool(raw.get("vosk_grammar", True)),
+        num_threads=_get_int(raw, "num_threads", 2),
     )
 
 
