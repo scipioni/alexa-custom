@@ -1177,12 +1177,15 @@
       }
       const h = document.getElementById('hero');
       h.classList.remove('llm-thinking');
+      const sleeping = state === 'sleeping';
+      h.classList.toggle('sleeping', sleeping);
+      document.body.classList.toggle('stt-sleeping', sleeping);
       switch (state) {
         case 'sleeping':
           _cancelPartialClear();
           var displayText = text || 'Sleeping — say "start listening" to wake';
-          _setHeroContent('<span class="hero-icon hero-muted" style="color:var(--muted);font-size:24px">💤</span>'
-            + '<span class="hero-text hero-muted">' + esc(displayText) + '</span>');
+          _setHeroContent('<span class="hero-icon material-symbols-outlined" style="color:var(--amber)">bedtime</span>'
+            + '<span class="hero-text" style="color:var(--amber)">' + esc(displayText) + '</span>');
           break;
         case 'listening':
           _cancelPartialClear();
