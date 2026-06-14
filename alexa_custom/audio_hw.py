@@ -97,6 +97,72 @@ def save_volume_config(volume: float) -> None:
         logger.warning("Failed to save volume to config.yaml: %s", e)
 
 
+def save_volume_state(volume: float) -> None:
+    """Persist output volume to state.yaml."""
+    state_file = Path(_STATE_FILE)
+    try:
+        state_file.parent.mkdir(parents=True, exist_ok=True)
+        import json
+        if state_file.exists():
+            with open(state_file) as f:
+                state = json.load(f)
+        else:
+            state = {}
+        state["output_volume"] = volume
+        with open(state_file, "w") as f:
+            json.dump(state, f)
+    except Exception as e:
+        logger.warning("Failed to save volume state: %s", e)
+
+
+def load_volume_state() -> float | None:
+    """Load persisted output volume from state.yaml."""
+    state_file = Path(_STATE_FILE)
+    try:
+        if not state_file.exists():
+            return None
+        import json
+        with open(state_file) as f:
+            state = json.load(f)
+        return state.get("output_volume")
+    except Exception as e:
+        logger.warning("Failed to load volume state: %s", e)
+        return None
+
+
+def load_input_gain_state() -> float | None:
+    """Load persisted input gain from state.yaml."""
+    state_file = Path(_STATE_FILE)
+    try:
+        if not state_file.exists():
+            return None
+        import json
+        with open(state_file) as f:
+            state = json.load(f)
+        return state.get("input_gain")
+    except Exception as e:
+        logger.warning("Failed to load input gain state: %s", e)
+        return None
+
+
+def save_input_gain_config(gain: float) -> None:
+    """Persist input gain to state.yaml."""
+    state_file = Path(_STATE_FILE)
+    try:
+        state_file.parent.mkdir(parents=True, exist_ok=True)
+        import json
+        if state_file.exists():
+            with open(state_file) as f:
+                state = json.load(f)
+        else:
+            state = {}
+        state["input_gain"] = gain
+        with open(state_file, "w") as f:
+            json.dump(state, f)
+    except Exception as e:
+        logger.warning("Failed to save input gain state: %s", e)
+
+
 def configure(cfg) -> None:
     """Update module-level audio parameters from ActionsConfig."""
     global \
