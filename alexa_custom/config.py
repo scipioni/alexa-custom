@@ -496,9 +496,9 @@ def _parse_stt_stage1_config(raw: dict) -> STTStage1Config:
 
 def _parse_stt_stage2_config(raw: dict) -> STTStage2Config:
     backend = str(raw.get("backend", "vosk"))
-    if backend not in ("vosk", "sherpa-onnx"):
+    if backend not in ("vosk", "sherpa-onnx", "nemo-offline", "whisper-cpp"):
         raise ConfigError(
-            f"'stt.stage2.backend' must be 'vosk' or 'sherpa-onnx', got {backend!r}"
+            f"'stt.stage2.backend' must be 'vosk', 'sherpa-onnx', 'nemo-offline', or 'whisper-cpp', got {backend!r}"
         )
     model_path_raw = raw.get("model_path")
     model_variant = str(raw.get("model_variant", "auto"))

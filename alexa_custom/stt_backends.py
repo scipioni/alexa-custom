@@ -490,7 +490,7 @@ def get_stt_backend(
     cfg: STTStage1Config | STTStage2Config,
     keywords: list[str] | None = None,
 ) -> STTBackend:
-    if cfg.backend == "sherpa-onnx":
+    if cfg.backend in ("sherpa-onnx", "nemo-offline"):
         model_path = cfg.model_path or _SHERPA_MODEL_PATH
         if isinstance(cfg, STTStage1Config) and cfg.keyword_spotter:
             if not keywords:
@@ -503,7 +503,7 @@ def get_stt_backend(
                 keywords_score=cfg.keywords_score,
                 keywords_threshold=cfg.keywords_threshold,
             )
-        return SherpaOnnxSTT(model_path)
+        return SherpaOnnxSTT(model_path, model_variant=cfg.model_variant)
     vosk_path = cfg.model_path or _MODEL_PATH
     return VoskSTT(_load_model(vosk_path))
 
