@@ -185,6 +185,7 @@ def match_trigger_with_score(
     triggers: list[Trigger],
     threshold: float = _TRIGGER_THRESHOLD,
     algorithm: str = "token_set_ratio",
+    min_word_overlap: float = 0.0,
 ) -> tuple[Trigger | None, float]:
     # Pattern match is definitive: first trigger whose patterns match wins.
     for trigger in triggers:
@@ -198,8 +199,24 @@ def match_trigger_with_score(
     best: Trigger | None = None
     best_score = 0.0
     t_phon = italian_phonetic(transcript)
+    t_tokens = set(t_phon.split()) if min_word_overlap > 0.0 else set()
     for trigger in triggers:
         phrases = [trigger.phrase] + trigger.aliases
+        # Word-overlap guard: at least min_word_overlap fraction of each phrase's
+        # phonetic tokens must appear verbatim in the transcript token set.
+        # Prevents token_set_ratio from firing on transcripts that share only a
+        # subset of the trigger's words (e.g. background noise containing "che"
+        # and "è" but not "giorno" still scoring ≥ threshold).
+        if min_word_overlap > 0.0:
+            overlap_ok = False
+            for p in phrases:
+                p_words = italian_phonetic(p).split()
+                matched = sum(1 for w in p_words if w in t_tokens)
+                if matched / len(p_words) >= min_word_overlap:
+                    overlap_ok = True
+                    break
+            if not overlap_ok:
+                continue
         scores = []
         for p in phrases:
             p_phon = italian_phonetic(p)
@@ -223,8 +240,11 @@ def match_trigger(
     triggers: list[Trigger],
     threshold: float = _TRIGGER_THRESHOLD,
     algorithm: str = "token_set_ratio",
+    min_word_overlap: float = 0.0,
 ) -> Trigger | None:
-    trigger, _ = match_trigger_with_score(transcript, triggers, threshold, algorithm)
+    trigger, _ = match_trigger_with_score(
+        transcript, triggers, threshold, algorithm, min_word_overlap
+    )
     return trigger
 
 
