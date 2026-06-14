@@ -1307,20 +1307,61 @@
       }
     }
 
-    const MAX_LOG = 300;
+    const MAX_LOG = 1000;
+    let logBuffer = [];
+    let logRenderTimeout = null;
+
     function addLog(m) {
-      const el = document.getElementById('le');
-      const d  = document.createElement('div');
-      d.className = 'le';
-      d.innerHTML = '<span class="ts">' + esc(m.ts) + ' </span>'
-                  + '<span class="' + m.level + '">' + m.level.padEnd(8) + '</span> '
-                  + esc(m.msg);
-      el.appendChild(d);
-      while (el.children.length > MAX_LOG) el.removeChild(el.firstChild);
-      el.scrollTop = el.scrollHeight;
+      logBuffer.push(m);
+      if (!logRenderTimeout) {
+        logRenderTimeout = setTimeout(flushLogs, 100);
+      }
     }
 
-    function clearLogs()    { document.getElementById('le').innerHTML = ''; }
+    function flushLogs() {
+      logRenderTimeout = null;
+      if (logBuffer.length === 0) return;
+
+      const el = document.getElementById('le');
+      if (!el) {
+        logBuffer = [];
+        return;
+      }
+
+      const isAtBottom = el.scrollHeight - el.clientHeight - el.scrollTop < 15;
+
+      const htmls = [];
+      for (const m of logBuffer) {
+        htmls.push(
+          '<div class="le">'
+          + '<span class="ts">' + esc(m.ts) + ' </span>'
+          + '<span class="' + m.level + '">' + m.level.padEnd(8) + '</span> '
+          + esc(m.msg)
+          + '</div>'
+        );
+      }
+      logBuffer = [];
+
+      el.insertAdjacentHTML('beforeend', htmls.join(''));
+
+      while (el.children.length > MAX_LOG) {
+        el.removeChild(el.firstChild);
+      }
+
+      if (isAtBottom) {
+        el.scrollTop = el.scrollHeight;
+      }
+    }
+
+    function clearLogs() {
+      logBuffer = [];
+      if (logRenderTimeout) {
+        clearTimeout(logRenderTimeout);
+        logRenderTimeout = null;
+      }
+      const el = document.getElementById('le');
+      if (el) el.innerHTML = '';
+    }
 
     function updateHistoryVisibility() {
       const hl = document.getElementById('hl');
