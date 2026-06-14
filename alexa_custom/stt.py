@@ -1441,6 +1441,13 @@ def _recognition_loop(
                                 loop=loop,
                             )
                     elif wake_match:
+                        # One-breath: if the transcript contains the wake word
+                        # followed by a command, extract the command portion and
+                        # pass it to stage-2 as pre_transcript so it fires
+                        # immediately without waiting for another utterance.
+                        _, _inline_cmd = _extract_wake_command(
+                            text, alias_map, fuzzy=True
+                        )
                         _fire(
                             text,
                             wake_group=wake_match,
@@ -1457,6 +1464,7 @@ def _recognition_loop(
                             loop=loop,
                             dispatch_loop=dispatch_loop,
                             vad_silence_ms=_eff_vad_ms,
+                            pre_transcript=_inline_cmd or None,
                         )
                         _drain_pipe(proc)
                         _dispatch_ended_at[0] = time.monotonic()
@@ -1478,6 +1486,65 @@ def _recognition_loop(
                 if partial and partial != _last_partial and on_stt_event:
                     on_stt_event("transcribing", {"text": partial})
                 _last_partial = partial
+
+                # One-breath partial firing: if the partial already contains a
+                # recognised wake word + command, fire immediately without waiting
+                # for the endpoint (mirrors vosk's partial_matching behaviour).
+                if partial and config.recognition.partial_matching and not is_stt_sleeping():
+                    intent_result = _match_full_intent(partial, alias_map, intent_map)
+                    if intent_result is not None:
+                        intent_key = (intent_result[0].word, intent_result[1].phrase)
+                        if intent_key == _partial_stable_key:
+                            _partial_stable_reads += 1
+                            elapsed_ms = (time.monotonic() - _partial_stable_since) * 1000
+                            if (
+                                _partial_stable_reads >= config.recognition.partial_stability_reads
+                                and elapsed_ms >= config.recognition.partial_stability_ms
+                            ):
+                                wake_group, trigger, inline_cmd = intent_result
+                                logger.info("Partial intent fired (sherpa): %r", partial)
+                                _reset_stage1_state()
+                                stage1_backend.reset()
+                                _fire(
+                                    trigger.phrase,
+                                    wake_group=wake_group,
+                                    proc=proc,
+                                    channels=channels,
+                                    pre_transcript=inline_cmd,
+                                    backend=stage2_backend,
+                                    config=config,
+                                    stop_event=stop_event,
+                                    telegram_client=telegram_client,
+                                    livekit_connect_fn=livekit_connect_fn,
+                                    livekit_connected_flag=livekit_connected_flag,
+                                    on_stt_event=on_stt_event,
+                                    mqtt_client=mqtt_client,
+                                    loop=loop,
+                                    dispatch_loop=dispatch_loop,
+                                    vad_silence_ms=_eff_vad_ms,
+                                )
+                                _drain_pipe(proc)
+                                _dispatch_ended_at[0] = time.monotonic()
+                                if on_stt_event:
+                                    on_stt_event(
+                                        "listening",
+                                        {"wake_words": [g.word for g in config.wake_words]},
+                                    )
+                                if mqtt_client:
+                                    mqtt_client.publish_threadsafe(
+                                        f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
+                                        "idle",
+                                        loop=loop,
+                                    )
+                                continue
+                        else:
+                            _partial_stable_key = intent_key
+                            _partial_stable_reads = 1
+                            _partial_stable_since = time.monotonic()
+                    else:
+                        _partial_stable_key = None
+                        _partial_stable_reads = 0
+
                 max_pw = config.stt.stage1.max_partial_words
                 if max_pw > 0 and partial and len(partial.split()) >= max_pw:
                     logger.debug("stage-1 partial exceeded %d words, resetting stream", max_pw)
