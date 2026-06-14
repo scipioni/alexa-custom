@@ -727,6 +727,20 @@ class WebServer:
             except OSError:
                 load1 = load5 = load15 = 0.0
 
+            ram_free_pct: float | None = None
+            try:
+                meminfo: dict[str, int] = {}
+                with open("/proc/meminfo") as _f:
+                    for _line in _f:
+                        _k, _v = _line.split(":", 1)
+                        meminfo[_k.strip()] = int(_v.split()[0])
+                total = meminfo.get("MemTotal", 0)
+                available = meminfo.get("MemAvailable", 0)
+                if total > 0:
+                    ram_free_pct = available / total * 100
+            except Exception:
+                pass
+
             try:
                 vol = get_output_volume()
             except Exception:
@@ -744,6 +758,8 @@ class WebServer:
                 "load15": load15,
                 "cpu_count": cpu_count,
             }
+            if ram_free_pct is not None:
+                msg["ram_free_pct"] = round(ram_free_pct, 1)
             if vol is not None:
                 msg["output_volume"] = vol
             if gain is not None:
