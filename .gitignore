@@ -12,3 +12,7 @@ corpus
 # Build artifacts
 setup/uart_bridge
 setup/display_firmware/uart_bridge
+
+*.wav
+conf.sherpa/
+conf.vosk/

@@ -226,7 +226,7 @@ def match_trigger_with_score(
         if trigger.patterns and _trigger_matches_patterns(
             trigger, transcript, algorithm, threshold
         ):
-            logger.info(f"Matched trigger '{trigger.phrase}' (glob pattern)")
+            logger.debug(f"Matched trigger '{trigger.phrase}' (glob pattern)")
             return trigger, 100.0
 
     # Fuzzy fallback: best phonetic similarity score above threshold.
@@ -248,9 +248,8 @@ def match_trigger_with_score(
             best_score = score
             best = trigger
     if best is not None and best_score >= threshold:
-        logger.info(f"Matched trigger '{best.phrase}' (score={best_score:.0f})")
+        logger.debug(f"Matched trigger '{best.phrase}' (score={best_score:.0f})")
         return best, best_score
-    logger.debug(f"No trigger matched '{transcript}' (best score={best_score:.0f})")
     return None, best_score
 
 

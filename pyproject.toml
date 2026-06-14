@@ -37,6 +37,7 @@ alexa-audio-setup = "alexa_custom.audio:setup_audio"
 alexa-audio-doctor = "alexa_custom.audio:main_doctor"
 alexa-wake-eval = "alexa_custom.wake_eval:main"
 alexa-record = "alexa_custom.record:main"
+alexa-stt = "alexa_custom.stt_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

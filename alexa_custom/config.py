@@ -114,6 +114,7 @@ class STTStage1Config:
     keyword_spotter: bool = False
     keywords_score: float = 1.0
     keywords_threshold: float = 0.25
+    max_partial_words: int = 0
 
 
 @dataclass
@@ -151,6 +152,7 @@ class RecognitionConfig:
     command_max_timeout: float = 8.0
     wake_tone: str = "wake"
     partial_matching: bool = True
+    kws_one_breath: bool = False
     partial_stability_ms: int = 150
     partial_stability_reads: int = 3
     matching_algorithm: str = "token_set_ratio"
@@ -542,6 +544,7 @@ def _parse_stt_stage1_config(raw: dict) -> STTStage1Config:
         keyword_spotter=bool(raw.get("keyword_spotter", False)),
         keywords_score=_get_float(raw, "keywords_score", 1.0),
         keywords_threshold=_get_float(raw, "keywords_threshold", 0.25),
+        max_partial_words=_get_int(raw, "max_partial_words", 0),
     )
 
 
@@ -605,6 +608,7 @@ def _parse_recognition_config(raw: dict) -> RecognitionConfig:
         command_max_timeout=_get_float(raw, "command_max_timeout", 8.0),
         wake_tone=str(raw.get("wake_tone", "wake")),
         partial_matching=bool(raw.get("partial_matching", True)),
+        kws_one_breath=bool(raw.get("kws_one_breath", False)),
         partial_stability_ms=_get_int(raw, "partial_stability_ms", 150),
         partial_stability_reads=_get_int(raw, "partial_stability_reads", 3),
         matching_algorithm=algo,
