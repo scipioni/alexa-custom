@@ -269,10 +269,17 @@ _MAX_DISPATCH_DEPTH = 10
 
 async def dispatch(
     trigger: Trigger,
-    ctx: ActionContext,
+    ctx: ActionContext | TelegramClient | None = None,
+    livekit_connect_fn: Callable[[], Awaitable[None]] | None = None,
     *,
     wake_word: str | None = None,
     transcript: str | None = None,
+    telegram_client: TelegramClient | None = None,
+    listen_fn: Callable[..., Awaitable[str]] | None = None,
+    on_stt_event: Callable[[str, dict], None] | None = None,
+    actions_config: object | None = None,
+    mqtt_client: MQTTClient | None = None,
+    livekit_connected: bool = False,
 ) -> None:
     global _dispatch_depth
     _dispatch_depth += 1
@@ -283,6 +290,22 @@ async def dispatch(
             _dispatch_depth,
         )
         return
+    if not isinstance(ctx, ActionContext):
+        if ctx is None:
+            tc = telegram_client or TelegramClient()
+        elif isinstance(ctx, TelegramClient):
+            tc = ctx
+        else:
+            tc = TelegramClient()
+        ctx = ActionContext(
+            telegram_client=tc,
+            livekit_connect_fn=livekit_connect_fn,
+            listen_fn=listen_fn,
+            on_stt_event=on_stt_event,
+            actions_config=actions_config,
+            mqtt_client=mqtt_client,
+            livekit_connected=livekit_connected,
+        )
     try:
         for action in trigger.actions:
             await _run_action(action, ctx, wake_word=wake_word, transcript=transcript)
