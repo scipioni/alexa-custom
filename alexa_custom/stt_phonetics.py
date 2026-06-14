@@ -46,7 +46,10 @@ def _approx_wake_match(
         matched = sum(
             1
             for pw in phrase_words
-            if any(pw in tw or (len(tw) >= 3 and tw in pw) for tw in text_words)
+            if any(
+                pw in tw or (len(tw) >= 3 and len(tw) >= len(pw) * 0.7 and tw in pw)
+                for tw in text_words
+            )
         )
         score = matched / len(phrase_words)
         if score > best_score:

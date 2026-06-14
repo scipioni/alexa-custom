@@ -36,6 +36,7 @@ class Trigger:
     patterns: list[str] = field(default_factory=list)
     wake_words: list[str] | None = None  # None=global, []=direct, [ids]=scoped
     follow_up: bool | None = None  # None=inherit global, True/False=override
+    min_word_overlap: float | None = None  # None=use RecognitionConfig.min_word_overlap
 
 
 @dataclass
@@ -113,9 +114,10 @@ class STTStage1Config:
     vosk_grammar: bool = True
     keyword_spotter: bool = False
     keywords_score: float = 1.0
-    keywords_threshold: float = 0.25
+    keywords_threshold: float = 0.35
     hotwords_score: float = 1.5
-    max_partial_words: int = 0
+    max_partial_words: int = 8
+    wake_match_threshold: float = 0.5
     # ONNX intra-op threads for sherpa backends. 2 leaves headroom for audio
     # I/O and TTS on the quad-core target board; ignored by the Vosk backend.
     num_threads: int = 2
@@ -163,12 +165,21 @@ class RecognitionConfig:
     partial_stability_reads: int = 3
     matching_algorithm: str = "token_set_ratio"
     matching_threshold: float = 70.0
+    min_word_overlap: float = 0.0
     reply_matching_algorithm: str = "levenshtein"
     reply_matching_threshold: float = 80.0
     follow_up: bool = False
     follow_up_timeout: float = 4.0
     follow_up_max_turns: int = 5
     follow_up_tone: str = "info"
+    # Cooldown applied after every successful dispatch (wake or direct trigger).
+    # Prevents immediate re-activation from acoustic echo or tail audio before
+    # the post_playback gate fires. 0 disables. Default: 800 ms.
+    post_dispatch_cooldown_ms: int = 800
+    # Minimum number of words in the recognised command before fuzzy matching
+    # runs. 1 (default) skips empty transcripts only; raise to 2 to require
+    # at least a two-word command and block single-phoneme false matches.
+    min_cmd_words: int = 1
     # Maximum seconds a single dispatched turn may run on the STT thread.
     # Covers TTS + LLM + livekit connect backoff (≤30s) — keep well above that.
     dispatch_timeout: float = 90.0
@@ -381,6 +392,10 @@ def _parse_triggers(raw_triggers: list[Any], path_prefix: str) -> list[Trigger]:
             follow_up_val: bool | None = None
         else:
             follow_up_val = bool(raw_follow_up)
+        raw_min_word_overlap = t.get("min_word_overlap")
+        min_word_overlap_val: float | None = (
+            float(raw_min_word_overlap) if raw_min_word_overlap is not None else None
+        )
         triggers.append(
             Trigger(
                 phrase=phrase,
@@ -389,6 +404,7 @@ def _parse_triggers(raw_triggers: list[Any], path_prefix: str) -> list[Trigger]:
                 patterns=patterns,
                 wake_words=wake_words_val,
                 follow_up=follow_up_val,
+                min_word_overlap=min_word_overlap_val,
             )
         )
     return triggers
@@ -550,9 +566,10 @@ def _parse_stt_stage1_config(raw: dict) -> STTStage1Config:
         vosk_grammar=bool(raw.get("vosk_grammar", True)),
         keyword_spotter=bool(raw.get("keyword_spotter", False)),
         keywords_score=_get_float(raw, "keywords_score", 1.0),
-        keywords_threshold=_get_float(raw, "keywords_threshold", 0.25),
+        keywords_threshold=_get_float(raw, "keywords_threshold", 0.35),
         hotwords_score=_get_float(raw, "hotwords_score", 1.5),
-        max_partial_words=_get_int(raw, "max_partial_words", 0),
+        max_partial_words=_get_int(raw, "max_partial_words", 8),
+        wake_match_threshold=_get_float(raw, "wake_match_threshold", 0.5),
         num_threads=_get_int(raw, "num_threads", 2),
     )
 
@@ -623,12 +640,15 @@ def _parse_recognition_config(raw: dict) -> RecognitionConfig:
         partial_stability_reads=_get_int(raw, "partial_stability_reads", 3),
         matching_algorithm=algo,
         matching_threshold=_get_float(raw, "matching_threshold", 70.0),
+        min_word_overlap=_get_float(raw, "min_word_overlap", 0.0),
         reply_matching_algorithm=reply_algo,
         reply_matching_threshold=_get_float(raw, "reply_matching_threshold", 80.0),
         follow_up=bool(raw.get("follow_up", False)),
         follow_up_timeout=_get_float(raw, "follow_up_timeout", 4.0),
         follow_up_max_turns=_get_int(raw, "follow_up_max_turns", 5),
         follow_up_tone=str(raw.get("follow_up_tone", "info")),
+        post_dispatch_cooldown_ms=_get_int(raw, "post_dispatch_cooldown_ms", 800),
+        min_cmd_words=_get_int(raw, "min_cmd_words", 1),
         dispatch_timeout=_get_float(raw, "dispatch_timeout", 90.0),
     )
 

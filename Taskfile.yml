@@ -265,6 +265,11 @@ tasks:
       - echo "Playing test sound ('Front_Center.wav')..."
       - pw-play /usr/share/sounds/alsa/Front_Center.wav || aplay /usr/share/sounds/alsa/Front_Center.wav
 
+  stt:analyze-dumps:
+    desc: Analyze trigger-dump WAV files to identify false positives
+    cmds:
+      - uv run scripts/analyze_dumps.py {{.CLI_ARGS}}
+
   display:compile:
     desc: Compile uart_bridge for direct UART access (bypasses kernel driver)
     cmds:
