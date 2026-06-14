@@ -149,19 +149,26 @@ def is_stt_sleeping() -> bool:
 
 
 def _get_stage1_key(cfg: ActionsConfig) -> tuple:
+    needs_phrase_hash = (
+        cfg.stt.stage1.vosk_grammar
+        or cfg.stt.stage1.backend in ("sherpa-hotwords",)
+        or cfg.stt.stage1.keyword_spotter
+    )
     return (
         cfg.stt.stage1.backend,
         cfg.stt.stage1.model_path,
         cfg.stt.stage1.vosk_grammar,
+        cfg.stt.stage1.hotwords_score if cfg.stt.stage1.backend == "sherpa-hotwords" else 0.0,
         hash(
             (
                 tuple(g.word for g in cfg.wake_words),
+                tuple(g.word + "/" + a for g in cfg.wake_words for a in g.aliases),
                 tuple(t.phrase for g in cfg.wake_words for t in g.triggers),
                 tuple(t.phrase for t in cfg.triggers),
                 tuple(t.phrase for t in cfg.direct_triggers),
             )
         )
-        if cfg.stt.stage1.vosk_grammar
+        if needs_phrase_hash
         else 0,
     )
 
@@ -328,12 +335,17 @@ def run_stt_worker(
             if new_stage1_key != stage1_key:
                 try:
                     _kws_keywords = [
-                        p
-                        for g in current_config.wake_words
-                        for p in [g.word] + g.aliases
+                        p for g in current_config.wake_words for p in [g.word] + g.aliases
                     ]
+                    for _t in current_config.direct_triggers:
+                        _kws_keywords.append(_t.phrase)
+                        _kws_keywords.extend(_t.aliases)
+                    if current_config.recognition.kws_one_breath:
+                        for _g in current_config.wake_words:
+                            for _t in current_config.triggers + list(_g.triggers):
+                                _kws_keywords.append(f"{_g.word} {_t.phrase}")
                     stage1_backend = get_stt_backend(
-                        current_config.stt.stage1, keywords=_kws_keywords
+                        current_config.stt.stage1, keywords=list(set(_kws_keywords))
                     )
                     stage1_key = new_stage1_key
                     logger.info("STT stage1 backend reloaded after config change")

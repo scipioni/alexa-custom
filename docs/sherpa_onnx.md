@@ -1,18 +1,20 @@
 # sherpa-onnx STT Backend
 
-alexa-custom supports **sherpa-onnx** as an alternative speech-to-text backend to Vosk. sherpa-onnx streaming models are open-vocabulary (no grammar constraints), offering potentially better command accuracy. For stage-1 wake-word detection the optional **KeywordSpotter** mode uses the same model files but with a keyword-boosted decoder — lower CPU, no false transcriptions.
+alexa-custom supports **sherpa-onnx** as an alternative speech-to-text backend to Vosk. sherpa-onnx streaming models are open-vocabulary (no grammar constraints), offering potentially better command accuracy. For stage-1 wake-word detection the optional **KeywordSpotter** mode uses the same model files but with a keyword-boosted decoder — lower CPU, no false transcriptions. The **sherpa-hotwords** mode combines full ASR with contextual biasing: beam search is nudged toward registered phrases while background audio is transcribed literally and rejected by the fuzzy matcher.
 
 ---
 
 ## Compared to Vosk
 
-| Feature | Vosk | sherpa-onnx (OnlineRecognizer) | sherpa-onnx (KeywordSpotter) |
-|---------|------|-------------------------------|------------------------------|
-| Model | Kaldi/grammar | Streaming transducer/CTC | Streaming transducer |
-| Vocabulary | Grammar-constrained | Open-vocabulary | Keyword-only |
-| Stage | 1 or 2 | 1 or 2 | Stage 1 only |
-| CPU usage | Lower | Higher | Lower (tuned for wake words) |
-| Wake word accuracy | Grammar-exact | Fuzzy match | Keyword-boosted beam search |
+| Feature | Vosk | sherpa-onnx (OnlineRecognizer) | sherpa-onnx (KeywordSpotter) | sherpa-hotwords |
+|---------|------|-------------------------------|------------------------------|-----------------|
+| Model | Kaldi/grammar | Streaming transducer/CTC | Streaming transducer | Streaming transducer |
+| Vocabulary | Grammar-constrained | Open-vocabulary | Keyword-only | Open-vocabulary + biased |
+| Stage | 1 or 2 | 1 or 2 | Stage 1 only | Stage 1 |
+| CPU usage | Lower | Higher | Lower | Medium |
+| Wake word accuracy | Grammar-exact | Fuzzy match | Keyword-boosted | Biased beam + fuzzy match |
+| Full transcription | No (grammar) | Yes | No | Yes |
+| False-positive rejection | Poor–medium | Good | Best | Very good |
 
 For the target hardware (Arduino Uno Q, Snapdragon 801, CPU-only), **Vosk remains the default** for stage-1 due to its lower footprint. `keyword_spotter: true` is the recommended sherpa-onnx mode for always-on wake detection on that board.
 
@@ -118,6 +120,30 @@ stt:
     keywords_score: 1.0       # boost weight — raise if wake word is missed
     keywords_threshold: 0.25  # fire threshold — raise to reduce false positives
 ```
+
+### Stage-1 — sherpa-hotwords (biased ASR, recommended for false-positive reduction)
+
+Uses the same kroko model as `sherpa-onnx` but enables contextual biasing via `modified_beam_search`. Wake words, their aliases, and all direct-trigger phrases are registered as hotwords at startup — no extra config file needed.
+
+```yaml
+stt:
+  stage1:
+    backend: sherpa-hotwords
+    model_path: models/it/kroko_128l
+    hotwords_score: 1.5    # 1.0–2.0; raise if wake word is missed, lower to reduce false fires
+    vad_silence_ms: 900
+    rms_threshold: 0.02
+    min_speech_ms: 200
+```
+
+`hotwords_score` tuning guide:
+- `1.0` — minimal bias, near-identical to free-vocab `sherpa-onnx`
+- `1.5` — recommended starting point
+- `2.0` — maximum; maximises recall at the cost of occasional near-miss false fires
+
+**Implementation notes**: the hotwords file contains raw normalized Italian text (one phrase per line). At startup the backend generates a temporary `bpe.vocab` file from `tokens.txt` using quadratic token-length scores, then calls `from_transducer` with `modeling_unit="bpe"` so Sherpa's ssentencepiece library tokenizes each phrase word-by-word with Viterbi decoding. `decoding_method` is automatically set to `modified_beam_search` when hotwords are present. Both temp files are deleted when the backend is garbage-collected.
+
+---
 
 ### Stage-1 — open-vocabulary mode (higher CPU)
 
