@@ -228,6 +228,17 @@ class MQTTSecretsConfig:
 
 
 @dataclass
+class DisplayConfig:
+    enabled: bool = False
+    backend: str = "auto"
+    transport: str = "auto"
+    i2c_bus: int = 0
+    i2c_address: int = 0x3C
+    i2c_width: int = 128
+    i2c_height: int = 64
+
+
+@dataclass
 class SecretsConfig:
     livekit: LiveKitSecretsConfig = field(default_factory=LiveKitSecretsConfig)
     telegram: TelegramSecretsConfig = field(default_factory=TelegramSecretsConfig)
@@ -260,6 +271,7 @@ class ActionsConfig:
     system: SystemConfig = field(default_factory=SystemConfig)
     actions: ActionsDirectoryConfig = field(default_factory=ActionsDirectoryConfig)
     llm: LLMConfig | None = None
+    display: DisplayConfig | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -960,6 +972,22 @@ def _parse_actions_config(
         raise ConfigError(f"{source}: 'actions' must be a mapping if present")
     actions_dir_cfg = _parse_actions_dir_config(actions_raw)
 
+    # Display config
+    display: DisplayConfig | None = None
+    raw_display = raw.get("display")
+    if raw_display is not None:
+        if not isinstance(raw_display, dict):
+            raise ConfigError(f"{source}: 'display' must be a mapping if present")
+        display = DisplayConfig(
+            enabled=bool(raw_display.get("enabled", False)),
+            backend=str(raw_display.get("backend", "auto")),
+            transport=str(raw_display.get("transport", "auto")),
+            i2c_bus=int(raw_display.get("i2c_bus", 0)),
+            i2c_address=int(raw_display.get("i2c_address", "0x3C"), 0),
+            i2c_width=int(raw_display.get("i2c_width", 128)),
+            i2c_height=int(raw_display.get("i2c_height", 64)),
+        )
+
     # LLM: merge llm_host from secrets if available
     llm: LLMConfig | None = None
     raw_llm = raw.get("llm")
@@ -1020,4 +1048,5 @@ def _parse_actions_config(
         system=system,
         actions=actions_dir_cfg,
         llm=llm,
+        display=display,
     )
