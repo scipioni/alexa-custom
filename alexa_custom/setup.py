@@ -8,30 +8,17 @@ import zipfile
 from pathlib import Path
 
 _SHERPA_MODELS = {
-<<<<<<< HEAD
-<<<<<<< HEAD
     "kroko_128l": (
         "https://huggingface.co/hudaiapa88/sherpa-stt-onnx/resolve/main/it/kroko_128l",
         "models/it/kroko_128l",
-=======
-    "ita": (
-<<<<<<< HEAD
-        "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-fast-conformer-ctc-be-de-en-es-fr-hr-it-pl-ru-uk-20k/resolve/main",
-        "models/sherpa-onnx/zipformer2-ctc-it",
->>>>>>> 84a06b1 (feat: switch sherpa-onnx to NeMo FastConformer CTC with model_variant config)
     ),
     "kroko_64l": (
         "https://huggingface.co/hudaiapa88/sherpa-stt-onnx/resolve/main/it/kroko_64l",
         "models/it/kroko_64l",
-=======
-        "https://huggingface.co/hudaiapa88/sherpa-stt-onnx/resolve/main/it/kroko_128l",
-        "models/it/kroko_128l",
->>>>>>> 77759e6 (fix: revert model download/path to kroko_128l (NeMo FastConformer CTC metadata incompatible with board's sherpa-onnx))
-=======
+    ),
     "ita": (
         "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-fast-conformer-ctc-be-de-en-es-fr-hr-it-pl-ru-uk-20k/resolve/main",
         "models/sherpa-onnx/nemo-ctc-it",
->>>>>>> 50b0bb0 (feat: add NeMoOfflineSTT backend using OfflineRecognizer.from_nemo_ctc())
     ),
 }
 _SHERPA_FILES = [
@@ -92,15 +79,12 @@ _PIPER_VOICES = {
 _PIPER_HF_BASE = "https://huggingface.co/rhasspy/piper-voices/resolve/main"
 _PIPER_DEST_DIR = Path("models/piper")
 
-<<<<<<< HEAD
-=======
 _WHISPER_CPP_MODEL = "ggml-tiny-q4_0.bin"
 _WHISPER_CPP_URL = (
     f"https://huggingface.co/ggerganov/whisper.cpp/resolve/main/{_WHISPER_CPP_MODEL}"
 )
 _WHISPER_CPP_DEST = Path("models/whisper-cpp") / _WHISPER_CPP_MODEL
 
->>>>>>> 84a06b1 (feat: switch sherpa-onnx to NeMo FastConformer CTC with model_variant config)
 
 def _progress(count: int, block_size: int, total: int) -> None:
     if total <= 0:
@@ -228,7 +212,6 @@ def main() -> None:
     )
     parser.add_argument(
         "--sherpa-onnx",
-<<<<<<< HEAD
         nargs="?",
         const="kroko_128l",
         metavar="MODEL",
@@ -236,15 +219,6 @@ def main() -> None:
             "Download a sherpa-onnx Italian transducer model. "
             f"MODEL is one of: {', '.join(_SHERPA_MODELS)} (default: kroko_128l)"
         ),
-=======
-        action="store_true",
-        help="Also download the NeMo FastConformer CTC Italian model (offline STT backend, ~461 MB)",
-    )
-    parser.add_argument(
-        "--whisper-cpp",
-        action="store_true",
-        help="Download the whisper.cpp tiny Q4_0 GGML model for stage-2 transcription",
->>>>>>> 84a06b1 (feat: switch sherpa-onnx to NeMo FastConformer CTC with model_variant config)
     )
     args = parser.parse_args()
 

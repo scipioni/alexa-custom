@@ -61,15 +61,7 @@ stt:
     backend: vosk          # can differ from stage1 for higher accuracy
     vosk_grammar: true     # restrict Vosk to command vocabulary (grammar mode)
     # backend: sherpa-onnx
-<<<<<<< HEAD
     # model_path: models/it/kroko_128l
-=======
-    # backend: whisper-cpp  # Whisper tiny via whisper.cpp (high accuracy, offline)
-    # backend: nemo-offline  # NeMo FastConformer CTC (fast, non-autoregressive, ~461MB)
-    # model_path: models/it/kroko_128l
-    # model_path: models/whisper-cpp/ggml-tiny-q4_0.bin  # for whisper-cpp backend
-    # model_path: models/sherpa-onnx/nemo-ctc-it         # for nemo-offline backend
->>>>>>> 396d6dd (docs: add nemo-offline backend example in conf.example)
 
 # ---------------------------------------------------------------------------
 # TTS — text-to-speech

@@ -368,11 +368,7 @@ class WebServer:
             return 0.0
 
     async def _system_stats_loop(self) -> None:
-<<<<<<< HEAD
         from alexa_custom.audio_hw import get_output_volume
-=======
-        from alexa_custom.audio_hw import get_input_gain_display, get_output_volume
->>>>>>> 1a14599 (fix: dashboard input gain slider no longer resets)
 
         cpu_count = os.cpu_count() or 1
         while True:
@@ -390,10 +386,6 @@ class WebServer:
                     "cpu_count": cpu_count,
                     "ram_free_pct": self._ram_free_pct(),
                     "output_volume": get_output_volume(),
-<<<<<<< HEAD
-=======
-                    "input_gain": get_input_gain_display(),
->>>>>>> 1a14599 (fix: dashboard input gain slider no longer resets)
                 }
             )
 

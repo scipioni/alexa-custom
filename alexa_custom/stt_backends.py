@@ -15,26 +15,8 @@ from alexa_custom.stt_gating import _rms_level
 logger = logging.getLogger(__name__)
 
 _MODEL_PATH = os.environ.get("VOSK_MODEL_PATH", "models/it")
-<<<<<<< HEAD
-<<<<<<< HEAD
 _SHERPA_MODEL_PATH = os.environ.get("SHERPA_ONNX_PATH", "models/it/kroko_128l")
-=======
-_SHERPA_MODEL_PATH = os.environ.get(
-    "SHERPA_ONNX_PATH", "models/it/kroko_128l"
-)
-_WHISPER_CPP_MODEL_PATH = os.environ.get(
-    "WHISPER_CPP_MODEL_PATH", "models/whisper-cpp/ggml-tiny-q4_0.bin"
-)
->>>>>>> 84a06b1 (feat: switch sherpa-onnx to NeMo FastConformer CTC with model_variant config)
-=======
-_SHERPA_MODEL_PATH = os.environ.get("SHERPA_ONNX_PATH", "models/it/kroko_128l")
-_WHISPER_CPP_MODEL_PATH = os.environ.get(
-    "WHISPER_CPP_MODEL_PATH", "models/whisper-cpp/ggml-tiny-q4_0.bin"
-)
-_NEMO_OFFLINE_MODEL_PATH = os.environ.get(
-    "NEMO_OFFLINE_MODEL_PATH", "models/sherpa-onnx/nemo-ctc-it"
-)
->>>>>>> 50b0bb0 (feat: add NeMoOfflineSTT backend using OfflineRecognizer.from_nemo_ctc())
+_WHISPER_CPP_MODEL_PATH = os.environ.get("WHISPER_CPP_MODEL_PATH", "models/whisper/ggml-base.bin")
 
 
 class STTBackend(ABC):
@@ -433,8 +415,6 @@ class SherpaKeywordSpotter(STTBackend):
         return ""
 
 
-<<<<<<< HEAD
-=======
 class WhisperCppSTT(STTBackend):
     """Stage-2 backend using whisper.cpp (ggml) for offline command transcription."""
 
@@ -487,76 +467,6 @@ class WhisperCppSTT(STTBackend):
         return self._result
 
 
-<<<<<<< HEAD
->>>>>>> 84a06b1 (feat: switch sherpa-onnx to NeMo FastConformer CTC with model_variant config)
-=======
-class NeMoOfflineSTT(STTBackend):
-    """Stage-2 backend using sherpa-onnx OfflineRecognizer with NeMo CTC models."""
-
-    def __init__(
-        self,
-        model_dir: str = _NEMO_OFFLINE_MODEL_PATH,
-        num_threads: int = 4,
-    ) -> None:
-        import sherpa_onnx
-
-        if not os.path.isdir(model_dir):
-            raise RuntimeError(
-                f"NeMo offline model not found at {model_dir!r}. "
-                f"Run 'alexa-setup --sherpa-onnx' to download it."
-            )
-        model_path = os.path.join(model_dir, "model.onnx")
-        tokens_path = os.path.join(model_dir, "tokens.txt")
-        if not os.path.isfile(model_path):
-            raise RuntimeError(
-                f"model.onnx not found in {model_dir!r}. "
-                f"Run 'alexa-setup --sherpa-onnx' to download it."
-            )
-        if not os.path.isfile(tokens_path):
-            raise RuntimeError(
-                f"tokens.txt not found in {model_dir!r}. "
-                f"Run 'alexa-setup --sherpa-onnx' to download it."
-            )
-        self._recognizer = sherpa_onnx.OfflineRecognizer.from_nemo_ctc(
-            model=str(model_path),
-            tokens=str(tokens_path),
-            num_threads=num_threads,
-            sample_rate=16000,
-            feature_dim=80,
-            decoding_method="greedy_search",
-            provider="cpu",
-        )
-        self._buffer: list[np.ndarray] = []
-        self._result: str = ""
-
-    def accept_waveform(self, data: bytes) -> bool:
-        samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
-        self._buffer.append(samples)
-        return False
-
-    def text(self) -> str:
-        return self._result
-
-    def partial_text(self) -> str:
-        return ""
-
-    def reset(self) -> None:
-        self._buffer.clear()
-        self._result = ""
-
-    def finalize(self) -> str:
-        if not self._buffer:
-            return ""
-        audio = np.concatenate(self._buffer)
-        stream = self._recognizer.create_stream()
-        stream.accept_waveform(16000, audio)
-        self._recognizer.decode_stream(stream)
-        self._result = stream.result.text.strip()
-        self._buffer.clear()
-        return self._result
-
-
->>>>>>> 50b0bb0 (feat: add NeMoOfflineSTT backend using OfflineRecognizer.from_nemo_ctc())
 def _load_model(model_path: str = _MODEL_PATH) -> vosk.Model:
     if not os.path.isdir(model_path):
         raise RuntimeError(
@@ -593,30 +503,7 @@ def get_stt_backend(
                 keywords_score=cfg.keywords_score,
                 keywords_threshold=cfg.keywords_threshold,
             )
-<<<<<<< HEAD
         return SherpaOnnxSTT(model_path)
-=======
-        return SherpaOnnxSTT(model_path, model_variant=cfg.model_variant)
-    if cfg.backend == "whisper-cpp":
-        if isinstance(cfg, STTStage1Config):
-            raise RuntimeError(
-                "whisper-cpp backend is not supported for stage 1 "
-                "(use vosk or sherpa-onnx for wake word detection)"
-            )
-        model_path = cfg.model_path or _WHISPER_CPP_MODEL_PATH
-        return WhisperCppSTT(model_path)
-<<<<<<< HEAD
->>>>>>> 84a06b1 (feat: switch sherpa-onnx to NeMo FastConformer CTC with model_variant config)
-=======
-    if cfg.backend == "nemo-offline":
-        if isinstance(cfg, STTStage1Config):
-            raise RuntimeError(
-                "nemo-offline backend is not supported for stage 1 "
-                "(use vosk or sherpa-onnx for wake word detection)"
-            )
-        model_path = cfg.model_path or _NEMO_OFFLINE_MODEL_PATH
-        return NeMoOfflineSTT(model_path)
->>>>>>> 50b0bb0 (feat: add NeMoOfflineSTT backend using OfflineRecognizer.from_nemo_ctc())
     vosk_path = cfg.model_path or _MODEL_PATH
     return VoskSTT(_load_model(vosk_path))
 

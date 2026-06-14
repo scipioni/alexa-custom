@@ -1027,16 +1027,12 @@ def main() -> None:
         watch_paths=[conf_dir],
         output_volume=output_volume,
         input_gain=input_gain,
-<<<<<<< HEAD
         cpu_limit=config.web.cpu_limit if config is not None else 4,
         shutdown_callback=_web_shutdown_callback,
         extra_event_cb=display_controller.on_event if display_controller else None,
         extra_stt_event_cb=display_controller.on_stt_event
         if display_controller
         else None,
-=======
-        shutdown_callback=None,
->>>>>>> f70dba6 (fix: remove nonexistent kwargs from run_web() call)
     )
 
     import time as _time

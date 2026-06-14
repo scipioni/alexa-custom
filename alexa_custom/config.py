@@ -496,15 +496,9 @@ def _parse_stt_stage1_config(raw: dict) -> STTStage1Config:
 
 def _parse_stt_stage2_config(raw: dict) -> STTStage2Config:
     backend = str(raw.get("backend", "vosk"))
-<<<<<<< HEAD
     if backend not in ("vosk", "sherpa-onnx"):
         raise ConfigError(
             f"'stt.stage2.backend' must be 'vosk' or 'sherpa-onnx', got {backend!r}"
-=======
-    if backend not in ("vosk", "sherpa-onnx", "whisper-cpp", "nemo-offline"):
-        raise ConfigError(
-            f"'stt.stage2.backend' must be 'vosk', 'sherpa-onnx', 'whisper-cpp', or 'nemo-offline', got {backend!r}"
->>>>>>> 50b0bb0 (feat: add NeMoOfflineSTT backend using OfflineRecognizer.from_nemo_ctc())
         )
     model_path_raw = raw.get("model_path")
     model_variant = str(raw.get("model_variant", "auto"))

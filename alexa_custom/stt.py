@@ -93,19 +93,10 @@ logger = logging.getLogger(__name__)
 
 _MODEL_PATH = os.environ.get("VOSK_MODEL_PATH", "models/it")
 _STT_COOLDOWN = 1.0
-<<<<<<< HEAD
 _SHERPA_MODEL_PATH = os.environ.get("SHERPA_ONNX_PATH", "models/sherpa-onnx")
-<<<<<<< HEAD
-=======
-=======
-_SHERPA_MODEL_PATH = os.environ.get(
-    "SHERPA_ONNX_PATH", "models/sherpa-onnx"
-)
->>>>>>> 84a06b1 (feat: switch sherpa-onnx to NeMo FastConformer CTC with model_variant config)
 _WHISPER_CPP_MODEL_PATH = os.environ.get(
     "WHISPER_CPP_MODEL_PATH", "models/whisper-cpp/ggml-tiny-q4_0.bin"
 )
->>>>>>> f77eeed (feat: phonetic Levenshtein matching for Vosk free-vocab wake words)
 
 _STAGE1_VAD_SILENCE_MS = int(os.environ.get("STT_STAGE1_VAD_SILENCE_MS", "500"))
 _STAGE1_RMS_THRESHOLD = float(os.environ.get("STT_STAGE1_RMS_THRESHOLD", "0.02"))

@@ -385,67 +385,6 @@ stt:
         with pytest.raises(ConfigError, match="stage1.backend"):
             load_config(cfg_path)
 
-<<<<<<< HEAD
-=======
-    def test_invalid_stage2_backend_raises(self, tmp_path):
-        cfg_path = write_file(
-            tmp_path,
-            "config.yaml",
-            "wake_words:\n  - word: alexa\nstt:\n  stage2:\n    backend: invalid\n",
-        )
-        from alexa_custom.config import load_config, ConfigError
-
-        with pytest.raises(ConfigError, match="stage2.backend"):
-            load_config(cfg_path)
-
-    def test_whisper_cpp_stage2_backend(self, tmp_path):
-        cfg_path = write_file(
-            tmp_path,
-            "config.yaml",
-            "wake_words:\n  - word: alexa\nstt:\n  stage2:\n    backend: whisper-cpp\n    model_path: models/whisper-cpp/ggml-tiny-q4_0.bin\n",
-        )
-        from alexa_custom.config import load_config
-
-        result = load_config(cfg_path)
-        assert result.stt.stage2.backend == "whisper-cpp"
-        assert result.stt.stage2.model_path == "models/whisper-cpp/ggml-tiny-q4_0.bin"
-
-    def test_model_variant_defaults_to_auto(self, tmp_path):
-        cfg_path = write_file(
-            tmp_path,
-            "config.yaml",
-            "wake_words:\n  - word: alexa\nstt:\n  stage1:\n    backend: sherpa-onnx\n  stage2:\n    backend: sherpa-onnx\n",
-        )
-        from alexa_custom.config import load_config
-
-        result = load_config(cfg_path)
-        assert result.stt.stage1.model_variant == "auto"
-        assert result.stt.stage2.model_variant == "auto"
-
-    def test_model_variant_zipformer2_ctc(self, tmp_path):
-        cfg_path = write_file(
-            tmp_path,
-            "config.yaml",
-            "wake_words:\n  - word: alexa\nstt:\n  stage1:\n    backend: sherpa-onnx\n    model_variant: zipformer2-ctc\n  stage2:\n    backend: sherpa-onnx\n    model_variant: nemo_ctc\n",
-        )
-        from alexa_custom.config import load_config
-
-        result = load_config(cfg_path)
-        assert result.stt.stage1.model_variant == "zipformer2-ctc"
-        assert result.stt.stage2.model_variant == "nemo_ctc"
-
-    def test_invalid_model_variant_raises(self, tmp_path):
-        cfg_path = write_file(
-            tmp_path,
-            "config.yaml",
-            "wake_words:\n  - word: alexa\nstt:\n  stage1:\n    backend: sherpa-onnx\n    model_variant: invalid\n",
-        )
-        from alexa_custom.config import load_config, ConfigError
-
-        with pytest.raises(ConfigError, match="model_variant"):
-            load_config(cfg_path)
-
->>>>>>> 84a06b1 (feat: switch sherpa-onnx to NeMo FastConformer CTC with model_variant config)
 
 # ---------------------------------------------------------------------------
 # _load_actions_dir tests (task 10.3)

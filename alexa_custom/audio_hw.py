@@ -21,15 +21,9 @@ logger = logging.getLogger(__name__)
 _input_gain_lock = threading.Lock()
 
 
-<<<<<<< HEAD
-<<<<<<< HEAD
 @contextmanager
 def pulse_session(name: str):
     """Open a pulsectl connection that always restores the NewPie PCM on exit."""
-=======
-=======
-@contextmanager
->>>>>>> 5929c11 (fix: add missing @contextmanager decorator to pulse_session)
 def pulse_session(name: str):
     """Open a pulsectl connection that always restores the NewPie PCM on exit.
 
@@ -40,7 +34,6 @@ def pulse_session(name: str):
     restoring right after" rule is enforced structurally rather than by
     convention. Always prefer this over a bare ``pulsectl.Pulse(...)``.
     """
->>>>>>> ed7bcc9 (fix: re-add pulse_session context manager to audio_hw.py)
     pulse = pulsectl.Pulse(name)
     try:
         yield pulse
@@ -50,10 +43,7 @@ def pulse_session(name: str):
         finally:
             _restore_hw_pcm()
 
-<<<<<<< HEAD
 
-=======
->>>>>>> ed7bcc9 (fix: re-add pulse_session context manager to audio_hw.py)
 # State variables managed through configuration
 _POST_PLAYBACK_MS = int(os.environ.get("AUDIO_POST_PLAYBACK_MS", "100"))
 _TONE_PREROLL_MS = int(os.environ.get("AUDIO_TONE_PREROLL_MS", "300"))
