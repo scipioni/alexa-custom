@@ -161,6 +161,7 @@ def capture_transcript(
 
         if backend.accept_waveform(data):
             text = backend.text()
+            backend.reset()
             if text:
                 logger.info(f"Capture match: '{text}'")
                 if on_stt_event:
