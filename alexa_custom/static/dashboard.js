@@ -148,13 +148,14 @@
           if (m.adaptive) {
             const rmsLine = document.getElementById('mic-rms-line');
             if (rmsLine && m.rms_threshold !== undefined) {
-              const rmsCount = Math.sqrt(Math.max(0, Math.min(1, m.rms_threshold))) * 20;
-              rmsLine.style.bottom = (rmsCount / 20 * 100).toFixed(1) + '%';
               rmsLine.classList.add('adaptive');
               rmsLine.title = `Adaptive RMS: ${m.rms_threshold.toFixed(3)}`;
             }
-            if (m.confidence !== undefined && m.confidence !== null) {
-                // optionally show confidence
+          } else {
+            const rmsLine = document.getElementById('mic-rms-line');
+            if (rmsLine) {
+              rmsLine.classList.remove('adaptive');
+              rmsLine.title = '';
             }
           }
           
