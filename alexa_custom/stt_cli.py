@@ -25,6 +25,7 @@ import threading
 # Audio helpers for --record / --play
 # ---------------------------------------------------------------------------
 
+
 class _TeePopen:
     """Wraps a real capture process and tees its stdout to a WAV file.
 
@@ -165,16 +166,32 @@ def _make_play_capture(play_path: str, stop_event: threading.Event):
 
         if shutil.which("ffmpeg"):
             cmd = [
-                "ffmpeg", "-i", play_path,
-                "-ar", "16000", "-ac", str(channels),
-                "-f", "s16le", "pipe:1",
+                "ffmpeg",
+                "-i",
+                play_path,
+                "-ar",
+                "16000",
+                "-ac",
+                str(channels),
+                "-f",
+                "s16le",
+                "pipe:1",
             ]
         elif shutil.which("sox"):
             cmd = [
-                "sox", play_path,
-                "-t", "raw", "-r", "16000",
-                "-c", str(channels),
-                "-e", "signed-integer", "-b", "16", "-",
+                "sox",
+                play_path,
+                "-t",
+                "raw",
+                "-r",
+                "16000",
+                "-c",
+                str(channels),
+                "-e",
+                "signed-integer",
+                "-b",
+                "16",
+                "-",
             ]
         else:
             raise RuntimeError("ffmpeg or sox is required for --play")
@@ -190,6 +207,7 @@ def _make_play_capture(play_path: str, stop_event: threading.Event):
 def _make_record_capture(record_path: str):
     """Return a start_capture replacement that also writes audio to a WAV file."""
     import alexa_custom.stt_gating as _gating
+
     _orig = _gating.start_capture
 
     def _record_capture(source, channels: int = 1):
@@ -204,6 +222,7 @@ def _make_record_capture(record_path: str):
 # Main
 # ---------------------------------------------------------------------------
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="alexa-stt: STT diagnostic tool (same pipeline as alexa-client)"
@@ -215,16 +234,19 @@ def main() -> None:
         help="configuration directory (default: conf)",
     )
     parser.add_argument(
-        "--record", metavar="FILE",
+        "--record",
+        metavar="FILE",
         help="record microphone audio to a WAV file while listening",
     )
     parser.add_argument(
-        "--play", metavar="FILE",
+        "--play",
+        metavar="FILE",
         help="replay a previously recorded WAV file instead of using the microphone",
     )
     args = parser.parse_args()
 
     from pathlib import Path
+
     conf_dir = Path(args.config)
 
     logging.basicConfig(

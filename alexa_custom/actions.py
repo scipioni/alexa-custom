@@ -15,6 +15,9 @@ if TYPE_CHECKING:
 
 from alexa_custom.config import ActionEntry, Trigger
 
+from rapidfuzz import fuzz as _fuzz
+from rapidfuzz.distance import Levenshtein as _lev
+
 logger = logging.getLogger(__name__)
 
 
@@ -94,10 +97,6 @@ class TelegramClient:
 
 
 _TRIGGER_THRESHOLD = 70.0
-
-
-from rapidfuzz import fuzz as _fuzz
-from rapidfuzz.distance import Levenshtein as _lev
 
 
 def get_similarity_score(a: str, b: str, algorithm: str) -> float:
@@ -483,13 +482,17 @@ async def handle_ask(
         elif action.on_else:
             logger.info(f"No reply trigger matched '{transcript}', running on_else")
             if on_stt_event:
-                on_stt_event("nomatch", {"transcript": transcript, "score": reply_score})
+                on_stt_event(
+                    "nomatch", {"transcript": transcript, "score": reply_score}
+                )
             for else_action in action.on_else:
                 await _run_action(else_action, ctx, wake_word=wake_word)
         else:
             logger.info(f"No reply trigger matched '{transcript}' and no on_else")
             if on_stt_event:
-                on_stt_event("nomatch", {"transcript": transcript, "score": reply_score})
+                on_stt_event(
+                    "nomatch", {"transcript": transcript, "score": reply_score}
+                )
             from alexa_custom.audio import play_timeout_beep
 
             await asyncio.to_thread(play_timeout_beep)
@@ -1150,9 +1153,13 @@ def _format_system_info_italian(vitals: dict) -> str:
         minutes = secs // 60
         units = []
         if days:
-            units.append(f"{'un' if days == 1 else str(days)} {'giorno' if days == 1 else 'giorni'}")
+            units.append(
+                f"{'un' if days == 1 else str(days)} {'giorno' if days == 1 else 'giorni'}"
+            )
         if hours and len(units) < 2:
-            units.append(f"{'un' if hours == 1 else str(hours)} {'ora' if hours == 1 else 'ore'}")
+            units.append(
+                f"{'un' if hours == 1 else str(hours)} {'ora' if hours == 1 else 'ore'}"
+            )
         if minutes and len(units) < 2:
             units.append(f"{minutes} {'minuto' if minutes == 1 else 'minuti'}")
         if units:
@@ -1164,7 +1171,9 @@ def _format_system_info_italian(vitals: dict) -> str:
 
 
 @registry.register("system_info")
-async def handle_system_info(action: ActionEntry, mqtt_client: "MQTTClient | None" = None, **_):
+async def handle_system_info(
+    action: ActionEntry, mqtt_client: "MQTTClient | None" = None, **_
+):
     from alexa_custom.tts import get_engine
 
     vitals = await asyncio.to_thread(_read_system_vitals)

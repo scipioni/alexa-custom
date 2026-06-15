@@ -24,7 +24,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from alexa_custom.config import load_config
 from alexa_custom.actions import match_trigger_with_score, normalize_text
-from alexa_custom.stt_phonetics import _build_alias_map, _approx_wake_match, _resolve_triggers
+from alexa_custom.stt_phonetics import (
+    _build_alias_map,
+    _approx_wake_match,
+    _resolve_triggers,
+)
 
 
 def _read_wav_mono_s16le(path: Path) -> bytes:
@@ -33,24 +37,29 @@ def _read_wav_mono_s16le(path: Path) -> bytes:
         frames = wf.readframes(wf.getnframes())
     if channels == 1:
         return frames
-    import numpy as np
-    samples = __import__("numpy").frombuffer(frames, dtype=__import__("numpy").int16).reshape(-1, channels)
+    samples = (
+        __import__("numpy")
+        .frombuffer(frames, dtype=__import__("numpy").int16)
+        .reshape(-1, channels)
+    )
     idx = __import__("numpy").argmax(__import__("numpy").abs(samples), axis=1)
     return samples[__import__("numpy").arange(len(samples)), idx].tobytes()
 
 
 def _transcribe(audio: bytes, cfg) -> str:
     from alexa_custom.stt_backends import get_stt_backend
+
     backend = get_stt_backend(cfg.stt.stage1)
-    import numpy as np
     chunk = 4096
     for i in range(0, len(audio), chunk):
-        backend.accept_waveform(audio[i:i + chunk])
+        backend.accept_waveform(audio[i : i + chunk])
     return backend.finalize().strip() or backend.text().strip()
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     ap.add_argument("--dir", default=None, help="Directory of WAV dump files")
     ap.add_argument("--config", default="conf/config.yaml", help="Config file path")
     args = ap.parse_args()
@@ -60,8 +69,14 @@ def main() -> None:
         print(f"ERROR: could not load config from {args.config}", file=sys.stderr)
         sys.exit(1)
 
-    dump_dir = Path(args.dir) if args.dir else (
-        Path(cfg.dump_triggers_dir) if cfg.dump_triggers_dir else Path("/tmp/trigger_dumps")
+    dump_dir = (
+        Path(args.dir)
+        if args.dir
+        else (
+            Path(cfg.dump_triggers_dir)
+            if cfg.dump_triggers_dir
+            else Path("/tmp/trigger_dumps")
+        )
     )
     wavs = sorted(dump_dir.glob("*.wav"))
     if not wavs:
@@ -69,11 +84,10 @@ def main() -> None:
         return
 
     alias_map = _build_alias_map(cfg.wake_words)
-    all_triggers = cfg.triggers + [t for g in cfg.wake_words for t in g.triggers]
     direct_triggers = cfg.direct_triggers
 
     col = "\033[{m}m{t}\033[0m".format
-    GREEN, RED, YELLOW, RESET = "32", "31", "33", "0"
+    GREEN, RED, YELLOW = "32", "31", "33"
 
     print(f"Analyzing {len(wavs)} dump(s) from {dump_dir}\n")
     false_positives = 0
@@ -81,7 +95,7 @@ def main() -> None:
     for wav_path in wavs:
         # Filename: <timestamp>_<label>.wav — label is the trigger phrase that fired
         label = wav_path.stem.split("_", 2)[-1].replace("_", " ")
-        print(f"{'─'*70}")
+        print(f"{'─' * 70}")
         print(f"File : {wav_path.name}")
         print(f"Fired: {label!r}")
 
@@ -101,45 +115,65 @@ def main() -> None:
             continue
 
         # Check wake word match
-        wake = _approx_wake_match(transcript, alias_map, threshold=cfg.stt.stage1.wake_match_threshold)
+        wake = _approx_wake_match(
+            transcript, alias_map, threshold=cfg.stt.stage1.wake_match_threshold
+        )
         if wake:
             print(f"Wake : {col(GREEN, wake.word)!r} matched")
             triggers = _resolve_triggers(wake, cfg.triggers)
             norm = normalize_text(transcript)
             # Strip wake tokens to get command
-            wake_tokens = {w for p in [wake.word] + wake.aliases for w in normalize_text(p).split()}
+            wake_tokens = {
+                w for p in [wake.word] + wake.aliases for w in normalize_text(p).split()
+            }
             cmd = " ".join(t for t in norm.split() if t not in wake_tokens)
             if cmd:
                 trig, score = match_trigger_with_score(
-                    cmd, triggers,
+                    cmd,
+                    triggers,
                     algorithm=cfg.recognition.matching_algorithm,
                     threshold=cfg.recognition.matching_threshold,
                     min_word_overlap=cfg.recognition.min_word_overlap,
                 )
                 if trig:
-                    print(f"Cmd  : {col(GREEN, cmd)!r} → trigger {trig.phrase!r} (score={score:.0f})")
+                    print(
+                        f"Cmd  : {col(GREEN, cmd)!r} → trigger {trig.phrase!r} (score={score:.0f})"
+                    )
                 else:
-                    print(f"Cmd  : {col(YELLOW, cmd)!r} → no trigger match (best score={score:.0f})")
+                    print(
+                        f"Cmd  : {col(YELLOW, cmd)!r} → no trigger match (best score={score:.0f})"
+                    )
             else:
-                print(f"Cmd  : (none — wake only)")
+                print("Cmd  : (none — wake only)")
         else:
             # Check direct triggers
-            trig, score = match_trigger_with_score(
-                transcript, direct_triggers,
-                algorithm=cfg.recognition.matching_algorithm,
-                threshold=cfg.recognition.matching_threshold,
-                min_word_overlap=1.0,
-            ) if direct_triggers else (None, 0.0)
+            trig, score = (
+                match_trigger_with_score(
+                    transcript,
+                    direct_triggers,
+                    algorithm=cfg.recognition.matching_algorithm,
+                    threshold=cfg.recognition.matching_threshold,
+                    min_word_overlap=1.0,
+                )
+                if direct_triggers
+                else (None, 0.0)
+            )
             if trig:
-                print(f"Direct: {col(GREEN, transcript)!r} → {trig.phrase!r} (score={score:.0f})")
+                print(
+                    f"Direct: {col(GREEN, transcript)!r} → {trig.phrase!r} (score={score:.0f})"
+                )
             else:
-                norm_label = normalize_text(label)
-                print(col(RED, f"  → FALSE POSITIVE: transcript {transcript!r} did not match expected trigger {label!r}"))
+                print(
+                    col(
+                        RED,
+                        f"  → FALSE POSITIVE: transcript {transcript!r} did not match expected trigger {label!r}",
+                    )
+                )
                 false_positives += 1
 
         print()
 
-    print(f"{'─'*70}")
+    print(f"{'─' * 70}")
     summary = f"{false_positives}/{len(wavs)} likely false positives"
     print(col(RED if false_positives else GREEN, summary))
 

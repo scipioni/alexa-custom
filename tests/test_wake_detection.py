@@ -25,7 +25,11 @@ from alexa_custom.stt import (
     _match_full_intent,
     _extract_wake_command,
 )
-from alexa_custom.stt_phonetics import build_intent_map, _build_alias_map, _approx_wake_match
+from alexa_custom.stt_phonetics import (
+    build_intent_map,
+    _build_alias_map,
+    _approx_wake_match,
+)
 from alexa_custom.config import (
     WakeWordGroup,
     Trigger,
@@ -440,10 +444,14 @@ class TestApproxWakeMatchThreshold:
     def test_extract_wake_command_passes_threshold(self):
         am = self._alias_map("ehi galileo")
         # At threshold=0.7, one-word transcript should not match
-        matched, _ = _extract_wake_command("il galileo ciao", am, fuzzy=True, wake_match_threshold=0.7)
+        matched, _ = _extract_wake_command(
+            "il galileo ciao", am, fuzzy=True, wake_match_threshold=0.7
+        )
         assert matched is None
         # At threshold=0.5, it should match
-        matched, _ = _extract_wake_command("il galileo ciao", am, fuzzy=True, wake_match_threshold=0.5)
+        matched, _ = _extract_wake_command(
+            "il galileo ciao", am, fuzzy=True, wake_match_threshold=0.5
+        )
         assert matched is not None
 
 
@@ -546,7 +554,9 @@ class TestPerTriggerMinWordOverlap:
         )
 
         # "ciao" shares no phonetic tokens with "chiama stefano" → tight trigger blocked
-        trig, _ = match_trigger_with_score("ciao", [tight, loose], threshold=50.0, min_word_overlap=0.0)
+        trig, _ = match_trigger_with_score(
+            "ciao", [tight, loose], threshold=50.0, min_word_overlap=0.0
+        )
         assert trig is loose or trig is None  # tight must not win
 
     def test_per_trigger_override_None_uses_global(self):
@@ -559,5 +569,7 @@ class TestPerTriggerMinWordOverlap:
             min_word_overlap=None,
         )
         # global min_word_overlap=1.0, no phonetic tokens of trigger in "ciao" → blocked
-        trig, _ = match_trigger_with_score("ciao", [t], threshold=50.0, min_word_overlap=1.0)
+        trig, _ = match_trigger_with_score(
+            "ciao", [t], threshold=50.0, min_word_overlap=1.0
+        )
         assert trig is None

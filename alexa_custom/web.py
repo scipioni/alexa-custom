@@ -123,6 +123,7 @@ class WebServer:
         self._livekit_stop_event: asyncio.Event | None = None
         self._handler: _WebLogHandler | None = None
         self._shutting_down = False
+        self._active_session: dict | None = None
 
         if hot_reload:
             from alexa_custom.config_manager import ConfigManager
@@ -146,6 +147,7 @@ class WebServer:
                 "TELEGRAM_CHAT_ID",
             )
         )
+        self._history_file = Path("conf/history.jsonl")
         # snapshot for hello message on new WS connects
         self._state: dict[str, Any] = {
             "status": "Starting…",
@@ -160,6 +162,227 @@ class WebServer:
             "room_status": "closed",
             "room_answer_timeout": 0,
         }
+
+    # ── persistent history helpers ────────────────────────────────────────────
+
+    async def _append_history_log(self, session_data: dict) -> None:
+        """Appends a single JSON line to the configured history file asynchronously."""
+
+        def _write():
+            try:
+                self._history_file.parent.mkdir(parents=True, exist_ok=True)
+                with _file_lock(self._history_file, exclusive=True):
+                    with self._history_file.open("a", encoding="utf-8") as f:
+                        f.write(json.dumps(session_data, ensure_ascii=False) + "\n")
+            except Exception as e:
+                logger.error(
+                    "Failed to append history to file %s: %s", self._history_file, e
+                )
+
+        loop = self._loop or asyncio.get_running_loop()
+        await loop.run_in_executor(None, _write)
+
+    async def _clear_history_log(self) -> None:
+        """Safely clears/truncates the persistent history file on disk."""
+
+        def _clear():
+            try:
+                if self._history_file.exists():
+                    with _file_lock(self._history_file, exclusive=True):
+                        with self._history_file.open("w", encoding="utf-8"):
+                            pass
+            except Exception as e:
+                logger.error(
+                    "Failed to truncate history file %s: %s", self._history_file, e
+                )
+
+        loop = self._loop or asyncio.get_running_loop()
+        await loop.run_in_executor(None, _clear)
+
+    async def _flag_history_log_fp(self, session_id: str) -> None:
+        """Locates a session by ID in history.jsonl, marks it as false positive, and updates the file atomically."""
+
+        def _update():
+            if not self._history_file.exists():
+                return
+            try:
+                lines = []
+                updated = False
+                with _file_lock(self._history_file, exclusive=True):
+                    with self._history_file.open("r", encoding="utf-8") as f:
+                        for line in f:
+                            if not line.strip():
+                                continue
+                            try:
+                                data = json.loads(line)
+                                if data.get("session_id") == session_id:
+                                    data.setdefault("feedback", {})[
+                                        "false_positive"
+                                    ] = True
+                                    data["feedback"]["user_flagged"] = True
+                                    line = json.dumps(data, ensure_ascii=False) + "\n"
+                                    updated = True
+                            except Exception:
+                                pass
+                            lines.append(line)
+                    if updated:
+                        with self._history_file.open("w", encoding="utf-8") as f:
+                            f.writelines(lines)
+            except Exception as e:
+                logger.error(
+                    "Failed to flag history session %s as false positive: %s",
+                    session_id,
+                    e,
+                )
+
+        loop = self._loop or asyncio.get_running_loop()
+        await loop.run_in_executor(None, _update)
+
+    def _read_last_history_entries(self, limit: int = 20) -> list[dict]:
+        """Reads the last limit entries from history.jsonl in chronological order."""
+        if not self._history_file.exists():
+            return []
+        try:
+            with _file_lock(self._history_file, exclusive=False):
+                with self._history_file.open("r", encoding="utf-8") as f:
+                    lines = [line.strip() for line in f if line.strip()]
+            last_lines = lines[-limit:]
+            entries = []
+            for line_str in last_lines:
+                try:
+                    entries.append(json.loads(line_str))
+                except Exception:
+                    pass
+            return entries
+        except Exception as e:
+            logger.error(
+                "Failed to read last history entries from %s: %s", self._history_file, e
+            )
+            return []
+
+    def _process_history_event(self, event: str, data: dict) -> None:
+        """Processes STT lifecycle events on the main event loop to aggregate and persist sessions."""
+        import uuid
+
+        def _flush_session():
+            if self._active_session:
+                session = self._active_session
+                self._active_session = None
+
+                if not session.get("transcript"):
+                    session["transcript"] = {
+                        "text": "",
+                        "is_matched": False,
+                        "match_phrase": "",
+                        "match_score": 0,
+                    }
+                    session.setdefault("diagnostics", {})["gated"] = True
+
+                asyncio.create_task(self._append_history_log(session))
+                asyncio.create_task(
+                    self._broadcast({"type": "history_item", "session": session})
+                )
+
+        if event == "wake":
+            _flush_session()
+            session_id = (
+                f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
+            )
+            self._active_session = {
+                "session_id": session_id,
+                "timestamp": datetime.now().isoformat() + "Z",
+                "wake": {
+                    "word": data.get("word", "unknown"),
+                    "timeout": data.get("timeout", 0.0),
+                    "confidence": self._pending_vu.get("confidence"),
+                },
+                "diagnostics": {
+                    "max_mic_level": self._pending_vu.get("mic", 0.0),
+                    "rms_threshold": self._pending_vu.get("rms_threshold", 0.0),
+                    "gated": False,
+                    "input_gain": self._input_gain,
+                    "cpu_limit": self._cpu_limit,
+                },
+                "transcript": None,
+                "action": None,
+                "llm": None,
+                "feedback": {
+                    "false_positive": False,
+                    "user_flagged": False,
+                },
+            }
+
+        elif self._active_session:
+            mic_val = self._pending_vu.get("mic", 0.0)
+            if mic_val > self._active_session["diagnostics"]["max_mic_level"]:
+                self._active_session["diagnostics"]["max_mic_level"] = mic_val
+
+            if event == "gated":
+                self._active_session["diagnostics"]["gated"] = True
+                _flush_session()
+
+            elif event == "transcribing":
+                text = data.get("text", "")
+                if text:
+                    if not self._active_session["transcript"]:
+                        self._active_session["transcript"] = {
+                            "text": text,
+                            "is_matched": False,
+                            "match_phrase": "",
+                            "match_score": 0,
+                        }
+                    else:
+                        self._active_session["transcript"]["text"] = text
+
+            elif event in ("matched", "nomatch"):
+                transcript_text = data.get("transcript", data.get("text", ""))
+                is_matched = event == "matched"
+
+                action_info = None
+                actions = data.get("actions", [])
+                if is_matched and actions:
+                    first = actions[0]
+                    action_info = {
+                        "type": first.get("type", "unknown"),
+                        "params": first.get("params", {}),
+                    }
+
+                self._active_session["transcript"] = {
+                    "text": transcript_text,
+                    "is_matched": is_matched,
+                    "match_phrase": data.get("phrase", ""),
+                    "match_score": data.get("score", 0),
+                }
+                if action_info:
+                    self._active_session["action"] = action_info
+
+                if is_matched:
+                    _flush_session()
+
+            elif event == "llm_thinking":
+                self._active_session["llm"] = {
+                    "thinking": True,
+                    "prompt": data.get("transcript", ""),
+                    "reply": "",
+                    "duration_ms": 0,
+                }
+                self._llm_thinking_start = datetime.now()
+
+            elif event in ("llm_reply", "llm_unreachable"):
+                if self._active_session and self._active_session.get("llm"):
+                    duration = 0
+                    if hasattr(self, "_llm_thinking_start"):
+                        duration = int(
+                            (datetime.now() - self._llm_thinking_start).total_seconds()
+                            * 1000
+                        )
+                    self._active_session["llm"]["thinking"] = False
+                    self._active_session["llm"]["reply"] = data.get("reply", "")
+                    self._active_session["llm"]["duration_ms"] = duration
+                _flush_session()
+
+        if event in ("listening", "sleeping"):
+            _flush_session()
 
     # ── thread-safe enqueue ───────────────────────────────────────────────────
 
@@ -276,6 +499,14 @@ class WebServer:
                     pass
             return
 
+        # Process history session aggregation on the main event loop thread-safely
+        loop_hist = self._loop
+        if loop_hist and not loop_hist.is_closed():
+            try:
+                loop_hist.call_soon_threadsafe(self._process_history_event, event, data)
+            except Exception:
+                pass
+
         if event == "listening":
             self._state["stt_state"] = "listening"
             self._state["stt_text"] = ", ".join(data.get("wake_words", []))
@@ -351,6 +582,7 @@ class WebServer:
                     "cpu_limit": self._cpu_limit,
                     "livekit_configured": self._livekit_ok,
                     "telegram_configured": self._telegram_ok,
+                    "history": self._read_last_history_entries(20),
                 }
             )
         )
@@ -380,6 +612,15 @@ class WebServer:
                 self._shutdown_callback()
             else:
                 os.execv(sys.executable, [sys.executable] + sys.argv)
+        elif action == "clear_history":
+            logger.info("Clear history requested via web dashboard")
+            await self._clear_history_log()
+            await self._broadcast({"type": "history_cleared"})
+        elif action.startswith("flag_fp:"):
+            session_id = action.split(":", 1)[1]
+            logger.info("Flag false positive requested for session: %s", session_id)
+            await self._flag_history_log_fp(session_id)
+            await self._broadcast({"type": "history_flagged", "session_id": session_id})
 
     # ── config API endpoints ───────────────────────────────────────────────────────
 
@@ -1001,6 +1242,19 @@ class WebServer:
     ) -> None:
         self._loop = asyncio.get_running_loop()
         self._install_log_handler()
+
+        config_obj = None
+        if stt_params and "config" in stt_params:
+            config_obj = stt_params["config"]
+        elif self._config_manager and self._config_manager.config:
+            config_obj = self._config_manager.config
+
+        if (
+            config_obj
+            and hasattr(config_obj, "web")
+            and hasattr(config_obj.web, "history_file")
+        ):
+            self._history_file = Path(config_obj.web.history_file)
 
         if hot_reload:
             from alexa_custom.config_manager import ConfigManager
