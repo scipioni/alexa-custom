@@ -106,6 +106,7 @@ class WebServer:
         conf_dir: Path = Path("conf"),
     ) -> None:
         self._port = port
+        os.environ["WEB_PORT"] = str(port)  # Export for actions
         self._conf_dir = Path(conf_dir)
         self._output_volume = output_volume
         self._input_gain = input_gain

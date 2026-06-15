@@ -18,7 +18,59 @@ from alexa_custom.config import ActionEntry, Trigger
 from rapidfuzz import fuzz as _fuzz
 from rapidfuzz.distance import Levenshtein as _lev
 
+import subprocess
+import sys
+import time
+import urllib.parse
+import webbrowser
+from pathlib import Path
+
+from livekit.api import AccessToken, VideoGrants, LiveKitAPI, CreateRoomRequest
+
 logger = logging.getLogger(__name__)
+
+async def _create_agent_room(room_name: str):
+    """Call LiveKit API to create a room with 5min empty timeout.
+    
+    Uses LIVEKIT_API_KEY, LIVEKIT_API_SECRET, LIVEKIT_URL from environment.
+    """
+    async with LiveKitAPI() as api:
+        return await api.room.create_room(
+            CreateRoomRequest(
+                name=room_name,
+                empty_timeout=300,
+                max_participants=10,
+            )
+        )
+
+def _generate_agent_tokens(room_name: str):
+    """Generate user and agent JWT tokens with audio-only permissions."""
+    key = os.environ.get("LIVEKIT_API_KEY")
+    secret = os.environ.get("LIVEKIT_API_SECRET")
+    
+    user_token = (
+        AccessToken(key, secret)
+        .with_identity(f"user-{int(time.time())}")
+        .with_grants(VideoGrants(
+            room_join=True,
+            room=room_name,
+            can_publish_sources=["microphone"],
+        ))
+        .to_jwt()
+    )
+    
+    agent_token = (
+        AccessToken(key, secret)
+        .with_identity("ai-agent")
+        .with_grants(VideoGrants(
+            room_join=True,
+            room=room_name,
+            can_publish_sources=["microphone"],
+        ))
+        .to_jwt()
+    )
+    
+    return user_token, agent_token
 
 
 @dataclasses.dataclass
@@ -321,6 +373,59 @@ async def handle_telegram(action: ActionEntry, telegram_client: TelegramClient, 
 
         text = text.replace("<room>", browser_join_url())
     await telegram_client.send_message(chat_id, text)
+
+
+@registry.register("agent_session")
+async def handle_agent_session(action: ActionEntry, **_):
+    """Orchestrates a LiveKit agent session: creates room, tokens, starts agent, opens tab."""
+    room_name = f"agent-room-{int(time.time())}"
+    logger.info(f"Starting agent session in room: {room_name}")
+    
+    try:
+        # 1. Create the room
+        await _create_agent_room(room_name)
+        
+        # 2. Generate tokens
+        user_token, agent_token = _generate_agent_tokens(room_name)
+        
+        # 3. Trigger the agent service (Laptop dev: start as sibling process)
+        # Use absolute path to agent.py
+        agent_path = Path(__file__).parent.parent / "agent.py"
+        room_url = os.environ.get("LIVEKIT_URL")
+        
+        logger.info(f"Starting local agent process for room {room_name}")
+        subprocess.Popen([
+            sys.executable, str(agent_path),
+            "--room", room_name,
+            "--token", agent_token,
+            "--url", room_url
+        ])
+
+        # 4. Open the browser tab for the user using LiveKit's meet interface
+        if not room_url:
+            logger.error("LIVEKIT_URL not set, cannot generate join link")
+            return
+
+        params = urllib.parse.urlencode({
+            "liveKitUrl": room_url,
+            "token": user_token
+        })
+        join_url = f"https://meet.livekit.io/custom/?{params}"
+        
+        logger.info(f"Opening agent session tab: {join_url}")
+        
+        def _open_browser():
+            try:
+                if not webbrowser.open(join_url, new=2):
+                    subprocess.Popen(['xdg-open', join_url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            except Exception as e:
+                logger.error(f"Browser open failed: {e}")
+
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, _open_browser)
+        
+    except Exception as e:
+        logger.error(f"Failed to initialize agent session: {e}")
 
 
 @registry.register("livekit_join")
