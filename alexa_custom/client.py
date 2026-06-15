@@ -581,8 +581,16 @@ async def _async_main(
                 input_device=pw_device,
                 queue_capacity=200,
             )
-        # PortAudio has no input on this board — bypass it with parec
-        cap = ParecAudioCapture()
+        # PortAudio has no input on this board — bypass it with parec.
+        # Address the configured device by name (like STT does) rather than
+        # relying on the PipeWire default source, which can drift on late-boot
+        # routing / USB autosuspend (see docs/audio). resolve_capture_source
+        # matches the friendly input_spec against `pactl list sources` to get
+        # the exact source name parec's --device expects (None → default).
+        from alexa_custom.stt_gating import resolve_capture_source
+
+        source, _ = await asyncio.to_thread(resolve_capture_source, input_spec)
+        cap = ParecAudioCapture(capture_device=source)
         await cap.start()
         return cap
 
