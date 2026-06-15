@@ -942,12 +942,18 @@ def _recognition_loop(
                 wake_match = alias_map.get(norm_kw)
 
                 # --- direct-match trigger (wake_words: []) ---
+                # ratio + min_word_overlap=1.0 for parity with the vosk/sherpa
+                # direct paths: a one-breath keyword like "galileo chiama stefano"
+                # must not match the bare "chiama stefano" direct trigger (which
+                # token_set_ratio would score ~100 on token overlap) — it should
+                # fall through to the one-breath wake+command handling below.
                 _direct_trigger = (
                     match_trigger(
                         keyword,
                         config.direct_triggers,
-                        algorithm=config.recognition.matching_algorithm,
+                        algorithm="ratio",
                         threshold=config.recognition.matching_threshold,
+                        min_word_overlap=1.0,
                     )
                     if not wake_match and config.direct_triggers
                     else None
@@ -1454,8 +1460,8 @@ def _recognition_loop(
 
                     # Direct-match triggers (wake_words: []) — checked before wake words.
                     # Filter to candidates whose phrase is no longer than the transcript
-                    # so a single-token noise artifact can't score 100 via token_set_ratio
-                    # against a multi-word trigger (e.g. 'e' → 'che ora è').
+                    # so a single-token noise artifact can't score 100 against a
+                    # multi-word trigger (e.g. 'e' → 'che ora è').
                     _dm_trigger = None
                     if config.direct_triggers:
                         _sherpa_words = len(normalize_text(text).split())
@@ -1468,7 +1474,13 @@ def _recognition_loop(
                             match_trigger(
                                 text,
                                 _dm_candidates,
-                                algorithm=config.recognition.matching_algorithm,
+                                # ratio (not token_set_ratio) for parity with the
+                                # vosk and sherpa-partial direct paths: character-level
+                                # similarity rejects longer/extra-word utterances that
+                                # merely contain the trigger's words (e.g. "chiama
+                                # stefano per favore" or "stefano comando il"), which
+                                # token_set_ratio would score ~100.
+                                algorithm="ratio",
                                 threshold=config.recognition.matching_threshold,
                                 min_word_overlap=1.0,
                             )

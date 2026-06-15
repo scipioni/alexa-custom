@@ -11,8 +11,9 @@ mic audio
    │
    ▼
 STAGE 1 — wake detection (always on)
-   │  Vosk free-vocab (or sherpa-onnx KWS)
+   │  Vosk (grammar/free-vocab), sherpa-onnx, sherpa-hotwords, or sherpa KWS
    │  fires when wake word found in transcript
+   │  (also fires direct-match triggers — see below — without any wake word)
    │
    ├─ no wake word → reset, keep listening
    │
@@ -137,6 +138,31 @@ Mode 3 uses **exact matching only** (no fuzzy, no glob patterns). If the partial
 | Latency after last word | `stage1.vad_silence_ms` | `stage1.vad_silence_ms` | `partial_stability_ms` (~150ms) |
 | Trigger matching | patterns → fuzzy | patterns → fuzzy | exact only (intent map) |
 | LLM fallback | Yes | Yes | Falls back to mode 1/2 + LLM |
+
+---
+
+## Direct-match triggers (no wake word)
+
+A trigger with an explicit empty `wake_words: []` is a **direct-match trigger**: it fires from stage 1 *without* any wake word, the moment the phrase itself is recognised.
+
+```yaml
+triggers:
+  - phrase: "chiama Stefano"
+    wake_words: []        # direct match — fires without a wake word
+    actions:
+      - type: livekit_join
+```
+
+Because there is no wake word gating these, they are matched far more strictly than command triggers (§ Trigger matching) to keep ambient speech from firing them. The rule is identical across **every** stage-1 backend (Vosk grammar/free-vocab, sherpa-onnx, sherpa-hotwords, and the sherpa keyword spotter):
+
+- **Algorithm: `ratio`** (character-level), *not* `matching_algorithm`/`token_set_ratio`. `token_set_ratio` ignores word order and extra words, so a longer utterance that merely *contains* the trigger's words would score ~100 and mis-fire. Character-level `ratio` rejects those because the full strings differ in length.
+- **Full word overlap (`min_word_overlap = 1.0`)** — every word of the trigger phrase must appear in the transcript before fuzzy scoring even runs.
+- **Word-count gate** — a trigger is only a candidate when the transcript has *at least* as many words as the phrase, so a single noise token (`"e"`) can't match a multi-word trigger (`"che ora è"`).
+- **Threshold** — the resulting `ratio` score must still clear `matching_threshold`.
+
+The trade-off is deliberate: direct triggers favour precision over recall. A phrase the STT consistently mis-transcribes should be added as an `alias` on the trigger rather than loosened globally. With **sherpa-hotwords**, registering the direct-trigger phrase as a hotword (done automatically) biases the transducer toward emitting it verbatim, which is what makes the strict `ratio` match land.
+
+> One-breath note: a keyword like `"galileo chiama stefano"` is *not* treated as the direct trigger `"chiama stefano"` — the full-overlap-plus-`ratio` rule rejects it, so it correctly falls through to wake-word + inline-command handling (mode 2).
 
 ---
 
@@ -334,9 +360,10 @@ stt:
   flush_ms: 300              # audio discarded after the beep (echo absorption)
 
   stage1:
-    backend: vosk
+    backend: vosk            # vosk | sherpa-onnx | sherpa-hotwords (+ keyword_spotter: true)
     vad_silence_ms: 900      # silence that ends stage-1; bridges wake+command pause (mode 2)
     min_speech_ms: 200       # minimum speech before VAD timer starts
+    hotwords_score: 1.5      # sherpa-hotwords: contextual-bias boost for wake/direct phrases
 
 recognition:
   command_timeout: 2.5       # inactivity window for stage-2 (slides while user speaks)
@@ -362,3 +389,5 @@ wake_words:
 | Stage 2 doesn't end promptly after command | Lower `stt.vad_silence_ms` |
 | Echo after beep bleeds into stage 2 | Raise `stt.flush_ms` |
 | Glob pattern too permissive | Add a stronger anchor token; avoid bare single-token patterns |
+| Direct trigger (`wake_words: []`) won't fire | Add the mis-transcribed form as an `alias`; with sherpa-hotwords raise `stage1.hotwords_score` |
+| Direct trigger fires on unrelated speech | It shouldn't — direct matching is strict (`ratio` + full overlap); check the trigger isn't a single very short word |
