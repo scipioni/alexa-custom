@@ -235,12 +235,16 @@ def _run_capture_tool(
     return data
 
 
-def record_wav_file(file_path: str, duration: float) -> None:
+def record_wav_file(
+    file_path: str,
+    duration: float,
+    source: str | None = None,
+    channels: int = 1,
+) -> None:
     """Record a WAV file from the default PipeWire source."""
     import wave
 
     rate = 16000
-    channels = 1
     parec = shutil.which("parec")
     if parec:
         cmd = [
@@ -253,6 +257,8 @@ def record_wav_file(file_path: str, duration: float) -> None:
             "s16le",
             "--latency-msec=50",
         ]
+        if source:
+            cmd.append(f"--device={source}")
         pcm_data = _run_capture_tool(cmd, duration, capture_stdout=True)
         if not pcm_data:
             logger.error("Recording produced no audio (parec died immediately?)")
@@ -279,8 +285,10 @@ def record_wav_file(file_path: str, duration: float) -> None:
         str(channels),
         "--format",
         "s16",
-        file_path,
     ]
+    if source:
+        cmd.append(f"--target={source}")
+    cmd.append(file_path)
     _run_capture_tool(cmd, duration, capture_stdout=False)
 
 

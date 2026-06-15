@@ -182,3 +182,14 @@ triggers:
         gain_high: 3.0
         listen_timeout: 6.0
         settle_ms: 500
+
+  - phrase: "registra campione"
+    wake_words: [default]
+    aliases:
+      - "test audio"
+      - "registra audio"
+    actions:
+      - type: record_and_playback
+        params:
+          duration: 7.0
+
