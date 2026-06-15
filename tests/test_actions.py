@@ -790,3 +790,77 @@ async def test_restart_action():
         args = mock_execv.call_args[0]
         assert len(args) == 2
         assert "python" in args[0]
+
+
+@pytest.mark.asyncio
+@patch("alexa_custom.stt_gating.resolve_capture_source")
+@patch("alexa_custom.audio_ops.record_wav_file")
+@patch("alexa_custom.audio_ops.play_wav_file")
+@patch("alexa_custom.audio_ops.play_tone")
+async def test_record_and_playback_action(
+    mock_play_tone,
+    mock_play_wav,
+    mock_record_wav,
+    mock_resolve_capture_source,
+):
+    mock_resolve_capture_source.return_value = ("mock_source", 2)
+
+    action = ActionEntry(type="record_and_playback", params={"duration": 7.5})
+
+    mock_config = MagicMock()
+    mock_config.audio.input_device = "my_custom_mic"
+
+    ctx = ActionContext(
+        telegram_client=MagicMock(),
+        actions_config=mock_config,
+    )
+
+    await _run_action(action, ctx)
+
+    # Verify that resolve_capture_source was called with the correct device
+    mock_resolve_capture_source.assert_called_once_with("my_custom_mic")
+
+    # Verify that play_tone was called to announce recording
+    mock_play_tone.assert_called_once_with("info")
+
+    # Verify that record_wav_file was called with the correct source, channels, and duration
+    mock_record_wav.assert_called_once()
+    args, kwargs = mock_record_wav.call_args
+    # First arg is file_path, second is duration
+    assert args[1] == 7.5
+    assert args[2] == "mock_source"
+    assert args[3] == 2
+
+    # Verify that play_wav_file was called
+    mock_play_wav.assert_called_once()
+    assert mock_play_wav.call_args[0][0] == args[0]
+
+
+@pytest.mark.asyncio
+@patch("alexa_custom.stt_gating.resolve_capture_source")
+@patch("alexa_custom.audio_ops.record_wav_file")
+@patch("alexa_custom.audio_ops.play_wav_file")
+@patch("alexa_custom.audio_ops.play_tone")
+async def test_register_and_playback_action(
+    mock_play_tone,
+    mock_play_wav,
+    mock_record_wav,
+    mock_resolve_capture_source,
+):
+    mock_resolve_capture_source.return_value = ("mock_source", 2)
+
+    action = ActionEntry(type="register_and_playback", params={})
+
+    mock_config = MagicMock()
+    mock_config.audio.input_device = "my_custom_mic"
+
+    ctx = ActionContext(
+        telegram_client=MagicMock(),
+        actions_config=mock_config,
+    )
+
+    await _run_action(action, ctx)
+
+    # Defaults to 7.0 seconds
+    args, kwargs = mock_record_wav.call_args
+    assert args[1] == 7.0

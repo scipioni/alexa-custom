@@ -1310,6 +1310,57 @@ async def handle_calibrate_input_gain(
     )
 
 
+@registry.register("record_and_playback")
+@registry.register("register_and_playback")
+async def handle_record_and_playback(
+    action: ActionEntry,
+    actions_config=None,
+    **_,
+):
+    """Record a sample of audio (default 7 seconds) and play it back.
+
+    Example YAML:
+        - type: record_and_playback
+          params:
+            duration: 7.0
+    """
+    from alexa_custom.stt_gating import resolve_capture_source
+    from alexa_custom.audio_ops import record_wav_file, play_wav_file, play_tone
+    import tempfile
+
+    duration = float(action.params.get("duration", 7.0))
+
+    input_spec = None
+    if actions_config and hasattr(actions_config, "audio"):
+        input_spec = actions_config.audio.input_device
+
+    source, channels = resolve_capture_source(input_spec)
+    logger.info(
+        "record_and_playback: recording %s seconds of audio using source=%s (%d ch)",
+        duration,
+        source or "default",
+        channels,
+    )
+
+    try:
+        await asyncio.to_thread(play_tone, "info")
+    except Exception as e:
+        logger.warning("record_and_playback: failed to play start tone: %s", e)
+
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+        tmp_wav = f.name
+
+    try:
+        await asyncio.to_thread(record_wav_file, tmp_wav, duration, source, channels)
+        logger.info("record_and_playback: playing back recorded sample")
+        await asyncio.to_thread(play_wav_file, tmp_wav)
+    finally:
+        try:
+            os.unlink(tmp_wav)
+        except OSError:
+            pass
+
+
 async def _run_action(
     action: ActionEntry,
     ctx: ActionContext,
