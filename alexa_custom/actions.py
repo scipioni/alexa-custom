@@ -394,12 +394,14 @@ async def handle_agent_session(action: ActionEntry, **_):
         room_url = os.environ.get("LIVEKIT_URL")
         
         logger.info(f"Starting local agent process for room {room_name}")
-        subprocess.Popen([
-            sys.executable, str(agent_path),
-            "--room", room_name,
-            "--token", agent_token,
-            "--url", room_url
-        ])
+        subprocess.Popen(
+            [
+                sys.executable, str(agent_path),
+                "--room", room_name,
+                "--token", agent_token,
+                "--url", room_url
+            ],
+        )
 
         # 4. Open the browser tab for the user using LiveKit's meet interface
         if not room_url:
