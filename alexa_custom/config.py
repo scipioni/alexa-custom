@@ -198,6 +198,7 @@ class MQTTConfig:
 class WebConfig:
     port: int = 8080
     cpu_limit: int = 4
+    history_file: str = "conf/history.jsonl"
 
 
 @dataclass
@@ -991,6 +992,7 @@ def _parse_actions_config(
     web = WebConfig(
         port=int(web_raw.get("port", 8080)),
         cpu_limit=int(web_raw.get("cpu_limit", 4)),
+        history_file=str(web_raw.get("history_file", "conf/history.jsonl")),
     )
 
     system_raw = raw.get("system") or {}

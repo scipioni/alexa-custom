@@ -595,6 +595,18 @@
       animation: slide-in 0.25s ease-out;
     }
     [data-theme="light"] .he { background: rgba(0,0,0,0.025); }
+    .he.fp-flagged {
+      border-color: rgba(255, 75, 75, 0.35);
+      opacity: 0.75;
+      background: rgba(255, 75, 75, 0.015);
+    }
+    [data-theme="light"] .he.fp-flagged {
+      border-color: rgba(255, 75, 75, 0.45);
+      background: rgba(255, 75, 75, 0.025);
+    }
+    .he.fp-flagged .hflag-btn {
+      display: none !important;
+    }
     .he-top {
       display: flex;
       align-items: center;

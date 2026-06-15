@@ -197,7 +197,6 @@ def _dump_trigger_wav(
     label: str,
     dump_dir: str,
 ) -> None:
-    import collections as _c
     import re
     import wave
     from datetime import datetime
@@ -423,7 +422,9 @@ def run_stt_worker(
 
 
 def _extract_wake_command(
-    text: str, alias_map: dict[str, WakeWordGroup], fuzzy: bool = False,
+    text: str,
+    alias_map: dict[str, WakeWordGroup],
+    fuzzy: bool = False,
     wake_match_threshold: float = 0.5,
 ) -> tuple[WakeWordGroup | None, str]:
     """Return (group, command) if text begins with a known wake phrase, else (None, '').
@@ -583,7 +584,9 @@ def _single_stage_loop(
             continue
 
         wake_group, command = _extract_wake_command(
-            text, alias_map, fuzzy=not isinstance(backend, VoskSTT),
+            text,
+            alias_map,
+            fuzzy=not isinstance(backend, VoskSTT),
             wake_match_threshold=config.stt.stage1.wake_match_threshold,
         )
         if wake_group is None:
@@ -1436,7 +1439,10 @@ def _recognition_loop(
                 stage1_last_speech_t = 0.0
                 stage1_speech_ms = 0.0
                 _last_partial = ""
-                if trigger_src == "endpoint" and speech_ms_snapshot < _eff_stage1_min_speech_ms:
+                if (
+                    trigger_src == "endpoint"
+                    and speech_ms_snapshot < _eff_stage1_min_speech_ms
+                ):
                     logger.debug(
                         "stage-1 sherpa endpoint rejected: speech_ms=%.0f < min=%d",
                         speech_ms_snapshot,
@@ -1454,7 +1460,8 @@ def _recognition_loop(
                     if config.direct_triggers:
                         _sherpa_words = len(normalize_text(text).split())
                         _dm_candidates = [
-                            t for t in config.direct_triggers
+                            t
+                            for t in config.direct_triggers
                             if _sherpa_words >= len(normalize_text(t.phrase).split())
                         ]
                         _dm_trigger = (
@@ -1469,7 +1476,11 @@ def _recognition_loop(
                             else None
                         )
 
-                    wake_match = _approx_wake_match(text, alias_map, threshold=config.stt.stage1.wake_match_threshold)
+                    wake_match = _approx_wake_match(
+                        text,
+                        alias_map,
+                        threshold=config.stt.stage1.wake_match_threshold,
+                    )
 
                     if is_stt_sleeping():
                         if wake_match or _dm_trigger:
@@ -1521,7 +1532,9 @@ def _recognition_loop(
                         # pass it to stage-2 as pre_transcript so it fires
                         # immediately without waiting for another utterance.
                         _, _inline_cmd = _extract_wake_command(
-                            text, alias_map, fuzzy=True,
+                            text,
+                            alias_map,
+                            fuzzy=True,
                             wake_match_threshold=config.stt.stage1.wake_match_threshold,
                         )
                         # Only trust the extracted inline command if it actually
@@ -1719,8 +1732,7 @@ def _recognition_loop(
                                             "listening",
                                             {
                                                 "wake_words": [
-                                                    g.word
-                                                    for g in config.wake_words
+                                                    g.word for g in config.wake_words
                                                 ]
                                             },
                                         )

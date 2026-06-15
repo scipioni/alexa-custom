@@ -107,6 +107,15 @@
           if (m.actions_config && Object.keys(m.actions_config).length) { _cfg = m.actions_config; renderActions(_cfg); }
           setRoomStatus(m.room_status || 'closed', m.room_answer_timeout || 0);
           _checkRoomConfig(m);
+          if (m.history) {
+            const hlEl = document.getElementById('hl');
+            if (hlEl) {
+              hlEl.innerHTML = '';
+              m.history.forEach(session => {
+                addSessionHistory(session);
+              });
+            }
+          }
           if (m.input_gain != null) {
             const el = document.getElementById('mic-gain');
             if (el) el.textContent = '×' + m.input_gain.toFixed(1);
@@ -182,7 +191,6 @@
           }
           if (s === 'matched') {
             const isReply = !_lastWakeWord;
-            addHistory(_lastWakeWord, m.transcript||'', m.trigger||'', m.score);
             updateInteraction(_lastWakeWord, (m.transcript||'') + ' → ' + (m.trigger||''), true);
             highlightTrigger(m.trigger||'', isReply);
             _graphFlashByPhrase(m.trigger||'');
@@ -192,7 +200,6 @@
           if (s === 'nomatch') {
             clearReplyDim();
             const txt = m.transcript || m.text || '';
-            addHistory(_lastWakeWord, txt, '✗ no match', m.score);
             if (_lastWakeWord) {
               updateInteraction(_lastWakeWord, (txt ? '"'+txt+'" ' : '') + '✗ no match', true);
             }
@@ -210,7 +217,6 @@
           if (s === 'llm_reply') {
             setLlmBadgeThinking(false);
             setLlmStatusDot(false);
-            addHistoryLLM(m.transcript||'', m.reply||'');
           }
           if (s === 'llm_unreachable') {
             setLlmBadgeThinking(false);
@@ -246,6 +252,23 @@
             const el = document.getElementById('mic-gain');
             if (el) el.textContent = '×' + m.input_gain.toFixed(1);
           }
+          break;
+        }
+        case 'history_item': addSessionHistory(m.session); break;
+        case 'history_cleared': {
+          document.getElementById('hl').innerHTML = '';
+          updateHistoryVisibility();
+          break;
+        }
+        case 'history_flagged': {
+          const cards = document.querySelectorAll('.he[data-id="' + esc(m.session_id) + '"]');
+          cards.forEach(card => {
+            card.classList.add('fp-flagged');
+            const row = card.querySelector('.he-action-row');
+            if (row) {
+              row.innerHTML = '<span class="hflagged" style="font-size:9px;color:var(--nomatch);font-weight:bold;margin-left:auto;">⚠️ Flagged</span>';
+            }
+          });
           break;
         }
         case 'error': setSt('Error: ' + (m.msg||'unknown'), null); break;
@@ -1384,51 +1407,83 @@
     function clearHistory() {
       document.getElementById('hl').innerHTML = '';
       updateHistoryVisibility();
+      sendCtrl('clear_history');
+    }
+
+    function flagFalsePositive(session_id) {
+      sendCtrl('flag_fp:' + session_id);
     }
 
     const MAX_HIST = 60;
-    function _hePush(html) {
+    function addSessionHistory(session) {
+      if (!session) return;
+
+      const ts = session.timestamp ? new Date(session.timestamp).toTimeString().slice(0, 8) : new Date().toTimeString().slice(0, 8);
+      const wakeWord = session.wake ? session.wake.word : '';
+      const wakeConf = session.wake && session.wake.confidence != null ? ' <span class="hscore" style="opacity:0.6;font-size:9px;">(' + Math.round(session.wake.confidence * 100) + '%)</span>' : '';
+
+      let bodyHtml = '';
+
+      if (session.transcript) {
+        const text = session.transcript.text;
+        const isMatched = session.transcript.is_matched;
+        const gated = session.diagnostics && session.diagnostics.gated;
+        const timeout = session.transcript.timeout;
+
+        if (gated) {
+          bodyHtml += '<div class="he-mid"><span class="hcmd" style="color:var(--muted);font-style:italic;">[Noise/Silence Gated]</span></div>';
+        } else if (text) {
+          bodyHtml += '<div class="he-mid"><span class="hcmd">"' + esc(text) + '"</span></div>';
+        } else if (timeout) {
+          bodyHtml += '<div class="he-mid"><span class="hcmd" style="color:var(--muted);font-style:italic;">[Response Timeout]</span></div>';
+        } else {
+          bodyHtml += '<div class="he-mid"><span class="hcmd" style="color:var(--muted);font-style:italic;">[Silence]</span></div>';
+        }
+
+        if (session.transcript.match_phrase) {
+          const matchPhrase = session.transcript.match_phrase;
+          const score = session.transcript.match_score;
+          const scoreStr = score != null ? ' <span class="hscore" style="opacity:0.7;font-weight:normal;margin-left:4px;">(' + Math.round(score) + '%)</span>' : '';
+
+          bodyHtml += '<div class="he-bot"><span class="htrig">' + esc(matchPhrase) + scoreStr + '</span></div>';
+        } else if (!isMatched && text) {
+          bodyHtml += '<div class="he-bot"><span class="hnomatch">✗ no match</span></div>';
+        }
+      }
+
+      if (session.llm && session.llm.reply) {
+        bodyHtml += '<div class="hllm-reply" style="margin-top:2px;font-size:10px;color:var(--info);opacity:0.9;">💬 ' + esc(session.llm.reply) + '</div>';
+      }
+
+      const session_id = session.session_id;
+      const isFp = session.feedback && session.feedback.false_positive;
+
+      let actionBtnHtml = '';
+      if (isFp) {
+        actionBtnHtml = '<span class="hflagged" style="font-size:9px;color:var(--nomatch);font-weight:bold;margin-left:auto;">⚠️ Flagged</span>';
+      } else if (session_id) {
+        actionBtnHtml = '<button class="hflag-btn" onclick="flagFalsePositive(\'' + esc(session_id) + '\')" style="margin-left:auto;font-size:9px;background:rgba(255,255,255,0.06);border:1px solid var(--border);border-radius:4px;color:var(--muted);padding:1px 5px;cursor:pointer;">Flag FP</button>';
+      }
+
+      const itemHtml = '<div class="he-top">'
+        + (wakeWord ? '<span class="hwk">' + esc(wakeWord) + wakeConf + '</span>' : '<span></span>')
+        + '<span class="hts">' + ts + '</span>'
+        + '</div>'
+        + bodyHtml
+        + '<div class="he-action-row" style="display:flex;align-items:center;margin-top:2px;">'
+        + actionBtnHtml
+        + '</div>';
+
       const el = document.getElementById('hl');
       if (!el) return;
       const d = document.createElement('div');
-      d.className = 'he';
-      d.innerHTML = html;
+      d.className = 'he' + (isFp ? ' fp-flagged' : '');
+      d.setAttribute('data-id', session_id);
+      d.innerHTML = itemHtml;
+
       el.insertBefore(d, el.firstChild);
       while (el.children.length > MAX_HIST) el.removeChild(el.lastChild);
       updateHistoryVisibility();
-    }
-
-    function addHistoryWake(word) {
-      const ts = new Date().toTimeString().slice(0, 8);
-      _hePush('<div class="he-top">'
-        + '<span class="hwk">' + esc(word) + '</span>'
-        + '<span class="hts">' + ts + '</span>'
-        + '</div>');
-    }
-
-    function addHistory(wake, transcript, trigger, score) {
-      const ts = new Date().toTimeString().slice(0, 8);
-      const hasTrig = !!trigger;
-      let scoreStr = '';
-      if (score !== undefined && score !== null) {
-        scoreStr = ' <span class="hscore" style="opacity: 0.7; font-weight: normal; margin-left: 4px;">(' + Math.round(score) + '%)</span>';
-      }
-      _hePush('<div class="he-top">'
-        + (wake ? '<span class="hwk">' + esc(wake) + '</span>' : '<span></span>')
-        + '<span class="hts">' + ts + '</span>'
-        + '</div>'
-        + (transcript ? '<div class="he-mid"><span class="hcmd">"' + esc(transcript) + '"</span></div>' : '')
-        + (hasTrig ? '<div class="he-bot"><span class="' + (trigger.includes('✗') ? 'hnomatch' : 'htrig') + '">' + esc(trigger) + scoreStr + '</span></div>' : ''));
-    }
-
-    function addHistoryLLM(transcript, reply) {
-      const ts = new Date().toTimeString().slice(0, 8);
-      _hePush('<div class="he-top">'
-        + '<span class="hwk-llm">AI</span>'
-        + '<span class="hts">' + ts + '</span>'
-        + '</div>'
-        + (transcript ? '<div class="hcmd">"' + esc(transcript) + '"</div>' : '')
-        + (reply ? '<div class="hllm-reply">' + esc(reply.length > 80 ? reply.slice(0,77)+'…' : reply) + '</div>' : ''));
     }
 
     function sendCtrl(action) {
