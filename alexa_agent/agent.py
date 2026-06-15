@@ -6,7 +6,6 @@ import math
 import os
 import struct
 import sys
-import time
 from pathlib import Path
 
 from livekit import rtc
@@ -88,7 +87,9 @@ async def _handle_llm(
         await _speak(reply, tts_voice, audio_source)
     except Exception as e:
         logger.error(f"Groq error: {e}")
-        await _speak("Mi dispiace, non ho capito. Puoi ripetere?", tts_voice, audio_source)
+        await _speak(
+            "Mi dispiace, non ho capito. Puoi ripetere?", tts_voice, audio_source
+        )
 
 
 async def _speak(text: str, tts_voice, audio_source: rtc.AudioSource):
@@ -123,6 +124,7 @@ async def _play_pcm(pcm: bytes, audio_source: rtc.AudioSource):
     ratio = SAMPLE_RATE / TTS_SAMPLE_RATE
 
     import numpy as np
+
     arr = np.frombuffer(pcm, dtype=np.int16).astype(np.float32)
     new_len = int(len(arr) * ratio)
     resampled = np.interp(
@@ -134,7 +136,7 @@ async def _play_pcm(pcm: bytes, audio_source: rtc.AudioSource):
 
     offset = 0
     while offset < len(data):
-        chunk = data[offset:offset + frame_size * 2]
+        chunk = data[offset : offset + frame_size * 2]
         samples_count = len(chunk) // 2
         if samples_count == 0:
             break
@@ -155,12 +157,13 @@ def _frame_to_pcm(frame: rtc.AudioFrame, target_rate: int = 16000) -> bytes | No
     channels = frame.num_channels
 
     if channels > 1:
-        samples = struct.unpack(f"<{len(data)//2}h", data)
+        samples = struct.unpack(f"<{len(data) // 2}h", data)
         mono = samples[0::channels]
         data = struct.pack(f"<{len(mono)}h", *mono)
 
     if rate != target_rate and len(data) > 0:
         import numpy as np
+
         arr = np.frombuffer(data, dtype=np.int16).astype(np.float32)
         ratio = target_rate / rate
         new_len = int(len(arr) * ratio)
@@ -177,7 +180,10 @@ def _frame_to_pcm(frame: rtc.AudioFrame, target_rate: int = 16000) -> bytes | No
 async def _play_beep(source: rtc.AudioSource):
     duration = 0.3
     num_samples = int(SAMPLE_RATE * duration)
-    samples = [int(32767 * 0.2 * math.sin(2 * math.pi * 660 * i / SAMPLE_RATE)) for i in range(num_samples)]
+    samples = [
+        int(32767 * 0.2 * math.sin(2 * math.pi * 660 * i / SAMPLE_RATE))
+        for i in range(num_samples)
+    ]
     pcm = struct.pack(f"<{num_samples}h", *samples)
     await _play_pcm(pcm, source)
     logger.info("Beep played")
@@ -200,16 +206,23 @@ async def main():
 
     logger.info("Loading Vosk model...")
     from vosk import Model
+
     vosk_model = Model(str(Path("models/it")))
     logger.info("Vosk model loaded")
 
     logger.info("Loading Piper voice...")
-    from piper import PiperVoice, SynthesisConfig
-    tts_voice = PiperVoice.load(str(Path("models/piper/it_IT-paola-medium.onnx")), use_cuda=False)
+    from piper import PiperVoice
+
+    tts_voice = PiperVoice.load(
+        str(Path("models/piper/it_IT-paola-medium.onnx")), use_cuda=False
+    )
     logger.info("Piper voice loaded")
 
     conversation = [
-        {"role": "system", "content": "Sei un assistente vocale utile. Rispondi in modo conciso, massimo due frasi. Parla sempre in italiano."},
+        {
+            "role": "system",
+            "content": "Sei un assistente vocale utile. Rispondi in modo conciso, massimo due frasi. Parla sempre in italiano.",
+        },
     ]
 
     room = rtc.Room()
@@ -229,7 +242,18 @@ async def main():
     def on_track(track, pub, participant):
         if track.kind == rtc.TrackKind.KIND_AUDIO:
             logger.info(f"Audio track from {participant.identity}")
-            asyncio.create_task(_process_audio(track, participant.identity, vosk_model, stop, audio_source, llm, tts_voice, conversation))
+            asyncio.create_task(
+                _process_audio(
+                    track,
+                    participant.identity,
+                    vosk_model,
+                    stop,
+                    audio_source,
+                    llm,
+                    tts_voice,
+                    conversation,
+                )
+            )
 
     logger.info("Connecting...")
     audio_source = rtc.AudioSource(SAMPLE_RATE, CHANNELS)
@@ -243,7 +267,9 @@ async def main():
     logger.info("Audio track published")
 
     await _play_beep(audio_source)
-    await _speak("Ciao, sono il tuo assistente. Come posso aiutarti?", tts_voice, audio_source)
+    await _speak(
+        "Ciao, sono il tuo assistente. Come posso aiutarti?", tts_voice, audio_source
+    )
     logger.info("Waiting for user speech...")
 
     try:
