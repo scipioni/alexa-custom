@@ -1080,6 +1080,7 @@ class WebServer:
                     livekit_connect_fn=stt_params["connect_fn"],
                     livekit_connected_flag=stt_params["connected_flag"],
                     on_stt_event=self.on_stt_event,
+                    mqtt_client=stt_params.get("mqtt_client"),
                     stt_ready_event=stt_params.get("stt_ready_event"),
                 )
                 stt_thread_holder[0] = new_thread
@@ -1353,6 +1354,7 @@ class WebServer:
                 livekit_connect_fn=stt_params["connect_fn"],
                 livekit_connected_flag=stt_params["connected_flag"],
                 on_stt_event=_on_stt_event,
+                mqtt_client=stt_params.get("mqtt_client"),
                 stt_ready_event=stt_params.get("stt_ready_event"),
             )
             stt_thread_holder = [stt_thread]

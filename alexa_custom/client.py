@@ -934,6 +934,7 @@ def main() -> None:
     connect_trigger: threading.Event | None = None
     livekit_connected_flag: threading.Event | None = None
     stt_params: dict | None = None
+    mqtt_client: MQTTClient | None = None
 
     if config is not None:
         from alexa_custom.actions import TelegramClient
@@ -954,6 +955,15 @@ def main() -> None:
             assert connect_trigger is not None
             connect_trigger.set()
 
+        if config.mqtt and config.mqtt.host:
+            mqtt_client = MQTTClient(
+                host=config.mqtt.host,
+                port=config.mqtt.port,
+                topic_prefix=config.mqtt.topic_prefix,
+                node_id=config.mqtt.node_id,
+                queue_max=config.mqtt.queue_max,
+            )
+
         stt_params = {
             "config": config,
             "stop_event": threading.Event(),
@@ -961,6 +971,7 @@ def main() -> None:
             "connect_fn": _livekit_connect_fn_web,
             "connected_flag": livekit_connected_flag,
             "stt_ready_event": stt_ready_event,
+            "mqtt_client": mqtt_client,
         }
 
         if config.llm is not None:
@@ -978,12 +989,15 @@ def main() -> None:
         on_event: Callable,
         stop_asyncio: asyncio.Event,
     ) -> None:
+        if mqtt_client is not None:
+            asyncio.create_task(mqtt_client.run())
         await _async_main(
             ext_stop_event=stop_asyncio,
             on_event=on_event,
             connect_trigger=connect_trigger,
             livekit_connected_flag=livekit_connected_flag,
             actions_config=config,
+            mqtt_client=mqtt_client,
             stt_ready_event=stt_params["stt_ready_event"] if stt_params else None,
         )
 

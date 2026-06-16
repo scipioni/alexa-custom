@@ -87,6 +87,15 @@ async def _publish_chat(room: rtc.Room, text: str, generated: bool = False):
     await room.local_participant.publish_data(payload, topic="chat")
 
 
+async def _check_disconnect(text: str, tts_voice, audio_source, stop_event) -> bool:
+    norm = text.lower().strip().rstrip(".!?")
+    if "disconnetti" in norm:
+        await _speak("Arrivederci.", tts_voice, audio_source)
+        stop_event.set()
+        return True
+    return False
+
+
 async def _process_audio(
     track: rtc.Track,
     identity: str,
@@ -145,6 +154,8 @@ async def _process_audio(
                 text = result.get("text", "").strip()
                 if text:
                     logger.info(f"STT: {text}")
+                    if _check_disconnect(text, tts_voice, audio_source, stop_event):
+                        return
                     try:
                         await _publish_chat(room, text, generated=False)
                     except Exception as e:
@@ -166,6 +177,8 @@ async def _process_audio(
             text = result.get("text", "").strip()
             if text:
                 logger.info(f"STT: {text}")
+                if _check_disconnect(text, tts_voice, audio_source, stop_event):
+                    return
                 try:
                     await _publish_chat(room, text, generated=False)
                 except Exception as e:

@@ -342,6 +342,88 @@ async def handle_livekit_join(
     await livekit_connect_fn()
 
 
+@registry.register("sos_trigger")
+async def handle_sos_trigger(
+    action: ActionEntry,
+    livekit_connected: bool,
+    livekit_connect_fn: Callable[[], Awaitable[None]] | None,
+    **_,
+):
+    from alexa_custom.tts import get_engine
+
+    import json as _json
+    import subprocess as _subprocess
+    import sys as _sys
+    import time as _time
+    from pathlib import Path as _Path
+
+    lang = action.params.get("lang", "it-IT")
+
+    room = os.environ.get("LIVEKIT_ROOM", "unknown")
+
+    # Signal the cloud Agente SOS via webhook if configured
+    endpoint = os.environ.get("SOS_ENDPOINT_URL", "")
+    if endpoint:
+        if livekit_connected:
+            logger.debug("sos_trigger: already connected to LiveKit")
+        elif livekit_connect_fn is not None:
+            logger.info("sos_trigger: connecting to LiveKit")
+            await livekit_connect_fn()
+        else:
+            logger.warning("sos_trigger: no livekit_connect_fn available")
+
+        payload = _json.dumps({"room": room, "timestamp": int(_time.time())})
+        logger.info("sos_trigger: POSTing to %s", endpoint)
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(endpoint, content=payload, headers={"content-type": "application/json"})
+                if resp.is_error:
+                    logger.warning("sos_trigger: HTTP %s from endpoint", resp.status_code)
+        except Exception as e:
+            logger.warning("sos_trigger: HTTP request failed: %s", e)
+
+        await asyncio.to_thread(get_engine().say, "Sto collegando l'assistente di emergenza", lang)
+    else:
+        # No cloud VM — spawn the local agent.py to join the same room
+        logger.info("sos_trigger: no cloud endpoint — spawning local agent")
+        if livekit_connected:
+            logger.debug("sos_trigger: already connected to LiveKit")
+        elif livekit_connect_fn is not None:
+            logger.info("sos_trigger: connecting to LiveKit")
+            await livekit_connect_fn()
+        else:
+            logger.warning("sos_trigger: no livekit_connect_fn available")
+
+        from alexa_agent.session import _generate_agent_tokens
+
+        _, agent_token = _generate_agent_tokens(room)
+        room_url = os.environ.get("LIVEKIT_URL")
+
+        agent_path = _Path(__file__).parent.parent / "alexa_agent" / "agent.py"
+        logger.info("sos_trigger: starting local agent for room %s", room)
+        _subprocess.Popen(
+            [_sys.executable, str(agent_path), "--room", room, "--token", agent_token, "--url", room_url],
+        )
+
+        await asyncio.to_thread(get_engine().say, "Sto collegando l'assistente di emergenza", lang)
+
+    # Open browser tab so a human operator can see/join the same room
+    try:
+        from alexa_custom.client import browser_join_url
+
+        url = browser_join_url()
+        logger.info("sos_trigger: browser join URL:\n  %s", url)
+        import webbrowser
+        if not webbrowser.open(url, new=2):
+            _subprocess.Popen(
+                ["xdg-open", url],
+                stdout=_subprocess.DEVNULL,
+                stderr=_subprocess.DEVNULL,
+            )
+    except Exception as e:
+        logger.debug("sos_trigger: browser open failed (headless?): %s", e)
+
+
 _CMD_RE = re.compile(r"\$\(([^)]+)\)")
 
 
