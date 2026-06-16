@@ -4,7 +4,7 @@
 </div>
 
 <p align="center">
-  <em>Turn any USB speakerphone into an Italian-speaking AI assistant — fully local, open source, zero cloud.</em>
+  <em>Turn any USB speakerphone into an Italian-speaking AI assistant with an arduino— optional fully local, open source, zero cloud.</em>
 </p>
 
 <p align="center">
@@ -136,7 +136,7 @@ Serena is built in five layers:
 
 ## 🖥️ Web Dashboard
 
-Serena includes a real-time browser dashboard at `http:// "hardware-ip":8080`:
+Serena includes a real-time browser dashboard at `http://&lt;host&gt;:8080`:
 
 - **STT status** — live wake-word detection with an animated wave indicator
 - **VU meters** — real-time input/output levels with RMS needle
@@ -145,6 +145,9 @@ Serena includes a real-time browser dashboard at `http:// "hardware-ip":8080`:
 - **Configuration panel** — edit wake words, STT/TTS backends, audio levels, and recognition thresholds without SSH
 - **Dark/light theme** — follows your system preference, toggleable per session
 
+<p align="center">
+  <img src="docs/web-dashboard.jpg" alt="Serena web dashboard" width="900">
+</p>
 
 ---
 
