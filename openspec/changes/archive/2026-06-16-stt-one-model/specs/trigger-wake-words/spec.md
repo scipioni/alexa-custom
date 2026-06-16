@@ -1,9 +1,4 @@
-# Capability: Trigger Wake Words
-
-## Purpose
-Declare per-trigger wake word scoping so a single flat trigger list can target any runtime slot (direct-match or wake-gated).
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: wake_words field on trigger entries
 
@@ -19,6 +14,8 @@ Trigger entries SHALL express their wake requirement through a boolean `with_wak
 - **WHEN** a trigger sets `with_wake: true` or omits the field
 - **THEN** its commands fire only when a wake word is currently active
 
+## ADDED Requirements
+
 ### Requirement: wake_words is a flat list of phrases
 
 `wake_words` SHALL be configured as a flat list of phrase strings. Any configured phrase, when matched and confirmed, activates the recently-woken state. Wake-word *groups* (with `id`, per-group `aliases`, per-group `triggers`, `lang`, `skip_unmatched_inline`) SHALL NOT exist.
@@ -33,3 +30,9 @@ Trigger entries SHALL express their wake requirement through a boolean `with_wak
 
 - **WHEN** `wake_words` contains a group mapping (e.g. `- word: ... id: ...`)
 - **THEN** the loader raises a `ConfigError` (or warns) directing the user to the flat-list form
+
+## REMOVED Requirements
+
+### Requirement: ActionsConfig carries direct_triggers list
+**Reason**: With the `with_wake` boolean, triggers are no longer pre-partitioned into `triggers` (global) and `direct_triggers` (direct) slots; a single trigger list carries the `with_wake` flag per entry.
+**Migration**: Triggers previously placed in `direct_triggers` (via `wake_words: []`) become entries with `with_wake: false`. Scoped triggers (`wake_words: [id]`) become `with_wake: true` (scoping is dropped) — confirm no scoped trigger relied on wake-group isolation before migrating.

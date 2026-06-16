@@ -30,25 +30,31 @@ class ActionEntry:
 
 @dataclass
 class Trigger:
-    phrase: str
-    actions: list[ActionEntry]
-    aliases: list[str] = field(default_factory=list)
+    commands: list[str] = field(default_factory=list)  # primary field
+    actions: list[ActionEntry] = field(default_factory=list)
     patterns: list[str] = field(default_factory=list)
-    wake_words: list[str] | None = None  # None=global, []=direct, [ids]=scoped
-    follow_up: bool | None = None  # None=inherit global, True/False=override
-    min_word_overlap: float | None = None  # None=use RecognitionConfig.min_word_overlap
+    with_wake: bool = True  # False = fires without a wake word
+    follow_up: bool | None = None
+    min_word_overlap: float | None = None
+    # Legacy compat: populated from commands[0] / commands[1:] by the parser.
+    # match_trigger_with_score() uses these — do not set directly.
+    phrase: str = ""
+    aliases: list[str] = field(default_factory=list)
+    # Deprecated: trigger-level wake_words (old routing); kept to hold the raw
+    # YAML value for migration warnings. Not used for dispatch routing.
+    wake_words: list[str] | None = None
 
 
 @dataclass
 class WakeWordGroup:
+    """Deprecated: wake_words is now a flat list[str]. Kept for backward compat."""
+
     word: str
     aliases: list[str] = field(default_factory=list)
     triggers: list[Trigger] = field(default_factory=list)
     lang: str = "it-IT"
-    id: str = ""  # stable key for wake_triggers in action files; defaults to word
-    skip_unmatched_inline: bool = (
-        False  # if True, silently skip when inline_cmd doesn't match any trigger
-    )
+    id: str = ""
+    skip_unmatched_inline: bool = False
 
     def __post_init__(self):
         if not self.id:
@@ -97,14 +103,19 @@ class AudioConfig:
     webrtc: AudioWebRTCConfig = field(default_factory=AudioWebRTCConfig)
 
 
+# ---------------------------------------------------------------------------
+# Deprecated STT stage configs — kept as stubs for backward compat
+# (wake_eval.py, bench_stt.py, and old tests still reference these)
+# ---------------------------------------------------------------------------
+
+
 @dataclass
 class STTStage1Config:
+    """Deprecated: use the flat STTConfig fields instead."""
+
     backend: str = "vosk"
     model_path: str | None = None
     confidence: float = 0.65
-    # "first" preserves original behaviour (words[0] only).
-    # "min" requires every decoded token to clear the bar (strictest).
-    # "mean" uses the average across tokens (moderate).
     confidence_mode: str = "first"
     vad_silence_ms: int = 500
     rms_threshold: float = 0.02
@@ -118,26 +129,36 @@ class STTStage1Config:
     hotwords_score: float = 1.5
     max_partial_words: int = 8
     wake_match_threshold: float = 0.5
-    # ONNX intra-op threads for sherpa backends. 2 leaves headroom for audio
-    # I/O and TTS on the quad-core target board; ignored by the Vosk backend.
     num_threads: int = 2
 
 
 @dataclass
 class STTStage2Config:
+    """Deprecated: use the flat STTConfig fields instead."""
+
     backend: str = "vosk"
     model_path: str | None = None
-    vosk_grammar: bool = True
-    # ONNX intra-op threads for sherpa backends; ignored by Vosk.
+    vosk_grammar: bool = False
     num_threads: int = 2
+
+
+# ---------------------------------------------------------------------------
+# New flat STTConfig (replaces STTStage1Config + STTStage2Config container)
+# ---------------------------------------------------------------------------
 
 
 @dataclass
 class STTConfig:
-    vad_silence_ms: int = 500
-    flush_ms: int = 300
-    stage1: STTStage1Config = field(default_factory=STTStage1Config)
-    stage2: STTStage2Config = field(default_factory=STTStage2Config)
+    backend: str = "vosk"
+    model_path: str | None = None
+    num_threads: int = 2
+    # 900 ms confirmed clean on-board (vosk, no utterance fragmentation)
+    vad_silence_ms: int = 900
+    rms_threshold: float = 0.02
+    adaptive_rms: bool = True
+    adaptive_rms_margin: float = 0.01
+    min_speech_ms: int = 200
+    wake_match_threshold: float = 0.5
 
 
 @dataclass
@@ -147,22 +168,14 @@ class TTSConfig:
     preroll_ms: int = 100
 
 
-_VALID_MODES = {"two-stage", "single-stage"}
 _VALID_ALGORITHMS = {"token_set_ratio", "levenshtein", "ratio"}
 
 
 @dataclass
 class RecognitionConfig:
-    mode: str = "two-stage"
-    command_timeout: float = 2.5
-    # Absolute cap on stage-2 capture once speech has started; the window
-    # slides while the user keeps speaking, bounded by this. 0 disables sliding.
-    command_max_timeout: float = 8.0
+    # Time (seconds) the recently-woken state stays open after a wake word.
+    wake_window: float = 8.0
     wake_tone: str = "wake"
-    partial_matching: bool = True
-    kws_one_breath: bool = False
-    partial_stability_ms: int = 150
-    partial_stability_reads: int = 3
     matching_algorithm: str = "token_set_ratio"
     matching_threshold: float = 70.0
     min_word_overlap: float = 0.0
@@ -172,16 +185,8 @@ class RecognitionConfig:
     follow_up_timeout: float = 4.0
     follow_up_max_turns: int = 5
     follow_up_tone: str = "info"
-    # Cooldown applied after every successful dispatch (wake or direct trigger).
-    # Prevents immediate re-activation from acoustic echo or tail audio before
-    # the post_playback gate fires. 0 disables. Default: 800 ms.
     post_dispatch_cooldown_ms: int = 800
-    # Minimum number of words in the recognised command before fuzzy matching
-    # runs. 1 (default) skips empty transcripts only; raise to 2 to require
-    # at least a two-word command and block single-phoneme false matches.
     min_cmd_words: int = 1
-    # Maximum seconds a single dispatched turn may run on the STT thread.
-    # Covers TTS + LLM + livekit connect backoff (≤30s) — keep well above that.
     dispatch_timeout: float = 90.0
 
 
@@ -289,9 +294,11 @@ class ActionsData:
 
 @dataclass
 class ActionsConfig:
-    wake_words: list[WakeWordGroup]
-    triggers: list[Trigger]  # global (active after any wake word)
-    direct_triggers: list[Trigger] = field(default_factory=list)  # no wake word needed
+    wake_words: list[str]    # flat list of wake phrases (all variants)
+    triggers: list[Trigger]  # all triggers flat (with_wake=True and False)
+    # Convenience subset: triggers with with_wake=False. Kept for backward compat
+    # with code that reads config.direct_triggers.
+    direct_triggers: list[Trigger] = field(default_factory=list)
     on_startup: list[ActionEntry] = field(default_factory=list)
     audio: AudioConfig = field(default_factory=AudioConfig)
     stt: STTConfig = field(default_factory=STTConfig)
@@ -303,11 +310,11 @@ class ActionsConfig:
     actions: ActionsDirectoryConfig = field(default_factory=ActionsDirectoryConfig)
     llm: LLMConfig | None = None
     display: DisplayConfig | None = None
-    dump_triggers_dir: str | None = None  # if set, save pre-trigger audio as WAV here
+    dump_triggers_dir: str | None = None
 
 
 # ---------------------------------------------------------------------------
-# Primitive parsers (actions, triggers, wake word groups)
+# Primitive parsers (actions, triggers)
 # ---------------------------------------------------------------------------
 
 
@@ -359,59 +366,181 @@ def _parse_triggers(raw_triggers: list[Any], path_prefix: str) -> list[Trigger]:
     for i, t in enumerate(raw_triggers):
         if not isinstance(t, dict):
             raise ConfigError(f"config:{path_prefix}[{i}] must be a mapping")
-        phrase = t.get("phrase")
-        if not phrase or not isinstance(phrase, str):
-            raise ConfigError(f"config:{path_prefix}[{i}] missing 'phrase' string")
+
         raw_actions = t.get("actions")
         if not isinstance(raw_actions, list):
             raise ConfigError(f"config:{path_prefix}[{i}] 'actions' must be a list")
-
         actions = _parse_actions(raw_actions, f"{path_prefix}[{i}]")
+
+        # --- commands ---
+        # New: commands: ["phrase1", "phrase2"]
+        # Legacy: phrase: "..." + aliases: [...]
+        raw_commands = t.get("commands")
+        phrase = t.get("phrase")
         raw_aliases = t.get("aliases", [])
         if not isinstance(raw_aliases, list):
             raise ConfigError(f"config:{path_prefix}[{i}].aliases must be a list")
         aliases = [str(a) for a in raw_aliases if a]
+
+        if raw_commands is not None:
+            if not isinstance(raw_commands, list):
+                raise ConfigError(
+                    f"config:{path_prefix}[{i}].commands must be a list"
+                )
+            commands = [str(c) for c in raw_commands if c]
+            if phrase:
+                logger.warning(
+                    "%s[%d]: 'phrase' ignored when 'commands' is present",
+                    path_prefix, i,
+                )
+        elif phrase:
+            if not isinstance(phrase, str):
+                raise ConfigError(
+                    f"config:{path_prefix}[{i}] 'phrase' must be a string"
+                )
+            commands = [phrase] + aliases
+            if aliases:
+                logger.debug(
+                    "%s[%d]: legacy 'phrase'+'aliases' folded into commands", path_prefix, i
+                )
+        else:
+            raise ConfigError(
+                f"config:{path_prefix}[{i}] missing 'commands' list (or legacy 'phrase')"
+            )
+
+        if not commands:
+            raise ConfigError(
+                f"config:{path_prefix}[{i}] 'commands' must not be empty"
+            )
+
+        # --- patterns ---
         raw_patterns = t.get("patterns", [])
         if not isinstance(raw_patterns, list):
             raise ConfigError(f"config:{path_prefix}[{i}].patterns must be a list")
         patterns = [str(p) for p in raw_patterns if p]
-        if "direct_match" in t:
-            logger.warning(
-                "%s[%d]: 'direct_match' is no longer supported — use 'wake_words: []' instead",
-                path_prefix,
-                i,
-            )
+
+        # --- with_wake ---
+        # New: with_wake: true/false
+        # Legacy: wake_words: [] → with_wake=False; wake_words: [ids] → with_wake=True (scoping dropped)
+        raw_with_wake = t.get("with_wake")
         raw_wake_words = t.get("wake_words")
-        if raw_wake_words is None:
-            wake_words_val: list[str] | None = None
-        elif not isinstance(raw_wake_words, list):
-            raise ConfigError(f"config:{path_prefix}[{i}].wake_words must be a list")
-        else:
+
+        if raw_with_wake is not None:
+            with_wake = bool(raw_with_wake)
+            if raw_wake_words is not None:
+                logger.warning(
+                    "%s[%d]: 'wake_words' ignored when 'with_wake' is present",
+                    path_prefix, i,
+                )
+        elif raw_wake_words is not None:
+            if not isinstance(raw_wake_words, list):
+                raise ConfigError(
+                    f"config:{path_prefix}[{i}].wake_words must be a list"
+                )
             wake_words_val = [str(w) for w in raw_wake_words if w is not None]
-        raw_follow_up = t.get("follow_up")
-        if raw_follow_up is None:
-            follow_up_val: bool | None = None
+            if len(wake_words_val) == 0:
+                # wake_words: [] → fires without wake word
+                with_wake = False
+                logger.warning(
+                    "%s[%d]: 'wake_words: []' is deprecated — use 'with_wake: false'",
+                    path_prefix, i,
+                )
+            else:
+                # wake_words: [ids] → scoping dropped, becomes with_wake: true
+                with_wake = True
+                logger.warning(
+                    "%s[%d]: 'wake_words: %r' scoping dropped — trigger fires after any wake word (with_wake: true)",
+                    path_prefix, i, wake_words_val,
+                )
         else:
-            follow_up_val = bool(raw_follow_up)
+            # Default: direct_match legacy key check
+            if "direct_match" in t:
+                logger.warning(
+                    "%s[%d]: 'direct_match' is no longer supported — use 'with_wake: false'",
+                    path_prefix, i,
+                )
+                with_wake = False
+            else:
+                with_wake = True
+
+        # --- follow_up, min_word_overlap ---
+        raw_follow_up = t.get("follow_up")
+        follow_up_val: bool | None = None if raw_follow_up is None else bool(raw_follow_up)
         raw_min_word_overlap = t.get("min_word_overlap")
         min_word_overlap_val: float | None = (
             float(raw_min_word_overlap) if raw_min_word_overlap is not None else None
         )
+
+        # Populate compat phrase/aliases from commands
+        compat_phrase = commands[0] if commands else ""
+        compat_aliases = commands[1:] if len(commands) > 1 else []
+
         triggers.append(
             Trigger(
-                phrase=phrase,
+                commands=commands,
                 actions=actions,
-                aliases=aliases,
                 patterns=patterns,
-                wake_words=wake_words_val,
+                with_wake=with_wake,
                 follow_up=follow_up_val,
                 min_word_overlap=min_word_overlap_val,
+                phrase=compat_phrase,
+                aliases=compat_aliases,
+                wake_words=[str(w) for w in raw_wake_words if w is not None]
+                if raw_wake_words is not None
+                else None,
             )
         )
     return triggers
 
 
+def _parse_wake_words_flat(raw_list: list[Any], source: str) -> list[str]:
+    """Parse wake_words as a flat list of strings.
+
+    Handles both the new flat format (list of strings) and the legacy group
+    format (list of dicts with 'word'/'aliases' keys), emitting deprecation
+    warnings for the latter.
+    """
+    phrases: list[str] = []
+    seen: set[str] = set()
+
+    for i, entry in enumerate(raw_list):
+        if isinstance(entry, str):
+            norm = entry.strip()
+            if norm and norm not in seen:
+                phrases.append(norm)
+                seen.add(norm)
+        elif isinstance(entry, dict):
+            # Legacy group format
+            word = entry.get("word")
+            if not word or not isinstance(word, str):
+                raise ConfigError(
+                    f"{source}: wake_words[{i}] legacy group missing 'word' string"
+                )
+            logger.warning(
+                "%s: wake_words[%d] uses legacy group format {word: %r, ...} — "
+                "update to a flat string list",
+                source, i, word,
+            )
+            raw_aliases = entry.get("aliases", [])
+            if not isinstance(raw_aliases, list):
+                raw_aliases = []
+            for p in [word] + [str(a) for a in raw_aliases if a]:
+                norm = p.strip()
+                if norm and norm not in seen:
+                    phrases.append(norm)
+                    seen.add(norm)
+        else:
+            raise ConfigError(
+                f"{source}: wake_words[{i}] must be a string or a mapping, "
+                f"got {type(entry).__name__!r}"
+            )
+
+    return phrases
+
+
+# Kept for backward compat (tests call this directly)
 def _parse_wake_word_groups(raw_groups: list[Any], source: str) -> list[WakeWordGroup]:
+    """Deprecated: use _parse_wake_words_flat instead."""
     groups: list[WakeWordGroup] = []
     seen: dict[str, int] = {}
 
@@ -447,10 +576,7 @@ def _parse_wake_word_groups(raw_groups: list[Any], source: str) -> list[WakeWord
             if norm in seen:
                 logger.warning(
                     "%s: wake phrase %r also defined in group %d — group %d will shadow it",
-                    source,
-                    phrase,
-                    seen[norm],
-                    i,
+                    source, phrase, seen[norm], i,
                 )
             else:
                 seen[norm] = i
@@ -480,12 +606,6 @@ def _parse_wake_word_groups(raw_groups: list[Any], source: str) -> list[WakeWord
 
 
 def _get_float(raw: dict, key: str, default: float) -> float:
-    """float(raw[key]) but tolerant of a present-but-null value.
-
-    The web config editor can write `key: null` (e.g. a cleared numeric field),
-    and `float(None)` raises TypeError — which would otherwise break daemon
-    startup on the next cold load. Treat null/missing as the default.
-    """
     value = raw.get(key)
     return default if value is None else float(value)
 
@@ -542,66 +662,38 @@ def _parse_audio_config(raw: dict) -> AudioConfig:
     )
 
 
-def _parse_stt_stage1_config(raw: dict) -> STTStage1Config:
-    backend = str(raw.get("backend", "vosk"))
-    if backend not in ("vosk", "sherpa-onnx", "sherpa-hotwords"):
-        raise ConfigError(
-            f"'stt.stage1.backend' must be 'vosk', 'sherpa-onnx', or 'sherpa-hotwords', got {backend!r}"
+def _parse_stt_config(raw: dict) -> STTConfig:
+    # Warn on removed nested keys
+    if "stage1" in raw:
+        logger.warning(
+            "stt.stage1 is removed — update to flat stt fields (backend, model_path, "
+            "vad_silence_ms, …). See docs/stt-simple.md."
         )
-    model_path_raw = raw.get("model_path")
-    confidence_mode = str(raw.get("confidence_mode", "first"))
-    if confidence_mode not in ("first", "min", "mean"):
-        raise ConfigError(
-            f"'stt.stage1.confidence_mode' must be 'first', 'min', or 'mean', got {confidence_mode!r}"
+    if "stage2" in raw:
+        logger.warning(
+            "stt.stage2 is removed — update to flat stt fields. See docs/stt-simple.md."
         )
-    return STTStage1Config(
-        backend=backend,
-        model_path=str(model_path_raw) if model_path_raw else None,
-        confidence=_get_float(raw, "confidence", 0.65),
-        confidence_mode=confidence_mode,
-        vad_silence_ms=_get_int(raw, "vad_silence_ms", 500),
-        rms_threshold=_get_float(raw, "rms_threshold", 0.02),
-        adaptive_rms=bool(raw.get("adaptive_rms", True)),
-        adaptive_rms_margin=_get_float(raw, "adaptive_rms_margin", 0.01),
-        min_speech_ms=_get_int(raw, "min_speech_ms", 300),
-        vosk_grammar=bool(raw.get("vosk_grammar", True)),
-        keyword_spotter=bool(raw.get("keyword_spotter", False)),
-        keywords_score=_get_float(raw, "keywords_score", 1.0),
-        keywords_threshold=_get_float(raw, "keywords_threshold", 0.35),
-        hotwords_score=_get_float(raw, "hotwords_score", 1.5),
-        max_partial_words=_get_int(raw, "max_partial_words", 8),
-        wake_match_threshold=_get_float(raw, "wake_match_threshold", 0.5),
-        num_threads=_get_int(raw, "num_threads", 2),
-    )
+    if raw.get("vosk_grammar") is not None:
+        logger.warning("stt.vosk_grammar is removed — free-vocabulary mode is always used.")
+    if raw.get("keyword_spotter") is not None:
+        logger.warning("stt.keyword_spotter is removed — single-model design uses no KWS.")
 
-
-def _parse_stt_stage2_config(raw: dict) -> STTStage2Config:
     backend = str(raw.get("backend", "vosk"))
     if backend not in ("vosk", "sherpa-onnx"):
         raise ConfigError(
-            f"'stt.stage2.backend' must be 'vosk' or 'sherpa-onnx', got {backend!r}"
+            f"'stt.backend' must be 'vosk' or 'sherpa-onnx', got {backend!r}"
         )
     model_path_raw = raw.get("model_path")
-    return STTStage2Config(
+    return STTConfig(
         backend=backend,
         model_path=str(model_path_raw) if model_path_raw else None,
-        vosk_grammar=bool(raw.get("vosk_grammar", True)),
         num_threads=_get_int(raw, "num_threads", 2),
-    )
-
-
-def _parse_stt_config(raw: dict) -> STTConfig:
-    stage1_raw = raw.get("stage1") or {}
-    if not isinstance(stage1_raw, dict):
-        raise ConfigError("'stt.stage1' must be a mapping if present")
-    stage2_raw = raw.get("stage2") or {}
-    if not isinstance(stage2_raw, dict):
-        raise ConfigError("'stt.stage2' must be a mapping if present")
-    return STTConfig(
-        vad_silence_ms=int(raw.get("vad_silence_ms", 700)),
-        flush_ms=int(raw.get("flush_ms", 300)),
-        stage1=_parse_stt_stage1_config(stage1_raw),
-        stage2=_parse_stt_stage2_config(stage2_raw),
+        vad_silence_ms=_get_int(raw, "vad_silence_ms", 900),
+        rms_threshold=_get_float(raw, "rms_threshold", 0.02),
+        adaptive_rms=bool(raw.get("adaptive_rms", True)),
+        adaptive_rms_margin=_get_float(raw, "adaptive_rms_margin", 0.01),
+        min_speech_ms=_get_int(raw, "min_speech_ms", 200),
+        wake_match_threshold=_get_float(raw, "wake_match_threshold", 0.5),
     )
 
 
@@ -615,11 +707,18 @@ def _parse_tts_config(raw: dict) -> TTSConfig:
 
 
 def _parse_recognition_config(raw: dict) -> RecognitionConfig:
-    mode = str(raw.get("mode", "two-stage"))
-    if mode not in _VALID_MODES:
-        raise ConfigError(
-            f"'recognition.mode' must be one of {sorted(_VALID_MODES)}, got {mode!r}"
-        )
+    # Warn on removed keys
+    _removed = ("mode", "partial_matching", "kws_one_breath",
+                 "partial_stability_ms", "partial_stability_reads",
+                 "command_timeout", "command_max_timeout")
+    for key in _removed:
+        if raw.get(key) is not None:
+            logger.warning(
+                "recognition.%s is removed in the single-model design — ignored. "
+                "Use 'recognition.wake_window' instead.",
+                key,
+            )
+
     algo = str(raw.get("matching_algorithm", "token_set_ratio"))
     if algo not in _VALID_ALGORITHMS:
         raise ConfigError(
@@ -631,14 +730,8 @@ def _parse_recognition_config(raw: dict) -> RecognitionConfig:
             f"'recognition.reply_matching_algorithm' must be one of {sorted(_VALID_ALGORITHMS)}, got {reply_algo!r}"
         )
     return RecognitionConfig(
-        mode=mode,
-        command_timeout=_get_float(raw, "command_timeout", 3.0),
-        command_max_timeout=_get_float(raw, "command_max_timeout", 8.0),
+        wake_window=_get_float(raw, "wake_window", 8.0),
         wake_tone=str(raw.get("wake_tone", "wake")),
-        partial_matching=bool(raw.get("partial_matching", True)),
-        kws_one_breath=bool(raw.get("kws_one_breath", False)),
-        partial_stability_ms=_get_int(raw, "partial_stability_ms", 150),
-        partial_stability_reads=_get_int(raw, "partial_stability_reads", 3),
         matching_algorithm=algo,
         matching_threshold=_get_float(raw, "matching_threshold", 70.0),
         min_word_overlap=_get_float(raw, "min_word_overlap", 0.0),
@@ -727,7 +820,6 @@ def _parse_llm_config(
 
 
 def _parse_actions_file_raw(path: Path, source: str) -> dict:
-    """Load a single action YAML file; return raw dict."""
     try:
         with path.open() as f:
             raw = yaml.safe_load(f) or {}
@@ -740,31 +832,33 @@ def _parse_actions_file_raw(path: Path, source: str) -> dict:
 
 def _load_actions_dir(
     dir_path: Path,
-    wake_words: list[WakeWordGroup],
+    existing_wake_words: list[str] | None = None,
     system_file: str = "system.yaml",
-) -> tuple[list[ActionEntry], ActionsData]:
+) -> tuple[list[ActionEntry], ActionsData, list[str]]:
     """Load all .yaml files from dir_path; system_file first, rest alphabetically.
 
-    Returns (on_startup_actions, merged_actions_data).
+    Returns (on_startup_actions, merged_actions_data, extra_wake_words).
     on_startup is only read from system_file.
+    extra_wake_words is the flat list of any wake phrases defined in action files.
     """
     if not dir_path.is_dir():
         logger.warning("Actions directory not found: %s", dir_path)
-        return [], ActionsData()
+        return [], ActionsData(), []
 
-    # Collect files: system first, then others alphabetically
+    existing_wake_words = list(existing_wake_words or [])
+    existing_set: set[str] = {w.lower().strip() for w in existing_wake_words}
+
     system_path = dir_path / system_file
     other_paths = sorted(p for p in dir_path.glob("*.yaml") if p.name != system_file)
-    paths: list[tuple[Path, bool]] = []  # (path, is_system)
+    paths: list[tuple[Path, bool]] = []
     if system_path.exists():
         paths.append((system_path, True))
     for p in other_paths:
         paths.append((p, False))
 
-    existing_ids = {g.id for g in wake_words}
-
     on_startup: list[ActionEntry] = []
     all_triggers: list[Trigger] = []
+    extra_wake_words: list[str] = []
 
     for path, is_system in paths:
         source = str(path)
@@ -787,42 +881,36 @@ def _load_actions_dir(
                 "%s: 'on_startup' ignored (only honoured in %s)", source, system_file
             )
 
-        # wake_words: new groups declared in action files
+        # wake_words in action files: merge into flat list
         raw_ww = raw.get("wake_words")
         if raw_ww is not None:
             if not isinstance(raw_ww, list):
                 logger.warning("%s: 'wake_words' must be a list — ignored", source)
             else:
                 try:
-                    new_groups = _parse_wake_word_groups(raw_ww, source)
+                    new_phrases = _parse_wake_words_flat(raw_ww, source)
                 except ConfigError as e:
                     logger.warning("%s: wake_words error — ignored: %s", source, e)
-                    new_groups = []
+                    new_phrases = []
                 added = 0
-                for group in new_groups:
-                    if group.id in existing_ids:
-                        logger.debug(
-                            "%s: wake word %r (id=%r) already defined — skipping",
-                            source,
-                            group.word,
-                            group.id,
-                        )
-                    else:
-                        wake_words.append(group)
-                        existing_ids.add(group.id)
+                for phrase in new_phrases:
+                    norm = phrase.lower().strip()
+                    if norm not in existing_set:
+                        extra_wake_words.append(phrase)
+                        existing_set.add(norm)
                         added += 1
                 if added:
-                    logger.info("%s: merged %d wake word group(s)", source, added)
+                    logger.info("%s: merged %d wake phrase(s)", source, added)
 
-        # wake_triggers: removed key — warn if present
+        # wake_triggers: removed key
         if raw.get("wake_triggers") is not None:
             logger.warning(
                 "%s: 'wake_triggers' is no longer supported — "
-                "use 'wake_words: [<id>]' on individual trigger entries instead",
+                "use 'with_wake: false' on individual trigger entries instead",
                 source,
             )
 
-        # triggers: flat list with optional wake_words field
+        # triggers: flat list
         raw_triggers = raw.get("triggers")
         if raw_triggers is not None:
             if not isinstance(raw_triggers, list):
@@ -830,7 +918,7 @@ def _load_actions_dir(
             else:
                 all_triggers.extend(_parse_triggers(raw_triggers, f"{source}:triggers"))
 
-    return on_startup, ActionsData(triggers=all_triggers)
+    return on_startup, ActionsData(triggers=all_triggers), extra_wake_words
 
 
 # ---------------------------------------------------------------------------
@@ -839,10 +927,6 @@ def _load_actions_dir(
 
 
 def load_secrets(path: str | Path = "conf/secrets.yaml") -> SecretsConfig:
-    """Load conf/secrets.yaml, apply values to os.environ, return SecretsConfig.
-
-    Missing file is silently ignored (all fields default to empty strings).
-    """
     p = Path(path)
     if not p.exists():
         logger.debug("Secrets file not found: %s — skipping", p)
@@ -880,7 +964,6 @@ def load_secrets(path: str | Path = "conf/secrets.yaml") -> SecretsConfig:
 
     secrets = SecretsConfig(livekit=lk, telegram=tg, llm_host=llm_host, mqtt=mq)
 
-    # Apply to os.environ
     env_updates: list[str] = []
     if lk.url:
         os.environ["LIVEKIT_URL"] = lk.url
@@ -922,7 +1005,6 @@ def load_config(
     path: str | Path = "conf/config.yaml",
     secrets: "SecretsConfig | None" = None,
 ) -> "ActionsConfig | None":
-    """Load conf/config.yaml and merge action files from conf/actions/."""
     p = Path(path)
     if not p.exists():
         return None
@@ -942,9 +1024,7 @@ def load_config(
             "move credentials to conf/secrets.yaml"
         )
 
-    cfg = _parse_actions_config(raw, source=str(p), secrets=secrets)
-
-    return cfg
+    return _parse_actions_config(raw, source=str(p), secrets=secrets)
 
 
 def _parse_actions_config(
@@ -953,14 +1033,16 @@ def _parse_actions_config(
     secrets: SecretsConfig | None = None,
 ) -> ActionsConfig:
     """Parse a raw YAML dict into ActionsConfig."""
+    # --- wake_words ---
     raw_wake_words = raw.get("wake_words")
     if raw_wake_words is not None and not isinstance(raw_wake_words, list):
         raise ConfigError(f"{source}: 'wake_words' must be a list if present")
 
-    wake_words = (
-        _parse_wake_word_groups(raw_wake_words, source) if raw_wake_words else []
+    wake_words: list[str] = (
+        _parse_wake_words_flat(raw_wake_words, source) if raw_wake_words else []
     )
 
+    # --- sub-configs ---
     audio_raw = raw.get("audio") or {}
     if not isinstance(audio_raw, dict):
         raise ConfigError(f"{source}: 'audio' must be a mapping if present")
@@ -1005,15 +1087,13 @@ def _parse_actions_config(
         raise ConfigError(f"{source}: 'actions' must be a mapping if present")
     actions_dir_cfg = _parse_actions_dir_config(actions_raw)
 
-    # LLM: merge llm_host from secrets if available
+    # LLM
     llm: LLMConfig | None = None
     raw_llm = raw.get("llm")
     if raw_llm is not None:
         if not isinstance(raw_llm, dict):
             raise ConfigError(f"{source}: 'llm' must be a mapping if present")
-        llm_host_override = (secrets.llm_host if secrets else None) or raw_llm.get(
-            "host"
-        )
+        llm_host_override = (secrets.llm_host if secrets else None) or raw_llm.get("host")
         if not llm_host_override:
             logger.warning(
                 "%s: LLM disabled — 'llm_host' not set in conf/secrets.yaml or 'llm.host' in config",
@@ -1027,7 +1107,7 @@ def _parse_actions_config(
             except ConfigError as e:
                 logger.warning("LLM config error — LLM disabled: %s", e)
 
-    # Display: optional section, None when absent
+    # Display
     display: DisplayConfig | None = None
     raw_display = raw.get("display")
     if raw_display is not None:
@@ -1047,16 +1127,12 @@ def _parse_actions_config(
             i2c_height=int(raw_display.get("i2c_height", 64)),
         )
 
-    # Set audio WebRTC env vars from config
+    # WebRTC env vars
     webrtc = audio.webrtc
     os.environ.setdefault("MIC_AGC", "1" if webrtc.agc else "0")
     os.environ.setdefault("MIC_AEC", "1" if webrtc.aec else "0")
-    os.environ.setdefault(
-        "MIC_NOISE_SUPPRESSION", "1" if webrtc.noise_suppression else "0"
-    )
-    os.environ.setdefault(
-        "MIC_HIGH_PASS_FILTER", "1" if webrtc.high_pass_filter else "0"
-    )
+    os.environ.setdefault("MIC_NOISE_SUPPRESSION", "1" if webrtc.noise_suppression else "0")
+    os.environ.setdefault("MIC_HIGH_PASS_FILTER", "1" if webrtc.high_pass_filter else "0")
 
     # Load and merge action files
     config_dir = Path(source).parent if source != "config" else Path(".")
@@ -1064,43 +1140,27 @@ def _parse_actions_config(
     if not actions_dir.is_absolute():
         actions_dir = config_dir.parent / actions_dir_cfg.dir
 
-    on_startup, actions_data = _load_actions_dir(actions_dir, wake_words)
+    on_startup, actions_data, extra_wake_words = _load_actions_dir(
+        actions_dir, existing_wake_words=wake_words
+    )
+    wake_words = wake_words + extra_wake_words
 
     if not wake_words:
         raise ConfigError(
-            f"{source}: no wake word groups defined — add 'wake_words:' to "
+            f"{source}: no wake words defined — add 'wake_words:' to "
             "config.yaml or to a conf/actions/*.yaml file"
         )
 
-    # Resolve triggers to slots: global, direct, or per-group
-    id_map = {g.id: g for g in wake_words}
-    global_triggers: list[Trigger] = []
-    direct_triggers: list[Trigger] = []
-    for t in actions_data.triggers:
-        ww = t.wake_words
-        if ww is None:
-            global_triggers.append(t)
-        elif len(ww) == 0:
-            direct_triggers.append(t)
-        else:
-            for group_id in ww:
-                if group_id == "global":
-                    global_triggers.append(t)
-                elif group_id in id_map:
-                    id_map[group_id].triggers = id_map[group_id].triggers + [t]
-                else:
-                    logger.debug(
-                        "trigger %r: wake_words id %r has no matching group — ignored",
-                        t.phrase,
-                        group_id,
-                    )
+    # All triggers flat; direct_triggers = subset with with_wake=False
+    all_triggers = actions_data.triggers
+    direct_triggers = [t for t in all_triggers if not t.with_wake]
 
     dump_triggers_dir_raw = actions_raw.get("dump_triggers_dir")
     dump_triggers_dir = str(dump_triggers_dir_raw) if dump_triggers_dir_raw else None
 
     return ActionsConfig(
         wake_words=wake_words,
-        triggers=global_triggers,
+        triggers=all_triggers,
         direct_triggers=direct_triggers,
         on_startup=on_startup,
         audio=audio,

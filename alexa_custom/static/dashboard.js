@@ -578,107 +578,67 @@
       // Layout constants
       const PAD = 6, WW_W = 148, WW_PAD = 9, LINE_H = 17, GAP = 46;
       const TR_X = PAD + WW_W + GAP;
-      const TR_W = Math.max(130, canvasW - TR_X - PAD);
-      const TR_H = 32, ITEM_GAP = 7, GROUP_GAP = 22;
 
-      const wws    = cfg.wake_words      || [];
-      const globals = cfg.global_triggers || [];
+      // Flat single-model layout: one wake-words box + one triggers grid container.
+      const wws      = cfg.wake_words || [];   // flat string[]
+      const triggers = cfg.triggers   || [];   // flat trigger list with with_wake bool
 
-      function boxH(w) {
-        return WW_PAD * 2 + (1 + (w.aliases||[]).length) * LINE_H;
-      }
       // Trigger pill height: max of left-section (phrase+aliases) and right-section (ask panel).
       function trigH(t) {
+        const TR_H = 32;
         const aliasH = TR_H + (t.aliases||[]).length * 15;
         const ask = (t.actions||[]).find(a => a.type === 'ask');
         if (!ask) return aliasH;
-        const askH = 12 + 13 + (ask.on_reply||[]).length * 13; // V_PAD + LINE_Q + n*LINE_R
+        const askH = 12 + 13 + (ask.on_reply||[]).length * 13;
         return Math.max(aliasH, askH);
       }
 
-      const globalUserNodes = [];
       let curY = PAD;
 
-      wws.forEach((w, wi) => {
-        const trigs = w.triggers || [];
-        const bh    = boxH(w);
-        const wwNode = { id: `w${wi}`, type: 'wake', label: w.word,
-                         aliases: w.aliases || [], wi,
-                         x: PAD, y: curY, w: WW_W, h: bh,
-                         usesGlobals: trigs.length === 0 && globals.length > 0,
-                         skipUnmatched: !!w.skip_unmatched_inline };
-        nodes.push(wwNode);
+      // ── Wake-words box ────────────────────────────────────────────────────
+      if (wws.length > 0) {
+        const bh = WW_PAD * 2 + wws.length * LINE_H;
+        nodes.push({ id: 'ww-node', type: 'wake-list', label: wws[0],
+                     words: wws, x: PAD, y: curY, w: WW_W, h: bh });
+        curY += bh;
+      }
 
-        if (trigs.length > 0) {
-          const CONT_PAD = 10, COLS = 3, GRID_GAP_X = 8, GRID_GAP_Y = 6, TITLE_H = 18;
-          const contX = TR_X;
-          const contW = Math.max(180, canvasW - TR_X - PAD);
-          const cellW = Math.floor((contW - CONT_PAD * 2 - (COLS - 1) * GRID_GAP_X) / COLS);
-          const cellH = trigs.reduce((m, t) => Math.max(m, trigH(t)), TR_H);
-          const rows  = Math.ceil(trigs.length / COLS);
-          const contH = TITLE_H + CONT_PAD + rows * cellH + (rows - 1) * GRID_GAP_Y + CONT_PAD;
-          const groupH = Math.max(bh, contH);
-          wwNode.y = curY + Math.max(0, (contH - bh) / 2);
-          const contY = curY;
-          nodes.push({ id: `wc${wi}`, type: 'ww-container',
-                       x: contX, y: contY, w: contW, h: contH, wi });
-          edges.push({ from: `w${wi}`, to: `wc${wi}`,
-                       parts: [0.12, 0.52, 0.84].map(t0 => ({ t: t0 })) });
-          trigs.forEach((t, ti) => {
-            const col = ti % COLS, row = Math.floor(ti / COLS);
-            const cx  = contX + CONT_PAD + col * (cellW + GRID_GAP_X);
-            const cy  = contY + TITLE_H + CONT_PAD + row * (cellH + GRID_GAP_Y) + cellH / 2;
-            nodes.push({ id: `t${wi}_${ti}`, type: 'trig', label: t.phrase,
-                         aliases: t.aliases || [], direct_match: !!t.direct_match,
-                         sleeping_only: !!t.sleeping_only,
-                         actions: t.actions, x: cx, y: cy, w: cellW, h: cellH,
-                         containerId: `wc${wi}` });
-          });
-          curY += groupH + GROUP_GAP;
-        } else {
-          globalUserNodes.push(wwNode);
-          curY += bh + ITEM_GAP;
-        }
-      });
-
-      if (globals.length > 0) {
-        if (globalUserNodes.length > 0) curY += GROUP_GAP;
-
-        // Grid layout inside a single container rectangle.
+      // ── Triggers grid container ───────────────────────────────────────────
+      if (triggers.length > 0) {
         const CONT_PAD = 10, COLS = 3, GRID_GAP_X = 8, GRID_GAP_Y = 6, TITLE_H = 18;
-        const contX  = TR_X;
-        const contW  = Math.max(180, canvasW - TR_X - PAD);
-        const cellW  = Math.floor((contW - CONT_PAD * 2 - (COLS - 1) * GRID_GAP_X) / COLS);
-        const cellH  = globals.reduce((m, t) => Math.max(m, trigH(t)), TR_H);
-        const rows   = Math.ceil(globals.length / COLS);
-        const contH  = TITLE_H + CONT_PAD + rows * cellH + (rows - 1) * GRID_GAP_Y + CONT_PAD;
-        const globsY0 = curY;
+        const contX = TR_X;
+        const contW = Math.max(180, canvasW - TR_X - PAD);
+        const cellW = Math.floor((contW - CONT_PAD * 2 - (COLS - 1) * GRID_GAP_X) / COLS);
+        const cellH = triggers.reduce((m, t) => Math.max(m, trigH(t)), 32);
+        const rows  = Math.ceil(triggers.length / COLS);
+        const contH = TITLE_H + CONT_PAD + rows * cellH + (rows - 1) * GRID_GAP_Y + CONT_PAD;
+        const contY = PAD;
 
-        nodes.push({ id: 'globals-container', type: 'globals-container',
-                     x: contX, y: globsY0, w: contW, h: contH });
+        nodes.push({ id: 'triggers-container', type: 'globals-container',
+                     x: contX, y: contY, w: contW, h: contH });
 
-        globals.forEach((t, gi) => {
-          const col = gi % COLS, row = Math.floor(gi / COLS);
+        if (wws.length > 0) {
+          const wwNode = nodes[0];
+          const wwMid  = wwNode.y + wwNode.h / 2;
+          const contMid = contY + contH / 2;
+          wwNode.y = contMid - wwNode.h / 2;
+          edges.push({ from: 'ww-node', to: 'triggers-container', isGlobal: true,
+                       parts: [0.12, 0.52, 0.84].map(t0 => ({ t: t0 })) });
+        }
+
+        triggers.forEach((t, i) => {
+          const col = i % COLS, row = Math.floor(i / COLS);
           const cx  = contX + CONT_PAD + col * (cellW + GRID_GAP_X);
-          const cy  = globsY0 + TITLE_H + CONT_PAD + row * (cellH + GRID_GAP_Y) + cellH / 2;
-          nodes.push({ id: `g${gi}`, type: 'global', label: t.phrase,
-                       aliases: t.aliases || [], direct_match: !!t.direct_match,
+          const cy  = contY + TITLE_H + CONT_PAD + row * (cellH + GRID_GAP_Y) + cellH / 2;
+          nodes.push({ id: `g${i}`, type: 'global', label: t.phrase,
+                       commands: t.commands || [],
+                       aliases: t.aliases || [],
+                       direct_match: !t.with_wake,
                        sleeping_only: !!t.sleeping_only,
                        actions: t.actions, x: cx, y: cy, w: cellW, h: cellH });
         });
 
-        // Re-centre global-user wake boxes alongside the container; one edge each.
-        if (globalUserNodes.length > 0) {
-          const stackH = globalUserNodes.reduce((s, n) => s + n.h, 0)
-                         + (globalUserNodes.length - 1) * ITEM_GAP;
-          let wy = globsY0 + Math.max(0, (contH - stackH) / 2);
-          globalUserNodes.forEach(n => { n.y = wy; wy += n.h + ITEM_GAP; });
-          globalUserNodes.forEach(wn =>
-            edges.push({ from: wn.id, to: 'globals-container', isGlobal: true,
-                         parts: [0.12, 0.52, 0.84].map(t0 => ({ t: t0 })) })
-          );
-        }
-        curY = globsY0 + contH + PAD;
+        curY = contY + contH + PAD;
       } else {
         curY += PAD;
       }
@@ -797,50 +757,28 @@
           ctx.lineWidth = 1.5;
           ctx.stroke();
         }
-        // Primary word — rendered as a badge chip
+        // Wake word list — each phrase rendered as a badge chip
         const WW_PAD = 9, LINE_H = 17;
-        ctx.font = 'bold 12px system-ui,sans-serif';
+        const allWords = n.words || [n.label];
+        const AB_PAD_X = 6, AB_H = 15, AB_R = 3;
+        ctx.font = '11px system-ui,sans-serif';
         ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-        const wwStr = n.label.toUpperCase();
-        const WB_PAD_X = 7, WB_H = 18, WB_R = 4;
-        const wwW = ctx.measureText(wwStr).width + WB_PAD_X * 2;
-        const wwBX = n.x + WW_PAD, wwBY = n.y + WW_PAD;
-        ctx.beginPath(); _rrect(ctx, wwBX, wwBY, wwW, WB_H, WB_R);
-        ctx.fillStyle = col + '28';
-        ctx.fill();
-        ctx.strokeStyle = col + '99';
-        ctx.lineWidth = 0.5;
-        ctx.setLineDash([]);
-        ctx.stroke();
-        ctx.fillStyle = col;
-        ctx.fillText(wwStr, wwBX + WB_PAD_X, wwBY + WB_H / 2);
-        // skip_unmatched_inline indicator — small ⊘ in top-right corner
-        if (n.skipUnmatched) {
-          ctx.font = '11px system-ui,sans-serif';
-          ctx.textAlign = 'right'; ctx.textBaseline = 'top';
-          ctx.fillStyle = col + '99';
-          ctx.fillText('⊘', n.x + n.w - 5, n.y + 4);
-          ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-        }
-        // Aliases — same badge chip style
-        if (n.aliases.length) {
-          ctx.font = '11px system-ui,sans-serif';
-          const AB_PAD_X = 6, AB_H = 15, AB_R = 3;
-          n.aliases.forEach((a, i) => {
-            const abW = ctx.measureText(a).width + AB_PAD_X * 2;
-            const abX = n.x + WW_PAD;
-            const abY = n.y + WW_PAD + LINE_H * (i + 1) + (LINE_H - AB_H) / 2;
-            ctx.beginPath(); _rrect(ctx, abX, abY, abW, AB_H, AB_R);
-            ctx.fillStyle = col + '18';
-            ctx.fill();
-            ctx.strokeStyle = col + '66';
-            ctx.lineWidth = 0.5;
-            ctx.setLineDash([]);
-            ctx.stroke();
-            ctx.fillStyle = col + 'bb';
-            ctx.fillText(a, abX + AB_PAD_X, abY + AB_H / 2);
-          });
-        }
+        allWords.forEach((w, i) => {
+          const abW = Math.min(ctx.measureText(w).width + AB_PAD_X * 2, n.w - WW_PAD * 2);
+          const abX = n.x + WW_PAD;
+          const abY = n.y + WW_PAD + LINE_H * i + (LINE_H - AB_H) / 2;
+          ctx.beginPath(); _rrect(ctx, abX, abY, abW, AB_H, AB_R);
+          ctx.fillStyle = i === 0 ? col + '28' : col + '18';
+          ctx.fill();
+          ctx.strokeStyle = i === 0 ? col + '99' : col + '66';
+          ctx.lineWidth = 0.5;
+          ctx.setLineDash([]);
+          ctx.stroke();
+          ctx.fillStyle = i === 0 ? col : col + 'bb';
+          const maxCh = Math.floor((n.w - WW_PAD * 2 - AB_PAD_X * 2) / 6.2);
+          const disp = w.length > maxCh ? w.slice(0, maxCh - 1) + '…' : w;
+          ctx.fillText(disp, abX + AB_PAD_X, abY + AB_H / 2);
+        });
         ctx.restore();
       }
 
@@ -1028,12 +966,11 @@
         ctx.save(); ctx.scale(dpr, dpr);
         ctx.clearRect(0, 0, W, H);
 
-        // Draw order: container bg → edges → trigger pills → wake boxes (on top)
+        // Draw order: container bg → edges → trigger pills → wake box (on top)
         built.nodes.filter(n => n.type === 'globals-container').forEach(n => drawGlobalsContainer(n));
-        built.nodes.filter(n => n.type === 'ww-container').forEach(n => drawWwContainer(n));
         built.edges.forEach(e => drawEdge(e, dt));
         built.nodes.filter(n => n.type === 'trig' || n.type === 'global').forEach(n => drawTrig(n));
-        built.nodes.filter(n => n.type === 'wake').forEach(n => drawWake(n));
+        built.nodes.filter(n => n.type === 'wake' || n.type === 'wake-list').forEach(n => drawWake(n));
 
         ctx.restore();
         _graphAnimId = requestAnimationFrame(frame);
@@ -1044,9 +981,9 @@
         hov = null;
         let contHov = null;
         for (const n of built.nodes) {
-          if (n.type === 'wake') {
+          if (n.type === 'wake' || n.type === 'wake-list') {
             if (mx >= n.x && mx <= n.x+n.w && my >= n.y && my <= n.y+n.h) { hov = n.id; break; }
-          } else if (n.type === 'globals-container' || n.type === 'ww-container') {
+          } else if (n.type === 'globals-container') {
             // Container hover is a fallback — individual pills inside take priority
             if (mx >= n.x && mx <= n.x+n.w && my >= n.y && my <= n.y+n.h) contHov = n.id;
           } else if (mx >= n.x && mx <= n.x+n.w && my >= n.y-n.h/2 && my <= n.y+n.h/2) {
@@ -1078,18 +1015,19 @@
     function _graphFlashByPhrase(phrase) {
       const norm = phrase.toLowerCase().trim();
       for (const n of _graphNodes) {
-        if (n.label && n.label.toLowerCase().trim() === norm) {
+        const labels = [n.label, ...(n.commands || [])];
+        if (labels.some(l => l && l.toLowerCase().trim() === norm)) {
           _graphFlash(n.id, 2500);
-          if (n.type === 'global') _graphFlash('globals-container', 2500);
+          if (n.type === 'global') _graphFlash('triggers-container', 2500);
         }
       }
     }
 
     function _graphFlashByWord(word) {
-      const ms   = ((_cfg?.recognition?.command_timeout || _cfg?.command_timeout || 3) * 1000);
+      const ms   = ((_cfg?.recognition?.wake_window || 8) * 1000);
       const norm = word.toLowerCase().trim();
       for (const n of _graphNodes)
-        if (n.type === 'wake' && n.label.toLowerCase().trim() === norm) _graphFlash(n.id, ms);
+        if (n.type === 'wake-list') _graphFlash(n.id, ms);
     }
 
     // ── end graph view ────────────────────────────────────────────────────
@@ -1818,14 +1756,10 @@
 
       let html = '<div style="display: flex; flex-direction: column; gap: 8px;">';
       currentConfig.wake_words.forEach((ww, index) => {
-        const skipBadge = ww.skip_unmatched_inline
-          ? `<span class="ww-skip-badge" title="Standalone wake with no inline command is silently ignored"><span class="ww-skip-badge-icon">⊘</span>skip unmatched</span>`
-          : '';
+        const word = typeof ww === 'string' ? ww : (ww.word || '');
         html += `
           <div style="display: flex; align-items: center; gap: 8px; background: var(--surface); padding: 8px; border-radius: 6px; border: 1px solid var(--border);">
-            <span style="color: var(--info); font-weight: 500;">${ww.word}</span>
-            ${ww.aliases && ww.aliases.length > 0 ? `<span style="font-size: 12px; color: var(--muted);">(${ww.aliases.join(', ')})</span>` : ''}
-            ${skipBadge}
+            <span style="color: var(--info); font-weight: 500;">${word}</span>
             <button onclick="removeWakeWord(${index})" style="margin-left: auto; background: rgba(248,113,113,0.2); border: none; color: #f87171; padding: 4px 8px; border-radius: 4px; cursor: pointer; font-size: 12px;">✕</button>
           </div>
         `;
@@ -1858,8 +1792,9 @@
         <div class="form-section">
           <h3>Recognition</h3>
           <div class="form-group">
-            <label>Command Timeout (seconds)</label>
-            <input type="number" id="input-command-timeout" step="0.1" min="0.1">
+            <label>Wake Window (seconds)</label>
+            <input type="number" id="input-wake-window" step="0.5" min="1">
+            <span class="form-hint">How long to listen for a command after a wake word</span>
           </div>
           <div class="form-group">
             <label>Matching Threshold (%)</label>
@@ -1871,13 +1806,6 @@
               <option value="token_set_ratio">token_set_ratio</option>
               <option value="levenshtein">levenshtein</option>
               <option value="ratio">ratio</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label>Partial Matching</label>
-            <select id="input-partial-matching">
-              <option value="true">Enabled</option>
-              <option value="false">Disabled</option>
             </select>
           </div>
           <div class="form-group">
@@ -1920,10 +1848,6 @@
               <option value="vosk">vosk</option>
               <option value="sherpa-onnx">sherpa-onnx</option>
             </select>
-          </div>
-          <div class="form-group">
-            <label>Stage 1 Confidence</label>
-            <input type="number" id="input-stt-confidence" step="0.01" min="0" max="1">
           </div>
         </div>
       `;
@@ -1977,19 +1901,17 @@
         </div>
       `;
 
-      document.getElementById('input-command-timeout').value = config.recognition?.command_timeout ?? '';
+      document.getElementById('input-wake-window').value = config.recognition?.wake_window ?? '';
       document.getElementById('input-matching-threshold').value = config.recognition?.matching_threshold ?? '';
       document.getElementById('input-matching-algorithm').value = config.recognition?.matching_algorithm || 'token_set_ratio';
-      document.getElementById('input-partial-matching').value = config.recognition?.partial_matching !== false ? 'true' : 'false';
       document.getElementById('input-reply-matching-algorithm').value = config.recognition?.reply_matching_algorithm || 'levenshtein';
       document.getElementById('input-reply-matching-threshold').value = config.recognition?.reply_matching_threshold ?? '';
       document.getElementById('input-follow-up').value = config.recognition?.follow_up ? 'true' : 'false';
       document.getElementById('input-follow-up-timeout').value = config.recognition?.follow_up_timeout ?? '';
       document.getElementById('input-follow-up-max-turns').value = config.recognition?.follow_up_max_turns ?? '';
-      document.getElementById('input-stt-backend').value = config.stt?.stage1?.backend || 'vosk';
-      document.getElementById('input-stt-confidence').value = config.stt?.stage1?.confidence ?? '';
-      document.getElementById('input-rms-threshold').value = config.stt?.stage1?.rms_threshold ?? '';
-      document.getElementById('input-adaptive-rms').value = config.stt?.stage1?.adaptive_rms !== false ? 'true' : 'false';
+      document.getElementById('input-stt-backend').value = config.stt?.backend || 'vosk';
+      document.getElementById('input-rms-threshold').value = config.stt?.rms_threshold ?? '';
+      document.getElementById('input-adaptive-rms').value = config.stt?.adaptive_rms !== false ? 'true' : 'false';
       document.getElementById('input-output-volume').value = config.audio?.output_volume ?? '';
       document.getElementById('input-input-gain').value = config.audio?.input_gain ?? '';
       document.getElementById('input-tts-backend').value = config.tts?.backend || 'piper';
@@ -2005,51 +1927,40 @@
         currentConfig.wake_words = [];
       }
 
-      currentConfig.wake_words.push({
-        word: word,
-        aliases: []
-      });
+      currentConfig.wake_words.push(word);
 
       input.value = '';
       renderConfigForm(currentConfig);
     }
 
     function collectFormData() {
-      const result = { wake_words: (currentConfig.wake_words || []).map(w => ({ word: w.word, aliases: w.aliases || [] })) };
+      const wws = (currentConfig.wake_words || []).map(w => typeof w === 'string' ? w : (w.word || w));
+      const result = { wake_words: wws };
 
-      const commandTimeout = parseFloat(document.getElementById('input-command-timeout').value);
-      if (!isNaN(commandTimeout)) {
-        result.recognition = {
-          command_timeout: commandTimeout,
-          matching_algorithm: document.getElementById('input-matching-algorithm').value,
-          partial_matching: document.getElementById('input-partial-matching').value === 'true',
-          reply_matching_algorithm: document.getElementById('input-reply-matching-algorithm').value,
-          follow_up: document.getElementById('input-follow-up').value === 'true',
-        };
-        // Only include numeric fields if they parse — NaN serializes to JSON null
-        // which breaks the daemon's float() coercion on cold start.
-        const matchingThreshold = parseFloat(document.getElementById('input-matching-threshold').value);
-        if (!isNaN(matchingThreshold)) result.recognition.matching_threshold = matchingThreshold;
-        const replyThreshold = parseFloat(document.getElementById('input-reply-matching-threshold').value);
-        if (!isNaN(replyThreshold)) result.recognition.reply_matching_threshold = replyThreshold;
-        const followUpTimeout = parseFloat(document.getElementById('input-follow-up-timeout').value);
-        if (!isNaN(followUpTimeout)) result.recognition.follow_up_timeout = followUpTimeout;
-        const followUpMaxTurns = parseInt(document.getElementById('input-follow-up-max-turns').value, 10);
-        if (!isNaN(followUpMaxTurns)) result.recognition.follow_up_max_turns = followUpMaxTurns;
-      }
+      const wakeWindow = parseFloat(document.getElementById('input-wake-window').value);
+      result.recognition = {
+        matching_algorithm: document.getElementById('input-matching-algorithm').value,
+        reply_matching_algorithm: document.getElementById('input-reply-matching-algorithm').value,
+        follow_up: document.getElementById('input-follow-up').value === 'true',
+      };
+      // Only include numeric fields if they parse — NaN serializes to JSON null
+      // which breaks the daemon's float() coercion on cold start.
+      if (!isNaN(wakeWindow)) result.recognition.wake_window = wakeWindow;
+      const matchingThreshold = parseFloat(document.getElementById('input-matching-threshold').value);
+      if (!isNaN(matchingThreshold)) result.recognition.matching_threshold = matchingThreshold;
+      const replyThreshold = parseFloat(document.getElementById('input-reply-matching-threshold').value);
+      if (!isNaN(replyThreshold)) result.recognition.reply_matching_threshold = replyThreshold;
+      const followUpTimeout = parseFloat(document.getElementById('input-follow-up-timeout').value);
+      if (!isNaN(followUpTimeout)) result.recognition.follow_up_timeout = followUpTimeout;
+      const followUpMaxTurns = parseInt(document.getElementById('input-follow-up-max-turns').value, 10);
+      if (!isNaN(followUpMaxTurns)) result.recognition.follow_up_max_turns = followUpMaxTurns;
 
-      const confidence = parseFloat(document.getElementById('input-stt-confidence').value);
-      if (!isNaN(confidence)) {
-        result.stt = {
-          stage1: {
-            backend: document.getElementById('input-stt-backend').value,
-            confidence: confidence,
-            adaptive_rms: document.getElementById('input-adaptive-rms').value === 'true',
-          }
-        };
-        const rmsThreshold = parseFloat(document.getElementById('input-rms-threshold').value);
-        if (!isNaN(rmsThreshold)) result.stt.stage1.rms_threshold = rmsThreshold;
-      }
+      result.stt = {
+        backend: document.getElementById('input-stt-backend').value,
+        adaptive_rms: document.getElementById('input-adaptive-rms').value === 'true',
+      };
+      const rmsThreshold = parseFloat(document.getElementById('input-rms-threshold').value);
+      if (!isNaN(rmsThreshold)) result.stt.rms_threshold = rmsThreshold;
 
       result.audio = {};
       const outputVolume = parseFloat(document.getElementById('input-output-volume').value);

@@ -767,15 +767,16 @@ class WebServer:
 
         if "wake_words" in config:
             for ww in config["wake_words"]:
-                if not ww.get("word"):
+                word = ww if isinstance(ww, str) else ww.get("word", "")
+                if not word:
                     return False, "Wake word cannot be empty"
 
         if "recognition" in config:
             rec = config["recognition"]
-            if "command_timeout" in rec:
-                command_timeout = rec["command_timeout"]
-                if command_timeout is not None and command_timeout <= 0:
-                    return False, "command_timeout must be positive"
+            if "wake_window" in rec:
+                wake_window = rec["wake_window"]
+                if wake_window is not None and wake_window <= 0:
+                    return False, "wake_window must be positive"
             if "matching_threshold" in rec:
                 threshold = rec["matching_threshold"]
                 if threshold is not None and not (0 <= threshold <= 100):
@@ -801,20 +802,14 @@ class WebServer:
 
         if "stt" in config:
             stt = config["stt"]
-            if "stage1" in stt:
-                stage1 = stt["stage1"]
-                if "backend" in stage1:
-                    valid_backends = ["vosk", "sherpa-onnx"]
-                    if stage1["backend"] not in valid_backends:
-                        return False, f"Invalid STT backend: {stage1['backend']}"
-                if "confidence" in stage1:
-                    conf = stage1["confidence"]
-                    if conf is not None and not (0 <= conf <= 1):
-                        return False, "confidence must be between 0 and 1"
-                if "rms_threshold" in stage1:
-                    rms = stage1["rms_threshold"]
-                    if rms is not None and not (0 <= rms <= 1):
-                        return False, "rms_threshold must be between 0 and 1"
+            if "backend" in stt:
+                valid_backends = ["vosk", "sherpa-onnx"]
+                if stt["backend"] not in valid_backends:
+                    return False, f"Invalid STT backend: {stt['backend']}"
+            if "rms_threshold" in stt:
+                rms = stt["rms_threshold"]
+                if rms is not None and not (0 <= rms <= 1):
+                    return False, "rms_threshold must be between 0 and 1"
 
         if "audio" in config:
             audio = config["audio"]
@@ -855,25 +850,16 @@ class WebServer:
         return result
 
     def _merge_wake_words(self, current: list, updates: list) -> list:
-        """Replace wake words list. Preserve extra fields from existing entries.
+        """Replace wake words list (flat string list in new schema).
 
-        For each new wake word, if an entry with the same 'word' exists in
-        the current config, merge the new fields onto the existing entry.
-        This preserves fields like id, skip_unmatched_inline that the
-        frontend doesn't send.
+        Accepts both string lists and legacy {word: ...} dicts.
         """
-        existing = {}
-        for e in current:
-            if isinstance(e, dict) and "word" in e:
-                existing[e["word"]] = e
-
         result = []
         for u in updates:
-            word = u.get("word")
-            if word and word in existing:
-                merged = copy.deepcopy(existing[word])
-                merged.update(u)
-                result.append(merged)
+            if isinstance(u, str):
+                result.append(u)
+            elif isinstance(u, dict) and u.get("word"):
+                result.append(u["word"])
             else:
                 result.append(u)
 
@@ -891,19 +877,16 @@ class WebServer:
         word/aliases/id/skip_unmatched_inline on wake words.
         """
         payload = copy.deepcopy(payload)
-        payload.pop("global_triggers", None)
-        for entry in payload.get("wake_words", []):
-            if isinstance(entry, dict):
-                entry.pop("triggers", None)
+        payload.pop("triggers", None)
         return payload
 
     def _deep_update_raw(self, raw: Any, updates: dict) -> None:
         """Recursively merge `updates` into the ruamel `raw` mapping in place.
 
         Only leaf keys present in `updates` are overwritten; nested mappings on
-        disk (e.g. stt.stage1's model_path, vad_silence_ms, …) that the editor
-        does not serialize are preserved. A shallow dict.update() would replace
-        whole nested mappings and silently wipe those keys.
+        disk (e.g. stt.model_path, num_threads, …) that the editor does not
+        serialize are preserved. A shallow dict.update() would replace whole
+        nested mappings and silently wipe those keys.
         """
         for key, value in updates.items():
             if key in raw and isinstance(raw[key], dict) and isinstance(value, dict):
@@ -1098,9 +1081,10 @@ class WebServer:
     def _serialize_trigger(t) -> dict:
         return {
             "phrase": t.phrase,
+            "commands": t.commands,
             "aliases": t.aliases,
             "actions": WebServer._serialize_action_list(t.actions),
-            "direct_match": t.wake_words is not None and len(t.wake_words) == 0,
+            "with_wake": t.with_wake,
             "sleeping_only": any(a.type == "start_listening" for a in t.actions),
         }
 
@@ -1127,33 +1111,16 @@ class WebServer:
         if not isinstance(config, ActionsConfig):
             return {}
 
-        ww = []
-        for g in config.wake_words:
-            entry: dict[str, Any] = {
-                "word": g.word,
-                "aliases": g.aliases,
-                "triggers": [self._serialize_trigger(t) for t in g.triggers],
-            }
-            if g.skip_unmatched_inline:
-                entry["skip_unmatched_inline"] = True
-            if g.id and g.id != g.word:
-                entry["id"] = g.id
-            ww.append(entry)
-
         result: dict[str, Any] = {
-            "wake_words": ww,
-            "global_triggers": [
-                self._serialize_trigger(t)
-                for t in config.triggers + config.direct_triggers
-            ],
+            "wake_words": list(config.wake_words),
+            "triggers": [self._serialize_trigger(t) for t in config.triggers],
         }
 
         if config.recognition is not None:
             result["recognition"] = {
-                "command_timeout": config.recognition.command_timeout,
+                "wake_window": config.recognition.wake_window,
                 "matching_threshold": config.recognition.matching_threshold,
                 "matching_algorithm": config.recognition.matching_algorithm,
-                "partial_matching": config.recognition.partial_matching,
                 "reply_matching_algorithm": config.recognition.reply_matching_algorithm,
                 "reply_matching_threshold": config.recognition.reply_matching_threshold,
                 "follow_up": config.recognition.follow_up,
@@ -1163,12 +1130,10 @@ class WebServer:
 
         if config.stt is not None:
             result["stt"] = {
-                "stage1": {
-                    "backend": config.stt.stage1.backend,
-                    "confidence": config.stt.stage1.confidence,
-                    "rms_threshold": config.stt.stage1.rms_threshold,
-                    "adaptive_rms": config.stt.stage1.adaptive_rms,
-                }
+                "backend": config.stt.backend,
+                "rms_threshold": config.stt.rms_threshold,
+                "adaptive_rms": config.stt.adaptive_rms,
+                "vad_silence_ms": config.stt.vad_silence_ms,
             }
 
         if config.audio is not None:

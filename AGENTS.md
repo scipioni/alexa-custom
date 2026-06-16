@@ -154,30 +154,33 @@ Split across two locations — both hot-reloaded while the daemon is running:
 `conf/config.yaml` — system settings and wake words:
 ```yaml
 wake_words:
-  - word: galileo
-    id: galileo
+  - "ehi galileo"          # flat list of wake phrases
 recognition:
-  command_timeout: 3.0
+  wake_window: 8.0         # seconds to listen after wake word
+stt:
+  backend: vosk            # vosk | sherpa-onnx (single always-on model)
+  vad_silence_ms: 900
 ```
 
-`conf/actions/user.yaml` — triggers (and optional extra wake word groups):
+`conf/actions/user.yaml` — triggers (and optional extra wake phrases):
 ```yaml
-wake_words:           # optional extra groups (merged with config.yaml)
-  - word: "aiuto"
-    id: help
+wake_words:                  # extra phrases added to the flat wake list
+  - "aiuto"
 
 triggers:
-  - phrase: "chiama"             # no wake_words → global (after any wake word)
+  - commands:
+      - "chiama"             # with_wake absent → fires after any wake word
     actions:
       - type: livekit_join
 
-  - phrase: "chiama Stefano"
-    wake_words: []               # direct match — fires without wake word
+  - commands:
+      - "chiama Stefano"
+    with_wake: false         # direct match — fires without a wake word
     actions:
       - type: livekit_join
 
-  - phrase: "chiama assistenza"
-    wake_words: [help]           # scoped to the 'help' wake word group only
+  - commands:
+      - "chiama assistenza"  # with_wake: true (default) — fires after any wake word
     actions:
       - type: livekit_join
 ```
@@ -185,9 +188,9 @@ triggers:
 ### Web Configuration Panel
 
 Access via the web dashboard (http://localhost:8080/config):
-- **Wake Words**: Add/remove wake words individually with delete buttons
-- **Recognition**: Adjust command timeout, matching thresholds, and partial matching
-- **Speech-to-Text**: Change STT backend and confidence thresholds
+- **Wake Words**: Add/remove wake phrases (flat string list)
+- **Recognition**: Adjust wake window, matching thresholds
+- **Speech-to-Text**: Change STT backend, RMS threshold, adaptive RMS
 - **Audio**: Set output volume and input gain
 - **Text-to-Speech**: Configure TTS backend and voice
 

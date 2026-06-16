@@ -65,71 +65,53 @@ class TestDeepUpdateRaw:
 
 
 class TestStripActionDerived:
-    def test_removes_global_triggers(self, server):
-        payload = {"wake_words": [], "global_triggers": [{"phrase": "x"}]}
+    def test_removes_triggers(self, server):
+        payload = {"wake_words": ["galileo"], "triggers": [{"phrase": "x"}]}
         out = server._strip_action_derived(payload)
-        assert "global_triggers" not in out
+        assert "triggers" not in out
 
-    def test_removes_per_group_triggers(self, server):
-        payload = {
-            "wake_words": [
-                {
-                    "word": "galileo",
-                    "aliases": ["g"],
-                    "triggers": [{"phrase": "chiama"}],
-                }
-            ]
-        }
+    def test_preserves_wake_words(self, server):
+        payload = {"wake_words": ["galileo", "aiuto"], "triggers": [{"phrase": "x"}]}
         out = server._strip_action_derived(payload)
-        assert "triggers" not in out["wake_words"][0]
-        # editor-owned fields are kept
-        assert out["wake_words"][0]["word"] == "galileo"
-        assert out["wake_words"][0]["aliases"] == ["g"]
+        assert out["wake_words"] == ["galileo", "aiuto"]
 
     def test_does_not_mutate_input(self, server):
         payload = {
-            "wake_words": [{"word": "g", "triggers": [1]}],
-            "global_triggers": [1],
+            "wake_words": ["galileo"],
+            "triggers": [{"phrase": "leaked"}],
         }
         server._strip_action_derived(payload)
         # original still has the action-derived keys
-        assert "triggers" in payload["wake_words"][0]
-        assert "global_triggers" in payload
+        assert "triggers" in payload
 
 
 class TestSerializeMergeRoundTrip:
-    def test_editor_save_preserves_disk_stage1_keys(self, server, tmp_path):
+    def test_editor_save_preserves_disk_stt_keys(self, server, tmp_path):
         """End-to-end of the save path: a full on-disk config + an editor payload
-        that only touches a few stage1 fields must not lose the rest."""
+        that only touches a few stt fields must not lose the rest."""
         raw = {
-            "wake_words": [{"word": "galileo"}],
+            "wake_words": ["galileo"],
             "stt": {
-                "stage1": {
-                    "backend": "vosk",
-                    "confidence": 0.65,
-                    "rms_threshold": 0.02,
-                    "model_path": "models/it",
-                    "min_speech_ms": 300,
-                }
+                "backend": "vosk",
+                "rms_threshold": 0.02,
+                "model_path": "models/it",
+                "num_threads": 2,
             },
         }
         editor_payload = {
-            "stt": {
-                "stage1": {"backend": "vosk", "confidence": 0.9, "rms_threshold": 0.05}
-            },
-            "global_triggers": [{"phrase": "leaked"}],
-            "wake_words": [{"word": "galileo", "triggers": [{"phrase": "leaked"}]}],
+            "stt": {"backend": "vosk", "rms_threshold": 0.05, "adaptive_rms": True},
+            "triggers": [{"phrase": "leaked"}],
+            "wake_words": ["galileo"],
         }
 
         cleaned = server._strip_action_derived(editor_payload)
         server._deep_update_raw(raw, cleaned)
 
-        assert raw["stt"]["stage1"]["confidence"] == 0.9
-        assert raw["stt"]["stage1"]["model_path"] == "models/it"
-        assert raw["stt"]["stage1"]["min_speech_ms"] == 300
+        assert raw["stt"]["rms_threshold"] == 0.05
+        assert raw["stt"]["model_path"] == "models/it"
+        assert raw["stt"]["num_threads"] == 2
         # action-derived data never reaches disk
-        assert "global_triggers" not in raw
-        assert "triggers" not in raw["wake_words"][0]
+        assert "triggers" not in raw
 
 
 class TestValidateConfig:

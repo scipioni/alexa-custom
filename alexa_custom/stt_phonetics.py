@@ -8,6 +8,59 @@ if TYPE_CHECKING:
 from alexa_custom.actions import normalize_text
 
 
+def _match_wake_word(
+    text: str,
+    wake_words: list[str],
+    threshold: float = 0.5,
+) -> tuple[str | None, str]:
+    """Return (matched_wake_phrase, trailing_command) or (None, "").
+
+    Tries exact prefix match first, then fuzzy word-overlap scoring.
+    trailing_command is the portion of text after the wake word (stripped).
+    """
+    norm_text = normalize_text(text)
+    text_words = set(norm_text.split())
+
+    # 1. Exact prefix match
+    for w in wake_words:
+        norm_w = normalize_text(w)
+        if norm_text.startswith(norm_w):
+            rest = norm_text[len(norm_w):]
+            if rest and not rest.startswith(" "):
+                continue  # prefix of a longer word, not a boundary
+            return w, rest.strip()
+
+    # 2. Fuzzy word-overlap match
+    best_phrase: str | None = None
+    best_score = 0.0
+    for w in wake_words:
+        norm_w = normalize_text(w)
+        phrase_words = [x for x in norm_w.split() if len(x) >= 3]
+        if not phrase_words:
+            phrase_words = norm_w.split()
+        matched = sum(
+            1
+            for pw in phrase_words
+            if any(
+                pw in tw or (len(tw) >= 3 and len(tw) >= len(pw) * 0.7 and tw in pw)
+                for tw in text_words
+            )
+        )
+        score = matched / len(phrase_words) if phrase_words else 0.0
+        if score > best_score:
+            best_score = score
+            best_phrase = w
+
+    if best_score >= threshold and best_phrase is not None:
+        # Strip wake word tokens from transcript to get trailing command
+        norm_w = normalize_text(best_phrase)
+        wake_tokens = set(norm_w.split())
+        command = " ".join(t for t in norm_text.split() if t not in wake_tokens)
+        return best_phrase, command
+
+    return None, ""
+
+
 def _build_alias_map(groups: list[WakeWordGroup]) -> dict[str, WakeWordGroup]:
     return {
         normalize_text(phrase): group
