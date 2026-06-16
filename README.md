@@ -1,353 +1,308 @@
-# LiveKit Headless Audio Client
+<div style="display: flex; align-items: center; justify-content: center; gap: 48px; flex-wrap: wrap;">
+  <h1 style="margin: 0; font-size: 4em; font-weight: 900; letter-spacing: -2px;">🎙️ <span style="background: linear-gradient(135deg, #4ade80, #60a5fa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;">Serena</span></h1>
+  <img src="docs/logo_alexa.png" alt="Serena" style="height: 140px;">
+</div>
 
-A headless Python client that turns a USB conference speakerphone into a voice-activated smart assistant.
+<p align="center">
+  <em>Turn any USB speakerphone into an Italian-speaking AI assistant — fully local, open source, zero cloud.</em>
+</p>
 
-Optimized for **PipeWire** and fully integrated with **Home Assistant**.
+<p align="center">
+  <em>Why Serena? I wanted a voice assistant that didn't phone home. One that understood Italian naturally, ran on cheap hardware, and answered to me — not a cloud. Serena is that assistant.</em>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Python_3.13-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.13">
+  <img src="https://img.shields.io/badge/Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux">
+  <img src="https://img.shields.io/badge/Vosk-blueviolet?style=for-the-badge" alt="Vosk">
+  <img src="https://img.shields.io/badge/Piper--TTS-success?style=for-the-badge" alt="Piper TTS">
+  <img src="https://img.shields.io/badge/Home_Assistant-41BDF5?style=for-the-badge&logo=homeassistant&logoColor=white" alt="Home Assistant">
+  <img src="https://img.shields.io/badge/Apache_2.0-D22128?style=for-the-badge&logo=apache&logoColor=white" alt="Apache 2.0">
+</p>
+
+<br>
+
+<p align="center">
+  <a href="#-features"><strong>Features</strong></a> ·
+  <a href="#-quick-start"><strong>Quick Start</strong></a> ·
+  <a href="#%EF%B8%8F-architecture"><strong>Architecture</strong></a> ·
+  <a href="#%EF%B8%8F-web-dashboard"><strong>Dashboard</strong></a> ·
+  <a href="#-configuration"><strong>Config</strong></a> ·
+  <a href="details.md"><strong>Technical Reference</strong></a>
+</p>
 
 ---
 
-## Prerequisites
+## 📋 Index
 
-### System packages (Debian 13 / Trixie)
-
-```bash
-# Core
-sudo apt install python3 python3-pip python3-venv
-sudo apt install pipewire pipewire-pulse wireplumber
-sudo apt install pulseaudio-utils    # parec, paplay
-sudo apt install pipewire-bin        # pw-play, pw-metadata, wpctl
-sudo apt install alsa-utils          # amixer
-
-# Optional — LED matrix display (Arduino UNO Q)
-sudo apt install gcc make            # compile uart_bridge
-# sudo apt install i2c-tools         # I2C OLED (optional)
-
-# Optional — development
-sudo apt install git task             # task runner
-```
-
-### Python version
-
-Requires **Python ≥ 3.13**.
+- [✨ Features](#-features)
+- [💡 Who's It For](#-whos-it-for)
+- [🎤 Voice Interaction](#-voice-interaction)
+- [🚀 Quick Start](#-quick-start)
+- [🏗️ Architecture](#%EF%B8%8F-architecture)
+- [🖥️ Web Dashboard](#%EF%B8%8F-web-dashboard)
+- [🔩 Requirements](#-requirements)
+- [⚙️ Configuration](#-configuration)
+- [🔒 Security](#-security)
+- [🛠️ Commands](#%EF%B8%8F-commands)
+- [🔧 Troubleshooting](#-troubleshooting)
+- [📚 Documentation](#-documentation)
+- [🤝 Contributing](#-contributing)
 
 ---
 
-## Quick Start
+
+## 💡 Who's It For
+
+| 👴 Elderly Care | 🏠 Smart Home | 🔒 Privacy-First |
+|---|---|---|
+| Voice-activated emergency calls, medication reminders, and family check-ins. Wide phonetic matching works even with slurred speech. | Control lights, heating, shutters, and TV by voice. Built-in Home Assistant Discovery — no bridging required. | Everything runs on-device until the emergency protocol or request. |
+
+---
+## ✨ Features
+
+| | |
+|---|---|
+| 🧠 **Two-Stage STT** | Lightweight wake-word runs continuously (stage 1). Full command recognition fires only after activation (stage 2). Backends configurable independently per stage. |
+| ⚡ **Smart Inline Pass-Through** | If the command follows the wake word in one breath, stage 2 fires immediately — no second capture round-trip. Three speaking patterns for different use cases. |
+| 🗣️ **Neural Italian TTS** | Piper speaks back with natural intonation. Falls back to lightweight Pico when every millisecond counts. Both run locally — zero API fees. |
+| 📞 **Polite LiveKit Join** | Polls the room via REST API; only connects when a remote participant is present. Disconnects cleanly if nobody joins within the timeout. |
+| 🏠 **Home Assistant Discovery** | Auto-registers as Media Player and Voice Assistant entities via MQTT. No configuration needed — just point at your broker. |
+| 🤖 **LLM Chat & Learning** | Chat with a cloud LLM through voice. Say *"impara nuovo comando"* to teach new triggers interactively — no YAML editing required. |
+| 🔄 **Hot-Reload Everything** | Edit config, triggers, or the dashboard HTML while the daemon runs. Changes apply in ~2 seconds — no restart. |
+| 🖥️ **Real-Time Dashboard** | Live VU meters with RMS needle, STT status badges, room panel, streaming logs, and an in-browser config editor. |
+| 🔌 **17+ Action Types** | Voice triggers run shell commands, publish MQTT, send Telegram alerts, control volume, query weather, and more. All wired in plain YAML. |
+| 💡 **LED Matrix Feedback** | Animated icons on the built-in 8×13 display: scanning wave while listening, hourglass while thinking, checkmark on success. |
+
+
+---
+
+
+## 🚀 Quick Start
 
 ```bash
-# 1. Install system dependencies
-sudo apt install -y pulseaudio-utils pipewire python3-venv
+# 1. System dependencies (Debian 13)
+sudo apt install python3-venv pipewire pulseaudio-utils alsa-utils
 
-# 2. Setup virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
+# 2. Python environment
+python3 -m venv .venv && source .venv/bin/activate
 
-# 3. Install dependencies
-pip install -e .                      # installs alexa-custom + core deps
-pip install smbus2                    # optional: I2C OLED display
+# 3. Install Serena
+pip install -e .
 
-# 4. Download STT models
+# 4. Download speech models (Vosk, sherpa-onnx, Piper)
 alexa-setup
 
-# 5. Configure USB audio (run once after first boot)
-task audio:setup            # sets NewPie as default, installs PCM restore service
-task audio:status           # verify routing and endpoints
+# 5. Configure audio routing (run once)
+task audio:setup
 
-# 6. Create config
-mkdir -p conf/actions
-cp conf.example/config.yaml conf/config.yaml
-cp conf.example/secrets.yaml conf/secrets.yaml
-# Edit conf/secrets.yaml — add LiveKit, Telegram, LLM credentials
-# Edit conf/config.yaml  — set wake words, audio device, STT backend
+# 6. Create configuration
+cp -r conf.example/* conf/
 
-# 7. Install as a systemd service (recommended for headless use)
-task setup
-sudo loginctl enable-linger arduino   # keep service alive when SSH disconnects
-systemctl --user start alexa-custom
+# 7. Start the assistant
+alexa-client
+```
 
-# 8. Or run manually
-alexa-client                # web dashboard at http://<host>:8080
+Open **http://localhost:8080** for the web dashboard.
+
+> 💡 New to the project? See [details.md](details.md) for the full installation guide, including systemd setup, audio troubleshooting, and configuration reference.
+
+### Audio diagnostics
+
+```bash
+alexa-devices       # list audio input/output devices
+alexa-audio         # microphone → speaker loopback test
+alexa-audio-doctor  # full audio diagnostics
+task audio:status   # audio device health dashboard
 ```
 
 ---
 
-## Python Dependencies
+## 🏗️ Architecture
 
-| Package | Required | Purpose |
-|---------|----------|---------|
-| `livekit` | core | LiveKit room client |
-| `livekit-api` | core | LiveKit REST API + tokens |
-| `sounddevice` | core | Audio device enumeration |
-| `numpy` | core | Audio signal processing |
-| `pulsectl` | core | PipeWire/PulseAudio routing |
-| `vosk` | core | Local wake-word + STT |
-| `pyyaml` | core | Config file parsing |
-| `httpx` | core | HTTP client for LLM |
-| `aiomqtt` | core | MQTT / Home Assistant |
-| `aiohttp` | core | Web dashboard server |
-| `piper-tts` | core | Local text-to-speech |
-| `sherpa-onnx` | core | Alternative STT backend |
-| `rapidfuzz` | core | Fuzzy phonetic matching |
-| `ruamel.yaml` | core | YAML round-trip editing |
-| `smbus2` | *optional* | I2C OLED display backend |
-| `msgpack` | *on UNO Q* | RouterBridge communication |
+<p align="center">
+  <img src="docs/how-it-works.png" alt="Serena architecture diagram" width="800">
+</p>
 
-Install optional extras:
-```bash
-pip install smbus2                    # I2C OLED support
-pip install -e ".[i2c]"              # or via extras
-```
+Serena is built in five layers:
+
+1. **Audio Pipeline** — `parec` captures raw 16 kHz s16le from the USB microphone. A VAD gate filters audio during TTS playback to prevent echo loops. Input gain is applied in software.
+2. **STT Pipeline** — Stage 1 runs a lightweight wake-word recognizer continuously (Vosk grammar or sherpa-onnx keyword spotter). On match, stage 2 transcribes the follow-on command until silence. Both backends can be mixed.
+3. **Trigger Matching** — The transcript is matched against YAML-defined triggers using Italian phonetic normalization + fuzzy matching (RapidFuzz). Supports glob patterns, direct matches, and scoped wake-word groups.
+4. **Action Dispatch** — Matched triggers invoke registered handlers: TTS, MQTT, LiveKit, Telegram, shell, LLM chat, volume control, weather, and more.
+5. **Web & Integration** — aiohttp dashboard serves real-time status. MQTT publishes Home Assistant auto-discovery. LiveKit client manages JWT tokens and bidirectional audio.
 
 ---
 
-## Display Backends (Arduino UNO Q)
+## 🖥️ Web Dashboard
 
-The project supports multiple display backends for visual feedback:
+Serena includes a real-time browser dashboard at `http:// "hardware-ip":8080`:
 
-### Built-in LED Matrix (via RouterBridge)
-- STM32 firmware in `setup/display_firmware/display_firmware.ino`
-- Communicate via `Arduino_RouterBridge` over UART → TCP port 7501
-- Shows animated icons: scanning wave (listening), hourglass (thinking), checkmark (connected), etc.
-- **Flash firmware**:
-  ```bash
-  # Install required libraries (one-time)
-  arduino-cli lib install Arduino_RouterBridge ArduinoGraphics
+- **STT status** — live wake-word detection with an animated wave indicator
+- **VU meters** — real-time input/output levels with RMS needle
+- **Room panel** — LiveKit call status with countdown timer and participant list
+- **Live logs** — streaming log output with clear button
+- **Configuration panel** — edit wake words, STT/TTS backends, audio levels, and recognition thresholds without SSH
+- **Dark/light theme** — follows your system preference, toggleable per session
 
-  # Compile and upload
-  arduino-cli compile --upload --fqbn arduino:zephyr:unoq \
-    setup/display_firmware/display_firmware.ino
-
-  # Restart Router to reconnect to the newly-flashed STM32
-  sudo systemctl restart arduino-router
-  ```
-
-### Router TCP port 7501 not listening
-
-Some UNO Q board images have a systemd drop-in that overrides the Router's command line, **removing** the `--listen-port` flag needed for TCP access:
-
-```bash
-# Check if Router is listening on TCP 7501
-ss -tlnp | grep 7501
-
-# If empty, inspect the active service config:
-sudo systemctl cat arduino-router
-# Look for drop-ins in /run/systemd/generator/arduino-router.service.d/
-```
-
-If a drop-in (`10-imola.conf` or similar) clears `ExecStart` without `--listen-port`, create a higher-priority override:
-
-```bash
-sudo mkdir -p /etc/systemd/system/arduino-router.service.d
-sudo tee /etc/systemd/system/arduino-router.service.d/20-listen-port.conf << 'EOF'
-[Service]
-ExecStart=
-ExecStart=/usr/bin/arduino-router --unix-port /var/run/arduino-router.sock --listen-port 0.0.0.0:7501 --serial-port /dev/ttyHS1 --serial-baudrate 115200 --after-ready '/usr/bin/gpioset -c /dev/gpiochip1 -t0 70=1'
-EOF
-sudo systemctl daemon-reload
-sudo systemctl restart arduino-router
-```
-
-### I2C OLED (SSD1306)
-- Connect SSD1306 128×64 (or similar) to Snapdragon I2C pins
-- Backend: `i2c` in `config.yaml`
-- Requires: `pip install smbus2`
-
-### GPIO LEDs (built-in MPU LEDs)
-- Uses `/sys/class/leds/`
-- Works immediately on UNO Q (2 LEDs)
-
-### UART Bridge (direct STM32 access)
-- Bypasses kernel driver via `/dev/mem` register access
-- Compile: `gcc -o uart_bridge setup/display_firmware/uart_bridge.c`
-- Run: `ALEXA_DISPLAY_CMD="sudo ./uart_bridge" alexa-client`
 
 ---
 
-## Configuration
+## 🔩 Requirements
 
-Configuration lives in the `conf/` directory:
+| Hardware | Software |
+|---|---|
+| Linux board (aarch64, 2+ GB RAM) | Debian 13 (Trixie) or similar |
+| USB speakerphone (e.g., NewPie) | PipeWire 1.4+ with PulseAudio compat |
+| Optional: LED matrix or I2C OLED display | Python 3.13+ |
 
-| File | Purpose | Hot-reload |
-|------|---------|-----------|
-| `conf/config.yaml` | Wake words, audio, STT, TTS, LLM, MQTT | Yes (~2 s) |
+Optimized for the **Arduino Uno Q** (Qualcomm Snapdragon 801), but runs on any Linux system with PipeWire.
+
+---
+
+## ⚙️ Configuration
+
+Configuration lives in `conf/` with hot-reload support:
+
+| File | Purpose | Reload |
+|---|---|---|
+| `conf/config.yaml` | Wake words, audio, STT, TTS, LLM, MQTT, display | ~2 seconds |
 | `conf/secrets.yaml` | Credentials (git-ignored) | Restart required |
-| `conf/actions/*.yaml` | Voice triggers and startup actions | Yes (~2 s) |
-
-### conf/secrets.yaml
-
-```yaml
-livekit:
-  url: wss://your-project.livekit.cloud
-  api_key: YOUR_KEY
-  api_secret: YOUR_SECRET
-  room: your-room
-
-telegram:
-  bot_token: "123456:TOKEN"
-  chat_id: "12345678"
-
-llm_host: http://192.168.1.10:11434   # Ollama host
-```
-
-### conf/config.yaml (key blocks)
+| `conf/actions/*.yaml` | Voice triggers and startup actions | ~2 seconds |
 
 ```yaml
 wake_words:
   - word: galileo
     lang: it-IT
 
-  # For emergency-style wake words, prefer multi-word phrases so a single
-  # utterance in conversation does not trigger the assistant:
-  # - word: "aiuto aiuto"
-  #   aliases: ["aiutami"]
-
-recognition:
-  command_timeout: 3.0      # seconds to listen after wake word
-
-stt:
-  stage1:                   # continuous wake-word detection (low CPU)
-    backend: vosk
-    vosk_grammar: true      # true = grammar mode (recommended, low CPU); false = free-vocabulary
-    confidence: 0.65        # minimum confidence threshold (grammar mode only)
-    confidence_mode: first  # first | min | mean (grammar mode only)
-    vad_silence_ms: 500     # force-finalize after N ms of silence
-    rms_threshold: 0.02     # minimum energy level to count as speech
-  stage2:                   # command recognition after wake
-    backend: vosk
-
-audio:
-  input_device: pipewire    # or 'NewPie' to pin to the USB mic
-  output_device: pipewire   # or 'NewPie' to pin to the USB speaker
-  output_volume: 0.5
-
-tts:
-  backend: piper
-  voice: it_IT-paola-medium
-
-system:
-  wait_for_participant: true  # poll room before joining; connect only when a caller appears
-  answer_timeout: 60          # seconds to poll before returning to idle
-```
-
-### conf/actions/
-
-Action files are loaded alphabetically with `system.yaml` first (highest priority):
-
-- **`system.yaml`** — startup message, system-level triggers (restart, help, etc.)
-- **`user.yaml`** (or any name) — your custom triggers and wake-word shortcuts
-
-```yaml
-# conf/actions/system.yaml
-on_startup:
-  - type: say
-    text: Sistema pronto
-    lang: it-IT
-
 triggers:
-  - phrase: che ora è
+  - phrase: che ore sono
     actions:
       - type: shell
         command: date +%H:%M
+  - phrase: accendi la luce
+    wake_words: [galileo]
+    actions:
+      - type: mqtt_publish
+        topic: home/light/set
+        payload: "ON"
 ```
 
-See `conf.example/config.yaml` and `conf.example/secrets.yaml` for the full reference.
+### Key environment variables
 
-### Web Configuration Panel
-
-Access the configuration panel at `http://<host>:8080/config` (requires dev-mode toggle in the dashboard sidebar). From the panel you can:
-
-- **Wake Words**: Add or remove wake words individually with delete buttons
-- **Recognition**: Adjust `command_timeout`, `matching_threshold`, and `partial_matching`
-- **Speech-to-Text**: Switch between Vosk and sherpa-onnx backends, adjust confidence and RMS thresholds
-- **Audio**: Set output volume (0–1) and input gain
-- **Text-to-Speech**: Choose backend (piper/pico) and voice
-
-Changes are validated client-side and server-side before saving, preserve YAML comments and formatting via `ruamel.yaml`, and trigger hot-reload immediately. A file-locking mechanism prevents concurrent edit conflicts.
+| Variable | Description |
+|---|---|
+| `ALEXA_CONFIG` | Path to config directory (default: `conf/`) |
+| `ALEXA_WEB_PORT` | Override web dashboard port |
 
 ---
 
-## Key Features
+## 🎤 Voice Interaction
 
-- **Two-stage STT**: Lightweight wake-word detection (stage 1) → full command recognition (stage 2). Backends configurable independently. Free-vocabulary mode gives Vosk a genuine reject path so unrelated speech is not forced onto a wake phrase. Inline command pass-through: if the command follows the wake word in a single breath, stage-2 dispatch fires immediately without a second capture round-trip.
-- **Polite LiveKit join**: With `wait_for_participant: true` (default), saying the join trigger polls the LiveKit room via the REST API and only connects when a remote participant is actually present — STT stays active throughout. Disconnects cleanly if nobody joins within `answer_timeout` seconds.
-- **Hot-reload**: Edit `conf/config.yaml`, any action file, or `dashboard.html` while the daemon is running — config changes apply within ~2 seconds, HTML changes reload the browser within ~1 second.
-- **Multi-file actions**: Drop `.yaml` files into `conf/actions/` for modular command sets; `system.yaml` always loads first.
-- **LLM learning**: Say "impara nuovo comando" to teach the assistant a new trigger via voice dialogue (stored in `conf/actions/learned.yaml`).
-- **Bidirectional MQTT**: Home Assistant Discovery support. Forward voice commands to HA and trigger local actions via MQTT.
-- **Web Dashboard**: Real-time browser UI — VU meters with RMS needle, STT status with wake-word badge, room status panel (closed / waiting / in call), live logs, restart button. **Configuration panel** at `/config` for editing wake words, recognition thresholds, STT/TTS backends, and audio settings without SSH.
-- **PipeWire native**: Direct integration without PortAudio shims.
-- **LED Matrix Icons**: Animated icons on the built-in 8×13 LED matrix (scanning wave, hourglass, checkmark, etc.) with RGB LED feedback.
+> **User:** *Galileo, che ore sono?*
+>
+> **Serena:** *Sono le 15 e 42.*
+>
+> **User:** *Galileo, impara nuovo comando*
+>
+> **Serena:** *OK, dimmi la frase da imparare.*
+>
+> **User:** *"apri cancello"*
+>
+> **Serena:** *Frase registrata. Ora dimmi cosa deve fare.*
+>
+> **User:** *mqtt publish a "home/gate/set" con payload "ON"*
+>
+> **Serena:** *Comando "apri cancello" imparato. Puoi usarlo subito.*
 
 ---
 
-## Commands
+## 🔒 Security
+
+- `conf/secrets.yaml` is **git-ignored** by default. Verify with `git check-ignore conf/secrets.yaml`.
+- Set restrictive permissions: `chmod 600 conf/secrets.yaml`.
+- Credentials are also read from environment variables (`LIVEKIT_URL`, `LIVEKIT_API_KEY`, `TELEGRAM_BOT_TOKEN`, etc.) — preferred for containerized deployments.
+- The web dashboard binds to `0.0.0.0:8080` by default. Restrict with `--web-host 127.0.0.1` in production.
+
+---
+
+## 🛠️ Commands
 
 | Command | Description |
-|---------|-------------|
-| `alexa-client` | Start the assistant daemon |
-| `alexa-client --web-port 9090` | Start with dashboard on a custom port |
-| `alexa-audio` | Microphone → speaker loopback test |
-| `alexa-devices` | List detected audio devices |
+|---|---|
+| `alexa-client --web-port 8080` | Start with dashboard on custom port |
+| `alexa-client --web-host 127.0.0.1` | Restrict dashboard to localhost |
 | `alexa-setup` | Download/update STT and TTS models |
-
-## Task Automation
-
-| Task | Description |
-|------|-------------|
-| `task audio:setup` | Set NewPie as default, install PCM restore service |
-| `task audio:restart` | Restart WirePlumber and restore routing/PCM |
-| `task audio:status` | Show audio device status dashboard |
-| `task audio:test` | Play a test WAV to verify speaker output |
-| `task display:compile` | Compile uart_bridge for direct UART access |
-| `task display:test` | Test UART communication with STM32 |
-| `task display:setup` | Compile uart_bridge + sudoers setup |
-| `task test` | Run regression tests |
-| `task lint` / `task format` | Code quality checks and formatting |
+| `alexa-devices` | List detected audio devices |
+| `alexa-audio` | Microphone → speaker loopback test |
+| `alexa-audio-doctor` | Full audio diagnostics |
+| `alexa-record --duration 5` | Record and transcribe audio |
+| `alexa-stt --text "..."` | Test STT without microphone |
 
 ---
 
-## Project Structure
+## 🔧 Troubleshooting
 
+| Symptom | Fix |
+|---|---|
+| No audio after boot | `amixer -c 0 sset PCM 100%` — PCM mixer resets on PipeWire init |
+| Audio drops mid-session | `task audio:restart` — restores routing and PCM |
+| Microphone not detected | `alexa-devices` to list cards; check `wpctl status` |
+| LiveKit join hangs | Verify `wait_for_participant` and `answer_timeout` in config |
+| Service won't start | `journalctl --user -fu alexa-custom` — check logs |
+
+---
+
+## 📦 Dependencies
+
+| Package | Purpose |
+|---|---|
+| `livekit` / `livekit-api` | LiveKit room client and REST API |
+| `sounddevice` | Device enumeration only |
+| `numpy` | Audio signal processing |
+| `pulsectl` | PipeWire/PulseAudio routing |
+| `vosk` | Local wake-word + STT |
+| `piper-tts` | Local text-to-speech |
+| `aiomqtt` | MQTT / Home Assistant |
+| `aiohttp` | Web dashboard server |
+| `httpx` | HTTP client for LLM/Ollama |
+| `rapidfuzz` | Fuzzy phonetic matching |
+| `ruamel.yaml` | YAML round-trip editing |
+
+---
+
+## 📚 Documentation
+
+| Guide | What's inside |
+|---|---|
+| [→ Technical Reference](details.md) | Full architecture, config reference, CLI, audio pipeline, STT, actions, displays, MQTT, development, troubleshooting |
+| [→ Hardware Setup](docs/setup_hardware.md) | PipeWire configuration, Bluetooth, board-specific fixes |
+| [→ Software Installation](docs/setup_software.md) | Dependencies, virtual environment, model downloads |
+| [→ Configuration Reference](docs/configuration.md) | Every config field documented |
+| [→ Audio Architecture](docs/audio.md) | Capture and playback paths, known bugs and workarounds |
+| [→ STT Pipeline](docs/stt.md) | Two-stage detection, Italian phonetics, trigger matching |
+| [→ MQTT & HA](docs/mqtt_integration.md) | Home Assistant auto-discovery, entities, bidirectional control |
+| [→ Displays](docs/display_setup.md) | LED matrix, I2C OLED, GPIO LED configuration |
+| [→ Troubleshooting](docs/troubleshooting.md) | Common issues: audio, connection, permissions |
+
+---
+
+## 🤝 Contributing
+
+Contributions welcome! Open an issue first for significant changes.
+
+```bash
+source .venv/bin/activate
+task test          # run regression tests
+task lint          # ruff check + format check
+task fix           # auto-fix, format, and test
 ```
-conf/
-  config.yaml         main config (hot-reloaded)
-  secrets.yaml        credentials (git-ignored)
-  actions/
-    system.yaml       startup + system triggers (loaded first)
-    user.yaml         your custom triggers
-    learned.yaml      auto-created by llm_learn
-
-setup/
-  display_firmware/
-    display_firmware.ino   STM32 firmware (LED matrix + RGB LEDs)
-    uart_bridge.c          Direct UART access (bypasses kernel driver)
-
-alexa_custom/
-  client.py           main loop, LiveKit session
-  display.py          display backends (bridge, gpio, i2c, mock)
-  stt.py              two-stage STT pipeline (Vosk / sherpa-onnx)
-  tts.py              TTS engine (Piper)
-  audio.py            PipeWire routing, AudioWatcher, device enumeration
-  actions.py          action dispatcher
-  config.py           typed config dataclasses and loaders
-  config_manager.py   hot-reload watcher
-  mqtt.py             MQTT / Home Assistant Discovery
-  web.py              aiohttp web dashboard
-```
 
 ---
 
-## Documentation
-
-- **[Hardware Setup](docs/setup_hardware.md)** — PipeWire, Bluetooth, device-specific fixes
-- **[Software Installation](docs/setup_software.md)** — Dependencies, venv, STT models
-- **[Configuration](docs/configuration.md)** — Full config reference
-- **[MQTT & Home Assistant](docs/mqtt_integration.md)** — Auto-discovery and remote control
-- **[Troubleshooting](docs/troubleshooting.md)** — Common audio, connection, and permission fixes
-- **[Display Setup](docs/display_setup.md)** — LED matrix, OLED, and LED configuration
-
----
-
-## License
-
-Apache-2.0
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/Apache_2.0-D22128?style=for-the-badge&logo=apache&logoColor=white" alt="Apache 2.0"></a>
+</p>
+<p align="center">
+  Made by Galielo Team for privacy-first voice assistants
+</p>
