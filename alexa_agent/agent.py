@@ -7,10 +7,13 @@ import os
 import struct
 import sys
 import time
+import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
 
+import httpx
 from livekit import rtc
+from livekit.api import AccessToken, VideoGrants
 
 from alexa_custom.llm import OpenAIClient
 
@@ -30,7 +33,8 @@ class AgentConfig:
     max_tokens: int = 80
     system_prompt: str = (
         "Sei un assistente vocale utile. Rispondi in modo conciso, "
-        "massimo una frase, al massimo 15 parole. Parla sempre in italiano."
+        "massimo una frase, al massimo 15 parole. Parla sempre in italiano. "
+        "Non terminare la conversazione finché l'utente non dice 'disconnetti'."
     )
     vosk_model_path: str = "models/it"
     tts_voice_path: str = "models/piper/it_IT-paola-medium.onnx"
@@ -54,6 +58,68 @@ config = AgentConfig()
 _SENTENCE_END = frozenset(".!?")
 
 _tts_cooldown_until: float = 0.0
+_caregiver_notified: bool = False
+
+_DISTRESS_PHRASES = frozenset({
+    "non sto bene",
+    "ho bisogno di aiuto",
+    "chiama aiuto",
+    "aiutami",
+    "mi sento male",
+    "sto male",
+    "chiama un medico",
+    "chiama l'ambulanza",
+    "emergenza",
+})
+
+
+async def _notify_caregiver(room_name: str, room_url: str) -> bool:
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.environ.get("CAREGIVER_CHAT_ID", "")
+    if not token or not chat_id:
+        logger.warning("caregiver: TELEGRAM_BOT_TOKEN or CAREGIVER_CHAT_ID not set")
+        return False
+
+    api_key = os.environ.get("LIVEKIT_API_KEY", "")
+    api_secret = os.environ.get("LIVEKIT_API_SECRET", "")
+    if not api_key or not api_secret:
+        logger.warning("caregiver: LIVEKIT_API_KEY or LIVEKIT_API_SECRET not set")
+        return False
+
+    caregiver_identity = f"caregiver-{int(time.time())}"
+    caregiver_token = (
+        AccessToken(api_key, api_secret)
+        .with_identity(caregiver_identity)
+        .with_name("Caregiver")
+        .with_grants(VideoGrants(room_join=True, room=room_name))
+        .to_jwt()
+    )
+    params = urllib.parse.urlencode({"liveKitUrl": room_url, "token": caregiver_token})
+    join_url = f"https://meet.livekit.io/custom/?{params}"
+
+    text = (
+        f"🚨 Richiesta di aiuto!\n\n"
+        f"L'utente ha bisogno di assistenza.\n"
+        f"Clicca per entrare nella stanza LiveKit:\n{join_url}"
+    )
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(url, json={"chat_id": chat_id, "text": text})
+            resp.raise_for_status()
+        logger.info("caregiver: Telegram notification sent")
+        return True
+    except Exception as e:
+        logger.error(f"caregiver: Telegram notification failed: {e}")
+        return False
+
+
+def _is_distress(text: str) -> bool:
+    norm = text.lower().strip().rstrip(".!?")
+    for phrase in _DISTRESS_PHRASES:
+        if phrase in norm:
+            return True
+    return False
 
 
 def _compute_rms(data: bytes) -> float:
@@ -106,7 +172,9 @@ async def _process_audio(
     tts_voice,
     conversation: list,
     room: rtc.Room,
+    room_url: str,
 ):
+    global _caregiver_notified
     from vosk import KaldiRecognizer
 
     stream = rtc.AudioStream(track)
@@ -156,6 +224,14 @@ async def _process_audio(
                     logger.info(f"STT: {text}")
                     if _check_disconnect(text, tts_voice, audio_source, stop_event):
                         return
+                    if _is_distress(text) and not _caregiver_notified:
+                        _caregiver_notified = True
+                        asyncio.create_task(
+                            _notify_caregiver(room.name or "", room_url)
+                        )
+                        asyncio.create_task(
+                            _speak("Ho chiamato aiuto, stanno arrivando.", tts_voice, audio_source)
+                        )
                     try:
                         await _publish_chat(room, text, generated=False)
                     except Exception as e:
@@ -179,6 +255,14 @@ async def _process_audio(
                 logger.info(f"STT: {text}")
                 if _check_disconnect(text, tts_voice, audio_source, stop_event):
                     return
+                if _is_distress(text) and not _caregiver_notified:
+                    _caregiver_notified = True
+                    asyncio.create_task(
+                        _notify_caregiver(room.name or "", room_url)
+                    )
+                    asyncio.create_task(
+                        _speak("Ho chiamato aiuto, stanno arrivando.", tts_voice, audio_source)
+                    )
                 try:
                     await _publish_chat(room, text, generated=False)
                 except Exception as e:
@@ -435,6 +519,7 @@ async def main():
                     tts_voice,
                     conversation,
                     room,
+                    args.url or "",
                 )
             )
 
@@ -451,7 +536,7 @@ async def main():
 
     await _play_beep(audio_source)
     await _speak(
-        "Ciao, sono il tuo assistente. Come posso aiutarti?", tts_voice, audio_source
+        "Ciao, sono il tuo assistente. Stai bene?", tts_voice, audio_source
     )
     logger.info("Waiting for user speech...")
 

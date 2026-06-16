@@ -127,6 +127,25 @@ This headless host runs a modern **PipeWire** audio graph managed by **WirePlumb
 - `task audio:status`: displays a status dashboard for the NewPie.
 - `task audio:test`: plays a test WAV to verify speaker output.
 
+## SOS / Caregiver Flow
+
+The SOS flow ("emergenza") uses `sos_trigger` action in `alexa_custom/actions.py`:
+1. Opens a browser tab for the user to join the LiveKit room
+2. Spawns `alexa_agent/agent.py` as a subprocess (the AI agent) — joins the same room
+3. The device does **not** join the room (no `headless-participant`)
+
+The AI agent stays in the room until "disconnetti" or all participants leave.
+If the user says "non sto bene" (or other distress phrases), the agent sends a Telegram notification to the caregiver with a LiveKit join link.
+
+### Env vars for caregiver notification
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `CAREGIVER_CHAT_ID` | No | Telegram chat ID of the caregiver (agent sends a join link here on distress) |
+| `TELEGRAM_BOT_TOKEN` | Yes (for Telegram) | Bot token used by both the main client and the agent subprocess |
+
+The agent reads these directly from the environment (inherited from the parent process / systemd service).
+
 ## Project structure
 
 ```

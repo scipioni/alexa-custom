@@ -345,8 +345,6 @@ async def handle_livekit_join(
 @registry.register("sos_trigger")
 async def handle_sos_trigger(
     action: ActionEntry,
-    livekit_connected: bool,
-    livekit_connect_fn: Callable[[], Awaitable[None]] | None,
     **_,
 ):
     from alexa_custom.tts import get_engine
@@ -364,14 +362,6 @@ async def handle_sos_trigger(
     # Signal the cloud Agente SOS via webhook if configured
     endpoint = os.environ.get("SOS_ENDPOINT_URL", "")
     if endpoint:
-        if livekit_connected:
-            logger.debug("sos_trigger: already connected to LiveKit")
-        elif livekit_connect_fn is not None:
-            logger.info("sos_trigger: connecting to LiveKit")
-            await livekit_connect_fn()
-        else:
-            logger.warning("sos_trigger: no livekit_connect_fn available")
-
         payload = _json.dumps({"room": room, "timestamp": int(_time.time())})
         logger.info("sos_trigger: POSTing to %s", endpoint)
         try:
@@ -386,14 +376,6 @@ async def handle_sos_trigger(
     else:
         # No cloud VM — spawn the local agent.py to join the same room
         logger.info("sos_trigger: no cloud endpoint — spawning local agent")
-        if livekit_connected:
-            logger.debug("sos_trigger: already connected to LiveKit")
-        elif livekit_connect_fn is not None:
-            logger.info("sos_trigger: connecting to LiveKit")
-            await livekit_connect_fn()
-        else:
-            logger.warning("sos_trigger: no livekit_connect_fn available")
-
         from alexa_agent.session import _generate_agent_tokens
 
         _, agent_token = _generate_agent_tokens(room)
