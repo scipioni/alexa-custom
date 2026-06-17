@@ -8,7 +8,7 @@
       }
     });
 
-    let ws = null, reconnTimer = null, _restarting = false, _reconnDelay = 1000;
+    let ws = null, reconnTimer = null, _restarting = false, _reconnDelay = 1000, reconnectPopupTimer = null;
     let _lastWakeWord = '', _cfg = null, _sttState = 'listening';
     const parts = {};
     const _heroTimers = {};
@@ -90,6 +90,24 @@
       el.className   = up ? 'ok' : '';
       const dot = document.getElementById('cdot');
       dot.className = up ? 'sdot ok' : 'sdot warn';
+
+      const popup = document.getElementById('reconnect-popup');
+      if (popup) {
+        if (up) {
+          if (reconnectPopupTimer) {
+            clearTimeout(reconnectPopupTimer);
+            reconnectPopupTimer = null;
+          }
+          popup.classList.add('hidden');
+        } else {
+          if (popup.classList.contains('hidden') && !reconnectPopupTimer) {
+            reconnectPopupTimer = setTimeout(() => {
+              popup.classList.remove('hidden');
+              reconnectPopupTimer = null;
+            }, 500);
+          }
+        }
+      }
     }
 
     function handle(m) {
@@ -1634,6 +1652,12 @@
       }
       updateHistoryVisibility();
     })();
+
+    reconnectPopupTimer = setTimeout(() => {
+      const popup = document.getElementById('reconnect-popup');
+      if (popup) popup.classList.remove('hidden');
+      reconnectPopupTimer = null;
+    }, 500);
 
     connect();
 
