@@ -16,6 +16,11 @@ tasks:
     cmds:
       - PYTHONPATH={{.PYTHONPATH}} {{.PYTEST}} tests/test_stt_e2e.py -v -s
 
+  eval:
+    desc: "Score wake+command matching precision/recall vs tests/eval/corpus.yaml (pass -- --sweep for a threshold table)"
+    cmds:
+      - PYTHONPATH={{.PYTHONPATH}} python3 -m alexa_custom.match_eval {{.CLI_ARGS}}
+
   lint:
     desc: Run ruff for linting and formatting
     cmds:

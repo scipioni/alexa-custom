@@ -1,0 +1,66 @@
+# Labelled corpus for the text-level matching harness (alexa_custom/match_eval.py).
+#
+# Each case is a simulated STT transcript with the expected outcome:
+#   expect: none          -> system must stay silent (negative / must not fire)
+#   expect: wake          -> a wake word fires, no command dispatched
+#   expect: "<phrase>"    -> a command trigger fires (via one-breath or direct)
+# Optional: woken: true   -> evaluate as if the wake window is already open.
+#
+# Add real-world false wakes here as you encounter them — this file is the
+# regression gate (tests/test_match_eval.py) and the tuning input (--sweep).
+
+wake_words:
+  - "ehi galileo"
+  - "assistente"
+
+stt:
+  wake_match_threshold: 0.5
+
+recognition:
+  matching_threshold: 70.0
+  matching_algorithm: token_set_ratio
+  min_word_overlap: 0.0
+
+triggers:
+  - commands: ["che ore sono", "che ora è"]
+    with_wake: true
+  - commands: ["accendi la luce"]
+    with_wake: true
+  - commands: ["chiama stefano"]
+    with_wake: false
+
+cases:
+  # ── positives: wake word present ───────────────────────────────────────────
+  - {text: "ehi galileo", expect: wake}
+  - {text: "ehi galileo che ore sono", expect: "che ore sono"}
+  - {text: "ehi galileo accendi la luce", expect: "accendi la luce"}
+  - {text: "assistente", expect: wake}
+  - {text: "galileo", expect: wake, note: "truncated wake — distinctive word"}
+  - {text: "galile", expect: wake, note: "STT truncation of galileo"}
+  - {text: "assistent", expect: wake, note: "STT truncation of assistente"}
+
+  # ── positives: command matching ────────────────────────────────────────────
+  - {text: "chiama stefano", expect: "chiama stefano", note: "direct trigger, no wake"}
+  - {text: "puoi chiamare stefano", expect: "chiama stefano", note: "inflected, direct"}
+  - {text: "che ore sono", expect: "che ore sono", woken: true}
+  - {text: "accendi la luce", expect: "accendi la luce", woken: true}
+
+  # ── negatives: short wake-component only (the false-wake class #1 targets) ──
+  - {text: "ehi come stai oggi", expect: none, note: "filler 'ehi' alone"}
+  - {text: "ehi aspetta un attimo", expect: none, note: "filler 'ehi' alone"}
+  - {text: "ehi guarda lì", expect: none, note: "filler 'ehi' alone"}
+  - {text: "ehi ci vediamo dopo", expect: none, note: "filler 'ehi' alone"}
+
+  # ── negatives: near-misses and unrelated speech ────────────────────────────
+  - {text: "gabriele vieni qui", expect: none, note: "near-miss name"}
+  - {text: "ho assistito alla partita", expect: none, note: "shares stem with assistente"}
+  - {text: "il gatto dorme sul divano", expect: none}
+  - {text: "che bella giornata oggi", expect: none}
+  - {text: "ho fame andiamo a mangiare", expect: none}
+  - {text: "domani piove di sicuro", expect: none}
+  - {text: "non capisco cosa vuoi dire", expect: none}
+  - {text: "spegni la televisione per favore", expect: none, note: "command-shaped but not configured"}
+
+  # ── negatives: gating (configured but should not fire in this context) ─────
+  - {text: "che ore sono", expect: none, note: "gated trigger, NOT woken"}
+  - {text: "accendi la luce", expect: none, note: "gated trigger, NOT woken"}
