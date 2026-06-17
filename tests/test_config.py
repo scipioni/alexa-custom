@@ -232,7 +232,7 @@ class TestLoadConfig:
 
         result = load_config(cfg_path)  # must not raise
         assert result is not None
-        assert result.recognition.matching_threshold == 70.0
+        assert result.recognition.matching_threshold == 75.0
         assert result.recognition.wake_window == pytest.approx(8.0)
         assert result.stt.rms_threshold == pytest.approx(0.02)
         assert result.audio.input_gain == pytest.approx(1.0)

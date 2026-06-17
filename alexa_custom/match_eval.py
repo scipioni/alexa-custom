@@ -87,8 +87,8 @@ def load_corpus(path: Path) -> tuple[ActionsConfig, list[Case]]:
             wake_match_threshold=float(stt_raw.get("wake_match_threshold", 0.5))
         ),
         recognition=RecognitionConfig(
-            matching_threshold=float(rec_raw.get("matching_threshold", 70.0)),
-            matching_algorithm=rec_raw.get("matching_algorithm", "token_set_ratio"),
+            matching_threshold=float(rec_raw.get("matching_threshold", 75.0)),
+            matching_algorithm=rec_raw.get("matching_algorithm", "token_sort_ratio"),
             min_word_overlap=float(rec_raw.get("min_word_overlap", 0.0)),
         ),
     )
@@ -235,7 +235,9 @@ def format_report(m: Metrics, label: str = "") -> str:
 
 
 def _sweep(config: ActionsConfig, cases: list[Case]) -> None:
-    print(f"{'wake_match_threshold':>22}  {'prec':>6}  {'recall':>6}  {'false-wake':>10}")
+    print(
+        f"{'wake_match_threshold':>22}  {'prec':>6}  {'recall':>6}  {'false-wake':>10}"
+    )
     print("-" * 50)
     for thr in (0.3, 0.4, 0.5, 0.6, 0.7, 0.8):
         config.stt.wake_match_threshold = thr

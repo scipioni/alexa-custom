@@ -168,7 +168,7 @@ class TTSConfig:
     preroll_ms: int = 100
 
 
-_VALID_ALGORITHMS = {"token_set_ratio", "levenshtein", "ratio"}
+_VALID_ALGORITHMS = {"token_set_ratio", "token_sort_ratio", "levenshtein", "ratio"}
 
 
 @dataclass
@@ -176,9 +176,9 @@ class RecognitionConfig:
     # Time (seconds) the recently-woken state stays open after a wake word.
     wake_window: float = 8.0
     wake_tone: str = "wake"
-    matching_algorithm: str = "token_set_ratio"
-    matching_threshold: float = 70.0
-    min_word_overlap: float = 0.5
+    matching_algorithm: str = "token_sort_ratio"
+    matching_threshold: float = 75.0
+    min_word_overlap: float = 0.0
     reply_matching_algorithm: str = "levenshtein"
     reply_matching_threshold: float = 80.0
     follow_up: bool = False
@@ -740,7 +740,7 @@ def _parse_recognition_config(raw: dict) -> RecognitionConfig:
                 key,
             )
 
-    algo = str(raw.get("matching_algorithm", "token_set_ratio"))
+    algo = str(raw.get("matching_algorithm", "token_sort_ratio"))
     if algo not in _VALID_ALGORITHMS:
         raise ConfigError(
             f"'recognition.matching_algorithm' must be one of {sorted(_VALID_ALGORITHMS)}, got {algo!r}"
@@ -754,7 +754,7 @@ def _parse_recognition_config(raw: dict) -> RecognitionConfig:
         wake_window=_get_float(raw, "wake_window", 8.0),
         wake_tone=str(raw.get("wake_tone", "wake")),
         matching_algorithm=algo,
-        matching_threshold=_get_float(raw, "matching_threshold", 70.0),
+        matching_threshold=_get_float(raw, "matching_threshold", 75.0),
         min_word_overlap=_get_float(raw, "min_word_overlap", 0.0),
         reply_matching_algorithm=reply_algo,
         reply_matching_threshold=_get_float(raw, "reply_matching_threshold", 80.0),

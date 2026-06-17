@@ -151,6 +151,12 @@ def get_similarity_score(a: str, b: str, algorithm: str) -> float:
         return (1.0 - (_lev.distance(a, b) / max_len)) * 100.0
     elif algorithm == "ratio":
         return _fuzz.ratio(a, b)
+    elif algorithm == "token_sort_ratio":
+        # Order-independent but length-aware: sorts tokens then does a full-string
+        # ratio. Unlike token_set_ratio it does NOT collapse to 100 when the
+        # transcript is a subset of the phrase, so a single word ("sono") cannot
+        # falsely match a longer command ("che ore sono").
+        return _fuzz.token_sort_ratio(a, b)
     else:  # "token_set_ratio"
         return _fuzz.token_set_ratio(a, b)
 

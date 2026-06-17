@@ -17,8 +17,8 @@ stt:
   wake_match_threshold: 0.5
 
 recognition:
-  matching_threshold: 70.0
-  matching_algorithm: token_set_ratio
+  matching_threshold: 75.0
+  matching_algorithm: token_sort_ratio
   min_word_overlap: 0.0
 
 triggers:
@@ -64,3 +64,16 @@ cases:
   # ── negatives: gating (configured but should not fire in this context) ─────
   - {text: "che ore sono", expect: none, note: "gated trigger, NOT woken"}
   - {text: "accendi la luce", expect: none, note: "gated trigger, NOT woken"}
+
+  # ── negatives: single content-word subsets of a command (token_set_ratio FP
+  #    class — a bare word inside a longer phrase must NOT fire the command). ──
+  - {text: "sono", expect: none, woken: true, note: "subset of 'che ore sono'"}
+  - {text: "ore", expect: none, woken: true, note: "subset of 'che ore sono'"}
+  - {text: "luce", expect: none, woken: true, note: "subset of 'accendi la luce'"}
+  - {text: "la luce", expect: none, woken: true, note: "subset of 'accendi la luce'"}
+  - {text: "chiama", expect: none, woken: true, note: "bare verb, not a full command"}
+
+  # ── positives: word-order / dropped-word tolerance (token_sort handles these) ─
+  - {text: "ore sono", expect: "che ore sono", woken: true, note: "dropped 'che'"}
+  - {text: "sono le ore", expect: "che ore sono", woken: true, note: "reordered"}
+  - {text: "accendi luce", expect: "accendi la luce", woken: true, note: "dropped 'la'"}

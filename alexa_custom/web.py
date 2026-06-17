@@ -823,7 +823,12 @@ class WebServer:
                 threshold = rec["reply_matching_threshold"]
                 if threshold is not None and not (0 <= threshold <= 100):
                     return False, "reply_matching_threshold must be between 0 and 100"
-            _valid_algos = {"token_set_ratio", "levenshtein", "ratio"}
+            _valid_algos = {
+                "token_set_ratio",
+                "token_sort_ratio",
+                "levenshtein",
+                "ratio",
+            }
             if (
                 "matching_algorithm" in rec
                 and rec["matching_algorithm"] not in _valid_algos
