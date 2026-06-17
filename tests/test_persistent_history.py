@@ -209,3 +209,34 @@ class TestSessionAggregation:
         assert record["transcript"]["text"] == ""
         assert record["transcript"]["is_matched"] is False
         assert record["diagnostics"]["gated"] is True
+
+    async def test_direct_command_aggregation(self, server, temp_history_file):
+        """A direct command match (no wake event) must aggregate and append a session log."""
+        server._loop = asyncio.get_running_loop()
+        server._pending_vu["mic"] = 0.12
+        server._pending_vu["rms_threshold"] = 0.04
+
+        # Simulate a direct command "matched" event without any preceding "wake" event
+        server._process_history_event(
+            "matched",
+            {
+                "transcript": "che ore sono",
+                "phrase": "che ore sono",
+                "score": 100,
+                "actions": [{"type": "tts_say", "params": {"text": "Sono le 21"}}],
+            },
+        )
+
+        assert server._active_session is None
+        await asyncio.sleep(0.01)
+
+        assert temp_history_file.exists()
+        lines = temp_history_file.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1
+        record = json.loads(lines[0])
+
+        assert record["wake"]["word"] == ""
+        assert record["transcript"]["text"] == "che ore sono"
+        assert record["transcript"]["is_matched"] is True
+        assert record["action"]["type"] == "tts_say"
+

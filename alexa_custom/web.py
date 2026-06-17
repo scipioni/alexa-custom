@@ -289,6 +289,34 @@ class WebServer:
                     self._broadcast({"type": "history_item", "session": session})
                 )
 
+        if event == "matched" and not self._active_session:
+            session_id = (
+                f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
+            )
+            self._active_session = {
+                "session_id": session_id,
+                "timestamp": datetime.now().isoformat() + "Z",
+                "wake": {
+                    "word": "",
+                    "timeout": 0.0,
+                    "confidence": None,
+                },
+                "diagnostics": {
+                    "max_mic_level": self._pending_vu.get("mic", 0.0),
+                    "rms_threshold": self._pending_vu.get("rms_threshold", 0.0),
+                    "gated": False,
+                    "input_gain": self._input_gain,
+                    "cpu_limit": self._cpu_limit,
+                },
+                "transcript": None,
+                "action": None,
+                "llm": None,
+                "feedback": {
+                    "false_positive": False,
+                    "user_flagged": False,
+                },
+            }
+
         if event == "wake":
             _flush_session()
             session_id = (
