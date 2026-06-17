@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import time
+from pathlib import Path
 
 import numpy as np
 
@@ -53,6 +54,8 @@ class AgentDaemon:
     def __init__(self, config, vosk_model=None, dispatch_cb=None):
         self._config = config
         self._dispatch_cb = dispatch_cb
+        self._skill_text = self._load_skill()
+        self._conversation_history: list[str] = []
         if vosk_model is None:
             from alexa_custom.stt import _MODEL_PATH
             from vosk import Model as _VoskModel
@@ -69,6 +72,40 @@ class AgentDaemon:
         self._device_identity: str | None = None
         self._responder_joined = asyncio.Event()
         self._llm_client = None
+
+    def _load_skill(self) -> str:
+        skill_path = Path("conf/skills/soccorso-anziani.yaml")
+        if not skill_path.is_file():
+            return ""
+        try:
+            import yaml as _yaml
+
+            with open(skill_path) as f:
+                skill = _yaml.safe_load(f)
+            parts = [f"## {skill.get('name', 'skill')}\n{skill.get('description', '')}"]
+            for s in skill.get("steps", []):
+                parts.append(f"\n### Passo {s['step']} — {s['name']}")
+                parts.append(s.get("description", ""))
+                if "signals" in s:
+                    parts.append("\nAllarme: " + "\n- ".join([""] + s["signals"]))
+                if "response" in s:
+                    parts.append(f"\nRisposta: {s['response']}")
+                if "scenarios" in s:
+                    for sc in s["scenarios"]:
+                        parts.append(f"\nScenario {sc['name']}:")
+                        for instr in sc.get("instructions", []):
+                            parts.append(f"- {instr}")
+            parts.append(
+                "\n### Comunicazione\n"
+                + "\n".join(f"- {c}" for c in skill.get("communication", []))
+            )
+            parts.append(
+                "\n### Limiti\n" + "\n".join(f"- {x}" for x in skill.get("limits", []))
+            )
+            return "\n".join(parts)
+        except Exception as e:
+            logger.warning("Skill load failed: %s", e)
+            return ""
 
     async def start(self) -> None:
         from livekit.api import AccessToken, VideoGrants
@@ -143,7 +180,21 @@ class AgentDaemon:
             self._responder_joined.clear()
             try:
                 await asyncio.wait_for(self._responder_joined.wait(), timeout=30.0)
-                await self._say("È arrivato qualcuno per aiutarla.")
+                summary = (
+                    self._conversation_history[-3:]
+                    if self._conversation_history
+                    else []
+                )
+                brief = ". ".join(s.split(": ", 1)[-1] for s in summary)
+                if self._device_identity:
+                    await self._room.local_participant.publish_data(
+                        f"La persona ha bisogno di aiuto. Riassunto: {brief}"
+                        if brief
+                        else "La persona ha bisogno di aiuto.",
+                        reliable=True,
+                        topic="tts",
+                        destination_identities=[self._device_identity],
+                    )
                 return
             except asyncio.TimeoutError:
                 logger.warning(
@@ -193,7 +244,12 @@ class AgentDaemon:
 
         stream = AudioStream(track)
         resampler = _AudioResampler()
-        llm_history = [{"role": "system", "content": _TRIAGE_PROMPT}]
+        skill_text = self._skill_text
+        if skill_text:
+            system_prompt = _TRIAGE_PROMPT + "\n\n" + skill_text
+        else:
+            system_prompt = _TRIAGE_PROMPT
+        llm_history = [{"role": "system", "content": system_prompt}]
 
         async def _drain():
             while self._busy.is_set():
@@ -345,6 +401,7 @@ class AgentDaemon:
         if self._llm_client is None:
             self._llm_client = OpenAIClient(cfg.host, cfg.api_key, cfg.request_timeout)
         history.append({"role": "user", "content": text})
+        self._conversation_history.append(f"Utente: {text}")
         try:
             result = await asyncio.wait_for(
                 self._llm_client.chat(history, cfg.model),
@@ -375,6 +432,7 @@ class AgentDaemon:
         if not reply:
             reply = result
         history.append({"role": "assistant", "content": reply})
+        self._conversation_history.append(f"Assistente: {reply}")
         return urgency, reply
 
     async def _llm_chat(self, history: list[dict]) -> str:
