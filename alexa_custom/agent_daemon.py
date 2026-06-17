@@ -49,6 +49,130 @@ _END_PHRASES = {
     "termina",
 }
 
+_MEDICAL_HOTWORDS = {
+    "dolore": "dolore",
+    "toracico": "toracico",
+    "petto": "petto",
+    "respirare": "respirare",
+    "respiro": "respiro",
+    "dispnea": "dispnea",
+    "coscienza": "coscienza",
+    "svenuto": "svenuto",
+    "sanguino": "sanguino",
+    "sangue": "sangue",
+    "ferita": "ferita",
+    "taglio": "taglio",
+    "febbre": "febbre",
+    "tosse": "tosse",
+    "vertigini": "vertigini",
+    "confuso": "confuso",
+    "confusione": "confusione",
+    "incidente": "incidente",
+    "caduto": "caduto",
+    "frattura": "frattura",
+    "osso": "osso",
+    "testa": "testa",
+    "schiena": "schiena",
+    "pancia": "pancia",
+    "gamba": "gamba",
+    "braccio": "braccio",
+    "cuore": "cuore",
+    "collo": "collo",
+    "fianco": "fianco",
+    "inguine": "inguine",
+    "scottatura": "scottatura",
+    "ustione": "ustione",
+    "bruciore": "bruciore",
+    "gonfiore": "gonfiore",
+    "tumore": "tumore",
+    "diabete": "diabete",
+    "infarto": "infarto",
+    "ictus": "ictus",
+    "crampo": "crampo",
+    "emicrania": "emicrania",
+    "allergia": "allergia",
+    "medicinale": "medicinale",
+    "farmaco": "farmaco",
+    "anticoagulante": "anticoagulante",
+    "ospedale": "ospedale",
+    "ambulanza": "ambulanza",
+    "soccorso": "soccorso",
+    "emergenza": "emergenza",
+    "medico": "medico",
+    "infermiere": "infermiere",
+    "sintomo": "sintomo",
+    "diagnosi": "diagnosi",
+    "terapia": "terapia",
+    "cura": "cura",
+    "riposo": "riposo",
+    "operazione": "operazione",
+    "intervento": "intervento",
+}
+
+# Common mispronunciations / Vosk errors mapped to correct terms
+_PHONETIC_FIXES = {
+    "torassico": "toracico",
+    "toracico": "toracico",
+    "respirato": "respirare",
+    "respirando": "respirare",
+    "sfenuto": "svenuto",
+    "sfenuta": "svenuta",
+    "svenuta": "svenuta",
+    "sanguinamento": "sanguinamento",
+    "sanguina": "sanguina",
+    "vertigine": "vertigini",
+    "confussa": "confusa",
+    "fratura": "frattura",
+    "fratto": "frattura",
+    "gamba rotta": "gamba rotta",
+    "scotatura": "scottatura",
+    "ustionato": "ustione",
+    "gonfiato": "gonfiore",
+    "gonfio": "gonfiore",
+    "mal di testa": "mal di testa",
+    "mal di pancia": "mal di pancia",
+    "mal di schiena": "mal di schiena",
+    "dolore al petto": "dolore al petto",
+    "male al petto": "dolore al petto",
+    "fame d'aria": "fame d'aria",
+    "mancanza di respiro": "mancanza di respiro",
+    "non respiro": "non respiro",
+    "buco nero": "svenimento",
+    "vista offuscata": "vista offuscata",
+    "vedo doppio": "vista doppia",
+    "parlare strano": "parlata strana",
+    "braccio debole": "braccio debole",
+    "faccia storta": "faccia storta",
+    "bocca storta": "bocca storta",
+}
+
+
+def _correct_stt(text: str) -> str:
+    """Apply fuzzy phonetic correction for Italian medical terms."""
+    from rapidfuzz import fuzz
+
+    words = text.lower().split()
+    corrected = []
+    for word in words:
+        if word in _PHONETIC_FIXES:
+            corrected.append(_PHONETIC_FIXES[word])
+            continue
+        best = word
+        best_score = 0
+        for hotword in _MEDICAL_HOTWORDS:
+            score = fuzz.ratio(word, hotword, score_cutoff=70)
+            if score > best_score:
+                best = hotword
+                best_score = score
+        if best_score >= 75:
+            corrected.append(_MEDICAL_HOTWORDS[best])
+        else:
+            corrected.append(word)
+    result = " ".join(corrected)
+    if result != text.lower():
+        logger.debug("STT corrected: '%s' -> '%s'", text, result)
+    return result
+
 
 class AgentDaemon:
     def __init__(self, config, vosk_model=None, dispatch_cb=None):
@@ -265,6 +389,7 @@ class AgentDaemon:
             rec = KaldiRecognizer(self._vosk_model, 16000)
             rec.SetWords(True)
             rec.SetPartialWords(True)
+            rec.SetMaxAlternatives(3)
             speech_timeout = 0.0
             last_partial = ""
             try:
@@ -280,10 +405,18 @@ class AgentDaemon:
                         continue
                     if rec.AcceptWaveform(down.tobytes()):
                         result = json.loads(rec.Result())
-                        text = result.get("text", "").strip()
+                        if "alternatives" in result:
+                            best = max(
+                                result["alternatives"],
+                                key=lambda a: a.get("confidence", 0),
+                            )
+                            text = best.get("text", "").strip()
+                        else:
+                            text = result.get("text", "").strip()
                         if not text or len(text.split()) < 2:
                             speech_timeout = 0.0
                             continue
+                        text = _correct_stt(text)
                         logger.info("STT: '%s'", text)
 
                         if text.lower() in _END_PHRASES or any(
@@ -323,7 +456,15 @@ class AgentDaemon:
                                 speech_timeout = now + 1.5
                         elif speech_timeout > 0.0 and now > speech_timeout:
                             result = json.loads(rec.FinalResult())
-                            text = result.get("text", "").strip()
+                            if "alternatives" in result:
+                                best = max(
+                                    result["alternatives"],
+                                    key=lambda a: a.get("confidence", 0),
+                                )
+                                text = best.get("text", "").strip()
+                            else:
+                                text = result.get("text", "").strip()
+                            text = _correct_stt(text) if text else text
                             if text and len(text.split()) >= 2:
                                 logger.info("STT (force): '%s'", text)
                                 if text.lower() in _END_PHRASES or any(
