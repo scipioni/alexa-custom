@@ -89,6 +89,7 @@ python3 -m venv .venv && source .venv/bin/activate
 
 # 3. Install Serena
 pip install -e .
+pip install smbus2   # optional: I2C OLED display
 
 # 4. Download speech models (Vosk, sherpa-onnx, Piper)
 alexa-setup
@@ -97,9 +98,16 @@ alexa-setup
 task audio:setup
 
 # 6. Create configuration
-cp -r conf.example conf
+mkdir -p conf/actions
+cp conf.example/config.yaml conf/config.yaml
+cp conf.example/secrets.yaml conf/secrets.yaml
 
-# 7. Start the assistant
+# 7A. Install as a systemd service (recommended for headless use)
+task setup
+sudo loginctl enable-linger arduino 
+systemctl --user start alexa-custom
+
+# 7B.  or start the assistant directly
 alexa-client
 ```
 
