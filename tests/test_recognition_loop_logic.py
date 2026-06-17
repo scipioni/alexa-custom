@@ -6,6 +6,7 @@ Tests cover:
 - Exit-phrase window close: start_listening / stop_listening triggers
 - Follow-up window extension: _follow_up_active re-opens the window
 """
+
 from __future__ import annotations
 
 import time
@@ -104,7 +105,7 @@ class TestWakeWindowTimeout:
 
     def test_window_closed_after_expiry(self):
         past = time.monotonic() - 1.0  # 1 second ago
-        wake_window = 0.5              # only 500ms window
+        wake_window = 0.5  # only 500ms window
         wake_deadline = past + wake_window
         assert time.monotonic() >= wake_deadline  # window is closed
 
@@ -166,9 +167,7 @@ class TestOneBreathFiring:
         assert matched is t
 
     def test_wake_word_not_in_residual_after_strip(self):
-        phrase, residual = _match_wake_word(
-            "galileo dimmi qualcosa", ["galileo"]
-        )
+        phrase, residual = _match_wake_word("galileo dimmi qualcosa", ["galileo"])
         assert phrase == "galileo"
         assert "galileo" not in residual
 
@@ -179,7 +178,9 @@ class TestOneBreathFiring:
         residual = "accendi la luce"
         # One-breath candidate pool: only with_wake=True
         one_breath_candidates = [tr for tr in [t_gated, t_direct] if tr.with_wake]
-        matched, _ = match_trigger_with_score(residual, one_breath_candidates, threshold=50.0)
+        matched, _ = match_trigger_with_score(
+            residual, one_breath_candidates, threshold=50.0
+        )
         assert matched is t_gated
 
 

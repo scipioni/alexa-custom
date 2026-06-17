@@ -35,7 +35,7 @@ def _match_wake_word(
     for w in wake_words:
         norm_w = normalize_text(w)
         if norm_text.startswith(norm_w):
-            rest = norm_text[len(norm_w):]
+            rest = norm_text[len(norm_w) :]
             if rest and not rest.startswith(" "):
                 continue  # prefix of a longer word, not a boundary
             return w, rest.strip()

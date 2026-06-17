@@ -80,9 +80,7 @@ class TestRmsLevel:
 
 class TestMatchWakeWord:
     def test_exact_prefix_match(self):
-        phrase, residual = _match_wake_word(
-            "ehi galileo che ore sono", ["ehi galileo"]
-        )
+        phrase, residual = _match_wake_word("ehi galileo che ore sono", ["ehi galileo"])
         assert phrase == "ehi galileo"
         assert residual == "che ore sono"
 
@@ -148,7 +146,12 @@ class TestMatchWakeWord:
 
 
 def _make_trigger(phrase: str, aliases: list[str] | None = None) -> Trigger:
-    return Trigger(commands=[phrase] + (aliases or []), phrase=phrase, actions=[], aliases=aliases or [])
+    return Trigger(
+        commands=[phrase] + (aliases or []),
+        phrase=phrase,
+        actions=[],
+        aliases=aliases or [],
+    )
 
 
 def _make_group_with_triggers(

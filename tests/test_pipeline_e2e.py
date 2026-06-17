@@ -5,6 +5,7 @@ a ScriptedBackend (no real STT model) and a FakeProc (no real microphone).
 Covers wake detection, command matching, with_wake gating, one-breath, direct
 triggers, and the reply window.
 """
+
 from __future__ import annotations
 
 import os
@@ -30,13 +31,14 @@ from alexa_custom.stt_backends import STTBackend
 # Constants
 # ---------------------------------------------------------------------------
 
-_CHUNK = 4096          # bytes per audio chunk (matches stt_gating._CHUNK)
-_CHUNKS_PER_EMIT = 3   # how many chunks ScriptedBackend consumes before endpoint
+_CHUNK = 4096  # bytes per audio chunk (matches stt_gating._CHUNK)
+_CHUNKS_PER_EMIT = 3  # how many chunks ScriptedBackend consumes before endpoint
 
 
 # ---------------------------------------------------------------------------
 # FakeProc — endless stream of silent PCM chunks via os.pipe
 # ---------------------------------------------------------------------------
+
 
 class FakeProc:
     """Streams silent PCM chunks into an os.pipe so the recognition loop never blocks."""
@@ -65,6 +67,7 @@ class FakeProc:
 # ---------------------------------------------------------------------------
 # ScriptedBackend — delivers pre-canned transcripts, ignores audio content
 # ---------------------------------------------------------------------------
+
 
 class ScriptedBackend(STTBackend):
     """STTBackend that pops transcripts from a FIFO queue after _CHUNKS_PER_EMIT chunks.
@@ -114,6 +117,7 @@ class ScriptedBackend(STTBackend):
 # run_pipeline — full harness
 # ---------------------------------------------------------------------------
 
+
 def run_pipeline(
     script: list[str],
     config: ActionsConfig,
@@ -148,6 +152,7 @@ def run_pipeline(
     # Silence TTS: handle_ask does `from alexa_custom.tts import get_engine`
     # at call time, so patch the source module directly.
     import alexa_custom.tts as _tts_module
+
     _orig_get_engine = _tts_module.get_engine
     _mock_engine = types.SimpleNamespace(say=lambda *a, **kw: None)
     _tts_module.get_engine = lambda: _mock_engine
@@ -177,6 +182,7 @@ def run_pipeline(
 # ---------------------------------------------------------------------------
 # Config helpers
 # ---------------------------------------------------------------------------
+
 
 def _log_action() -> ActionEntry:
     return ActionEntry(type="log", params={"message": "ok"})
@@ -215,13 +221,21 @@ def _event_names(events: list[tuple[str, dict]]) -> list[str]:
 # 2. Core Scenario Tests
 # ---------------------------------------------------------------------------
 
+
 class TestTwoStepWakeCommand:
-    def test_wake_then_matched(self):
+    def test_wake_then_matched(self, caplog):
+        import logging
+
+        caplog.set_level(logging.INFO)
         config = _make_config([_gated(["che ore sono"])])
         events = run_pipeline(["ehi galileo", "che ore sono"], config)
         names = _event_names(events)
         assert "wake" in names, f"no wake event; got {names}"
         assert "matched" in names, f"no matched event; got {names}"
+        assert any(
+            "Command: 'che ore sono' → 'che ore sono'" in r.message
+            for r in caplog.records
+        )
 
     def test_wake_precedes_match(self):
         config = _make_config([_gated(["che ore sono"])])
@@ -251,12 +265,19 @@ class TestOneBreath:
 
 
 class TestDirectTrigger:
-    def test_direct_fires_without_wake(self):
+    def test_direct_fires_without_wake(self, caplog):
+        import logging
+
+        caplog.set_level(logging.INFO)
         config = _make_config([_direct(["chiama stefano"])])
         events = run_pipeline(["chiama stefano"], config)
         names = _event_names(events)
         assert "matched" in names, f"no matched event; got {names}"
         assert "wake" not in names, f"unexpected wake event; got {names}"
+        assert any(
+            "Direct: 'chiama stefano' → 'chiama stefano'" in r.message
+            for r in caplog.records
+        )
 
 
 class TestGatedTriggerNoWake:
@@ -270,6 +291,7 @@ class TestGatedTriggerNoWake:
 # ---------------------------------------------------------------------------
 # 3. Reply Window Tests
 # ---------------------------------------------------------------------------
+
 
 def _ask_trigger(with_wake: bool = True) -> Trigger:
     """'chiama stefano' ask trigger with si/no on_reply."""
@@ -313,7 +335,9 @@ class TestReplyWindowMatch:
         matched = [(e, d) for e, d in events if e == "matched"]
         assert len(matched) >= 2, f"expected ≥2 matched events; got {names}"
         triggers = [d.get("phrase", "") for _, d in matched]
-        assert any("chiama" in t for t in triggers), f"chiama trigger missing; {triggers}"
+        assert any("chiama" in t for t in triggers), (
+            f"chiama trigger missing; {triggers}"
+        )
         assert any(t == "si" for t in triggers), f"si reply missing; {triggers}"
 
     def test_reply_match_order(self):
@@ -323,8 +347,12 @@ class TestReplyWindowMatch:
         assert len(matched) >= 2
         first_trigger = matched[0][1].get("phrase", "")
         second_trigger = matched[1][1].get("phrase", "")
-        assert "chiama" in first_trigger, f"first match should be chiama; got {first_trigger}"
-        assert second_trigger == "si", f"second match should be si; got {second_trigger}"
+        assert "chiama" in first_trigger, (
+            f"first match should be chiama; got {first_trigger}"
+        )
+        assert second_trigger == "si", (
+            f"second match should be si; got {second_trigger}"
+        )
 
 
 class TestReplyWindowTimeout:
@@ -351,6 +379,7 @@ class TestReplyWindowTimeout:
 # ---------------------------------------------------------------------------
 # 4. System direct triggers (from conf.example/actions/system.yaml)
 # ---------------------------------------------------------------------------
+
 
 class TestSystemDirectTriggers:
     """Direct triggers (with_wake=False) from system.yaml — fire without wake word."""
@@ -389,6 +418,7 @@ class TestSystemDirectTriggers:
 # ---------------------------------------------------------------------------
 # 5. System gated triggers (from conf.example/actions/system.yaml)
 # ---------------------------------------------------------------------------
+
 
 class TestSystemGatedTriggers:
     """Gated triggers from system.yaml — require a wake word first."""
@@ -444,12 +474,16 @@ class TestSystemGatedTriggers:
         assert "matched" in _event_names(events)
 
     def test_registra_campione(self):
-        config = _make_config([_gated(["registra campione", "test audio", "registra audio"])])
+        config = _make_config(
+            [_gated(["registra campione", "test audio", "registra audio"])]
+        )
         events = run_pipeline(["ehi galileo", "registra campione"], config)
         assert "matched" in _event_names(events)
 
     def test_test_audio_alias(self):
-        config = _make_config([_gated(["registra campione", "test audio", "registra audio"])])
+        config = _make_config(
+            [_gated(["registra campione", "test audio", "registra audio"])]
+        )
         events = run_pipeline(["ehi galileo", "test audio"], config)
         assert "matched" in _event_names(events)
 
@@ -457,6 +491,7 @@ class TestSystemGatedTriggers:
 # ---------------------------------------------------------------------------
 # 6. User active triggers (from conf.example/actions/user.yaml)
 # ---------------------------------------------------------------------------
+
 
 class TestUserActiveTriggers:
     """Active (uncommented) triggers from user.yaml."""
@@ -472,7 +507,9 @@ class TestUserActiveTriggers:
         config = _make_config([ask_trigger])
         events = run_pipeline(["chiama Stefano"], config, timeout=8.0)
         # No real wake word fired (the ask action emits wake "(reply)" — exclude that)
-        real_wakes = [d for e, d in events if e == "wake" and d.get("word") != "(reply)"]
+        real_wakes = [
+            d for e, d in events if e == "wake" and d.get("word") != "(reply)"
+        ]
         assert not real_wakes, f"unexpected real wake: {real_wakes}"
         assert "matched" in _event_names(events)
 
@@ -515,7 +552,9 @@ class TestUserActiveTriggers:
         config = _make_config([t])
         events = run_pipeline(["chiama Stefano", "va bene"], config)
         triggers = [d.get("phrase", "") for e, d in events if e == "matched"]
-        assert any(t == "si" for t in triggers), f"'va bene' should match 'si' trigger; got {triggers}"
+        assert any(t == "si" for t in triggers), (
+            f"'va bene' should match 'si' trigger; got {triggers}"
+        )
 
     def test_aiuto_wake_word_then_command(self):
         # "aiuto" is both a wake word and a trigger command in user.yaml
@@ -553,6 +592,7 @@ class TestUserActiveTriggers:
 # 7. Commented user.yaml examples (domotica + assistenza anziani)
 #    These show that the commented triggers work when uncommented.
 # ---------------------------------------------------------------------------
+
 
 class TestCommentedUserExamples:
     """Commented triggers from user.yaml — verify they match when enabled."""

@@ -112,13 +112,18 @@ def capture_transcript(
     else:
         backend.reset()
     try:
-      return _capture_loop(
-          proc, channels, backend, timeout, stop_event, on_stt_event,
-          phrases=phrases,
-          start_after_playback=start_after_playback,
-          vad_silence_ms=vad_silence_ms,
-          hard_timeout=hard_timeout,
-      )
+        return _capture_loop(
+            proc,
+            channels,
+            backend,
+            timeout,
+            stop_event,
+            on_stt_event,
+            phrases=phrases,
+            start_after_playback=start_after_playback,
+            vad_silence_ms=vad_silence_ms,
+            hard_timeout=hard_timeout,
+        )
     finally:
         if grammar is not None and isinstance(backend, VoskSTT):
             backend.recreate(None)

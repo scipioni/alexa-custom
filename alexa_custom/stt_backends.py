@@ -7,7 +7,13 @@ import numpy as np
 import vosk
 from abc import ABC, abstractmethod
 
-from alexa_custom.config import STTConfig, STTStage1Config, STTStage2Config, WakeWordGroup, Trigger
+from alexa_custom.config import (
+    STTConfig,
+    STTStage1Config,
+    STTStage2Config,
+    WakeWordGroup,
+    Trigger,
+)
 
 from alexa_custom.actions import normalize_text
 
@@ -383,5 +389,3 @@ def get_stt_backend(
     # vosk (default)
     vosk_path = cfg.model_path or _MODEL_PATH
     return VoskSTT(_load_model(vosk_path), grammar=grammar)
-
-

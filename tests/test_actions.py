@@ -225,9 +225,7 @@ class TestConfigurableMatching:
     def test_trigger_phrases_uses_commands(self):
         from alexa_custom.actions import _trigger_phrases
 
-        t = Trigger(
-            commands=["si", "sì", "va bene", "ok"], phrase="si", actions=[]
-        )
+        t = Trigger(commands=["si", "sì", "va bene", "ok"], phrase="si", actions=[])
         assert _trigger_phrases(t) == ["si", "sì", "va bene", "ok"]
 
     def test_trigger_phrases_falls_back_to_phrase_and_aliases(self):
@@ -254,15 +252,11 @@ class TestConfigurableMatching:
                 commands=["no", "annulla"], phrase="no", actions=[], with_wake=True
             ),
         ]
-        action = ActionEntry(
-            type="ask", params={"text": "vuoi?", "timeout": 1.0}
-        )
+        action = ActionEntry(type="ask", params={"text": "vuoi?", "timeout": 1.0})
         action.on_reply = on_reply
 
         mock_listen_fn = AsyncMock(return_value="")  # empty → no reply matching
-        _ctx = ActionContext(
-            telegram_client=MagicMock(), listen_fn=mock_listen_fn
-        )
+        _ctx = ActionContext(telegram_client=MagicMock(), listen_fn=mock_listen_fn)
         with patch("alexa_custom.tts.get_engine"):
             await handle_ask(
                 action,

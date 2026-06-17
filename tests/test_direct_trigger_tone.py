@@ -1,4 +1,5 @@
 """Tests for direct (with_wake=False) trigger tone and dispatch behavior."""
+
 import pytest
 from alexa_custom.config import Trigger, ActionsConfig, RecognitionConfig, ActionEntry
 

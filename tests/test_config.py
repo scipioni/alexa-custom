@@ -204,9 +204,7 @@ class TestLoadConfig:
 
     def test_wake_word_legacy_format_accepted(self, tmp_path):
         """Legacy {word: ...} format is accepted with a warning and downgrades to string."""
-        cfg_path = self._make_config(
-            tmp_path, "wake_words:\n  - word: alexa\n"
-        )
+        cfg_path = self._make_config(tmp_path, "wake_words:\n  - word: alexa\n")
         from alexa_custom.config import load_config
 
         result = load_config(cfg_path)
@@ -674,9 +672,7 @@ class TestConfigManager:
         mgr = ConfigManager(config)
 
         received = []
-        mgr.register_reload_callback(
-            lambda c: received.append(list(c.wake_words))
-        )
+        mgr.register_reload_callback(lambda c: received.append(list(c.wake_words)))
 
         mgr.start_watcher(cfg_path, interval=0.05)
         await asyncio.sleep(0.05)
@@ -832,7 +828,9 @@ class TestActionsDirectoryIntegration:
         # In the new design wake_words is a flat string list.
         assert "aiuto" in cfg.wake_words
         # Scoped trigger becomes with_wake=True in the flat trigger list.
-        assert any(t.phrase == "chiama assistenza" and t.with_wake for t in cfg.triggers)
+        assert any(
+            t.phrase == "chiama assistenza" and t.with_wake for t in cfg.triggers
+        )
 
     def test_direct_trigger_in_direct_triggers_not_global(self, tmp_path):
         conf_dir = tmp_path / "conf"
@@ -850,8 +848,7 @@ class TestActionsDirectoryIntegration:
         # In the new design, all triggers are in cfg.triggers; direct_triggers is a subset.
         assert any(t.phrase == "chiama Stefano" for t in cfg.direct_triggers)
         assert any(
-            t.phrase == "chiama Stefano" and not t.with_wake
-            for t in cfg.triggers
+            t.phrase == "chiama Stefano" and not t.with_wake for t in cfg.triggers
         )
 
     def test_global_explicit_identical_to_absent(self, tmp_path):
@@ -891,10 +888,7 @@ class TestActionsDirectoryIntegration:
 
         cfg = load_config(conf_dir / "config.yaml")
         # In the new design, group scoping is dropped — trigger fires after any wake word.
-        assert any(
-            t.phrase == "accendi la luce" and t.with_wake
-            for t in cfg.triggers
-        )
+        assert any(t.phrase == "accendi la luce" and t.with_wake for t in cfg.triggers)
         assert "galileo" in cfg.wake_words
         assert "aiuto" in cfg.wake_words
 

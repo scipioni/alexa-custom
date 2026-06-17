@@ -17,7 +17,9 @@ async def test_listening_state_toggle():
     await registry.execute("stop_listening", action=ActionEntry(type="stop_listening"))
     assert is_stt_sleeping()
 
-    await registry.execute("start_listening", action=ActionEntry(type="start_listening"))
+    await registry.execute(
+        "start_listening", action=ActionEntry(type="start_listening")
+    )
     assert not is_stt_sleeping()
 
 
@@ -96,7 +98,7 @@ async def test_sleeping_dynamic_wake_up_phrase_propagation():
 @pytest.mark.asyncio
 async def test_get_wake_up_phrases_helper():
     from alexa_custom.stt import get_wake_up_phrases
-    from alexa_custom.config import ActionsConfig, Trigger, ActionEntry
+    from alexa_custom.config import Trigger, ActionEntry
 
     wakeup_trigger = Trigger(
         commands=["svegliati"],

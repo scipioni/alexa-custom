@@ -51,7 +51,9 @@ class TestFollowUpActive:
     def test_per_trigger_force_off_overrides_global_on(self):
         config = self._config(follow_up=True)
         trigger = Trigger(
-            commands=["x"], actions=[ActionEntry(type="say", params={})], follow_up=False
+            commands=["x"],
+            actions=[ActionEntry(type="say", params={})],
+            follow_up=False,
         )
         assert _follow_up_active(trigger, config) is False
 
@@ -64,7 +66,9 @@ class TestFollowUpActive:
 
     def test_llm_chat_only_trigger_suppressed_even_when_global_on(self):
         config = self._config(follow_up=True)
-        trigger = Trigger(commands=["x"], actions=[ActionEntry(type="llm_chat", params={})])
+        trigger = Trigger(
+            commands=["x"], actions=[ActionEntry(type="llm_chat", params={})]
+        )
         assert _follow_up_active(trigger, config) is False
 
     def test_mixed_actions_not_suppressed(self):

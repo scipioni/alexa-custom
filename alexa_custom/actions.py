@@ -113,7 +113,9 @@ def _trigger_phrases(trigger: "Trigger") -> list[str]:
     sync matters: if the grammar omits an alias the recognizer physically cannot
     emit it, so the alias would never match no matter how lenient the scorer is.
     """
-    return trigger.commands if trigger.commands else ([trigger.phrase] + trigger.aliases)
+    return (
+        trigger.commands if trigger.commands else ([trigger.phrase] + trigger.aliases)
+    )
 
 
 class TelegramClient:
@@ -260,7 +262,9 @@ def match_trigger_with_score(
             _t_words = transcript.split()
         overlap_ok = False
         for p in phrases:
-            content = [w for w in normalize_text(p).split() if len(italian_phonetic(w)) >= 3]
+            content = [
+                w for w in normalize_text(p).split() if len(italian_phonetic(w)) >= 3
+            ]
             if not content:
                 overlap_ok = True  # short-only phrase: defer to exact-match guard
                 break

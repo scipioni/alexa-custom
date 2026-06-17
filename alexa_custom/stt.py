@@ -36,14 +36,12 @@ from alexa_custom.stt_backends import (
     get_stt_backend,
     _phrases_to_grammar,
     _grammar_json,
-    _grammar_json_all,
 )
 from alexa_custom.stt_phonetics import (
     _match_wake_word,
     _approx_wake_match,
     _resolve_triggers,
     _build_alias_map,
-    build_intent_map,
 )
 from alexa_custom.stt_gating import (
     _CHUNK,
@@ -235,7 +233,8 @@ def _recognition_loop(
         if mqtt_client:
             mqtt_client.publish_threadsafe(
                 f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
-                state, loop=loop,
+                state,
+                loop=loop,
             )
 
     def _dispatch_trigger(
@@ -253,20 +252,29 @@ def _recognition_loop(
 
         metrics.inc("commands_matched")
         if on_stt_event:
-            on_stt_event("matched", {
-                "transcript": transcript,
-                "phrase": trigger.commands[0] if trigger.commands else trigger.phrase,
-                "score": score,
-                "actions": [{"type": a.type, "params": a.params} for a in trigger.actions],
-            })
+            on_stt_event(
+                "matched",
+                {
+                    "transcript": transcript,
+                    "phrase": trigger.commands[0]
+                    if trigger.commands
+                    else trigger.phrase,
+                    "score": score,
+                    "actions": [
+                        {"type": a.type, "params": a.params} for a in trigger.actions
+                    ],
+                },
+            )
         if mqtt_client:
             mqtt_client.publish_threadsafe(
                 f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/command",
-                json.dumps({
-                    "text": transcript,
-                    "wake_word": wake_phrase or "",
-                    "timestamp": time.time(),
-                }),
+                json.dumps(
+                    {
+                        "text": transcript,
+                        "wake_word": wake_phrase or "",
+                        "timestamp": time.time(),
+                    }
+                ),
                 loop=loop,
             )
 
@@ -275,7 +283,8 @@ def _recognition_loop(
             dispatch_loop.run_until_complete(
                 asyncio.wait_for(
                     dispatch(
-                        trigger, _ctx,
+                        trigger,
+                        _ctx,
                         wake_word=wake_phrase or "",
                         transcript=transcript,
                     ),
@@ -313,7 +322,9 @@ def _recognition_loop(
     _publish_state("idle")
 
     for data in _iter_gated_audio(
-        proc, channels, stop_event,
+        proc,
+        channels,
+        stop_event,
         on_playback_end=backend.reset,
         name="single-model",
         post_playback_ms=config.audio.post_playback_ms,
@@ -355,10 +366,15 @@ def _recognition_loop(
                 ) + config.stt.adaptive_rms_margin
 
         if on_stt_event:
-            on_stt_event("level", {
-                "mic": rms, "rms_threshold": _eff_rms,
-                "confidence": None, "adaptive": config.stt.adaptive_rms,
-            })
+            on_stt_event(
+                "level",
+                {
+                    "mic": rms,
+                    "rms_threshold": _eff_rms,
+                    "confidence": None,
+                    "adaptive": config.stt.adaptive_rms,
+                },
+            )
 
         _post_s = config.recognition.post_dispatch_cooldown_ms / 1000.0
         if (
@@ -411,7 +427,8 @@ def _recognition_loop(
 
         # --- Wake word detection ---
         wake_phrase, residual = _match_wake_word(
-            text, config.wake_words,
+            text,
+            config.wake_words,
             threshold=config.stt.wake_match_threshold,
         )
 
@@ -419,18 +436,22 @@ def _recognition_loop(
             if is_stt_sleeping():
                 # Sleeping: only react if residual matches a start_listening trigger
                 wake_up_candidates = [
-                    t for t in config.triggers
+                    t
+                    for t in config.triggers
                     if any(a.type == "start_listening" for a in t.actions)
                 ]
                 if residual and wake_up_candidates:
                     trig, score = match_trigger_with_score(
-                        residual, wake_up_candidates,
+                        residual,
+                        wake_up_candidates,
                         algorithm=config.recognition.matching_algorithm,
                         threshold=config.recognition.matching_threshold,
                         min_word_overlap=config.recognition.min_word_overlap,
                     )
                     if trig is not None:
-                        wake_deadline = time.monotonic() + config.recognition.wake_window
+                        wake_deadline = (
+                            time.monotonic() + config.recognition.wake_window
+                        )
                         try:
                             play_wake_beep(config.recognition.wake_tone)
                         except Exception:
@@ -444,21 +465,28 @@ def _recognition_loop(
             wake_deadline = time.monotonic() + config.recognition.wake_window
             logger.info(
                 "Wake: %r  residual=%r  window=+%.0fs",
-                wake_phrase, residual, config.recognition.wake_window,
+                wake_phrase,
+                residual,
+                config.recognition.wake_window,
             )
             if config.dump_triggers_dir:
                 _dump_trigger_wav(
-                    _audio_buf, channels,
-                    f"wake_{wake_phrase}", config.dump_triggers_dir,
+                    _audio_buf,
+                    channels,
+                    f"wake_{wake_phrase}",
+                    config.dump_triggers_dir,
                 )
             _publish_state("listening")
 
             if not residual:
                 if on_stt_event:
-                    on_stt_event("wake", {
-                        "word": wake_phrase,
-                        "timeout": config.recognition.wake_window,
-                    })
+                    on_stt_event(
+                        "wake",
+                        {
+                            "word": wake_phrase,
+                            "timeout": config.recognition.wake_window,
+                        },
+                    )
                 try:
                     play_wake_beep(config.recognition.wake_tone)
                 except Exception as e:
@@ -467,7 +495,8 @@ def _recognition_loop(
 
             # One-breath: residual present — try to match a command immediately
             trig, score = match_trigger_with_score(
-                residual, config.triggers,
+                residual,
+                config.triggers,
                 algorithm=config.recognition.matching_algorithm,
                 threshold=config.recognition.matching_threshold,
                 min_word_overlap=config.recognition.min_word_overlap,
@@ -486,10 +515,13 @@ def _recognition_loop(
             else:
                 # Wake word recognised but command not matched — open window, wait
                 if on_stt_event:
-                    on_stt_event("wake", {
-                        "word": wake_phrase,
-                        "timeout": config.recognition.wake_window,
-                    })
+                    on_stt_event(
+                        "wake",
+                        {
+                            "word": wake_phrase,
+                            "timeout": config.recognition.wake_window,
+                        },
+                    )
                 try:
                     play_wake_beep(config.recognition.wake_tone)
                 except Exception as e:
@@ -513,13 +545,15 @@ def _recognition_loop(
         # Exit phrase: close wake window early
         if woken() and config.llm:
             from alexa_custom.llm import is_exit_phrase
+
             if is_exit_phrase(text, config.llm.exit_phrases):
                 logger.debug("Exit phrase %r — closing wake window", text)
                 wake_deadline = 0.0
                 continue
 
         trig, score = match_trigger_with_score(
-            text, candidates,
+            text,
+            candidates,
             algorithm=config.recognition.matching_algorithm,
             threshold=config.recognition.matching_threshold,
             min_word_overlap=config.recognition.min_word_overlap,
@@ -563,11 +597,20 @@ def _recognition_loop(
             continue
 
         # start_listening triggers are pointless when already awake
-        if any(a.type == "start_listening" for a in trig.actions) and not is_stt_sleeping():
+        if (
+            any(a.type == "start_listening" for a in trig.actions)
+            and not is_stt_sleeping()
+        ):
             logger.info(
-                "start_listening trigger %r ignored: system is already awake", trig.phrase
+                "start_listening trigger %r ignored: system is already awake",
+                trig.phrase,
             )
             continue
+
+        if trig.with_wake:
+            logger.info("Command: %r → %r (score=%.0f)", text, trig.phrase, score)
+        else:
+            logger.info("Direct: %r → %r (score=%.0f)", text, trig.phrase, score)
 
         try:
             play_wake_beep(config.recognition.wake_tone)
@@ -594,6 +637,7 @@ def run_stt_worker(
     if callable(config) and not isinstance(config, ActionsConfig):
         _get_config: Callable[[], ActionsConfig] = config  # type: ignore[assignment]
     else:
+
         def _get_config() -> ActionsConfig:
             return config  # type: ignore[return-value]
 
@@ -620,7 +664,8 @@ def run_stt_worker(
         backend = get_stt_backend(current_config.stt)
         logger.info(
             "STT backend (%s) loaded in %.1fs",
-            current_config.stt.backend, time.monotonic() - t0,
+            current_config.stt.backend,
+            time.monotonic() - t0,
         )
     except RuntimeError as e:
         logger.error("STT backend creation failed: %s", e)
