@@ -9,13 +9,25 @@ from alexa_custom.actions import _word_token_match, normalize_text
 
 
 def _word_overlap_score(phrase_words: list[str], text_words: set[str]) -> float:
-    """Fraction of ``phrase_words`` that have an acoustic match in ``text_words``."""
-    if not phrase_words:
+    """Acoustic overlap of ``phrase_words`` with ``text_words``, weighted by length.
+
+    Score is the fraction of the wake phrase's *characters* (not word count)
+    that are covered by a matching transcript word. Longer words are inherently
+    more distinctive, so a phrase's long keyword dominates while a short filler
+    syllable contributes little: matching only "ehi" of "ehi galileo" scores
+    3/10 = 0.3 (below the 0.5 default → no wake), whereas matching the
+    distinctive "galileo" scores 7/10 = 0.7. This cuts false wakes from common
+    short syllables without losing truncated-keyword recall ("galile"→wake).
+    """
+    total = sum(len(pw) for pw in phrase_words)
+    if total == 0:
         return 0.0
     matched = sum(
-        1 for pw in phrase_words if any(_word_token_match(pw, tw) for tw in text_words)
+        len(pw)
+        for pw in phrase_words
+        if any(_word_token_match(pw, tw) for tw in text_words)
     )
-    return matched / len(phrase_words)
+    return matched / total
 
 
 def _match_wake_word(

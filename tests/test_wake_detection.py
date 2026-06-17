@@ -215,9 +215,18 @@ class TestApproxWakeMatchThreshold:
         am = self._alias_map("ehi galileo")
         assert _approx_wake_match("il galileo", am, threshold=0.5) is not None
 
-    def test_single_word_of_two_word_phrase_rejected_at_higher_threshold(self):
+    def test_distinctive_word_weighted_by_length(self):
+        # Char-coverage scoring: "galileo" covers 7 of "ehigalileo"'s 10 chars
+        # = 0.7, so it matches up to threshold 0.7 but is rejected above it.
         am = self._alias_map("ehi galileo")
-        assert _approx_wake_match("il galileo", am, threshold=0.7) is None
+        assert _approx_wake_match("il galileo", am, threshold=0.7) is not None
+        assert _approx_wake_match("il galileo", am, threshold=0.8) is None
+
+    def test_short_component_alone_does_not_wake(self):
+        # The short filler "ehi" (3 of 10 chars = 0.3) must not fire the wake on
+        # its own at the default threshold — the key false-wake class.
+        am = self._alias_map("ehi galileo")
+        assert _approx_wake_match("ehi come stai", am, threshold=0.5) is None
 
     def test_both_words_always_match(self):
         am = self._alias_map("ehi galileo")
