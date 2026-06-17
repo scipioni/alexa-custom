@@ -49,6 +49,53 @@ _END_PHRASES = {
     "termina",
 }
 
+
+class GroqSTT:
+    """Cloud STT via Groq Whisper API (OpenAI-compatible)."""
+
+    BASE = "https://api.groq.com/openai/v1/audio/transcriptions"
+
+    def __init__(self, api_key: str, model: str = "whisper-large-v3-turbo"):
+        self._api_key = api_key
+        self._model = model
+
+    async def transcribe(
+        self, audio_data: bytes, sample_rate: int = 16000
+    ) -> str | None:
+        import io
+        import wave
+
+        import httpx
+
+        wav_buf = io.BytesIO()
+        with wave.open(wav_buf, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(sample_rate)
+            wf.writeframes(audio_data)
+        wav_buf.seek(0)
+
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                resp = await client.post(
+                    self.BASE,
+                    headers={"Authorization": f"Bearer {self._api_key}"},
+                    files={"file": ("audio.wav", wav_buf, "audio/wav")},
+                    data={"model": self._model, "language": "it"},
+                )
+                if resp.status_code >= 400:
+                    logger.warning(
+                        "Groq STT error: HTTP %s %s", resp.status_code, resp.text[:200]
+                    )
+                    return None
+                result = resp.json()
+                text = result.get("text", "").strip()
+                return text if text else None
+        except Exception as e:
+            logger.warning("Groq STT request failed: %s", e)
+            return None
+
+
 _MEDICAL_HOTWORDS = {
     "dolore": "dolore",
     "toracico": "toracico",
@@ -196,6 +243,10 @@ class AgentDaemon:
         self._device_identity: str | None = None
         self._responder_joined = asyncio.Event()
         self._llm_client = None
+        self._groq_stt: GroqSTT | None = None
+        groq_key = os.environ.get("GROQ_API_KEY", "")
+        if groq_key:
+            self._groq_stt = GroqSTT(groq_key)
 
     def _load_skill(self) -> str:
         skill_path = Path("conf/skills/soccorso-anziani.yaml")
@@ -364,8 +415,6 @@ class AgentDaemon:
             logger.warning("Agent: no audio track within 30s")
 
     async def _run_conversation(self, track) -> None:
-        from vosk import KaldiRecognizer
-
         stream = AudioStream(track)
         resampler = _AudioResampler()
         skill_text = self._skill_text
@@ -384,6 +433,90 @@ class AgentDaemon:
 
         async def _echo_drain():
             await asyncio.sleep(2.0)
+
+        if self._groq_stt:
+            await self._run_groq_loop(
+                stream, resampler, llm_history, _drain, _echo_drain
+            )
+        else:
+            await self._run_vosk_loop(
+                stream, resampler, llm_history, _drain, _echo_drain
+            )
+
+    async def _run_groq_loop(self, stream, resampler, llm_history, _drain, _echo_drain):
+        """STT via Groq Whisper (cloud)."""
+        audio_buf = bytearray()
+        speech_start = 0.0
+        last_speech = 0.0
+
+        while self._participant_identity is not None:
+            audio_buf.clear()
+            speech_start = 0.0
+            last_speech = 0.0
+            try:
+                async for frame in stream:
+                    pcm16 = _frame_to_s16le(frame)
+                    if pcm16 is None:
+                        continue
+                    down = resampler.feed(pcm16)
+                    if down is None:
+                        continue
+                    rms = np.sqrt(np.mean(down.astype(np.float32) ** 2))
+                    now = time.monotonic()
+
+                    if rms >= 20:
+                        if speech_start == 0.0:
+                            speech_start = now
+                        last_speech = now
+                        audio_buf.extend(down.tobytes())
+                    elif speech_start > 0.0:
+                        if now - last_speech > 1.5:
+                            if len(audio_buf) < 3200:
+                                speech_start = 0.0
+                                continue
+                            text = await self._groq_stt.transcribe(bytes(audio_buf))
+                            speech_start = 0.0
+                            if not text or len(text.split()) < 2:
+                                break
+
+                            logger.info("STT: '%s'", text)
+                            if text.lower() in _END_PHRASES or any(
+                                p in text.lower() for p in _END_PHRASES
+                            ):
+                                await self._say("Arrivederci, stammi bene!")
+                                return
+
+                            self._busy.set()
+                            drainer = asyncio.create_task(_drain())
+
+                            urgency, reply = await self._combined_chat(
+                                text, llm_history
+                            )
+                            if urgency in ("HIGH", "CRITICAL"):
+                                logger.critical("Agent: emergency assessed %s", urgency)
+                                if self._dispatch_cb:
+                                    await self._dispatch_cb(f"URGENCY:{urgency}:{text}")
+                                await self._say(
+                                    "Ho capito, chiamo subito aiuto. Come sta adesso?"
+                                )
+                                asyncio.create_task(self._wait_for_responder())
+                            else:
+                                await self._say(reply)
+                            await _echo_drain()
+
+                            self._busy.clear()
+                            await drainer
+                            resampler = _AudioResampler()
+                            break
+            except StopAsyncIteration:
+                break
+            except Exception as e:
+                logger.error("Groq STT error: %s", e)
+                break
+        logger.info("Agent: conversation ended")
+
+    async def _run_vosk_loop(self, stream, resampler, llm_history, _drain, _echo_drain):
+        from vosk import KaldiRecognizer
 
         while self._participant_identity is not None:
             rec = KaldiRecognizer(self._vosk_model, 16000)
@@ -503,7 +636,6 @@ class AgentDaemon:
             except Exception as e:
                 logger.error("Agent conversation error: %s", e)
                 break
-
         logger.info("Agent: conversation ended")
 
     async def _assess_urgency(self, text: str) -> str:

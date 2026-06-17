@@ -274,6 +274,7 @@ class SecretsConfig:
     livekit: LiveKitSecretsConfig = field(default_factory=LiveKitSecretsConfig)
     telegram: TelegramSecretsConfig = field(default_factory=TelegramSecretsConfig)
     llm_host: str | None = None
+    groq_api_key: str = ""
     mqtt: MQTTSecretsConfig = field(default_factory=MQTTSecretsConfig)
 
 
@@ -877,8 +878,11 @@ def load_secrets(path: str | Path = "conf/secrets.yaml") -> SecretsConfig:
     llm_host = raw.get("llm_host") or None
     if llm_host:
         llm_host = str(llm_host)
+    groq_key = str(raw.get("groq_api_key", ""))
 
-    secrets = SecretsConfig(livekit=lk, telegram=tg, llm_host=llm_host, mqtt=mq)
+    secrets = SecretsConfig(
+        livekit=lk, telegram=tg, llm_host=llm_host, groq_api_key=groq_key, mqtt=mq
+    )
 
     # Apply to os.environ
     env_updates: list[str] = []
@@ -906,6 +910,9 @@ def load_secrets(path: str | Path = "conf/secrets.yaml") -> SecretsConfig:
     if mq.password:
         os.environ["MQTT_PASSWORD"] = mq.password
         env_updates.append("MQTT_PASSWORD")
+    if secrets.groq_api_key:
+        os.environ["GROQ_API_KEY"] = secrets.groq_api_key
+        env_updates.append("GROQ_API_KEY")
 
     if env_updates:
         logger.debug("Applied secrets env keys: %s", ", ".join(env_updates))
