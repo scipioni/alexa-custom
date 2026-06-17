@@ -29,6 +29,7 @@ dependencies = [
 
 [project.scripts]
 alexa-client = "alexa_custom.client:main"
+alexa-agent = "alexa_agent.agent:main"
 alexa-audio = "alexa_custom.audio:main"
 alexa-devices = "alexa_custom.audio:main_devices"
 alexa-test = "alexa_custom.audio:main_test"
@@ -41,7 +42,7 @@ alexa-stt = "alexa_custom.stt_cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["alexa_custom*"]
+include = ["alexa_custom*", "alexa_agent*"]
 
 [project.optional-dependencies]
 i2c = ["smbus2>=0.4.0"]

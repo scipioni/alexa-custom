@@ -91,6 +91,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Dynamic room override — set by agent_session action so the device
+# connects to a freshly-created room instead of LIVEKIT_ROOM.
+_pending_room_override: str | None = None
+_pending_token_override: str | None = None
+
+
+def set_pending_connect(room_name: str, token: str) -> None:
+    global _pending_room_override, _pending_token_override
+    _pending_room_override = room_name
+    _pending_token_override = token
+
 
 def get_token() -> str:
     api_key = require_env("LIVEKIT_API_KEY")
@@ -282,8 +293,16 @@ class LiveKitSessionManager:
 
         try:
             room_url = require_env("LIVEKIT_URL")
-            await self.room.connect(room_url, get_token())
-            room_name = require_env("LIVEKIT_ROOM")
+            global _pending_room_override, _pending_token_override
+            if _pending_room_override is not None:
+                token = _pending_token_override or get_token()
+                room_name = _pending_room_override
+                _pending_room_override = None
+                _pending_token_override = None
+            else:
+                token = get_token()
+                room_name = require_env("LIVEKIT_ROOM")
+            await self.room.connect(room_url, token)
             logger.info(
                 f"Connected to {room_url}/{room_name} as {self.room.local_participant.identity}"
             )

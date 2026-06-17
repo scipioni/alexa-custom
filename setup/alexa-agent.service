@@ -1,0 +1,16 @@
+[Unit]
+Description=alexa-custom AI agent daemon (Serena)
+After=pipewire.service pipewire-pulse.service
+Wants=pipewire.service pipewire-pulse.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/alexa-custom
+ExecStart=%h/alexa-custom/.venv/bin/alexa-agent --daemon
+Restart=on-failure
+RestartSec=5s
+Environment=PYTHONUNBUFFERED=1
+Environment=LANG=it
+
+[Install]
+WantedBy=default.target

@@ -17,6 +17,10 @@ from livekit.api import AccessToken, VideoGrants, LiveKitAPI, DeleteRoomRequest
 
 from alexa_custom.llm import OpenAIClient
 
+_IPC_DIR = Path.home() / ".local" / "share" / "alexa-agent"
+_REQUEST_FILE = _IPC_DIR / "request.json"
+_STATUS_FILE = _IPC_DIR / "status.json"
+
 logging.basicConfig(
     level=logging.DEBUG,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
@@ -32,9 +36,11 @@ class AgentConfig:
     temperature: float = 0.3
     max_tokens: int = 80
     system_prompt: str = (
-        "Sei un assistente vocale utile. Rispondi in modo conciso, "
-        "massimo una frase, al massimo 15 parole. Parla sempre in italiano. "
-        "Non terminare la conversazione finché l'utente non dice 'disconnetti'."
+        "Sei un assistente vocale utile. Rispondi in modo chiaro e naturale. "
+        "Parla sempre in italiano. "
+        "Non terminare la conversazione finché l'utente non dice 'disconnetti'. "
+        "Se l'utente ti descrive un problema o un malore, "
+        "fornisci consigli utili e rassicuranti su cosa fare nell'immediato."
     )
     vosk_model_path: str = "models/it"
     tts_voice_path: str = "models/piper/it_IT-paola-medium.onnx"
@@ -48,12 +54,38 @@ class AgentConfig:
     vad_silence_ms: int = 400
     vad_min_speech_ms: int = 150
     session_timeout: float = 0.0  # 0 = no timeout
+    tts_length_scale: float = 1.3
+    grammar_phrases: list[str] | None = None
 
     def llm_extra(self) -> dict:
         return {"temperature": self.temperature, "max_tokens": self.max_tokens}
 
 
 config = AgentConfig()
+
+_DEFAULT_GRAMMAR = [
+    "si", "no", "non lo so", "forse", "ok", "okay", "va bene",
+    "non sto bene", "ho bisogno di aiuto", "chiama aiuto", "aiutami",
+    "mi sento male", "sto male", "chiama un medico", "chiama l'ambulanza",
+    "emergenza", "aiuto",
+    "disconnetti", "arrivederci", "grazie", "ciao",
+    "buongiorno", "buonasera", "buonanotte",
+    "ripeti", "non ho capito", "puoi ripetere", "puoi parlare piu lentamente",
+    "stai bene", "come stai", "bene", "male", "cosi cosi",
+    "qual e il mio nome", "che ore sono", "che giorno e oggi",
+    "apri il browser", "chiama stefano",
+    "voglio parlare con un operatore", "parla con un operatore",
+]
+
+
+def _build_grammar(phrases: list[str] | None) -> str | None:
+    if not phrases:
+        return None
+    normalized = sorted(set(p.lower().strip() for p in phrases if p.strip()))
+    tokens = normalized + ["[unk]"]
+    logger.info("agent grammar: %d tokens", len(tokens))
+    return json.dumps(tokens)
+
 
 _SENTENCE_END = frozenset(".!?")
 
@@ -70,6 +102,7 @@ _DISTRESS_PHRASES = frozenset({
     "chiama un medico",
     "chiama l'ambulanza",
     "emergenza",
+    "no",
 })
 
 
@@ -190,12 +223,17 @@ async def _process_audio(
     conversation: list,
     room: rtc.Room,
     room_url: str,
+    vosk_grammar: str | None = None,
 ):
     global _caregiver_notified
     from vosk import KaldiRecognizer
 
     stream = rtc.AudioStream(track)
-    rec = KaldiRecognizer(vosk_model, config.vosk_rate)
+    rec = (
+        KaldiRecognizer(vosk_model, config.vosk_rate, vosk_grammar)
+        if vosk_grammar
+        else KaldiRecognizer(vosk_model, config.vosk_rate)
+    )
     rec.SetWords(True)
 
     logger.info(f"Audio stream started for {identity}")
@@ -246,9 +284,11 @@ async def _process_audio(
                         asyncio.create_task(
                             _notify_caregiver(room.name or "", room_url)
                         )
-                        asyncio.create_task(
-                            _speak("Ho chiamato aiuto, stanno arrivando.", tts_voice, audio_source)
-                        )
+                        await _speak("Ho chiamato aiuto. Dimmi cosa è successo.", tts_voice, audio_source)
+                        conversation.append({"role": "assistant", "content": "Ho chiamato aiuto. Dimmi cosa è successo."})
+                        _speech_ms = 0.0
+                        rec.Reset()
+                        continue
                     try:
                         await _publish_chat(room, text, generated=False)
                     except Exception as e:
@@ -277,21 +317,21 @@ async def _process_audio(
                     asyncio.create_task(
                         _notify_caregiver(room.name or "", room_url)
                     )
-                    asyncio.create_task(
-                        _speak("Ho chiamato aiuto, stanno arrivando.", tts_voice, audio_source)
+                    await _speak("Ho chiamato aiuto. Dimmi cosa è successo.", tts_voice, audio_source)
+                    conversation.append({"role": "assistant", "content": "Ho chiamato aiuto. Dimmi cosa è successo."})
+                else:
+                    try:
+                        await _publish_chat(room, text, generated=False)
+                    except Exception as e:
+                        logger.debug(f"Chat publish failed: {e}")
+                    await _handle_llm(
+                        text,
+                        llm,
+                        tts_voice,
+                        audio_source,
+                        conversation,
+                        room,
                     )
-                try:
-                    await _publish_chat(room, text, generated=False)
-                except Exception as e:
-                    logger.debug(f"Chat publish failed: {e}")
-                await _handle_llm(
-                    text,
-                    llm,
-                    tts_voice,
-                    audio_source,
-                    conversation,
-                    room,
-                )
             _speech_ms = 0.0
         else:
             partial = json.loads(rec.PartialResult())
@@ -392,6 +432,7 @@ def _synthesize(text: str, tts_voice) -> bytes:
     from piper import SynthesisConfig
 
     cfg = SynthesisConfig()
+    cfg.length_scale = config.tts_length_scale
     chunks = []
     for chunk in tts_voice.synthesize(text, cfg):
         chunks.append(chunk.audio_int16_bytes)
@@ -468,14 +509,109 @@ async def _play_beep(source: rtc.AudioSource):
     logger.info("Beep played")
 
 
-async def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--room", required=True)
-    parser.add_argument("--token", required=True)
-    parser.add_argument("--url", default=os.environ.get("LIVEKIT_URL"))
-    args = parser.parse_args()
+async def run_session(
+    room_name: str,
+    token: str,
+    room_url: str,
+    llm: OpenAIClient,
+    vosk_model,
+    tts_voice,
+    vosk_grammar: str | None = None,
+):
+    """Connect to a LiveKit room and handle a conversation session."""
+    now = time.localtime()
+    date_str = time.strftime("%A %d %B %Y, ore %H:%M", now)
+    conversation = [
+        {
+            "role": "system",
+            "content": f"{config.system_prompt} Data e ora corrente: {date_str}.",
+        },
+    ]
 
-    logger.info(f"Starting agent for room {args.room}")
+    room = rtc.Room()
+    stop = asyncio.Event()
+    audio_source: rtc.AudioSource | None = None
+
+    @room.on("participant_connected")
+    def on_join(p):
+        logger.info(f"User joined: {p.identity}")
+        if p.identity.startswith("caregiver-"):
+            logger.info("Caregiver joined — agent leaving room")
+            async def _leave():
+                await _speak("Arrivederci, il caregiver è arrivato. Passo la linea.", tts_voice, audio_source)
+                stop.set()
+            asyncio.create_task(_leave())
+
+    @room.on("participant_disconnected")
+    def on_leave(p):
+        logger.info(f"User left: {p.identity}")
+        stop.set()
+
+    @room.on("track_subscribed")
+    def on_track(track, pub, participant):
+        if track.kind == rtc.TrackKind.KIND_AUDIO:
+            logger.info(f"Audio track from {participant.identity}")
+            asyncio.create_task(
+                _process_audio(
+                    track,
+                    participant.identity,
+                    vosk_model,
+                    stop,
+                    audio_source,
+                    llm,
+                    tts_voice,
+                    conversation,
+                    room,
+                    room_url,
+                    vosk_grammar=vosk_grammar,
+                )
+            )
+
+    logger.info("Connecting...")
+    audio_source = rtc.AudioSource(config.sample_rate, config.channels)
+    await room.connect(room_url, token)
+    logger.info(f"Connected as {room.local_participant.identity}")
+
+    track = rtc.LocalAudioTrack.create_audio_track("agent-voice", audio_source)
+    opts = rtc.TrackPublishOptions()
+    opts.source = rtc.TrackSource.SOURCE_MICROPHONE
+    await room.local_participant.publish_track(track, opts)
+    logger.info("Audio track published")
+
+    await _play_beep(audio_source)
+    await _speak(
+        "Ciao, sono il tuo assistente. Stai bene?", tts_voice, audio_source
+    )
+    logger.info("Waiting for user speech...")
+
+    try:
+        await stop.wait()
+    finally:
+        await room.disconnect()
+        logger.info("Disconnected")
+
+
+def _write_status(state: str, room: str = ""):
+    _IPC_DIR.mkdir(parents=True, exist_ok=True)
+    _STATUS_FILE.write_text(json.dumps({"state": state, "room": room}))
+
+
+async def _wait_for_request() -> dict | None:
+    """Poll for request.json — returns parsed dict or None."""
+    if _REQUEST_FILE.exists():
+        try:
+            data = json.loads(_REQUEST_FILE.read_text())
+            _REQUEST_FILE.unlink(missing_ok=True)
+            return data
+        except (json.JSONDecodeError, OSError) as e:
+            logger.warning("Invalid request file: %s", e)
+            _REQUEST_FILE.unlink(missing_ok=True)
+    return None
+
+
+async def daemon_main():
+    """Persistent daemon: load models once, then loop waiting for session requests."""
+    _write_status("idle")
 
     api_key = os.environ.get("CROF_AI_API_KEY")
     if not api_key:
@@ -499,73 +635,87 @@ async def main():
     tts_voice = PiperVoice.load(str(Path(config.tts_voice_path)), use_cuda=False)
     logger.info("Piper voice loaded")
 
-    now = time.localtime()
-    date_str = time.strftime("%A %d %B %Y, ore %H:%M", now)
-    conversation = [
-        {
-            "role": "system",
-            "content": f"{config.system_prompt} Data e ora corrente: {date_str}.",
-        },
-    ]
+    vosk_grammar = _build_grammar(config.grammar_phrases or _DEFAULT_GRAMMAR)
+    if vosk_grammar:
+        logger.info("Using constrained grammar for STT")
 
-    room = rtc.Room()
-    stop = asyncio.Event()
-    audio_source: rtc.AudioSource | None = None
+    logger.info("Agent daemon ready, waiting for sessions...")
 
-    @room.on("participant_connected")
-    def on_join(p):
-        logger.info(f"User joined: {p.identity}")
+    while True:
+        request = await _wait_for_request()
+        if request is not None:
+            room = request.get("room", "")
+            token = request.get("token", "")
+            url = request.get("url", "")
+            if not room or not token or not url:
+                logger.warning("Invalid request — missing fields")
+                _write_status("idle")
+                await asyncio.sleep(0.5)
+                continue
 
-    @room.on("participant_disconnected")
-    def on_leave(p):
-        logger.info(f"User left: {p.identity}")
-        stop.set()
+            logger.info("Starting session in room %s", room)
+            _write_status("connecting", room)
+            try:
+                await run_session(room, token, url, llm, vosk_model, tts_voice, vosk_grammar=vosk_grammar)
+            except Exception as e:
+                logger.exception("Session failed: %s", e)
+            _write_status("idle")
+        else:
+            await asyncio.sleep(0.5)
 
-    @room.on("track_subscribed")
-    def on_track(track, pub, participant):
-        if track.kind == rtc.TrackKind.KIND_AUDIO:
-            logger.info(f"Audio track from {participant.identity}")
-            asyncio.create_task(
-                _process_audio(
-                    track,
-                    participant.identity,
-                    vosk_model,
-                    stop,
-                    audio_source,
-                    llm,
-                    tts_voice,
-                    conversation,
-                    room,
-                    args.url or "",
-                )
-            )
 
-    logger.info("Connecting...")
-    audio_source = rtc.AudioSource(config.sample_rate, config.channels)
-    await room.connect(args.url, args.token)
-    logger.info(f"Connected as {room.local_participant.identity}")
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--daemon", action="store_true", help="Run as persistent daemon")
+    parser.add_argument("--room", help="Room name (single session)")
+    parser.add_argument("--token", help="JWT token (single session)")
+    parser.add_argument("--url", default=os.environ.get("LIVEKIT_URL"))
+    args = parser.parse_args()
 
-    track = rtc.LocalAudioTrack.create_audio_track("agent-voice", audio_source)
-    opts = rtc.TrackPublishOptions()
-    opts.source = rtc.TrackSource.SOURCE_MICROPHONE
-    await room.local_participant.publish_track(track, opts)
-    logger.info("Audio track published")
+    if args.daemon:
+        logger.info("Starting agent daemon...")
+        try:
+            asyncio.run(daemon_main())
+        except Exception as e:
+            logger.exception("Agent daemon crashed: %s", e)
+            sys.exit(1)
+    else:
+        if not args.room or not args.token:
+            logger.error("--room and --token required unless --daemon is used")
+            sys.exit(1)
 
-    await _play_beep(audio_source)
-    await _speak(
-        "Ciao, sono il tuo assistente. Stai bene?", tts_voice, audio_source
-    )
-    logger.info("Waiting for user speech...")
+        api_key = os.environ.get("CROF_AI_API_KEY")
+        if not api_key:
+            logger.error("CROF_AI_API_KEY not set")
+            sys.exit(1)
+        llm = OpenAIClient(
+            host=config.llm_base_url,
+            api_key=api_key,
+            timeout=config.llm_timeout,
+        )
 
-    try:
-        await stop.wait()
-    finally:
-        await room.disconnect()
-        logger.info("Disconnected")
+        logger.info("Loading Vosk model...")
+        from vosk import Model
+
+        vosk_model = Model(str(Path(config.vosk_model_path)))
+        logger.info("Vosk model loaded")
+
+        logger.info("Loading Piper voice...")
+        from piper import PiperVoice
+
+        tts_voice = PiperVoice.load(str(Path(config.tts_voice_path)), use_cuda=False)
+        logger.info("Piper voice loaded")
+
+        vosk_grammar = _build_grammar(config.grammar_phrases or _DEFAULT_GRAMMAR)
+        if vosk_grammar:
+            logger.info("Using constrained grammar for STT")
+
+        try:
+            asyncio.run(run_session(args.room, args.token, args.url or "", llm, vosk_model, tts_voice, vosk_grammar=vosk_grammar))
+        except Exception as e:
+            logger.exception("Agent session failed: %s", e)
+            sys.exit(1)
 
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except Exception as e:
-        logger.exception(f"Agent crashed: {e}")
+    main()
