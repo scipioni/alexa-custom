@@ -163,6 +163,18 @@
 
 <script src="/static/dashboard.js" defer></script>
 
+  <div id="reconnect-popup" class="hidden">
+    <div class="popup-overlay"></div>
+    <div class="popup-content">
+      <div class="popup-icon-container">
+        <span class="material-symbols-outlined popup-icon-wifi">wifi_off</span>
+        <span class="material-symbols-outlined popup-icon-spin">sync</span>
+      </div>
+      <h3>Connection Lost</h3>
+      <p>Attempting to reconnect to the server...</p>
+    </div>
+  </div>
+
       <div id="config-modal" class="hidden">
         <div class="modal-overlay" onclick="closeConfigModal()"></div>
         <div class="modal-content">
