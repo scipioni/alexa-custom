@@ -563,9 +563,15 @@ async def _async_main(
                 url = browser_join_url()
                 msg = f"\U0001f6a8 EMERGENZA (da agente): {reason}\n\nEntra nella stanza: {url}"
                 chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
-                if telegram_client and chat_id:
+                token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+                if not token:
+                    logger.warning("Telegram dispatch: TELEGRAM_BOT_TOKEN not set")
+                if not chat_id:
+                    logger.warning("Telegram dispatch: TELEGRAM_CHAT_ID not set")
+                if telegram_client and chat_id and token:
                     try:
                         await telegram_client.send_message(chat_id, msg)
+                        logger.info("Telegram dispatch sent to %s", chat_id)
                     except Exception as e:
                         logger.error("Telegram dispatch failed: %s", e)
 
