@@ -81,7 +81,7 @@
         reconnTimer = setTimeout(connect, _reconnDelay);
         _reconnDelay = Math.min(_reconnDelay * 2, 8000);
       };
-      ws.onmessage = (e) => { try { handle(JSON.parse(e.data)); } catch(_) {} };
+      ws.onmessage = (e) => { try { handle(JSON.parse(e.data)); } catch(err) { console.error('WS message error:', err); } };
     }
 
     function wsInd(up) {
@@ -1334,7 +1334,7 @@
       if (hl && empty) {
         const hasItems = hl.children.length > 0;
         if (hasItems) {
-          hl.style.display = 'block';
+          hl.style.display = '';
           empty.style.display = 'none';
         } else {
           hl.style.display = 'none';
@@ -1497,11 +1497,7 @@
       localStorage.setItem('monitor-collapsed', collapsed ? '1' : '0');
     }
 
-    function toggleHistory() {
-      const sec = document.getElementById('history-section');
-      const collapsed = sec.classList.toggle('collapsed');
-      localStorage.setItem('history-collapsed', collapsed ? '1' : '0');
-    }
+
 
     function toggleLog() {
       const sec = document.getElementById('log-panel');

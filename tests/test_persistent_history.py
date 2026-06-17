@@ -81,7 +81,7 @@ class TestHistoryFileHelpers:
                 json.dumps({"id": i}) + "\n"
             )
 
-        entries = server._read_last_history_entries(limit=3)
+        entries = await server._read_last_history_entries(limit=3)
         assert len(entries) == 3
         # Should return last 3 in chronological order
         assert entries[0]["id"] == 2
@@ -143,6 +143,51 @@ class TestSessionAggregation:
         b_msg = server._broadcast.call_args[0][0]
         assert b_msg["type"] == "history_item"
         assert b_msg["session"]["session_id"] == session_id
+
+    async def test_clear_discards_active_session_and_new_session_appends(
+        self, server, temp_history_file
+    ):
+        """Clearing history must discard the in-progress session and allow new sessions."""
+        server._loop = asyncio.get_running_loop()
+        server._pending_vu["confidence"] = 0.9
+
+        # Start a session without completing it
+        server._process_history_event("wake", {"word": "alexa"})
+        assert server._active_session is not None
+
+        # Clear history mid-session (as _handle_control does)
+        await server._clear_history_log()
+        server._active_session = None
+        server._broadcast.reset_mock()
+
+        # A lingering listening event from the previous dispatch must be a no-op
+        server._process_history_event("listening", {})
+        await asyncio.sleep(0.01)
+        # File should not exist or be empty — the discarded session must not have been written
+        assert not temp_history_file.exists() or temp_history_file.stat().st_size == 0
+        server._broadcast.assert_not_called()
+
+        # New session after the clear must be appended and broadcast
+        server._process_history_event("wake", {"word": "alexa"})
+        server._process_history_event(
+            "matched",
+            {
+                "transcript": "new command",
+                "phrase": "new command",
+                "score": 90,
+                "actions": [{"type": "mqtt_publish"}],
+            },
+        )
+        await asyncio.sleep(0.01)
+
+        lines = temp_history_file.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1
+        assert json.loads(lines[0])["transcript"]["text"] == "new command"
+
+        server._broadcast.assert_called_once()
+        msg = server._broadcast.call_args[0][0]
+        assert msg["type"] == "history_item"
+        assert msg["session"]["transcript"]["text"] == "new command"
 
     async def test_gated_false_trigger_aggregation(self, server, temp_history_file):
         """A wake word followed by a gating event must record a false trigger."""

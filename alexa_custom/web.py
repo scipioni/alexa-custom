@@ -238,27 +238,33 @@ class WebServer:
         loop = self._loop or asyncio.get_running_loop()
         await loop.run_in_executor(None, _update)
 
-    def _read_last_history_entries(self, limit: int = 20) -> list[dict]:
+    async def _read_last_history_entries(self, limit: int = 20) -> list[dict]:
         """Reads the last limit entries from history.jsonl in chronological order."""
-        if not self._history_file.exists():
-            return []
-        try:
-            with _file_lock(self._history_file, exclusive=False):
-                with self._history_file.open("r", encoding="utf-8") as f:
-                    lines = [line.strip() for line in f if line.strip()]
-            last_lines = lines[-limit:]
-            entries = []
-            for line_str in last_lines:
-                try:
-                    entries.append(json.loads(line_str))
-                except Exception:
-                    pass
-            return entries
-        except Exception as e:
-            logger.error(
-                "Failed to read last history entries from %s: %s", self._history_file, e
-            )
-            return []
+
+        def _read() -> list[dict]:
+            if not self._history_file.exists():
+                return []
+            try:
+                with _file_lock(self._history_file, exclusive=False):
+                    with self._history_file.open("r", encoding="utf-8") as f:
+                        lines = [line.strip() for line in f if line.strip()]
+                entries = []
+                for line_str in lines[-limit:]:
+                    try:
+                        entries.append(json.loads(line_str))
+                    except Exception:
+                        pass
+                return entries
+            except Exception as e:
+                logger.error(
+                    "Failed to read last history entries from %s: %s",
+                    self._history_file,
+                    e,
+                )
+                return []
+
+        loop = self._loop or asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _read)
 
     def _process_history_event(self, event: str, data: dict) -> None:
         """Processes STT lifecycle events on the main event loop to aggregate and persist sessions."""
@@ -582,7 +588,7 @@ class WebServer:
                     "cpu_limit": self._cpu_limit,
                     "livekit_configured": self._livekit_ok,
                     "telegram_configured": self._telegram_ok,
-                    "history": self._read_last_history_entries(20),
+                    "history": await self._read_last_history_entries(20),
                 }
             )
         )
@@ -595,7 +601,10 @@ class WebServer:
                     except json.JSONDecodeError:
                         continue
                     if payload.get("type") == "control":
-                        await self._handle_control(payload.get("action", ""))
+                        try:
+                            await self._handle_control(payload.get("action", ""))
+                        except Exception:
+                            logger.exception("Error handling control action")
                 elif msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
                     break
         finally:
@@ -614,6 +623,7 @@ class WebServer:
                 os.execv(sys.executable, [sys.executable] + sys.argv)
         elif action == "clear_history":
             logger.info("Clear history requested via web dashboard")
+            self._active_session = None
             await self._clear_history_log()
             await self._broadcast({"type": "history_cleared"})
         elif action.startswith("flag_fp:"):

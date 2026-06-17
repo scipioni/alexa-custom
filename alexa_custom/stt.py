@@ -255,8 +255,9 @@ def _recognition_loop(
         if on_stt_event:
             on_stt_event("matched", {
                 "transcript": transcript,
-                "trigger": trigger.commands[0] if trigger.commands else trigger.phrase,
+                "phrase": trigger.commands[0] if trigger.commands else trigger.phrase,
                 "score": score,
+                "actions": [{"type": a.type, "params": a.params} for a in trigger.actions],
             })
         if mqtt_client:
             mqtt_client.publish_threadsafe(

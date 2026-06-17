@@ -303,6 +303,7 @@ triggers:
       - "chiama assistenza"
       - "chiama"
       - "aiuto"
+    with_wake: false
     actions:
       - type: ask
         text: "Vuoi chiamare assistenza ?"
