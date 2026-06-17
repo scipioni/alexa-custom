@@ -97,7 +97,7 @@ alexa-setup
 task audio:setup
 
 # 6. Create configuration
-cp -r conf.example/* conf/
+cp -r conf.example conf
 
 # 7. Start the assistant
 alexa-client
