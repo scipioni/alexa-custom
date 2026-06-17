@@ -26,8 +26,8 @@ logger = logging.getLogger("ai-agent")
 
 @dataclass
 class AgentConfig:
-    llm_model: str = "llama-3.1-8b-instant"
-    llm_base_url: str = "https://api.groq.com/openai"
+    llm_model: str = "glm-5.2"
+    llm_base_url: str = "https://ai.nahcrof.com"
     llm_timeout: float = 30.0
     temperature: float = 0.3
     max_tokens: int = 80
@@ -42,10 +42,10 @@ class AgentConfig:
     tts_sample_rate: int = 22050
     vosk_rate: int = 16000
     channels: int = 1
-    tts_cooldown_ms: int = 1000
+    tts_cooldown_ms: int = 300
     rms_threshold: float = 0.001
     debug_audio_every_n: int = 50
-    vad_silence_ms: int = 600
+    vad_silence_ms: int = 400
     vad_min_speech_ms: int = 150
     session_timeout: float = 0.0  # 0 = no timeout
 
@@ -91,7 +91,7 @@ async def _notify_caregiver(room_name: str, room_url: str) -> bool:
         AccessToken(api_key, api_secret)
         .with_identity(caregiver_identity)
         .with_name("Caregiver")
-        .with_grants(VideoGrants(room_join=True, room=room_name))
+        .with_grants(VideoGrants(room_join=True, room=room_name, can_publish_sources=["microphone"]))
         .to_jwt()
     )
     params = urllib.parse.urlencode({"liveKitUrl": room_url, "token": caregiver_token})
@@ -477,9 +477,9 @@ async def main():
 
     logger.info(f"Starting agent for room {args.room}")
 
-    api_key = os.environ.get("GROQ_API_KEY")
+    api_key = os.environ.get("CROF_AI_API_KEY")
     if not api_key:
-        logger.error("GROQ_API_KEY not set")
+        logger.error("CROF_AI_API_KEY not set")
         sys.exit(1)
     llm = OpenAIClient(
         host=config.llm_base_url,

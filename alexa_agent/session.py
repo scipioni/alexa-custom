@@ -48,7 +48,7 @@ def _generate_agent_tokens(room_name: str):
 
     agent_token = (
         AccessToken(key, secret)
-        .with_identity("ai-agent")
+        .with_identity("serena ai")
         .with_grants(
             VideoGrants(
                 room_join=True,

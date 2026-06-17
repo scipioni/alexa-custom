@@ -19,9 +19,9 @@ from agente_sos.notifier import SOSNotifier
 logger = logging.getLogger(__name__)
 
 _VOSK_RATE = 16000
-_TTS_COOLDOWN_MS = 1000
+_TTS_COOLDOWN_MS = 300
 _RMS_THRESHOLD = 0.001
-_VAD_SILENCE_MS = 600
+_VAD_SILENCE_MS = 400
 _VAD_MIN_SPEECH_MS = 150
 _SAMPLE_RATE = 48000
 _TTS_SAMPLE_RATE = 22050

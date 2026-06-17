@@ -9,7 +9,7 @@ alexa_agent/
 ├── agent.py          ← Script principale: loop Vosk → LLM → Piper su LiveKit
 ├── session.py        ← Orchestrazione: creazione stanza, token JWT, avvio agente
 ├── actions.py        ← Copia di alexa_custom/actions.py (modificato)
-├── config.py         ← Copia di alexa_custom/config.py (modificato: groq_api_key)
+├── config.py         ← Copia di alexa_custom/config.py (modificato: crof_ai_api_key)
 ├── web.py            ← Copia di alexa_custom/web.py (modificato: WEB_PORT export)
 ├── llm.py            ← Copia di alexa_custom/llm.py (modificato: extra_body)
 ├── __init__.py
@@ -36,7 +36,7 @@ alexa_agent/
 | File | Modifica |
 |---|---|
 | `actions.py` | Rimossa `_create_agent_room`, `_generate_agent_tokens`, `handle_agent_session`. Aggiunto `registry.register("agent_session")` da `alexa_agent.session`. |
-| `config.py` | Aggiunto campo `groq_api_key: str \| None = None` in `SecretsConfig` + env var. |
+| `config.py` | Aggiunto campo `crof_ai_api_key: str \| None = None` in `SecretsConfig` + env var. |
 | `web.py` | Aggiunto `os.environ["WEB_PORT"] = str(port)`. |
 | `llm.py` | `OpenAIClient.chat_stream()` ora accetta `extra_body: dict \| None` per parametri aggiuntivi (temperature, max_tokens). |
 
@@ -79,8 +79,8 @@ Tutti i parametri in `AgentConfig` (inizio di `agent.py`):
 
 | Parametro | Default | Cosa fa |
 |---|---|---|
-| `llm_model` | `llama-3.1-8b-instant` | Modello LLM |
-| `llm_base_url` | `https://api.groq.com/openai` | Endpoint LLM |
+| `llm_model` | `glm-5.2` | Modello LLM |
+| `llm_base_url` | `https://ai.nahcrof.com` | Endpoint LLM |
 | `temperature` | `0.3` | Creatività del LLM |
 | `max_tokens` | `80` | Max token per risposta |
 | `system_prompt` | "...massimo una frase..." | Prompt di sistema |

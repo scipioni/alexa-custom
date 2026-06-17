@@ -101,7 +101,7 @@ def get_token() -> str:
         AccessToken(api_key, api_secret)
         .with_identity("headless-participant")
         .with_name("Headless Participant")
-        .with_grants(VideoGrants(room_join=True, room=room))
+        .with_grants(VideoGrants(room_join=True, room=room, can_publish_sources=["microphone"]))
         .to_jwt()
     )
 
@@ -115,7 +115,7 @@ def make_browser_token(identity: str = "browser-user") -> str:
         AccessToken(api_key, api_secret)
         .with_identity(identity)
         .with_name(identity)
-        .with_grants(VideoGrants(room_join=True, room=room))
+        .with_grants(VideoGrants(room_join=True, room=room, can_publish_sources=["microphone"]))
         .to_jwt()
     )
 
