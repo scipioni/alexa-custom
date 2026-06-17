@@ -14,16 +14,7 @@ from pathlib import Path
 
 import numpy as np
 
-from livekit.rtc import (
-    AudioFrame,
-    AudioSource,
-    AudioStream,
-    LocalAudioTrack,
-    Room,
-    TrackKind,
-    TrackPublishOptions,
-    TrackSource,
-)
+from livekit.rtc import AudioStream, Room, TrackKind
 
 logger = logging.getLogger(__name__)
 
@@ -252,8 +243,6 @@ class AgentDaemon:
             vosk_model = _VoskModel(model_path)
         self._vosk_model = vosk_model
         self._room: Room | None = None
-        self._tts_source: AudioSource | None = None
-        self._tts_busy = asyncio.Event()
         self._busy = asyncio.Event()
         self._stop = asyncio.Event()
         self._participant_identity: str | None = None
@@ -369,62 +358,15 @@ class AgentDaemon:
         except Exception as e:
             logger.error("TTS data send error: %s", e)
 
-    async def _say_room(self, text: str) -> None:
-        """Publish one-shot TTS audio track to ALL room participants."""
-        logger.info("Room TTS: '%s'", text)
-        if not self._room or not text:
-            return
-        try:
-            from alexa_custom.tts import PIPER_VOICES_DIR
-
-            voice_path = PIPER_VOICES_DIR / "it_IT-paola-medium.onnx"
-            if not voice_path.is_file():
-                return
-            from piper import PiperVoice
-
-            voice = PiperVoice.load(str(voice_path))
-            sr = 22050
-
-            source = AudioSource(48000, 1)
-            track = LocalAudioTrack.create_audio_track("agent-summary", source)
-            opts = TrackPublishOptions(source=TrackSource.SOURCE_MICROPHONE)
-            pub = await self._room.local_participant.publish_track(track, opts)
-            await asyncio.sleep(0.5)
-
-            for chunk in voice.synthesize(text):
-                arr = getattr(chunk, "audio_int16_array", None)
-                if arr is None:
-                    raw = getattr(chunk, "audio_int16_bytes", None) or bytes(chunk)
-                    arr = np.frombuffer(raw, dtype=np.int16)
-                target_len = int(len(arr) * 48000 / sr)
-                resampled = _resample_numpy(arr.astype(np.float32), target_len)
-                if len(resampled) == 0:
-                    continue
-                frame = AudioFrame(
-                    data=resampled.astype(np.int16).tobytes(),
-                    sample_rate=48000,
-                    num_channels=1,
-                    samples_per_channel=len(resampled),
-                )
-                await source.capture_frame(frame)
-
-            await asyncio.sleep(0.2)
-            await self._room.local_participant.unpublish_track(pub.sid)
-        except Exception as e:
-            logger.warning("Room TTS error: %s", e)
-
     async def _wait_for_responder(self) -> None:
-        """Wait for a responder to join. Resend Telegram link every 30s."""
+        """Wait for a responder to join. Send final summary via Telegram then exit."""
         for attempt in range(5):
             self._responder_joined.clear()
             try:
                 await asyncio.wait_for(self._responder_joined.wait(), timeout=30.0)
-                if not self._conversation_history:
-                    return
-                summary = " ".join(
-                    s.split(": ", 1)[-1] for s in self._conversation_history[-5:]
-                )
-                await self._say_room(f"Riassunto: {summary}")
+                if self._conversation_history and self._dispatch_cb:
+                    summary = "\n".join(self._conversation_history[-5:])
+                    await self._dispatch_cb(f"DIAGNOSI (dopo emergenza):\n{summary}")
                 return
             except asyncio.TimeoutError:
                 logger.warning(
@@ -813,21 +755,6 @@ class AgentDaemon:
         except Exception as e:
             logger.error("LLM chat error: %s", e)
             return "Scusa, non ho capito. Puoi ripetere?"
-
-
-def _resample_numpy(arr: np.ndarray, target_len: int) -> np.ndarray:
-    if len(arr) < 2:
-        return np.resize(arr, max(target_len, 1))
-    try:
-        import scipy.signal
-
-        return scipy.signal.resample(arr.astype(np.float32), target_len).astype(
-            np.int16
-        )
-    except ImportError:
-        x = np.linspace(0, len(arr) - 1, num=len(arr))
-        x_new = np.linspace(0, len(arr) - 1, num=target_len)
-        return np.interp(x_new, x, arr.astype(np.float32)).astype(np.int16)
 
 
 def _frame_to_s16le(frame_or_event) -> bytes | None:
