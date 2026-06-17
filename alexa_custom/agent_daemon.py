@@ -252,6 +252,8 @@ class AgentDaemon:
             vosk_model = _VoskModel(model_path)
         self._vosk_model = vosk_model
         self._room: Room | None = None
+        self._tts_source: AudioSource | None = None
+        self._tts_busy = asyncio.Event()
         self._busy = asyncio.Event()
         self._stop = asyncio.Event()
         self._participant_identity: str | None = None
@@ -352,11 +354,11 @@ class AgentDaemon:
             asyncio.create_task(self._room.disconnect())
 
     async def _say(self, text: str) -> None:
-        """Publish TTS audio to room + send text via data channel."""
+        """Push TTS audio to room + send text via data channel."""
         logger.info("TTS: '%s'", text)
         if not self._room:
             return
-        # Always send text via data channel (fallback, also used by device)
+
         try:
             dest = [self._device_identity] if self._device_identity else []
             await self._room.local_participant.publish_data(
@@ -368,7 +370,9 @@ class AgentDaemon:
         except Exception as e:
             logger.error("TTS data send error: %s", e)
 
-        # Publish audio track to room so ALL participants (incl. browser) hear it
+        if self._tts_source is None:
+            return
+        self._tts_busy.set()
         try:
             from alexa_custom.tts import PIPER_VOICES_DIR
 
@@ -379,13 +383,6 @@ class AgentDaemon:
 
             voice = PiperVoice.load(str(voice_path))
             sr = 22050
-
-            source = AudioSource(48000, 1)
-            tts_track = LocalAudioTrack.create_audio_track("agent-voice", source)
-            opts = TrackPublishOptions(source=TrackSource.SOURCE_MICROPHONE)
-            pub = await self._room.local_participant.publish_track(tts_track, opts)
-            await asyncio.sleep(0.5)
-
             for chunk in voice.synthesize(text):
                 arr = getattr(chunk, "audio_int16_array", None)
                 if arr is None:
@@ -401,12 +398,11 @@ class AgentDaemon:
                     num_channels=1,
                     samples_per_channel=len(resampled),
                 )
-                await source.capture_frame(frame)
-
-            await asyncio.sleep(0.1)
-            await self._room.local_participant.unpublish_track(pub.sid)
+                await self._tts_source.capture_frame(frame)
         except Exception as e:
-            logger.warning("TTS audio track error: %s", e)
+            logger.error("TTS push error: %s", e)
+        finally:
+            self._tts_busy.clear()
 
     async def _wait_for_responder(self) -> None:
         """Wait for a responder to join. Resend Telegram link every 30s."""
@@ -474,33 +470,67 @@ class AgentDaemon:
             logger.warning("Agent: no audio track within 30s")
 
     async def _run_conversation(self, track) -> None:
-        stream = AudioStream(track)
-        resampler = _AudioResampler()
-        skill_text = self._skill_text
-        if skill_text:
-            system_prompt = _TRIAGE_PROMPT + "\n\n" + skill_text
-        else:
-            system_prompt = _TRIAGE_PROMPT
-        llm_history = [{"role": "system", "content": system_prompt}]
+        # Publish TTS track once — kept alive for entire conversation
+        self._tts_source = AudioSource(48000, 1)
+        tts_track = LocalAudioTrack.create_audio_track("agent-voice", self._tts_source)
+        opts = TrackPublishOptions(source=TrackSource.SOURCE_MICROPHONE)
+        tts_pub = await self._room.local_participant.publish_track(tts_track, opts)
+        logger.info("Agent: TTS track published (sid=%s)", tts_pub.sid)
 
-        async def _drain():
-            while self._busy.is_set():
+        async def _keep_alive():
+            noise = np.zeros(960, dtype=np.int16)
+            noise[::4] = 3
+            frame = AudioFrame(
+                data=noise.tobytes(),
+                sample_rate=48000,
+                num_channels=1,
+                samples_per_channel=960,
+            )
+            while not self._stop.is_set():
+                if not self._tts_busy.is_set() and self._tts_source:
+                    try:
+                        await self._tts_source.capture_frame(frame)
+                    except Exception:
+                        pass
+                await asyncio.sleep(0.02)
+
+        ka_task = asyncio.create_task(_keep_alive())
+        try:
+            stream = AudioStream(track)
+            resampler = _AudioResampler()
+            skill_text = self._skill_text
+            if skill_text:
+                system_prompt = _TRIAGE_PROMPT + "\n\n" + skill_text
+            else:
+                system_prompt = _TRIAGE_PROMPT
+            llm_history = [{"role": "system", "content": system_prompt}]
+
+            async def _drain():
+                while self._busy.is_set():
+                    try:
+                        await asyncio.wait_for(stream.__anext__(), timeout=0.5)
+                    except (asyncio.TimeoutError, StopAsyncIteration):
+                        return
+
+            async def _echo_drain():
+                await asyncio.sleep(2.0)
+
+            if self._groq_stt:
+                await self._run_groq_loop(
+                    stream, resampler, llm_history, _drain, _echo_drain
+                )
+            else:
+                await self._run_vosk_loop(
+                    stream, resampler, llm_history, _drain, _echo_drain
+                )
+        finally:
+            ka_task.cancel()
+            if self._room:
                 try:
-                    await asyncio.wait_for(stream.__anext__(), timeout=0.5)
-                except (asyncio.TimeoutError, StopAsyncIteration):
-                    return
-
-        async def _echo_drain():
-            await asyncio.sleep(2.0)
-
-        if self._groq_stt:
-            await self._run_groq_loop(
-                stream, resampler, llm_history, _drain, _echo_drain
-            )
-        else:
-            await self._run_vosk_loop(
-                stream, resampler, llm_history, _drain, _echo_drain
-            )
+                    await self._room.local_participant.unpublish_track(tts_pub.sid)
+                except Exception:
+                    pass
+            self._tts_source = None
 
     async def _run_groq_loop(self, stream, resampler, llm_history, _drain, _echo_drain):
         """STT via Groq Whisper (cloud)."""
