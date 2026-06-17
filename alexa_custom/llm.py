@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import re
+import shlex
 import time
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 import httpx
+import json5
 
 from alexa_custom.config import ActionEntry, ActionsData, LLMConfig, Trigger
 
@@ -55,6 +61,110 @@ _PARAM_QUESTIONS: dict[str, dict[str, str]] = {
     "telegram": {"text": "Quale testo devo inviare?"},
     "livekit_join": {},
 }
+
+
+# ---------------------------------------------------------------------------
+# Tool-calling types and registry
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class ToolParameter:
+    name: str
+    type: str
+    description: str
+    required: bool = True
+    enum: list[str] | None = None
+    minimum: float | None = None
+    maximum: float | None = None
+
+
+@dataclass
+class ToolSchema:
+    name: str
+    description: str
+    parameters: list[ToolParameter]
+    handler: Callable[..., Awaitable[dict]]
+
+
+@dataclass
+class ToolCall:
+    name: str
+    arguments: dict[str, Any]
+
+
+@dataclass
+class ToolResult:
+    success: bool
+    output: Any = None
+    error: str | None = None
+
+    def to_dict(self) -> dict:
+        return {"success": self.success, "output": self.output, "error": self.error}
+
+
+class ToolRegistry:
+    def __init__(self) -> None:
+        self._tools: dict[str, ToolSchema] = {}
+
+    def register(self, schema: ToolSchema) -> None:
+        self._tools[schema.name] = schema
+
+    def get(self, name: str) -> ToolSchema | None:
+        return self._tools.get(name)
+
+    def list_schemas(self) -> list[ToolSchema]:
+        return list(self._tools.values())
+
+    def to_system_prompt_block(self) -> str:
+        lines = [
+            'Hai accesso ai seguenti strumenti. Quando vuoi chiamare uno strumento,',
+            'emetti un blocco <tool_call> con JSON valido all\'interno.',
+            'Non chiamare mai più di uno strumento per volta.',
+            'Formato:',
+            '  <tool_call>',
+            '  {"name": "nome_strumento", "arguments": {...}}',
+            '  </tool_call>',
+            '',
+            'Strumenti disponibili:',
+        ]
+        for schema in self._tools.values():
+            params_desc = []
+            for p in schema.parameters:
+                required = " (obbligatorio)" if p.required else " (opzionale)"
+                constraints = ""
+                if p.enum:
+                    constraints = f" Valori consentiti: {p.enum}."
+                if p.minimum is not None and p.maximum is not None:
+                    constraints = f" Range: {p.minimum}-{p.maximum}."
+                elif p.minimum is not None:
+                    constraints = f" Minimo: {p.minimum}."
+                elif p.maximum is not None:
+                    constraints = f" Massimo: {p.maximum}."
+                params_desc.append(
+                    f"    - {p.name} ({p.type}{required}): {p.description}{constraints}"
+                )
+            params_str = "\n".join(params_desc) if params_desc else "    Nessun parametro."
+            lines.append(f"\n- {schema.name}: {schema.description}")
+            lines.append(params_str)
+        lines.append(
+            "\nDopo aver ricevuto il risultato, continua la conversazione "
+            "normalmente o chiama un altro strumento se necessario."
+        )
+        return "\n".join(lines)
+
+    async def execute(self, name: str, arguments: dict[str, Any]) -> dict:
+        schema = self._tools.get(name)
+        if schema is None:
+            return ToolResult(
+                success=False, error=f"Unknown tool: {name}"
+            ).to_dict()
+        try:
+            result = await schema.handler(**arguments)
+            return result if isinstance(result, dict) else ToolResult(success=True, output=result).to_dict()
+        except Exception as e:
+            logger.exception("Tool %s failed: %s", name, e)
+            return ToolResult(success=False, error=str(e)).to_dict()
 
 
 class OllamaUnreachable(Exception):
@@ -224,6 +334,242 @@ class OpenAIClient:
             raise OllamaUnreachable(f"OpenAI API HTTP error: {e}") from e
 
 
+# ---------------------------------------------------------------------------
+# Tool call parser
+# ---------------------------------------------------------------------------
+
+_TOOL_CALL_RE = re.compile(
+    r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL
+)
+
+
+def _parse_tool_call(text: str) -> ToolCall | None:
+    match = _TOOL_CALL_RE.search(text)
+    if not match:
+        return None
+    raw = match.group(1)
+    data = None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+    if data is None:
+        try:
+            data = json5.loads(raw)
+        except ValueError:
+            return None
+    name = data.get("name")
+    arguments = data.get("arguments")
+    if not isinstance(name, str) or not isinstance(arguments, dict):
+        return None
+    return ToolCall(name=name, arguments=arguments)
+
+
+# ---------------------------------------------------------------------------
+# Tool handlers
+# ---------------------------------------------------------------------------
+
+
+async def _tool_shell(
+    command: str,
+    whitelist: list[str] | None = None,
+) -> dict:
+    whitelist = whitelist or []
+    allowed = any(command.startswith(prefix) for prefix in whitelist)
+    if not allowed:
+        return ToolResult(
+            success=False,
+            error=f"Comando non consentito: '{command.split()[0] if command else ''}' "
+                   f"non è nella whitelist. Comandi permessi: {', '.join(whitelist) if whitelist else 'nessuno'}.",
+        ).to_dict()
+    safe_cmd = " ".join(shlex.quote(arg) for arg in command.split())
+    try:
+        proc = await asyncio.create_subprocess_shell(
+            safe_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=10.0)
+        output = stdout.decode().strip()
+        error = stderr.decode().strip()
+        if proc.returncode != 0:
+            return ToolResult(
+                success=False,
+                output=output,
+                error=error or f"Exit code {proc.returncode}",
+            ).to_dict()
+        return ToolResult(success=True, output=output[:1000]).to_dict()
+    except asyncio.TimeoutError:
+        return ToolResult(success=False, error="Comando terminato per timeout (10s)").to_dict()
+    except Exception as e:
+        return ToolResult(success=False, error=str(e)).to_dict()
+
+
+async def _tool_mqtt_publish(
+    topic: str,
+    payload: str,
+    mqtt_client=None,
+    allowed_topics: list[str] | None = None,
+) -> dict:
+    if mqtt_client is None:
+        return ToolResult(success=False, error="MQTT non configurato.").to_dict()
+    allowed_topics = allowed_topics or []
+    if allowed_topics:
+        topic_ok = any(topic.startswith(p) for p in allowed_topics)
+        if not topic_ok:
+            return ToolResult(
+                success=False,
+                error=f"Topic '{topic}' non consentito. Topics permessi: {allowed_topics}.",
+            ).to_dict()
+    try:
+        await mqtt_client.publish(topic, payload)
+        return ToolResult(success=True, output=f"Pubblicato su {topic}: {payload}").to_dict()
+    except Exception as e:
+        return ToolResult(success=False, error=str(e)).to_dict()
+
+
+async def _tool_set_volume(value: int) -> dict:
+    if not isinstance(value, int) or isinstance(value, bool):
+        return ToolResult(
+            success=False,
+            error=f"Value must be an integer between 0 and 100, got {type(value).__name__}.",
+        ).to_dict()
+    clamped = max(0, min(100, value))
+    try:
+        from alexa_custom.audio_hw import (
+            pulse_session,
+            save_volume_config,
+            set_output_volume,
+        )
+        vol_float = clamped / 100.0
+        with pulse_session("alexa-volume") as pulse:
+            set_output_volume(pulse, None, vol_float)
+        save_volume_config(vol_float)
+        return ToolResult(success=True, output=f"Volume impostato a {clamped}%.").to_dict()
+    except Exception as e:
+        return ToolResult(success=False, error=str(e)).to_dict()
+
+
+async def _tool_get_state(key: str, actions_config=None) -> dict:
+    from alexa_custom.actions import _read_system_vitals
+
+    vitals = _read_system_vitals()
+    known_keys = {"temp_c", "load", "free_kb", "uptime_s"}
+    if key not in known_keys:
+        return ToolResult(
+            success=False,
+            error=f"Chiave sconosciuta: '{key}'. Chiavi disponibili: {', '.join(sorted(known_keys))}.",
+        ).to_dict()
+    value = vitals.get(key)
+    if value is None:
+        return ToolResult(success=False, error=f"Valore '{key}' non disponibile.").to_dict()
+    return ToolResult(success=True, output={key: value}).to_dict()
+
+
+async def _tool_get_datetime(**kwargs) -> dict:
+    now = datetime.now()
+    return ToolResult(
+        success=True,
+        output={
+            "datetime": now.isoformat(),
+            "timezone": now.astimezone().tzname() or "UTC",
+            "weekday": now.strftime("%A"),
+        },
+    ).to_dict()
+
+
+def build_default_tool_registry(
+    mqtt_client=None,
+    actions_config=None,
+    shell_whitelist: list[str] | None = None,
+    mqtt_allowed_topics: list[str] | None = None,
+) -> ToolRegistry:
+    if shell_whitelist is None:
+        shell_whitelist = [
+            "echo ",
+            "cat /proc/",
+            "df -h",
+            "free -h",
+            "uptime ",
+            "uname ",
+            "ls /sys/class/thermal/",
+        ]
+    registry = ToolRegistry()
+
+    registry.register(ToolSchema(
+        name="shell",
+        description="Esegue un comando shell e restituisce l'output.",
+        parameters=[
+            ToolParameter(
+                name="command",
+                type="string",
+                description="Comando shell da eseguire (deve essere nella whitelist).",
+            ),
+        ],
+        handler=lambda command: _tool_shell(
+            command, whitelist=shell_whitelist,
+        ),
+    ))
+
+    registry.register(ToolSchema(
+        name="mqtt_publish",
+        description="Pubblica un payload su un topic MQTT (es. accende una luce).",
+        parameters=[
+            ToolParameter(
+                name="topic",
+                type="string",
+                description="Topic MQTT su cui pubblicare.",
+            ),
+            ToolParameter(
+                name="payload",
+                type="string",
+                description="Payload da pubblicare (stringa JSON o testo).",
+            ),
+        ],
+        handler=lambda topic, payload: _tool_mqtt_publish(
+            topic, payload, mqtt_client=mqtt_client, allowed_topics=mqtt_allowed_topics,
+        ),
+    ))
+
+    registry.register(ToolSchema(
+        name="set_volume",
+        description="Imposta il volume audio di sistema (0-100).",
+        parameters=[
+            ToolParameter(
+                name="value",
+                type="integer",
+                description="Volume in percentuale (0 = muto, 100 = massimo).",
+                minimum=0,
+                maximum=100,
+            ),
+        ],
+        handler=_tool_set_volume,
+    ))
+
+    registry.register(ToolSchema(
+        name="get_state",
+        description="Legge lo stato corrente di una variabile di sistema o dispositivo.",
+        parameters=[
+            ToolParameter(
+                name="key",
+                type="string",
+                description="Nome della variabile. Disponibili: temp_c, load, free_kb, uptime_s.",
+                enum=["temp_c", "load", "free_kb", "uptime_s"],
+            ),
+        ],
+        handler=lambda key: _tool_get_state(key, actions_config=actions_config),
+    ))
+
+    registry.register(ToolSchema(
+        name="get_datetime",
+        description="Restituisce la data, ora e fuso orario correnti.",
+        parameters=[],
+        handler=_tool_get_datetime,
+    ))
+
+    return registry
+
+
 class ConversationEngine:
     def __init__(self, config: LLMConfig, lang: str = "it-IT") -> None:
         self._config = config
@@ -304,6 +650,73 @@ class ConversationEngine:
 
         self._commit(full_text.strip())
         return full_text.strip()
+
+    async def reply_agentic(
+        self,
+        user_text: str,
+        tool_registry: ToolRegistry,
+        max_cycles: int = 5,
+        mqtt_client=None,
+        actions_config=None,
+    ) -> str:
+        messages = self._prepare_messages(user_text)
+        tool_block = tool_registry.to_system_prompt_block()
+        messages[0]["content"] += "\n\n" + tool_block
+
+        tool_role = "user"
+        final_text = ""
+        logger.info("ConversationEngine: starting agentic loop (max %d cycles)", max_cycles)
+
+        for cycle in range(max_cycles):
+            try:
+                async with asyncio.timeout(self._config.request_timeout):
+                    response = await self._client.chat(messages, self._config.model)
+            except (OllamaUnreachable, TimeoutError) as e:
+                logger.warning("Agentic loop: LLM error at cycle %d: %s", cycle, e)
+                if self._history:
+                    self._history.pop()
+                return _UNREACHABLE
+
+            tool_call = _parse_tool_call(response)
+            if tool_call is None:
+                final_text = response.strip()
+                break
+
+            schema = tool_registry.get(tool_call.name)
+            if schema is None:
+                logger.warning("Agentic loop: unknown tool '%s' at cycle %d", tool_call.name, cycle)
+                messages.append({"role": "assistant", "content": response})
+                messages.append({
+                    "role": tool_role,
+                    "content": f"Tool '{tool_call.name}' returned: success=False, error='Unknown tool: {tool_call.name}'",
+                })
+                continue
+
+            logger.info(
+                "Agentic loop cycle %d: calling tool '%s' with args %s",
+                cycle, tool_call.name, tool_call.arguments,
+            )
+            result = await tool_registry.execute(tool_call.name, tool_call.arguments)
+            logger.info(
+                "Tool '%s' result: success=%s output=%s",
+                tool_call.name, result.get("success"), str(result.get("output", ""))[:200],
+            )
+
+            messages.append({"role": "assistant", "content": response})
+            result_text = (
+                f"Tool '{tool_call.name}' returned: "
+                f"success={result.get('success')}, "
+                f"output={result.get('output')} "
+                f"{'(error: ' + result.get('error', '') + ')' if result.get('error') else ''}"
+            )
+            messages.append({"role": tool_role, "content": result_text})
+
+        else:
+            logger.warning("Agentic loop: max cycles (%d) exhausted", max_cycles)
+            final_text = "Mi dispiace, non sono riuscito a completare la richiesta."
+
+        self._commit(final_text)
+        return final_text
 
     async def warmup(self) -> None:
         await self._client.warmup(self._config.model)

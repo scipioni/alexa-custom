@@ -25,6 +25,7 @@ dependencies = [
     "rapidfuzz>=3.0.0",
     "ruamel.yaml>=0.18",
     "smbus2>=0.6.1",
+    "json5>=0.14.0",
 ]
 
 [project.scripts]

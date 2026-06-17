@@ -630,7 +630,7 @@ async def handle_llm_chat(
     transcript: str | None = None,
     **_,
 ) -> None:
-    from alexa_custom.llm import _UNREACHABLE, get_engine
+    from alexa_custom.llm import _UNREACHABLE, build_default_tool_registry, get_engine
     from alexa_custom.tts import get_engine as get_tts
 
     if actions_config is None or actions_config.llm is None:
@@ -690,10 +690,31 @@ async def handle_llm_chat(
                     "speaking",
                 )
 
-            async def _say(text: str) -> None:
-                await asyncio.to_thread(get_tts().say, text, lang)
+            if cfg.tool_calling:
+                tool_registry = build_default_tool_registry(
+                    mqtt_client=mqtt_client,
+                    actions_config=actions_config,
+                    shell_whitelist=cfg.shell_whitelist,
+                    mqtt_allowed_topics=cfg.mqtt_allowed_topics,
+                )
+                reply = await engine.reply_agentic(
+                    turn_text,
+                    tool_registry,
+                    max_cycles=cfg.max_tool_cycles,
+                    mqtt_client=mqtt_client,
+                    actions_config=actions_config,
+                )
+                if reply not in (_UNREACHABLE, ""):
+                    for sentence in reply.split(". "):
+                        sentence = sentence.strip()
+                        if sentence:
+                            sentence += "." if not sentence.endswith((".", "!", "?")) else ""
+                            await asyncio.to_thread(get_tts().say, sentence, lang)
+            else:
+                async def _say(text: str) -> None:
+                    await asyncio.to_thread(get_tts().say, text, lang)
 
-            reply = await engine.reply_streaming(turn_text, _say)
+                reply = await engine.reply_streaming(turn_text, _say)
             if reply == _UNREACHABLE:
                 if on_stt_event:
                     on_stt_event("llm_unreachable", {})

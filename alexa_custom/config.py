@@ -242,6 +242,19 @@ class LLMConfig:
     request_timeout: float = 60.0
     exit_phrases: list[str] = field(default_factory=lambda: list(_DEFAULT_EXIT_PHRASES))
     api_key: str = ""
+    tool_calling: bool = False
+    max_tool_cycles: int = 5
+    tool_calling_mode: str = "prompted_json"
+    shell_whitelist: list[str] = field(default_factory=lambda: [
+        "echo ",
+        "cat /proc/",
+        "df -h",
+        "free -h",
+        "uptime ",
+        "uname ",
+        "ls /sys/class/thermal/",
+    ])
+    mqtt_allowed_topics: list[str] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -706,6 +719,39 @@ def _parse_llm_config(
         if isinstance(raw_exit, list)
         else list(_DEFAULT_EXIT_PHRASES)
     )
+
+    tool_calling = bool(raw_llm.get("tool_calling", False))
+    tool_calling_mode = str(raw_llm.get("tool_calling_mode", "prompted_json"))
+    if tool_calling_mode not in {"prompted_json"}:
+        raise ConfigError(
+            f"{source}: 'llm.tool_calling_mode' must be 'prompted_json', got {tool_calling_mode!r}"
+        )
+    max_tool_cycles = int(raw_llm.get("max_tool_cycles", 5))
+    if max_tool_cycles < 1:
+        raise ConfigError(
+            f"{source}: 'llm.max_tool_cycles' must be >= 1, got {max_tool_cycles}"
+        )
+    raw_whitelist = raw_llm.get("shell_whitelist")
+    shell_whitelist = (
+        [str(p) for p in raw_whitelist if isinstance(p, str)]
+        if isinstance(raw_whitelist, list)
+        else [
+            "echo ",
+            "cat /proc/",
+            "df -h",
+            "free -h",
+            "uptime ",
+            "uname ",
+            "ls /sys/class/thermal/",
+        ]
+    )
+    raw_topics = raw_llm.get("mqtt_allowed_topics")
+    mqtt_allowed_topics = (
+        [str(t) for t in raw_topics if isinstance(t, str)]
+        if isinstance(raw_topics, list)
+        else []
+    )
+
     return LLMConfig(
         backend=backend,
         host=host,
@@ -718,6 +764,11 @@ def _parse_llm_config(
         request_timeout=float(raw_llm.get("request_timeout", 60.0)),
         exit_phrases=exit_phrases,
         api_key=str(raw_llm.get("api_key", "")),
+        tool_calling=tool_calling,
+        max_tool_cycles=max_tool_cycles,
+        tool_calling_mode=tool_calling_mode,
+        shell_whitelist=shell_whitelist,
+        mqtt_allowed_topics=mqtt_allowed_topics,
     )
 
 
