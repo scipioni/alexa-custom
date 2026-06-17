@@ -5,7 +5,17 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from alexa_custom.config import WakeWordGroup, Trigger
 
-from alexa_custom.actions import normalize_text
+from alexa_custom.actions import _word_token_match, normalize_text
+
+
+def _word_overlap_score(phrase_words: list[str], text_words: set[str]) -> float:
+    """Fraction of ``phrase_words`` that have an acoustic match in ``text_words``."""
+    if not phrase_words:
+        return 0.0
+    matched = sum(
+        1 for pw in phrase_words if any(_word_token_match(pw, tw) for tw in text_words)
+    )
+    return matched / len(phrase_words)
 
 
 def _match_wake_word(
@@ -38,15 +48,7 @@ def _match_wake_word(
         phrase_words = [x for x in norm_w.split() if len(x) >= 3]
         if not phrase_words:
             phrase_words = norm_w.split()
-        matched = sum(
-            1
-            for pw in phrase_words
-            if any(
-                pw in tw or (len(tw) >= 3 and len(tw) >= len(pw) * 0.7 and tw in pw)
-                for tw in text_words
-            )
-        )
-        score = matched / len(phrase_words) if phrase_words else 0.0
+        score = _word_overlap_score(phrase_words, text_words)
         if score > best_score:
             best_score = score
             best_phrase = w
@@ -96,15 +98,7 @@ def _approx_wake_match(
         phrase_words = [w for w in norm_phrase.split() if len(w) >= 3]
         if not phrase_words:
             phrase_words = norm_phrase.split()
-        matched = sum(
-            1
-            for pw in phrase_words
-            if any(
-                pw in tw or (len(tw) >= 3 and len(tw) >= len(pw) * 0.7 and tw in pw)
-                for tw in text_words
-            )
-        )
-        score = matched / len(phrase_words)
+        score = _word_overlap_score(phrase_words, text_words)
         if score > best_score:
             best_score = score
             best_group = group

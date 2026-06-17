@@ -9,15 +9,12 @@ from __future__ import annotations
 
 import os
 import threading
-import time
 import types
 from collections import deque
 from typing import Any
 
-import pytest
 
 import alexa_custom.stt as _stt_module
-import alexa_custom.stt_gating as _gating_module
 from alexa_custom.actions import ActionEntry, TelegramClient
 from alexa_custom.config import (
     ActionsConfig,
@@ -315,7 +312,7 @@ class TestReplyWindowMatch:
         assert "wake" in names, f"no wake; got {names}"
         matched = [(e, d) for e, d in events if e == "matched"]
         assert len(matched) >= 2, f"expected ≥2 matched events; got {names}"
-        triggers = [d.get("trigger", "") for _, d in matched]
+        triggers = [d.get("phrase", "") for _, d in matched]
         assert any("chiama" in t for t in triggers), f"chiama trigger missing; {triggers}"
         assert any(t == "si" for t in triggers), f"si reply missing; {triggers}"
 
@@ -324,8 +321,8 @@ class TestReplyWindowMatch:
         events = run_pipeline(["ehi galileo", "chiama stefano", "si"], config)
         matched = [(i, d) for i, (e, d) in enumerate(events) if e == "matched"]
         assert len(matched) >= 2
-        first_trigger = matched[0][1].get("trigger", "")
-        second_trigger = matched[1][1].get("trigger", "")
+        first_trigger = matched[0][1].get("phrase", "")
+        second_trigger = matched[1][1].get("phrase", "")
         assert "chiama" in first_trigger, f"first match should be chiama; got {first_trigger}"
         assert second_trigger == "si", f"second match should be si; got {second_trigger}"
 
@@ -344,7 +341,7 @@ class TestReplyWindowTimeout:
         matched = [(e, d) for e, d in events if e == "matched"]
         # First matched fires for "chiama stefano"
         assert len(matched) >= 1
-        triggers = [d.get("trigger", "") for _, d in matched]
+        triggers = [d.get("phrase", "") for _, d in matched]
         # No "si" or "no" reply matched
         assert not any(t in ("si", "no") for t in triggers), (
             f"unexpected reply match; triggers={triggers}"
@@ -484,7 +481,7 @@ class TestUserActiveTriggers:
         config = _make_config([ask_trigger])
         events = run_pipeline(["chiama Stefano", "no"], config)
         matched = [d for e, d in events if e == "matched"]
-        triggers = [d.get("trigger", "") for d in matched]
+        triggers = [d.get("phrase", "") for d in matched]
         assert any("chiama" in t.lower() for t in triggers)
         assert any(t == "no" for t in triggers)
 
@@ -517,7 +514,7 @@ class TestUserActiveTriggers:
         )
         config = _make_config([t])
         events = run_pipeline(["chiama Stefano", "va bene"], config)
-        triggers = [d.get("trigger", "") for e, d in events if e == "matched"]
+        triggers = [d.get("phrase", "") for e, d in events if e == "matched"]
         assert any(t == "si" for t in triggers), f"'va bene' should match 'si' trigger; got {triggers}"
 
     def test_aiuto_wake_word_then_command(self):

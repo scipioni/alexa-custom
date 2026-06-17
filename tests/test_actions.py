@@ -91,6 +91,33 @@ class TestMatchTrigger:
         assert result.phrase == "chiama"
 
 
+class TestContentWordFloor:
+    """The fuzzy fallback requires ≥1 phonetic content-word overlap, so a
+    transcript that only shares stopwords with a trigger no longer fires it."""
+
+    def test_stopword_only_overlap_rejected(self):
+        # Shares "la" with the trigger but no content word (accendi/luce).
+        triggers = [_trigger("accendi la luce")]
+        assert match_trigger("chiudi la finestra", triggers) is None
+
+    def test_content_word_present_matches(self):
+        triggers = [_trigger("accendi la luce")]
+        assert match_trigger("accendi la luce adesso", triggers) is not None
+
+    def test_content_word_phonetic_variant_matches(self):
+        # "accendere"/"luce" are phonetic/inflected variants of the content
+        # words; the floor is satisfied via prefix-anchored phonetic matching.
+        triggers = [_trigger("accendi la luce")]
+        assert match_trigger("puoi accendere la luce", triggers) is not None
+
+    def test_short_only_phrase_skips_floor(self):
+        # "si" has no content word (phonetic length < 3) → floor skipped, falls
+        # through to the short-phrase exact-match guard.
+        triggers = [_trigger("si")]
+        assert match_trigger("si", triggers) is not None
+        assert match_trigger("no", triggers) is None
+
+
 # ── existing registry tests ───────────────────────────────────────────────────
 
 

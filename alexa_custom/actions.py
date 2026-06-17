@@ -77,6 +77,34 @@ def italian_phonetic(text: str) -> str:
     return t
 
 
+def _word_token_match(pw: str, tw: str) -> bool:
+    """Return True if transcript word ``tw`` is an acoustic match for word ``pw``.
+
+    Compares Italian phonetic forms (so ``che``/``ke`` etc. compare equal) and
+    accepts only *prefix-anchored* relationships, which is how STT actually
+    mangles words:
+    - exact phonetic equality
+    - ``pw`` is a phonetic prefix of ``tw``  → inflection ("accendi" → "accendimi")
+    - ``tw`` is a phonetic prefix of ``pw``  → truncation ("galile" → "galileo"),
+      but only when ``tw`` covers ≥70% of ``pw`` so short fragments ("gali") do
+      not match a longer word.
+
+    This is deliberately stricter than substring-anywhere matching: a fragment
+    buried mid-word or in a suffix ("casa" inside "scocciacasa") does not match.
+    """
+    pp = italian_phonetic(pw)
+    tp = italian_phonetic(tw)
+    if not pp or not tp:
+        return False
+    if pp == tp:
+        return True
+    if len(pp) >= 3 and tp.startswith(pp):
+        return True
+    if len(tp) >= 3 and len(tp) >= len(pp) * 0.7 and pp.startswith(tp):
+        return True
+    return False
+
+
 class TelegramClient:
     def __init__(self) -> None:
         self._token: str | None = os.environ.get("TELEGRAM_BOT_TOKEN")
@@ -198,29 +226,41 @@ def match_trigger_with_score(
     best: Trigger | None = None
     best_score = 0.0
     t_phon = italian_phonetic(transcript)
-    _t_tokens: set[str] | None = None
+    _t_words: list[str] | None = None
     for trigger in triggers:
         phrases = trigger.commands if trigger.commands else ([trigger.phrase] + trigger.aliases)
-        # Word-overlap guard: at least eff_overlap fraction of each phrase's
-        # phonetic tokens must appear verbatim in the transcript token set.
-        # Per-trigger min_word_overlap overrides the call-site global when set.
+        # Word-overlap guard. Each phrase's *content* words (phonetic length ≥ 3,
+        # i.e. excluding stopwords like "la"/"di"/"che") are matched against the
+        # transcript words via _word_token_match (phonetic, prefix-anchored —
+        # tolerant of STT inflection/truncation). Two gates:
+        #   - floor: at least one content word must appear. This kills
+        #     token_set_ratio hits driven purely by shared stopwords, and is
+        #     recall-safe because a genuine command always carries its content
+        #     words. Phrases with no content words (e.g. "si") skip the floor
+        #     and rely on the short-phrase exact-match guard below.
+        #   - eff_overlap: optional stricter fraction (per-trigger override of
+        #     the call-site global) for triggers that need tighter gating.
         eff_overlap = (
             trigger.min_word_overlap
             if trigger.min_word_overlap is not None
             else min_word_overlap
         )
-        if eff_overlap > 0.0:
-            if _t_tokens is None:
-                _t_tokens = set(t_phon.split())
-            overlap_ok = False
-            for p in phrases:
-                p_words = italian_phonetic(p).split()
-                matched = sum(1 for w in p_words if w in _t_tokens)
-                if matched / len(p_words) >= eff_overlap:
-                    overlap_ok = True
-                    break
-            if not overlap_ok:
-                continue
+        if _t_words is None:
+            _t_words = transcript.split()
+        overlap_ok = False
+        for p in phrases:
+            content = [w for w in normalize_text(p).split() if len(italian_phonetic(w)) >= 3]
+            if not content:
+                overlap_ok = True  # short-only phrase: defer to exact-match guard
+                break
+            matched = sum(
+                1 for w in content if any(_word_token_match(w, tw) for tw in _t_words)
+            )
+            if matched >= 1 and matched / len(content) >= eff_overlap:
+                overlap_ok = True
+                break
+        if not overlap_ok:
+            continue
         scores = []
         for p in phrases:
             p_phon = italian_phonetic(p)
@@ -469,8 +509,16 @@ async def handle_ask(
                     "matched",
                     {
                         "transcript": transcript,
-                        "trigger": reply_trigger.phrase,
+                        # Same schema as command matches in stt.py (the web
+                        # dashboard reads "phrase"); a reply is a match too.
+                        "phrase": reply_trigger.commands[0]
+                        if reply_trigger.commands
+                        else reply_trigger.phrase,
                         "score": reply_score,
+                        "actions": [
+                            {"type": a.type, "params": a.params}
+                            for a in reply_trigger.actions
+                        ],
                     },
                 )
             await dispatch(

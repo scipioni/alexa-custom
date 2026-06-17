@@ -124,6 +124,23 @@ class TestMatchWakeWord:
         assert phrase == "ascolta assistente"
         assert residual == "accendi la luce"
 
+    def test_phonetic_variant_matches(self):
+        # STT spells the wake word phonetically ("kiave" for "chiave"); the
+        # phonetic-aware matcher accepts it where raw substring matching missed.
+        phrase, _ = _match_wake_word("kiave apri", ["chiave"])
+        assert phrase == "chiave"
+
+    def test_midword_occurrence_no_longer_false_wakes(self):
+        # "galileo" buried mid-word must NOT fire the wake word — prefix-anchored
+        # matching rejects substring-anywhere hits that used to leak through.
+        phrase, _ = _match_wake_word("scartagalileozzo", ["ehi galileo"])
+        assert phrase is None
+
+    def test_prefix_truncation_still_matches(self):
+        # Real STT truncation ("galile" for "galileo") still recognised.
+        phrase, _ = _match_wake_word("galile", ["ehi galileo"], threshold=0.5)
+        assert phrase == "ehi galileo"
+
 
 # ---------------------------------------------------------------------------
 # build_intent_map (backward compat, WakeWordGroup-based)
@@ -220,6 +237,17 @@ class TestApproxWakeMatchSubstring:
     def test_exact_word_always_matches(self):
         am = self._alias_map("galileo")
         assert _approx_wake_match("galileo", am) is not None
+
+    def test_midword_occurrence_does_not_match(self):
+        # "galileo" embedded inside an unrelated word no longer matches via the
+        # old substring-anywhere rule.
+        am = self._alias_map("galileo")
+        assert _approx_wake_match("exgalileox", am) is None
+
+    def test_phonetic_variant_matches(self):
+        # "chiave" → phonetic "kiave"; an STT "kiave" now matches.
+        am = self._alias_map("chiave")
+        assert _approx_wake_match("kiave", am) is not None
 
 
 # ---------------------------------------------------------------------------
