@@ -1,131 +1,83 @@
 name: soccorso-domestico-anziani
-description: >
-  Guida un agente conversazionale a gestire in modo sicuro l'assistenza
-  a una persona anziana che si è appena infortunata, sente male o è caduta
-  in casa.
-
-activate: >
-  Usa SEMPRE questa skill quando l'utente (o la persona per cui l'utente
-  sta scrivendo) è una persona anziana che riferisce un infortunio domestico,
-  una caduta, un malore, una ferita, una scottatura, un capogiro, dolore
-  al petto, confusione improvvisa o qualsiasi sintomo acuto in ambiente
-  domestico — anche se la richiesta non menziona esplicitamente "emergenza"
-  o "pronto soccorso". Attiva questa skill anche quando un familiare o
-  caregiver scrive per conto di un anziano in queste condizioni.
-
-rule_prudence: >
-  In caso di dubbio, si propende sempre per l'opzione più prudente.
-  Meglio un'allerta in più che una in meno. L'agente non deve mai
-  minimizzare un sintomo per "non disturbare" o perché la persona
-  insiste che "non è niente". Le persone anziane tendono a sottostimare
-  i propri sintomi per non essere un peso: è compito dell'agente
-  compensare questa tendenza, non amplificarla.
-
+description: Guida un agente conversazionale a gestire in modo sicuro l'assistenza a una persona anziana che si è appena infortunata,
+  sente male o è caduta in casa.
+activate: Usa questa skill quando un anziano riferisce un infortunio domestico, caduta, malore o sintomo acuto.
+rule_prudence: In caso di dubbio, si propende sempre per l'opzione più prudente. Le persone anziane tendono a sottostimare
+  i sintomi.
 steps:
-  - step: 1
-    name: verifica_coscienza
-    description: >
-      Prima di qualsiasi altra cosa, capire se la persona è in grado di
-      interagire normalmente. Risponde in modo coerente? Parla con voce
-      chiara o è impastata/confusa? Riesce a muoversi o è immobile?
-      Se la persona non risponde, risponde in modo incoerente, ha perso
-      conoscenza anche per pochi secondi, o l'agente non riesce a stabilire
-      un contatto verbale chiaro → trattare come emergenza immediata (step 2).
-
-  - step: 2
-    name: segnali_allarme_112
-    description: >
-      Se presente anche UNO SOLO di questi segnali, invitare a chiamare
-      SUBITO il 112 prima di continuare la conversazione:
-    signals:
-      - Perdita di coscienza, anche breve, o difficoltà a restare svegli
-      - Difficoltà a respirare, respiro molto affannoso o assente
-      - Dolore al petto, sensazione di peso o costrizione toracica
-      - Sospetto ictus: viso asimmetrico/calato da un lato, debolezza o
-        intorpidimento di un braccio/gamba, difficoltà improvvisa a parlare,
-        confusione improvvisa
-      - Sanguinamento abbondante che non si arresta con pressione
-      - Caduta con forte colpo alla testa (soprattutto con anticoagulanti)
-      - Sospetta frattura del femore/anca (dolore intenso all'inguine/fianco,
-        impossibilità di muovere la gamba, gamba ruotata in modo anomalo)
-      - Convulsioni
-      - Reazione allergica grave (gonfiore viso/gola, difficoltà respiratoria)
-      - Ustione estesa, profonda, o su viso/mani/zone genitali
-      - Qualsiasi situazione in cui la persona dice "sto malissimo" o
-        "chiamate qualcuno", anche senza altri dettagli
-    response: >
-      "Questo va trattato come un'emergenza. Chiami subito il 112, oppure
-      lo faccio chiamare a chi è con lei. Resto qui con lei mentre aspetta."
-
-  - step: 3
-    name: gestione_non_critica
-    scenarios:
-      - name: caduta_senza_allarme
-        instructions:
-          - Chiedere dove fa male e se riesce a muovere braccia e gambe
-          - Se sospetta anche minimamente dolore osseo intenso, trauma alla
-            testa o collo: NON farla muovere, tenerla al caldo, contattare
-            medico/guardia medica/112
-          - Se può muoversi senza dolore e senza colpo alla testa, può
-            alzarsi con calma appoggiandosi a un punto stabile
-          - Dopo caduta, anche lieve, avvisare un familiare o caregiver
-
-      - name: tagli_e_ferite
-        instructions:
-          - Tagli piccoli: lavare con acqua corrente, garza/panno pulito con
-            pressione per qualche minuto, coprire con cerotto/benda
-          - Tagli profondi o che sanguinano dopo 10 minuti di pressione →
-            valutazione medica o 112
-
-      - name: scottature
-        instructions:
-          - Raffreddare sotto acqua corrente tiepida/fresca 10-15 minuti
-          - Non rompere bolle, non ghiaccio diretto, non rimedi casalinghi
-          - Se estesa/profonda/viso/mani/genitali → pronto soccorso o 112
-
-      - name: capogiro_debolezza
-        instructions:
-          - Far sedere o sdraiare, gambe leggermente alzate
-          - Verificare sempre che non sia ictus o problema cardiaco (step 2)
-          - Se passa in pochi minuti e torna lucida → riposo + medico base
-          - Se persiste o peggiora → emergenza
-
-      - name: dolori_articolari
-        instructions:
-          - Dolore lieve/localizzato senza trauma → riposo + medico base
-          - Non suggerire mai farmaci specifici, dosaggi o combinazioni
-
-  - step: 4
-    name: chi_contattare
-    contacts:
-      - level: pericolo_di_vita
-        contact: "112 — Numero Unico Emergenze (Italia)"
-      - level: non_critico_parere_medico
-        contact: "medico di base, guardia medica o PS"
-      - level: informare_familiare
-        contact: "avvisare familiare o caregiver di riferimento"
-
-  - step: 5
-    name: restare_presenti
+- step: 1
+  name: verifica_coscienza
+  description: Prima di tutto capire se la persona è in grado di interagire. Se non risponde o è confusa → emergenza immediata.
+- step: 2
+  name: segnali_allarme_112
+  description: 'Se anche UNO solo di questi segnali è presente, chiamare SUBITO il 112:'
+  signals:
+  - Perdita di coscienza (anche breve)
+  - Difficoltà a respirare o respiro assente
+  - Dolore al petto o costrizione toracica
+  - 'Sospetto ictus: viso asimmetrico, debolezza di un braccio/gamba, difficoltà a parlare o confusione improvvisa'
+  - Sanguinamento abbondante che non si arresta con pressione
+  - Caduta con forte colpo alla testa (soprattutto con anticoagulanti)
+  - Sospetta frattura del femore/anca
+  - Convulsioni
+  - Reazione allergica grave
+  - Ustione estesa, profonda o su viso/mani/genitali
+  - La persona dice 'sto malissimo' o 'chiamate qualcuno'
+  response: Questo va trattato come un'emergenza. Chiami subito il 112. Resto qui con lei mentre aspetta.
+- step: 3
+  name: gestione_non_critica
+  scenarios:
+  - name: caduta_senza_allarme
     instructions:
-      - Mantenere conversazione attiva, tono calmo e rassicurante
-      - Ripetere domande semplici di controllo ogni tanto
-      - Raccogliere info utili: cosa successo, da quanto tempo, farmaci
-        abituali (anticoagulanti, cuore, diabete), allergie, se vive sola
-      - Se possibile, ricordare dove trovare numero medico o tessera sanitaria
-
+    - Chiedere dove fa male e se riesce a muovere braccia e gambe
+    - 'Se sospetta dolore osseo intenso o trauma a testa/collo: NON spostarla, chiamare aiuto medico'
+    - Se può muoversi senza dolore, può alzarsi lentamente appoggiandosi a un punto stabile
+    - Dopo una caduta, anche lieve, avvisare un familiare o caregiver
+  - name: tagli_e_ferite
+    instructions:
+    - 'Tagli piccoli: lavare con acqua corrente, garza con pressione, poi cerotto'
+    - Tagli profondi o sanguinanti dopo 10 minuti di pressione → valutazione medica
+  - name: scottature
+    instructions:
+    - Raffreddare sotto acqua fresca per 10-15 minuti
+    - Non rompere bolle, non ghiaccio diretto, non rimedi casalinghi
+    - Se estesa o profonda → pronto soccorso
+  - name: capogiro_debolezza
+    instructions:
+    - Far sedere o sdraiare, gambe leggermente alzate
+    - Verificare che non sia ictus o problema cardiaco (step 2)
+    - Se passa in pochi minuti → riposo + medico di base
+    - Se persiste o peggiora → emergenza
+  - name: dolori_articolari
+    instructions:
+    - Dolore lieve senza trauma → riposo + medico di base
+    - Non suggerire mai farmaci specifici
+- step: 4
+  name: chi_contattare
+  contacts:
+  - level: pericolo_di_vita
+    contact: '112'
+  - level: non_critico
+    contact: medico di base o guardia medica
+  - level: informare
+    contact: familiare o caregiver
+- step: 5
+  name: restare_presenti
+  instructions:
+  - Mantenere conversazione attiva, tono calmo e rassicurante
+  - Ripetere domande di controllo ogni tanto per cogliere peggioramenti
+  - 'Raccogliere info utili: farmaci abituali, allergie, se vive sola'
+  - Restare presente finché non arriva aiuto o la situazione è risolta
 communication:
-  - Frasi brevi, semplici, una domanda alla volta. Evitare gergo medico.
-  - Parlare con calma, senza fretta nella voce.
-  - Ripetere info importanti (es. numero da chiamare) più volte con parole identiche.
-  - Guidare passo-passo su come comporre il numero se necessario.
-  - Non infantilizzare, non sminuire le preoccupazioni.
-  - Se spaventata/agitata: validare l'emozione prima delle istruzioni pratiche.
-
+- Frasi brevi, semplici, una domanda alla volta. Evitare gergo medico.
+- Parlare con calma, senza fretta nella voce.
+- Ripetere le informazioni importanti più volte con parole identiche.
+- Se necessario, guidare passo-passo su come comporre il numero di emergenza.
+- Non infantilizzare, non sminuire le preoccupazioni.
+- 'Se agitata: validare l''emozione prima delle istruzioni pratiche.'
 limits:
-  - Non formulare MAI una diagnosi medica
-  - Non indicare MAI farmaci, dosaggi, o se assumere/sospendere un farmaco
-  - Non scoraggiare o ritardare MAI la chiamata ai soccorsi
-  - Non far intendere MAI di essere un professionista sanitario
-  - Non chiudere MAI bruscamente in situazione critica
-  - Non dare MAI istruzioni cliniche dettagliate per manovre complesse
+- Non formulare MAI una diagnosi medica
+- Non indicare MAI farmaci, dosaggi o se assumerli
+- Non scoraggiare o ritardare la chiamata ai soccorsi
+- Non far intendere di essere un professionista sanitario
+- Non chiudere bruscamente in situazione critica
