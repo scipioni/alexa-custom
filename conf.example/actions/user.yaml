@@ -16,9 +16,9 @@
 # Extra wake words (optional)
 # Flat list of additional phrases merged into the global wake-word list.
 # ---------------------------------------------------------------------------
-wake_words:
-  - "aiuto"
-  - "aiutami"
+#wake_words:
+#- "aiuto"
+#  - "aiutami"
 
 # ---------------------------------------------------------------------------
 # Triggers
