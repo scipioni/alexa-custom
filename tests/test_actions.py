@@ -222,6 +222,62 @@ class TestConfigurableMatching:
             # Extra words must fail even for token_set_ratio!
             assert match_trigger("si grazie", triggers, algorithm=algo) is None
 
+    def test_trigger_phrases_uses_commands(self):
+        from alexa_custom.actions import _trigger_phrases
+
+        t = Trigger(
+            commands=["si", "sì", "va bene", "ok"], phrase="si", actions=[]
+        )
+        assert _trigger_phrases(t) == ["si", "sì", "va bene", "ok"]
+
+    def test_trigger_phrases_falls_back_to_phrase_and_aliases(self):
+        from alexa_custom.actions import _trigger_phrases
+
+        t = Trigger(commands=[], phrase="si", actions=[], aliases=["va bene"])
+        assert _trigger_phrases(t) == ["si", "va bene"]
+
+    @pytest.mark.asyncio
+    async def test_ask_grammar_includes_reply_aliases(self):
+        from alexa_custom.actions import handle_ask
+
+        # The Vosk grammar handed to listen_fn must contain every command/alias
+        # the matcher accepts; otherwise the recognizer physically cannot emit
+        # the alias on real hardware and the reply could never match.
+        on_reply = [
+            Trigger(
+                commands=["si", "sì", "va bene", "certo"],
+                phrase="si",
+                actions=[],
+                with_wake=True,
+            ),
+            Trigger(
+                commands=["no", "annulla"], phrase="no", actions=[], with_wake=True
+            ),
+        ]
+        action = ActionEntry(
+            type="ask", params={"text": "vuoi?", "timeout": 1.0}
+        )
+        action.on_reply = on_reply
+
+        mock_listen_fn = AsyncMock(return_value="")  # empty → no reply matching
+        _ctx = ActionContext(
+            telegram_client=MagicMock(), listen_fn=mock_listen_fn
+        )
+        with patch("alexa_custom.tts.get_engine"):
+            await handle_ask(
+                action,
+                ctx=_ctx,
+                listen_fn=mock_listen_fn,
+                mqtt_client=None,
+                on_stt_event=None,
+                actions_config=None,
+            )
+
+        mock_listen_fn.assert_called_once()
+        passed = mock_listen_fn.call_args.kwargs.get("phrases") or []
+        for expected in ("si", "va bene", "certo", "no", "annulla"):
+            assert expected in passed, f"{expected!r} missing from grammar: {passed}"
+
     @pytest.mark.asyncio
     async def test_reply_matching_independence(self):
         from alexa_custom.config import RecognitionConfig

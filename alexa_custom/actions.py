@@ -6,7 +6,7 @@ import logging
 import os
 import re
 import unicodedata
-from typing import Awaitable, Callable, TYPE_CHECKING
+from typing import Any, Awaitable, Callable, Coroutine, TYPE_CHECKING
 
 import httpx
 
@@ -103,6 +103,17 @@ def _word_token_match(pw: str, tw: str) -> bool:
     if len(tp) >= 3 and len(tp) >= len(pp) * 0.7 and pp.startswith(tp):
         return True
     return False
+
+
+def _trigger_phrases(trigger: "Trigger") -> list[str]:
+    """All recognizable phrases for a trigger.
+
+    Single source of truth for both fuzzy matching (match_trigger_with_score)
+    and Vosk grammar construction (handle_ask reply window). Keeping these in
+    sync matters: if the grammar omits an alias the recognizer physically cannot
+    emit it, so the alias would never match no matter how lenient the scorer is.
+    """
+    return trigger.commands if trigger.commands else ([trigger.phrase] + trigger.aliases)
 
 
 class TelegramClient:
@@ -228,7 +239,7 @@ def match_trigger_with_score(
     t_phon = italian_phonetic(transcript)
     _t_words: list[str] | None = None
     for trigger in triggers:
-        phrases = trigger.commands if trigger.commands else ([trigger.phrase] + trigger.aliases)
+        phrases = _trigger_phrases(trigger)
         # Word-overlap guard. Each phrase's *content* words (phonetic length ≥ 3,
         # i.e. excluding stopwords like "la"/"di"/"che") are matched against the
         # transcript words via _word_token_match (phonetic, prefix-anchored —
@@ -431,7 +442,7 @@ async def handle_say(action: ActionEntry, mqtt_client: MQTTClient | None, **_):
 async def handle_ask(
     action: ActionEntry,
     ctx: ActionContext,
-    listen_fn: Callable[[float], Awaitable[str]] | None,
+    listen_fn: Callable[..., Coroutine[Any, Any, str]] | None,
     mqtt_client: MQTTClient | None,
     on_stt_event: Callable[[str, dict], None] | None,
     actions_config=None,
@@ -459,8 +470,10 @@ async def handle_ask(
             )
         return
 
-    # Use constrained grammar if triggers are defined to improve accuracy (e.g., 'si' vs 'se')
-    phrases = [t.phrase for t in action.on_reply]
+    # Use constrained grammar if triggers are defined to improve accuracy (e.g., 'si' vs 'se').
+    # Must include every command/alias the matcher accepts — a Vosk grammar
+    # restricts what the recognizer can emit, so an omitted alias is unmatchable.
+    phrases = [p for t in action.on_reply for p in _trigger_phrases(t)]
 
     if text and mqtt_client:
         await mqtt_client.publish(
@@ -670,7 +683,7 @@ async def handle_mqtt_publish(action: ActionEntry, mqtt_client: MQTTClient | Non
 @registry.register("llm_chat")
 async def handle_llm_chat(
     action: ActionEntry,
-    listen_fn: Callable[[float], Awaitable[str]] | None,
+    listen_fn: Callable[..., Coroutine[Any, Any, str]] | None,
     mqtt_client: MQTTClient | None,
     on_stt_event: Callable[[str, dict], None] | None = None,
     actions_config=None,
@@ -761,7 +774,7 @@ async def handle_llm_chat(
 @registry.register("llm_learn")
 async def handle_llm_learn(
     action: ActionEntry,
-    listen_fn: Callable[[float], Awaitable[str]] | None,
+    listen_fn: Callable[..., Coroutine[Any, Any, str]] | None,
     mqtt_client: MQTTClient | None,
     actions_config=None,
     wake_word: str | None = None,
