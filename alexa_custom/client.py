@@ -3,24 +3,34 @@ import asyncio
 import logging
 import os
 import signal
+import sys
 import threading
 import time
 from pathlib import Path
 from typing import Callable
 
-from livekit.api import AccessToken, VideoGrants
-from livekit.rtc import (
-    AudioStream,
-    LocalAudioTrack,
-    MediaDevices,
-    Room,
-    TrackKind,
-    TrackPublishOptions,
-    TrackSource,
-)
+try:
+    from livekit.api import AccessToken, VideoGrants
+    from livekit.rtc import (
+        AudioStream,
+        LocalAudioTrack,
+        MediaDevices,
+        Room,
+        TrackKind,
+        TrackPublishOptions,
+        TrackSource,
+    )
+except ImportError:
+    AccessToken = VideoGrants = None
+    AudioStream = LocalAudioTrack = MediaDevices = Room = None
+    TrackKind = TrackPublishOptions = TrackSource = None
 
 from alexa_custom._env import require_env
-import sounddevice as sd
+
+try:
+    import sounddevice as sd
+except ImportError:
+    sd = None
 from alexa_custom.config import ActionsConfig
 from alexa_custom.mqtt import MQTTClient
 
@@ -216,6 +226,19 @@ class LiveKitSessionManager:
             if not other_participants:
                 logger.info("Last participant left — disconnecting call")
                 self.disconnected.set()
+
+        @self.room.on("data_received")
+        def on_data_received(packet):
+            if packet.topic == "tts":
+                from alexa_custom.tts import get_engine as get_tts
+
+                text = (
+                    packet.data.decode()
+                    if isinstance(packet.data, bytes)
+                    else str(packet.data)
+                )
+                logger.info("Agent says: '%s'", text)
+                asyncio.create_task(asyncio.to_thread(get_tts().say, text, "it-IT"))
 
     def emit(self, event: str, data: dict | None = None) -> None:
         if self.on_event:
@@ -444,6 +467,7 @@ async def _async_main(
     actions_config: ActionsConfig | None = None,
     mqtt_client: MQTTClient | None = None,
     stt_ready_event: threading.Event | None = None,
+    telegram_client=None,
 ) -> None:
     logger.info(f"Browser join URL:\n  {browser_join_url()}")
 
@@ -492,34 +516,17 @@ async def _async_main(
 
     _input_spec = actions_config.audio.input_device if actions_config else None
     _output_spec = actions_config.audio.output_device if actions_config else None
-    logger.info("Waiting for audio hardware to initialize...")
-    for _ in range(15):  # Wait up to 7.5 seconds
-        ok, _ = await asyncio.to_thread(check_newpie_ready, _input_spec, _output_spec)
-        if ok:
-            # Extra settle time for PipeWire/WirePlumber to finalize routing
-            await asyncio.sleep(2.0)
-            break
-        await asyncio.sleep(0.5)
 
-    # Wait for STT backend to finish loading so "Sistema pronto" plays only
-    # when the system is actually ready to hear the first wake word.
-    if stt_ready_event is not None and not stt_ready_event.is_set():
-        logger.info("Waiting for STT backend to initialize...")
-        await asyncio.to_thread(stt_ready_event.wait, 60.0)
-
-    # Execute startup actions
+    # Play startup greeting immediately (before STT loads)
     if actions_config and actions_config.on_startup:
-        # Prime the audio hardware with a short chime before the first speech
+        # Prime audio hardware
         from alexa_custom.audio import play_tone
 
         await asyncio.to_thread(play_tone, "startup")
         await asyncio.sleep(0.5)
 
-        logger.info(f"Executing {len(actions_config.on_startup)} startup action(s)")
         from alexa_custom.actions import ActionContext, TelegramClient, _run_action
 
-        # We don't have a connect_fn or connected_flag here in a way that _run_action
-        # can use for livekit_join safely during early startup, but we can pass None.
         telegram_client = TelegramClient()
         _startup_ctx = ActionContext(
             telegram_client=telegram_client,
@@ -531,8 +538,46 @@ async def _async_main(
             except Exception as e:
                 logger.error(f"Startup action {action.type} failed: {e}")
 
+    # Fallback: on dev machines without NewPie, skip waiting and use defaults
+    try:
+        ok, _ = await asyncio.to_thread(check_newpie_ready, _input_spec, _output_spec)
+        if not ok:
+            logger.info("No specific audio card found — using system defaults")
+    except Exception:
+        logger.info("Audio check skipped — using system defaults")
+
+    # Wait for STT backend to finish loading (no more than 10s)
+    if stt_ready_event is not None and not stt_ready_event.is_set():
+        logger.info("Waiting for STT backend to initialize...")
+        await asyncio.to_thread(stt_ready_event.wait, 10.0)
+
     if on_event:
         on_event("idle", {})
+
+    # Start background agent daemon (always-on conversation agent)
+    if actions_config is not None and actions_config.llm is not None:
+        try:
+            from alexa_custom.agent_daemon import AgentDaemon
+
+            async def _dispatch_cb(reason: str):
+                url = browser_join_url()
+                msg = f"\U0001f6a8 EMERGENZA (da agente): {reason}\n\nEntra nella stanza: {url}"
+                if telegram_client:
+                    try:
+                        await telegram_client.send_message(
+                            telegram_client._default_chat_id or "me", msg
+                        )
+                    except Exception as e:
+                        logger.error("Telegram dispatch failed: %s", e)
+
+            agent = AgentDaemon(actions_config, dispatch_cb=_dispatch_cb)
+            asyncio.create_task(agent.start())
+            logger.info("Agent daemon started")
+        except Exception as e:
+            logger.error("Agent daemon failed to start: %s", e)
+            agent = None
+    else:
+        agent = None
 
     # Use connection-type-appropriate sample rate from config (default: usb=48000, bt=16000).
     from alexa_custom.audio import check_newpie_ready, get_sample_rates
@@ -778,6 +823,9 @@ async def _async_main(
             except asyncio.TimeoutError:
                 pass
     finally:
+        if agent is not None:
+            agent.stop()
+            logger.info("Agent daemon stopped")
         logger.info("Shutting down LiveKit loop...")
 
 
@@ -866,6 +914,211 @@ def ensure_setup() -> None:
             logger.error(f"Failed to download Piper voice: {e}")
 
 
+def _make_local_listen_fn(vosk_model, preloaded: bool = True):
+    """Return async listen_fn that captures from a fresh parec process + Vosk."""
+    from vosk import KaldiRecognizer
+
+    async def _listen(timeout: float = 5.0, flush_ms: int = 0, **_kw) -> str:
+        import json
+        import subprocess as _sp
+
+        cmd = [
+            "parec",
+            "--rate=16000",
+            "--channels=1",
+            "--format=s16le",
+            "--latency-msec=30",
+        ]
+        proc = _sp.Popen(cmd, stdout=_sp.PIPE, stderr=_sp.DEVNULL)
+        rec = KaldiRecognizer(vosk_model, 16000)
+        rec.SetWords(True)
+        deadline = time.time() + timeout
+        try:
+            while time.time() < deadline:
+                data = proc.stdout.read(4000)
+                if not data:
+                    break
+                if rec.AcceptWaveform(data):
+                    result = json.loads(rec.Result())
+                    text = result.get("text", "").strip()
+                    if text:
+                        return text
+            return ""
+        finally:
+            proc.terminate()
+            proc.wait()
+
+    return _listen
+
+
+def _local_main(
+    conf_dir: Path,
+    config: "ActionsConfig | None",
+    args,
+) -> None:
+    """Local mode: parec + Vosk + Piper. No LiveKit, no NewPie, no AudioWatcher."""
+    import json
+    import subprocess
+
+    from alexa_custom.actions import (
+        ActionContext,
+        TelegramClient,
+        match_trigger_with_score,
+        _run_action,
+    )
+    from alexa_custom.tts import init_engine, get_engine as get_tts
+
+    if config is None:
+        logger.error("No config — exiting")
+        sys.exit(1)
+
+    init_engine(
+        backend_type=config.tts.backend,
+        voice=config.tts.voice,
+        preroll_ms=config.tts.preroll_ms or 100,
+    )
+
+    # Find & load Vosk model (needed for both wake detection and listen_fn)
+    from alexa_custom.stt import _MODEL_PATH
+
+    candidate = Path(_MODEL_PATH)
+    if not candidate.is_dir():
+        logger.error("Vosk model not found at %s — run 'alexa-setup' first", candidate)
+        sys.exit(1)
+
+    from vosk import Model
+
+    _vosk_model_obj = Model(str(candidate))
+    listen_fn = _make_local_listen_fn(_vosk_model_obj)
+
+    ctx = ActionContext(
+        telegram_client=TelegramClient(),
+        mqtt_client=None,
+        actions_config=config,
+        listen_fn=listen_fn,
+    )
+
+    # Startup greeting
+    if config.on_startup:
+        for action in config.on_startup:
+            asyncio.run(_run_action(action, ctx))
+
+    web_port = args.web_port or (
+        config.web.port if config.web is not None and config.web.port else None
+    )
+    if web_port:
+        from alexa_custom.web import run_web
+
+        async def _noop_run(_stop, _on_event, _stop_async):
+            await asyncio.Event().wait()
+
+        def _web_thread():
+            run_web(
+                run_fn=_noop_run,
+                input_spec=None,
+                output_spec=None,
+                room="",
+                stt_params=None,
+                port=web_port,
+                conf_dir=conf_dir,
+            )
+
+        import threading as _t
+
+        _t.Thread(target=_web_thread, daemon=True).start()
+        logger.info("Web dashboard on http://localhost:%s", web_port)
+
+    # Build all-triggers list
+    all_triggers = []
+    for wg in config.wake_words or []:
+        all_triggers.extend(wg.triggers)
+    if config.triggers:
+        all_triggers.extend(config.triggers)
+
+    # Wake word phrases (word + aliases)
+    wake_phrases = []
+    for wg in config.wake_words or []:
+        wake_phrases.append(wg.word.lower())
+        for a in wg.aliases or []:
+            wake_phrases.append(a.lower())
+
+    logger.info("Wake words: %s", wake_phrases)
+
+    # Start parec capture
+    cmd = [
+        "parec",
+        "--rate=16000",
+        "--channels=1",
+        "--format=s16le",
+        "--latency-msec=30",
+    ]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    logger.info("parec started — listening via local mode")
+
+    from vosk import KaldiRecognizer
+
+    rec = KaldiRecognizer(_vosk_model_obj, 16000)
+    rec.SetWords(True)
+
+    try:
+        while True:
+            data = proc.stdout.read(4000)
+            if not data:
+                break
+            if rec.AcceptWaveform(data):
+                result = json.loads(rec.Result())
+                text = result.get("text", "").strip().lower()
+                if not text:
+                    continue
+                logger.info("Heard: '%s'", text)
+
+                matched_wake = next((wp for wp in wake_phrases if wp in text), None)
+                if matched_wake:
+                    remainder = text.replace(matched_wake, "", 1).strip()
+                    logger.info("Wake: '%s' → cmd: '%s'", matched_wake, remainder)
+
+                    try:
+                        from alexa_custom.audio import play_tone
+
+                        asyncio.run(asyncio.to_thread(play_tone, "wake"))
+                    except Exception:
+                        pass
+
+                    if remainder:
+                        trigger, score = match_trigger_with_score(
+                            remainder,
+                            all_triggers,
+                            threshold=config.recognition.matching_threshold,
+                            algorithm=config.recognition.matching_algorithm,
+                        )
+                        if trigger:
+                            logger.info(
+                                "Trigger: '%s' (score=%s)", trigger.phrase, score
+                            )
+                            for act in trigger.actions:
+                                asyncio.run(
+                                    _run_action(
+                                        act,
+                                        ctx,
+                                        wake_word=matched_wake,
+                                        transcript=remainder,
+                                    )
+                                )
+                        else:
+                            get_tts().say("Non ho capito. Riprova.", "it-IT")
+                    else:
+                        get_tts().say("Sono qui. Come posso aiutarti?", "it-IT")
+
+                rec = KaldiRecognizer(_vosk_model_obj, 16000)
+                rec.SetWords(True)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        proc.terminate()
+        proc.wait()
+        logger.info("Local mode stopped")
+
+
 def main() -> None:
     import argparse
     import threading
@@ -888,6 +1141,11 @@ def main() -> None:
     parser.add_argument(
         "--hot-reload", action="store_true", help="Auto-restart on .py file changes"
     )
+    parser.add_argument(
+        "--local",
+        action="store_true",
+        help="Local mode: use parec+Vosk directly, no LiveKit, no NewPie hardware",
+    )
     args = parser.parse_args()
 
     conf_dir = Path(args.config)
@@ -896,6 +1154,9 @@ def main() -> None:
 
     secrets = load_secrets(conf_dir / "secrets.yaml")
     config = load_config(conf_dir / "config.yaml", secrets=secrets)
+
+    if args.local:
+        return _local_main(conf_dir, config, args)
 
     ensure_setup()
 
@@ -961,6 +1222,9 @@ def main() -> None:
         async def _livekit_connect_fn_web() -> None:
             assert connect_trigger is not None
             connect_trigger.set()
+            if livekit_connected_flag is not None:
+                while not livekit_connected_flag.is_set():
+                    await asyncio.sleep(0.2)
 
         stt_params = {
             "config": config,
@@ -986,6 +1250,7 @@ def main() -> None:
         on_event: Callable,
         stop_asyncio: asyncio.Event,
     ) -> None:
+        _tg = stt_params.get("telegram_client") if stt_params else None
         await _async_main(
             ext_stop_event=stop_asyncio,
             on_event=on_event,
@@ -993,6 +1258,7 @@ def main() -> None:
             livekit_connected_flag=livekit_connected_flag,
             actions_config=config,
             stt_ready_event=stt_params["stt_ready_event"] if stt_params else None,
+            telegram_client=_tg,
         )
 
     run_web(
