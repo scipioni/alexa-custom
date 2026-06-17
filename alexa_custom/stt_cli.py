@@ -319,9 +319,9 @@ def main() -> None:
 
     print("alexa-stt: starting STT pipeline (Ctrl+C to stop)", file=sys.stderr)
     print(
-        f"  stage1={config.stt.stage1.backend}  "
-        f"stage2={config.stt.stage2.backend}  "
-        f"wake words={[g.word for g in config.wake_words]}",
+        f"  backend={config.stt.backend}  "
+        f"vad_silence_ms={config.stt.vad_silence_ms}  "
+        f"wake words={config.wake_words}",
         file=sys.stderr,
     )
 

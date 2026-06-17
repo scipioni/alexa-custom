@@ -204,6 +204,7 @@ def _recognition_loop(
     speech_ms: float = 0.0
     last_speech_t: float = 0.0
     was_gated = False
+    _last_partial: str = ""
 
     _audio_buf: collections.deque[bytes] = collections.deque(
         maxlen=int(8 * 16000 * 2 * channels // 4096) + 1
@@ -378,10 +379,11 @@ def _recognition_loop(
 
         endpoint = backend.accept_waveform(data)
 
-        if on_stt_event:
+        if on_stt_event and rms > _eff_rms:
             partial = backend.partial_text()
-            if partial:
+            if partial and partial != _last_partial:
                 on_stt_event("transcribing", {"text": partial})
+            _last_partial = partial
 
         vad_fire = (
             speech_ms >= config.stt.min_speech_ms
@@ -392,10 +394,12 @@ def _recognition_loop(
         if vad_fire and not endpoint:
             text = backend.finalize().strip()
             _reset_vad()
+            _last_partial = ""
         elif endpoint:
             text = backend.text().strip()
             backend.reset()
             _reset_vad()
+            _last_partial = ""
         else:
             continue
 

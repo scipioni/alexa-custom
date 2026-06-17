@@ -200,7 +200,7 @@ def match_trigger_with_score(
     t_phon = italian_phonetic(transcript)
     _t_tokens: set[str] | None = None
     for trigger in triggers:
-        phrases = [trigger.phrase] + trigger.aliases
+        phrases = trigger.commands if trigger.commands else ([trigger.phrase] + trigger.aliases)
         # Word-overlap guard: at least eff_overlap fraction of each phrase's
         # phonetic tokens must appear verbatim in the transcript token set.
         # Per-trigger min_word_overlap overrides the call-site global when set.

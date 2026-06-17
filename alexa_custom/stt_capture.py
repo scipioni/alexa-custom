@@ -111,6 +111,31 @@ def capture_transcript(
         backend.recreate(grammar)
     else:
         backend.reset()
+    try:
+      return _capture_loop(
+          proc, channels, backend, timeout, stop_event, on_stt_event,
+          phrases=phrases,
+          start_after_playback=start_after_playback,
+          vad_silence_ms=vad_silence_ms,
+          hard_timeout=hard_timeout,
+      )
+    finally:
+        if grammar is not None and isinstance(backend, VoskSTT):
+            backend.recreate(None)
+
+
+def _capture_loop(
+    proc: subprocess.Popen,
+    channels: int,
+    backend: STTBackend,
+    timeout: float,
+    stop_event: threading.Event,
+    on_stt_event: Callable[[str, dict], None] | None = None,
+    phrases: list[str] | None = None,
+    start_after_playback: bool = False,
+    vad_silence_ms: int | None = None,
+    hard_timeout: float | None = None,
+) -> str:
     deadline = time.monotonic() + timeout
     hard_deadline = (
         time.monotonic() + hard_timeout

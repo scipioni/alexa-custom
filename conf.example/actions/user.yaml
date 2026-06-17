@@ -4,61 +4,58 @@
 # The learning agent (llm_learn) appends new commands to conf/actions/learned.yaml.
 #
 # Schema:
-#   wake_words:      extra wake word groups (merged with conf/config.yaml)
-#   triggers:        flat list of triggers; scope set via optional 'wake_words' field:
-#                      absent            → active after any wake word (global)
-#                      wake_words: []    → direct match (no wake word required)
-#                      wake_words: [id]  → active only after the named wake word group
+#   wake_words:  extra wake phrases (flat string list, merged with conf/config.yaml)
+#   triggers:    flat list of triggers
+#     commands: [...]        list of recognised phrases (first is the canonical name)
+#     with_wake: true/false  true (default) = fires only after a wake word;
+#                            false = direct match, no wake word required
+#     patterns: [...]        optional word-glob patterns tested before fuzzy matching
+#     actions: [...]         list of action entries
 
 # ---------------------------------------------------------------------------
-# Extra wake word groups (optional)
-# Define groups here instead of a separate conf/user.yaml file.
-# Groups whose id already exists in conf/config.yaml are skipped.
+# Extra wake words (optional)
+# Flat list of additional phrases merged into the global wake-word list.
 # ---------------------------------------------------------------------------
 wake_words:
-  - word: "aiuto"
-    id: help          # stable key used in wake_words trigger scoping (defaults to word)
-    aliases:
-      - "aiutami"
-    skip_unmatched_inline: true
+  - "aiuto"
+  - "aiutami"
 
 # ---------------------------------------------------------------------------
-# Triggers — active for every wake word group (no wake_words field = global)
+# Triggers
 # ---------------------------------------------------------------------------
 triggers:
-  # - phrase: "test"
-  #   wake_words: [help]
-  #   actions:
-  #     - type: log
-  #       message: "command recognition working"
-
-  # - phrase: "di qualcosa"
+  # - commands:
+  #     - "di qualcosa"
   #   actions:
   #     - type: say
   #       text: "Ciao dal sistema vocale"
   #       lang: "it-IT"
 
-
-  # - phrase: "suona"
+  # - commands:
+  #     - "suona"
   #   actions:
   #     - type: tone
   #       name: info
 
-  # - phrase: "aggiorna"
+  # - commands:
+  #     - "aggiorna"
   #   actions:
   #     - type: shell
   #       command: "systemctl --user restart alexa-client"
 
-  # - phrase: "connettiti"
+  # - commands:
+  #     - "connettiti"
   #   actions:
   #     - type: livekit_join
 
-  # - phrase: "manda messaggio"
+  # - commands:
+  #     - "manda messaggio"
   #   actions:
   #     - type: telegram
   #       text: "Messaggio vocale ricevuto"
 
-  - phrase: "accendi la luce"
+  - commands:
+      - "accendi la luce"
     patterns:
       - "accend* * luc*"          # accendi/accenda/accendere … luci/luce
       - "mett* * luc*"            # metti/mettere la luce
@@ -70,14 +67,15 @@ triggers:
 # ---------------------------------------------------------------------------
 # Follow-up — per-trigger override
 #
-# Quando recognition.follow_up è abilitato globalmente, i singoli trigger
-# possono sovrascrivere il comportamento:
-#   follow_up: false   — non aprire la finestra dopo questo comando
-#   follow_up: true    — apri sempre la finestra anche se il flag globale è off
+# When recognition.follow_up is enabled globally, individual triggers can
+# override the behaviour:
+#   follow_up: false   — do not open a follow-up window after this command
+#   follow_up: true    — always open the window, even if the global flag is off
 # ---------------------------------------------------------------------------
 
-  # - phrase: "buonanotte"
-  #   follow_up: false        # chiudi la conversazione dopo questo comando
+  # - commands:
+  #     - "buonanotte"
+  #   follow_up: false        # close the conversation after this command
   #   actions:
   #     - type: say
   #       text: "Buonanotte!"
@@ -93,7 +91,8 @@ triggers:
 # ---------------------------------------------------------------------------
 
   # # Luci
-  # - phrase: "spegni le luci"
+  # - commands:
+  #     - "spegni le luci"
   #   patterns:
   #     - "spegn* * luc*"
   #   actions:
@@ -102,7 +101,8 @@ triggers:
   #       payload: "OFF"
 
   # # Riscaldamento
-  # - phrase: "alza il riscaldamento"
+  # - commands:
+  #     - "alza il riscaldamento"
   #   patterns:
   #     - "alz* * riscaldament*"
   #     - "aumenta * temperatura"
@@ -112,7 +112,8 @@ triggers:
   #       topic: "home/climate/heat"
   #       payload: "UP"
 
-  # - phrase: "abbassa il riscaldamento"
+  # - commands:
+  #     - "abbassa il riscaldamento"
   #   patterns:
   #     - "abbass* * riscaldament*"
   #     - "diminuisc* * temperatura"
@@ -123,7 +124,8 @@ triggers:
   #       payload: "DOWN"
 
   # # Tapparelle
-  # - phrase: "alza le tapparelle"
+  # - commands:
+  #     - "alza le tapparelle"
   #   patterns:
   #     - "alz* * tapparell*"
   #     - "apr* * tapparell*"
@@ -132,7 +134,8 @@ triggers:
   #       topic: "home/shutters"
   #       payload: "UP"
 
-  # - phrase: "abbassa le tapparelle"
+  # - commands:
+  #     - "abbassa le tapparelle"
   #   patterns:
   #     - "abbass* * tapparell*"
   #     - "chiud* * tapparell*"
@@ -142,7 +145,8 @@ triggers:
   #       payload: "DOWN"
 
   # # Televisione
-  # - phrase: "accendi la tv"
+  # - commands:
+  #     - "accendi la tv"
   #   patterns:
   #     - "accend* * tv"
   #     - "accend* * televisor*"
@@ -152,7 +156,8 @@ triggers:
   #       topic: "home/tv"
   #       payload: "ON"
 
-  # - phrase: "spegni la tv"
+  # - commands:
+  #     - "spegni la tv"
   #   patterns:
   #     - "spegn* * tv"
   #     - "spegn* * televisor*"
@@ -169,7 +174,8 @@ triggers:
 # ---------------------------------------------------------------------------
 
   # # Emergenza medica
-  # - phrase: "chiama il medico"
+  # - commands:
+  #     - "chiama il medico"
   #   patterns:
   #     - "chiam* * medico"
   #     - "ho * bisogno * medico"
@@ -180,7 +186,8 @@ triggers:
   #     - type: say
   #       text: "Sto avvisando i tuoi familiari."
 
-  # - phrase: "chiama i soccorsi"
+  # - commands:
+  #     - "chiama i soccorsi"
   #   patterns:
   #     - "chiam* * carabinier*"
   #     - "chiam* * polizia"
@@ -193,7 +200,8 @@ triggers:
   #       text: "Sto chiamando i soccorsi."
 
   # # Non sto bene
-  # - phrase: "non sto bene"
+  # - commands:
+  #     - "non sto bene"
   #   patterns:
   #     - "non * bene"
   #     - "sto * male"
@@ -205,7 +213,8 @@ triggers:
   #       text: "Ho avvisato i tuoi familiari. Come posso aiutarti?"
 
   # # Caduta
-  # - phrase: "sono caduto"
+  # - commands:
+  #     - "sono caduto"
   #   patterns:
   #     - "son* cadat*"
   #     - "son* cadut*"
@@ -217,7 +226,8 @@ triggers:
   #       text: "Avviso i tuoi familiari. Cerca di non muoverti."
 
   # # Chiamata familiare
-  # - phrase: "chiama la famiglia"
+  # - commands:
+  #     - "chiama la famiglia"
   #   patterns:
   #     - "chiam* * figli*"
   #     - "chiam* * famiglia"
@@ -226,7 +236,8 @@ triggers:
   #     - type: livekit_join
 
   # # Medicine
-  # - phrase: "ho preso le medicine"
+  # - commands:
+  #     - "ho preso le medicine"
   #   patterns:
   #     - "pres* * medicin*"
   #     - "pres* * farmac*"
@@ -238,7 +249,8 @@ triggers:
   #     - type: say
   #       text: "Perfetto, ho segnato che hai preso le medicine."
 
-  # - phrase: "non ho preso le medicine"
+  # - commands:
+  #     - "non ho preso le medicine"
   #   patterns:
   #     - "non * pres* * medicin*"
   #     - "dimentica* * medicin*"
@@ -250,7 +262,8 @@ triggers:
   #       payload: "true"
 
   # # Check-in benessere
-  # - phrase: "sto bene grazie"
+  # - commands:
+  #     - "sto bene grazie"
   #   patterns:
   #     - "sto * bene"
   #     - "mi sent* * bene"
@@ -261,25 +274,24 @@ triggers:
   #       payload: "ok"
   #     - type: say
   #       text: "Sono contento. Buona giornata!"
-  
-  - phrase: "chiama Stefano"
-    wake_words: []
+
+  - commands:
+      - "chiama Stefano"
+    with_wake: false
     actions:
       - type: ask
         text: "Vuoi chiamare Stefano?"
         lang: "it-IT"
         timeout: 5.0
         on_reply:
-          - phrase: "si"
-            aliases: ["sì", "si si", "sì sì", "va bene", "certo", "ok", "dai"]
+          - commands: ["si", "sì", "si si", "sì sì", "va bene", "certo", "ok", "dai"]
             actions:
               - type: say
                 text: "Sto chiamando Stefano"
               - type: livekit_join
               - type: telegram
                 text: "Collegati con casa <room>"
-          - phrase: "no"
-            aliases: ["no no", "no grazie", "annulla"]
+          - commands: ["no", "no no", "no grazie", "annulla"]
             actions:
               - type: say
                 text: "Chiamata annullata"
@@ -287,30 +299,27 @@ triggers:
           - type: say
             text: "Non ho capito"
 
-  # Trigger scoped to the 'help' wake word group only
-  - phrase: "chiama assistenza"
-    wake_words: [help]
-    aliases: ["chiama","aiuto"]
+  - commands:
+      - "chiama assistenza"
+      - "chiama"
+      - "aiuto"
     actions:
       - type: ask
         text: "Vuoi chiamare assistenza ?"
         lang: "it-IT"
         timeout: 5.0
         on_reply:
-          - phrase: "si"
-            aliases: ["sì", "si si", "sì sì", "va bene", "certo", "ok", "dai"]
+          - commands: ["si", "sì", "si si", "sì sì", "va bene", "certo", "ok", "dai"]
             actions:
               - type: say
                 text: "Sto chiamando l'assistenza"
               - type: livekit_join
               - type: telegram
                 text: "Collegati con casa <room>"
-          - phrase: "no"
-            aliases: ["no no", "no grazie", "annulla"]
+          - commands: ["no", "no no", "no grazie", "annulla"]
             actions:
               - type: say
                 text: "Chiamata annullata"
         on_else:
           - type: say
             text: "Non ho capito"
-
