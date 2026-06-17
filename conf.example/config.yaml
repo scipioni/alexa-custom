@@ -26,9 +26,9 @@ recognition:
   wake_tone: wake           # tone on wake: wake | startup | success | error | info | warning | none
   matching_algorithm: token_set_ratio  # token_set_ratio | levenshtein | ratio
   matching_threshold: 80.0             # similarity threshold (0-100)
-  # min_word_overlap: 0.0  # fraction of a trigger phrase's phonetic tokens that must
+  # min_word_overlap: 0.5  # fraction of a trigger phrase's phonetic tokens that must
   #   appear verbatim in the transcript before fuzzy scoring runs.
-  #   0.0 (default) — no overlap guard; 0.5 — half the words must be present;
+  #   0.0 — no overlap guard; 0.5 (default) — half the words must be present;
   #   1.0 — all words required. Raise to reduce false positives from partial matches.
   #   Individual triggers can override this with their own min_word_overlap field.
   # post_dispatch_cooldown_ms: 800  # silence listening for this many ms after any
