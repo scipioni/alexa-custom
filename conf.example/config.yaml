@@ -38,7 +38,7 @@ recognition:
   #   successful dispatch. Prevents immediate re-activation from acoustic echo.
   # min_cmd_words: 1  # minimum word count in the recognised command before fuzzy
   #   trigger matching runs. Raise to 2 to block single-phoneme noise.
-  reply_matching_algorithm: levenshtein  # token_set_ratio | levenshtein | ratio
+  reply_matching_algorithm: levenshtein  # token_sort_ratio | token_set_ratio | levenshtein | ratio
   reply_matching_threshold: 80.0         # similarity threshold (0-100)
   # follow_up: false          # re-open command window after a match without re-waking
   # follow_up_timeout: 4.0    # seconds of silence before the follow-up window closes
