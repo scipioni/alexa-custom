@@ -424,8 +424,7 @@ class AgentDaemon:
                 summary = " ".join(
                     s.split(": ", 1)[-1] for s in self._conversation_history[-5:]
                 )
-                await self._say("È arrivato qualcuno per aiutarla.")
-                await self._say_room(f"Riassunto della situazione: {summary}")
+                await self._say_room(f"Riassunto: {summary}")
                 return
             except asyncio.TimeoutError:
                 logger.warning(
