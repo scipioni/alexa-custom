@@ -467,16 +467,25 @@ class AgentDaemon:
                     if rms >= 20:
                         if speech_start == 0.0:
                             speech_start = now
+                            logger.debug("Groq: speech start, rms=%.1f", rms)
                         last_speech = now
                         audio_buf.extend(down.tobytes())
                     elif speech_start > 0.0:
                         if now - last_speech > 1.5:
                             if len(audio_buf) < 3200:
+                                logger.debug(
+                                    "Groq: buffer too small (%d), reset", len(audio_buf)
+                                )
                                 speech_start = 0.0
                                 continue
+                            logger.info("Groq: transcribing %d bytes", len(audio_buf))
                             text = await self._groq_stt.transcribe(bytes(audio_buf))
                             speech_start = 0.0
-                            if not text or len(text.split()) < 2:
+                            if not text:
+                                logger.debug("Groq: no text returned")
+                                break
+                            if len(text.split()) < 2:
+                                logger.debug("Groq: text too short: '%s'", text)
                                 break
 
                             logger.info("STT: '%s'", text)
