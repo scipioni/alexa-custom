@@ -562,11 +562,10 @@ async def _async_main(
             async def _dispatch_cb(reason: str):
                 url = browser_join_url()
                 msg = f"\U0001f6a8 EMERGENZA (da agente): {reason}\n\nEntra nella stanza: {url}"
-                if telegram_client:
+                chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+                if telegram_client and chat_id:
                     try:
-                        await telegram_client.send_message(
-                            telegram_client._default_chat_id or "me", msg
-                        )
+                        await telegram_client.send_message(chat_id, msg)
                     except Exception as e:
                         logger.error("Telegram dispatch failed: %s", e)
 
