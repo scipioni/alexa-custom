@@ -261,6 +261,7 @@ class LiveKitSecretsConfig:
 class TelegramSecretsConfig:
     bot_token: str = ""
     chat_id: str = ""
+    caregiver_chat_id: str = ""
 
 
 @dataclass
@@ -869,6 +870,7 @@ def load_secrets(path: str | Path = "conf/secrets.yaml") -> SecretsConfig:
     tg = TelegramSecretsConfig(
         bot_token=str(tg_raw.get("bot_token", "")),
         chat_id=str(tg_raw.get("chat_id", "")),
+        caregiver_chat_id=str(tg_raw.get("caregiver_chat_id", "")),
     )
     mqtt_raw = raw.get("mqtt") or {}
     mq = MQTTSecretsConfig(
@@ -905,6 +907,9 @@ def load_secrets(path: str | Path = "conf/secrets.yaml") -> SecretsConfig:
     if tg.chat_id:
         os.environ["TELEGRAM_CHAT_ID"] = tg.chat_id
         env_updates.append("TELEGRAM_CHAT_ID")
+    if tg.caregiver_chat_id:
+        os.environ["CAREGIVER_CHAT_ID"] = tg.caregiver_chat_id
+        env_updates.append("CAREGIVER_CHAT_ID")
     if mq.username:
         os.environ["MQTT_USERNAME"] = mq.username
         env_updates.append("MQTT_USERNAME")

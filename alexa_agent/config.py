@@ -261,6 +261,7 @@ class LiveKitSecretsConfig:
 class TelegramSecretsConfig:
     bot_token: str = ""
     chat_id: str = ""
+    caregiver_chat_id: str = ""
 
 
 @dataclass

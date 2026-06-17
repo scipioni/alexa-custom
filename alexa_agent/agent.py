@@ -13,7 +13,7 @@ from pathlib import Path
 
 import httpx
 from livekit import rtc
-from livekit.api import AccessToken, VideoGrants
+from livekit.api import AccessToken, VideoGrants, LiveKitAPI, DeleteRoomRequest
 
 from alexa_custom.llm import OpenAIClient
 
@@ -153,11 +153,28 @@ async def _publish_chat(room: rtc.Room, text: str, generated: bool = False):
     await room.local_participant.publish_data(payload, topic="chat")
 
 
-async def _check_disconnect(text: str, tts_voice, audio_source, stop_event) -> bool:
+async def _close_room(room_name: str):
+    """Delete the LiveKit room to disconnect all participants."""
+    key = os.environ.get("LIVEKIT_API_KEY")
+    secret = os.environ.get("LIVEKIT_API_SECRET")
+    host = os.environ.get("LIVEKIT_URL")
+    if not key or not secret or not host:
+        logger.warning("_close_room: missing LiveKit credentials")
+        return
+    try:
+        async with LiveKitAPI() as api:
+            await api.room.delete_room(DeleteRoomRequest(room=room_name))
+        logger.info("Room %s deleted", room_name)
+    except Exception as e:
+        logger.warning("_close_room: failed to delete room %s: %s", room_name, e)
+
+
+async def _check_disconnect(text: str, tts_voice, audio_source, stop_event, room_name: str = "") -> bool:
     norm = text.lower().strip().rstrip(".!?")
     if "disconnetti" in norm:
         await _speak("Arrivederci.", tts_voice, audio_source)
         stop_event.set()
+        asyncio.create_task(_close_room(room_name))
         return True
     return False
 
@@ -222,7 +239,7 @@ async def _process_audio(
                 text = result.get("text", "").strip()
                 if text:
                     logger.info(f"STT: {text}")
-                    if _check_disconnect(text, tts_voice, audio_source, stop_event):
+                    if await _check_disconnect(text, tts_voice, audio_source, stop_event, room.name or ""):
                         return
                     if _is_distress(text) and not _caregiver_notified:
                         _caregiver_notified = True
@@ -253,7 +270,7 @@ async def _process_audio(
             text = result.get("text", "").strip()
             if text:
                 logger.info(f"STT: {text}")
-                if _check_disconnect(text, tts_voice, audio_source, stop_event):
+                if await _check_disconnect(text, tts_voice, audio_source, stop_event, room.name or ""):
                     return
                 if _is_distress(text) and not _caregiver_notified:
                     _caregiver_notified = True
