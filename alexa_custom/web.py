@@ -1294,6 +1294,10 @@ class WebServer:
             _DASHBOARD_PATH,
             Path(__file__).parent / "static" / "dashboard.css",
             Path(__file__).parent / "static" / "dashboard.js",
+            Path(__file__).parent / "static" / "dashboard-graph.js",
+            Path(__file__).parent / "static" / "dashboard-config.js",
+            Path(__file__).parent / "static" / "dashboard-monitor.js",
+            Path(__file__).parent / "static" / "dashboard-history.js",
         ]
         asyncio.create_task(self._asset_watcher_loop(all_watch))
 
