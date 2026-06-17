@@ -178,7 +178,7 @@ class RecognitionConfig:
     wake_tone: str = "wake"
     matching_algorithm: str = "token_set_ratio"
     matching_threshold: float = 70.0
-    min_word_overlap: float = 0.0
+    min_word_overlap: float = 0.5
     reply_matching_algorithm: str = "levenshtein"
     reply_matching_threshold: float = 80.0
     follow_up: bool = False
