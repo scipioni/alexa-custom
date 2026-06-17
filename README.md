@@ -95,6 +95,7 @@ pip install smbus2   # optional: I2C OLED display
 alexa-setup
 
 # 5. Configure audio routing (run once)
+sudo apt install task  
 task audio:setup
 
 # 6. Create configuration
