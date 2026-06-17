@@ -254,7 +254,10 @@ class AgentDaemon:
             return ""
         try:
             import yaml as _yaml
-
+        except ImportError:
+            logger.warning("PyYAML not installed, skill disabled")
+            return ""
+        try:
             with open(skill_path) as f:
                 skill = _yaml.safe_load(f)
             parts = [f"## {skill.get('name', 'skill')}\n{skill.get('description', '')}"]
@@ -470,10 +473,24 @@ class AgentDaemon:
                             logger.info(
                                 "Groq: speech START at %.1f (rms=%.1f)", now, rms
                             )
-                        elif now - last_speech > 0.5 and len(audio_buf) == 0:
-                            logger.warning("Groq: rms>=20 but audio_buf empty!")
                         last_speech = now
                         audio_buf.extend(down.tobytes())
+                        if now - speech_start > 8.0:
+                            logger.info(
+                                "Groq: max duration %.0fs, sending %dB",
+                                now - speech_start,
+                                len(audio_buf),
+                            )
+                            text = await self._groq_stt.transcribe(bytes(audio_buf))
+                            speech_start = 0.0
+                            if text and len(text.split()) >= 2:
+                                if not await self._process_stt_text(
+                                    text, llm_history, _drain, _echo_drain
+                                ):
+                                    return
+                                resampler = _AudioResampler()
+                                break
+                            continue
                     elif speech_start > 0.0:
                         silence = now - last_speech
                         if silence > 1.5:
@@ -489,43 +506,15 @@ class AgentDaemon:
                                 silence,
                                 len(audio_buf),
                             )
-                            logger.info("Groq: transcribing %d bytes", len(audio_buf))
                             text = await self._groq_stt.transcribe(bytes(audio_buf))
                             speech_start = 0.0
-                            if not text:
-                                logger.debug("Groq: no text returned")
+                            if not text or len(text.split()) < 2:
+                                logger.debug("Groq: no/short text: '%s'", text)
                                 break
-                            if len(text.split()) < 2:
-                                logger.debug("Groq: text too short: '%s'", text)
-                                break
-
-                            logger.info("STT: '%s'", text)
-                            if text.lower() in _END_PHRASES or any(
-                                p in text.lower() for p in _END_PHRASES
+                            if not await self._process_stt_text(
+                                text, llm_history, _drain, _echo_drain
                             ):
-                                await self._say("Arrivederci, stammi bene!")
                                 return
-
-                            self._busy.set()
-                            drainer = asyncio.create_task(_drain())
-
-                            urgency, reply = await self._combined_chat(
-                                text, llm_history
-                            )
-                            if urgency in ("HIGH", "CRITICAL"):
-                                logger.critical("Agent: emergency assessed %s", urgency)
-                                if self._dispatch_cb:
-                                    await self._dispatch_cb(f"URGENCY:{urgency}:{text}")
-                                await self._say(
-                                    "Ho capito, chiamo subito aiuto. Come sta adesso?"
-                                )
-                                asyncio.create_task(self._wait_for_responder())
-                            else:
-                                await self._say(reply)
-                            await _echo_drain()
-
-                            self._busy.clear()
-                            await drainer
                             resampler = _AudioResampler()
                             break
             except StopAsyncIteration:
@@ -534,6 +523,33 @@ class AgentDaemon:
                 logger.error("Groq STT error: %s", e)
                 break
         logger.info("Agent: conversation ended")
+
+    async def _process_stt_text(
+        self, text: str, llm_history, _drain, _echo_drain
+    ) -> bool:
+        """Process transcribed text. Returns False if conversation should end."""
+        logger.info("STT: '%s'", text)
+        if text.lower() in _END_PHRASES or any(p in text.lower() for p in _END_PHRASES):
+            await self._say("Arrivederci, stammi bene!")
+            return False
+
+        self._busy.set()
+        drainer = asyncio.create_task(_drain())
+
+        urgency, reply = await self._combined_chat(text, llm_history)
+        if urgency in ("HIGH", "CRITICAL"):
+            logger.critical("Agent: emergency assessed %s", urgency)
+            if self._dispatch_cb:
+                await self._dispatch_cb(f"URGENCY:{urgency}:{text}")
+            await self._say("Ho capito, chiamo subito aiuto. Come sta adesso?")
+            asyncio.create_task(self._wait_for_responder())
+        else:
+            await self._say(reply)
+        await _echo_drain()
+
+        self._busy.clear()
+        await drainer
+        return True
 
     async def _run_vosk_loop(self, stream, resampler, llm_history, _drain, _echo_drain):
         from vosk import KaldiRecognizer
