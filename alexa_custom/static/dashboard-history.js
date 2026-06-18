@@ -71,9 +71,13 @@
       }
     }
 
-    function clearHistory() {
+    function _clearHistoryDOM() {
       document.getElementById('hl').innerHTML = '';
       updateHistoryVisibility();
+    }
+
+    function clearHistory() {
+      _clearHistoryDOM();
       sendCtrl('clear_history');
     }
 

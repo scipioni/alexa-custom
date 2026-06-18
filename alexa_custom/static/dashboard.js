@@ -215,8 +215,15 @@
         case 'volume_set':
           initVolumeSlider(m.volume != null ? m.volume : m.output_volume);
           break;
+        case 'history_item':
         case 'session_history':
           addSessionHistory(m.session);
+          break;
+        case 'history_cleared':
+          _clearHistoryDOM();
+          break;
+        case 'reload':
+          setTimeout(() => location.reload(), 200);
           break;
         case 'toast':
           showToast(m.message, m.level || 'info');

@@ -298,9 +298,10 @@ class WebServer:
                     session.setdefault("diagnostics", {})["gated"] = True
 
                 asyncio.create_task(self._append_history_log(session))
-                asyncio.create_task(
-                    self._broadcast({"type": "history_item", "session": session})
-                )
+                try:
+                    self._queue.put_nowait({"type": "history_item", "session": session})
+                except asyncio.QueueFull:
+                    pass
 
         if event == "matched" and not self._active_session:
             session_id = (
