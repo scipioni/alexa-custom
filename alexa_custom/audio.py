@@ -161,10 +161,14 @@ def main_test():
     input_spec = config.audio.input_device if config else None
     output_spec = config.audio.output_device if config else None
 
+    from alexa_custom.audio_hw import resolve_output_sink
+
     try:
         set_pipewire_defaults(input_spec, output_spec)
     except Exception as e:
         print(f"WARNING: Could not set PipeWire defaults: {e}")
+
+    resolve_output_sink(output_spec)
 
     if config and config.audio.output_volume > 0:
         with pulse_session("alexa-test") as pulse:

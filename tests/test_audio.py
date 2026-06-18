@@ -175,6 +175,7 @@ def test_configure_propagates_to_globals(monkeypatch):
     fake_audio.tone_preroll_ms = 400
     fake_audio.sample_rates = {"usb": 44100, "bluetooth": 16000}
     fake_audio.card_name = "ConferenceCam"
+    fake_audio.output_device = "pipewire"
     fake_audio.output_volume = 0.35
     fake_audio.input_gain = 1.8
 

@@ -30,6 +30,7 @@ class _AudioState:
     )
     default_card_name: str | None = None
     output_volume: float = 0.5
+    output_sink: str | None = None
     input_gain: float = 1.0
     hw_gain_applied: bool = False
 
@@ -118,9 +119,35 @@ def configure(cfg) -> None:
     if state_gain is not None:
         _state.input_gain = state_gain
 
+    resolve_output_sink(cfg.audio.output_device)
+
 
 def get_output_volume() -> float:
     return _state.output_volume
+
+
+def get_output_sink() -> str | None:
+    return _state.output_sink
+
+
+def resolve_output_sink(output_spec: str | None) -> str | None:
+    """Look up and cache the PipeWire sink name for output_spec.
+
+    Returns the sink node name for use as pw-play --target, or None when
+    output_spec is 'pipewire'/'default'/None (let PipeWire route normally).
+    """
+    if not output_spec or output_spec.lower() in ("pipewire", "default"):
+        _state.output_sink = None
+        return None
+    with pulse_session("alexa-sink-lookup") as pulse:
+        needle = output_spec.lower()
+        for s in pulse.sink_list():
+            if needle in s.description.lower() or needle in s.name.lower():
+                _state.output_sink = s.name
+                return s.name
+    logger.warning(f"resolve_output_sink: no sink found for {output_spec!r}")
+    _state.output_sink = None
+    return None
 
 
 def get_input_gain() -> float:
