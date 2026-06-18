@@ -292,7 +292,7 @@ def main():
         "--backend",
         action="append",
         default=[],
-        choices=["vosk", "sherpa-onnx"],
+        choices=["vosk"],
         help="backend(s) to test; repeat to compare (default: vosk)",
     )
     ap.add_argument(
@@ -327,7 +327,7 @@ def main():
         "--num-threads",
         type=int,
         default=2,
-        help="ONNX intra-op threads for sherpa (default 2, per CLAUDE.md)",
+        help="Number of decoder threads (default: 2)",
     )
     ap.add_argument("--rms-threshold", type=float, default=0.02)
     ap.add_argument("--min-speech-ms", type=int, default=200)

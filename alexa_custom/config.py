@@ -699,9 +699,9 @@ def _parse_stt_config(raw: dict) -> STTConfig:
         )
 
     backend = str(raw.get("backend", "vosk"))
-    if backend not in ("vosk", "sherpa-onnx"):
+    if backend != "vosk":
         raise ConfigError(
-            f"'stt.backend' must be 'vosk' or 'sherpa-onnx', got {backend!r}"
+            f"'stt.backend' must be 'vosk', got {backend!r}"
         )
     model_path_raw = raw.get("model_path")
     return STTConfig(

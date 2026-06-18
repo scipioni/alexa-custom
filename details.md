@@ -58,9 +58,8 @@
 ### Data Flow
 
 1. **Capture**: `parec` streams raw s16le audio from the USB microphone
-2. **Stage 1 (wake detection)**: Lightweight Vosk or sherpa-onnx model runs continuously on the audio stream
-3. **Stage 2 (command recognition)**: On wake word detection, full STT processes the follow-on command
-4. **Trigger matching**: The transcript is matched against configured triggers using phonetic normalization + fuzzy matching
+2. **STT Pipeline**: Single always-on free-vocabulary Vosk transcription model processes the audio stream continuously
+3. **Trigger matching**: The transcript is matched against configured triggers (wake words, commands) using phonetic normalization + fuzzy matching
 5. **Action dispatch**: Matched actions execute — LiveKit join, MQTT publish, shell command, Telegram, LLM chat, etc.
 6. **TTS response**: Piper or Pico TTS synthesises speech, played back via `pw-play`
 7. **Feedback**: Visual display (LED matrix, OLED, GPIO) updates to reflect state
@@ -121,7 +120,6 @@ alexa-setup
 
 Downloads:
 - Vosk Italian model (`models/it/vosk-model-small-it-0.22`)
-- Sherpa-onnx Italian model (`models/it/sherpa-onnx-kroko-8l`)
 - Piper TTS voice (`it_IT-paola-medium`)
 
 ### Audio Configuration
@@ -232,19 +230,13 @@ recognition:
 # STT — speech-to-text
 # ---------------------------------------------------------------------------
 stt:
-  vad_silence_ms: 500       # idle ms before command window closes
-  stage1:                   # continuous wake-word detection (low CPU)
-    backend: vosk            # vosk | sherpa-onnx | sherpa-hotwords
-    confidence: 0.75
-    confidence_mode: min    # first | min | mean
-    vad_silence_ms: 900
-    rms_threshold: 0.02
-    adaptive_rms: true
-    min_speech_ms: 200
-    vosk_grammar: true
-  stage2:                   # command recognition after wake
-    backend: vosk
-    vosk_grammar: true
+  backend: vosk            # speech-to-text backend
+  vad_silence_ms: 900      # idle ms before command window closes
+  rms_threshold: 0.02
+  adaptive_rms: true
+  adaptive_rms_margin: 0.01
+  min_speech_ms: 200
+  wake_match_threshold: 0.5
 
 # ---------------------------------------------------------------------------
 # TTS — text-to-speech
@@ -528,31 +520,17 @@ Audio Stream ──▶ Stage 1 (always-on, low CPU) ──▶ Wake word?
                                       Action dispatch
 ```
 
-### Stage 1: Wake Word Detection
+### Speech-to-Text (STT) Pipeline
 
-Runs continuously with minimal CPU usage. Configurable backends:
+Serena runs a single always-on free-vocabulary Vosk transcription model that continuously transcribes captured audio chunks. Wake word detection and command recognition both happen by matching this single transcription model's output.
 
-| Backend | Description | Best for |
-|---------|-------------|----------|
-| `vosk` | Grammar mode restricts Vosk to wake-word vocabulary | Low CPU, stable environment |
-| `sherpa-onnx` | Open-vocabulary neural network | Higher accuracy, more CPU |
-| `sherpa-hotwords` | Keyword-spotter mode | Minimal CPU, wake-only |
-
-Key parameters:
-- `confidence`: Minimum confidence threshold (0.0–1.0) to accept a wake word
-- `confidence_mode`: How per-token confidence is aggregated (`first`, `min`, `mean`)
-- `vad_silence_ms`: Force-finalize after this many ms of silence
-- `rms_threshold`: Minimum audio energy to consider as speech
-- `adaptive_rms`: Dynamically adjust threshold based on room noise floor
-
-### Stage 2: Command Recognition
-
-Activated only after a wake word. Uses a full STT model for accurate transcription.
-
-- `vosk_grammar: true`: Grammar mode — lower CPU, forces segments onto configured vocabulary
-- `vosk_grammar: false`: Free-vocabulary — full decoder, better at handling unexpected phrases
-- `command_timeout`: How many seconds to listen after the wake word
-- `command_max_timeout`: Absolute cap (slides while user keeps speaking)
+Key parameters under `stt`:
+- `backend`: Must be `"vosk"`.
+- `vad_silence_ms`: Force-finalize after this many ms of silence.
+- `rms_threshold`: Minimum audio energy to consider as speech (default: 0.02).
+- `adaptive_rms`: Dynamically adjust threshold based on room noise floor (default: true).
+- `min_speech_ms`: Minimum speech duration in ms to avoid brief clicks (default: 200).
+- `wake_match_threshold`: Similarity threshold (0.0 to 1.0) to match a wake word (default: 0.5).
 
 ### Speaking Patterns
 
@@ -818,7 +796,6 @@ Rollback: `task release:rollback`
 | `aiomqtt` | core | MQTT / Home Assistant |
 | `aiohttp` | core | Web dashboard server |
 | `piper-tts` | core | Local text-to-speech |
-| `sherpa-onnx` | core | Alternative STT backend |
 | `rapidfuzz` | core | Fuzzy phonetic matching |
 | `ruamel.yaml` | core | YAML round-trip editing (preserves comments) |
 | `smbus2` | optional | I2C OLED display backend |
@@ -828,7 +805,7 @@ Rollback: `task release:rollback`
 ```
 ├── alexa_custom/           # Main Python package
 │   ├── client.py           # Main loop, LiveKit session, wake-word dispatch
-│   ├── stt.py              # Two-stage STT pipeline (Vosk + sherpa-onnx)
+│   ├── stt.py              # STT pipeline (Vosk)
 │   ├── tts.py              # Text-to-speech (Piper)
 │   ├── audio_hw.py         # Core audio state, PCM restore, routing
 │   ├── audio_ops.py        # Playback operations (pw-play, WAV files, tones)
@@ -842,7 +819,7 @@ Rollback: `task release:rollback`
 │   ├── display.py          # Display backends (bridge, gpio, i2c, mock)
 │   ├── llm.py              # Ollama client, conversation engine
 │   ├── record.py           # WAV recording utility
-│   ├── stt_backends.py     # STT backend wrappers (Vosk, SherpaOnnx)
+│   ├── stt_backends.py     # STT backend wrappers (Vosk)
 │   ├── stt_capture.py      # Stage-2 command capture
 │   ├── stt_gating.py       # Audio capture via parec, gating logic
 │   ├── stt_phonetics.py    # Phonetic matching and normalization

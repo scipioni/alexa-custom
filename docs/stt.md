@@ -1,6 +1,6 @@
 # STT Pipeline and Trigger Matching
 
-alexa-custom runs a two-stage speech pipeline. Stage 1 listens continuously for a wake word; stage 2 captures and matches the command that follows.
+alexa-custom runs a single-stage always-on speech pipeline. A single Vosk free-vocabulary model transcribes audio continuously; wake words and command triggers are matched directly against this stream.
 
 ---
 
@@ -10,33 +10,22 @@ alexa-custom runs a two-stage speech pipeline. Stage 1 listens continuously for 
 mic audio
    │
    ▼
-STAGE 1 — wake detection (always on)
-   │  Vosk (grammar/free-vocab), sherpa-onnx, sherpa-hotwords, or sherpa KWS
-   │  fires when wake word found in transcript
-   │  (also fires direct-match triggers — see below — without any wake word)
+always-on STT (Vosk)
+   │  transcribes speech continuously (Vosk free-vocabulary)
    │
-   ├─ no wake word → reset, keep listening
+   ▼
+TRIGGER MATCHING (match_trigger)
    │
-   └─ wake word detected
-         │
-         ├─ inline command present? (wake+command in one breath, or streaming partial)
-         │      YES → skip stage 2, go straight to trigger matching
-         │      NO  → play beep, run stage 2
-         │
-         ▼
-      STAGE 2 — command capture
-         │  Vosk listens until VAD silence / timeout
-         │  returns full command transcript
-         │
-         ▼
-      TRIGGER MATCHING (match_trigger)
-         │
-         ├─ patterns defined on trigger? → word-glob match (definitive on hit)
-         └─ fallback → phonetic fuzzy scoring (token_set_ratio / levenshtein / ratio)
-              │
-              ├─ match  → dispatch action
-              ├─ no match + LLM enabled → LLM fallback
-              └─ no match → error tone
+   ├─ wake word matched?
+   │      YES → open command window / follow-up, match command phrases
+   │      NO  → check if direct trigger (wake_words: []) is matched
+   │
+   ▼
+ACTION DISPATCH
+   │
+   ├─ match  → dispatch action
+   ├─ no match + LLM enabled → LLM fallback
+   └─ no match → error tone
 ```
 
 ---
@@ -153,14 +142,14 @@ triggers:
       - type: livekit_join
 ```
 
-Because there is no wake word gating these, they are matched far more strictly than command triggers (§ Trigger matching) to keep ambient speech from firing them. The rule is identical across **every** stage-1 backend (Vosk grammar/free-vocab, sherpa-onnx, sherpa-hotwords, and the sherpa keyword spotter):
+Because there is no wake word gating these, they are matched far more strictly than command triggers (§ Trigger matching) to keep ambient speech from firing them. The rule is:
 
 - **Algorithm: `ratio`** (character-level), *not* `matching_algorithm`/`token_set_ratio`. `token_set_ratio` ignores word order and extra words, so a longer utterance that merely *contains* the trigger's words would score ~100 and mis-fire. Character-level `ratio` rejects those because the full strings differ in length.
 - **Full word overlap (`min_word_overlap = 1.0`)** — every word of the trigger phrase must appear in the transcript before fuzzy scoring even runs.
 - **Word-count gate** — a trigger is only a candidate when the transcript has *at least* as many words as the phrase, so a single noise token (`"e"`) can't match a multi-word trigger (`"che ora è"`).
 - **Threshold** — the resulting `ratio` score must still clear `matching_threshold`.
 
-The trade-off is deliberate: direct triggers favour precision over recall. A phrase the STT consistently mis-transcribes should be added as an `alias` on the trigger rather than loosened globally. With **sherpa-hotwords**, registering the direct-trigger phrase as a hotword (done automatically) biases the transducer toward emitting it verbatim, which is what makes the strict `ratio` match land.
+The trade-off is deliberate: direct triggers favour precision over recall. A phrase the STT consistently mis-transcribes should be added as an `alias` on the trigger rather than loosened globally.
 
 > One-breath note: a keyword like `"galileo chiama stefano"` is *not* treated as the direct trigger `"chiama stefano"` — the full-overlap-plus-`ratio` rule rejects it, so it correctly falls through to wake-word + inline-command handling (mode 2).
 
@@ -356,14 +345,13 @@ A literal alias approach requires you to enumerate: `"chiama il medico"`, `"chia
 
 ```yaml
 stt:
-  vad_silence_ms: 500        # silence that ends stage-2 command capture
-  flush_ms: 300              # audio discarded after the beep (echo absorption)
-
-  stage1:
-    backend: vosk            # vosk | sherpa-onnx | sherpa-hotwords (+ keyword_spotter: true)
-    vad_silence_ms: 900      # silence that ends stage-1; bridges wake+command pause (mode 2)
-    min_speech_ms: 200       # minimum speech before VAD timer starts
-    hotwords_score: 1.5      # sherpa-hotwords: contextual-bias boost for wake/direct phrases
+  backend: vosk            # speech-to-text backend (must be vosk)
+  vad_silence_ms: 900      # idle ms before command window closes
+  rms_threshold: 0.02      # minimum RMS energy level to count as speech
+  adaptive_rms: true       # dynamically adjust threshold based on room noise floor
+  adaptive_rms_margin: 0.01
+  min_speech_ms: 200       # minimum sustained speech before silence timer starts
+  wake_match_threshold: 0.5 # similarity threshold (0.0 to 1.0) to match a wake word
 
 recognition:
   command_timeout: 2.5       # inactivity window for stage-2 (slides while user speaks)
@@ -383,11 +371,9 @@ wake_words:
 
 | Symptom | Fix |
 |---|---|
-| Mode 2 keeps falling back to mode 1 | Raise `stage1.vad_silence_ms` (e.g. 900–1200 ms) |
-| Stage 1 fires too slowly after wake word | Lower `stage1.vad_silence_ms` |
-| Stage 2 cuts off long commands | Raise `command_timeout` or `command_max_timeout` |
-| Stage 2 doesn't end promptly after command | Lower `stt.vad_silence_ms` |
-| Echo after beep bleeds into stage 2 | Raise `stt.flush_ms` |
+| Mode 2 keeps falling back to mode 1 | Raise `stt.vad_silence_ms` (e.g. 900–1200 ms) |
+| Pipeline cuts off long commands | Raise `command_timeout` or `command_max_timeout` |
+| Pipeline doesn't end promptly after command | Lower `stt.vad_silence_ms` |
 | Glob pattern too permissive | Add a stronger anchor token; avoid bare single-token patterns |
-| Direct trigger (`wake_words: []`) won't fire | Add the mis-transcribed form as an `alias`; with sherpa-hotwords raise `stage1.hotwords_score` |
+| Direct trigger (`wake_words: []`) won't fire | Add the mis-transcribed form as an `alias` |
 | Direct trigger fires on unrelated speech | It shouldn't — direct matching is strict (`ratio` + full overlap); check the trigger isn't a single very short word |

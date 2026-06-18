@@ -91,7 +91,7 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
 pip install smbus2   # optional: I2C OLED display
 
-# 4. Download speech models (Vosk, sherpa-onnx, Piper)
+# 4. Download speech models (Vosk, Piper)
 alexa-setup
 
 # 5. Configure audio routing (run once)
@@ -136,7 +136,7 @@ task audio:status   # audio device health dashboard
 Serena is built in five layers:
 
 1. **Audio Pipeline** — `parec` captures raw 16 kHz s16le from the USB microphone. A VAD gate filters audio during TTS playback to prevent echo loops. Input gain is applied in software.
-2. **STT Pipeline** — Stage 1 runs a lightweight wake-word recognizer continuously (Vosk grammar or sherpa-onnx keyword spotter). On match, stage 2 transcribes the follow-on command until silence. Both backends can be mixed.
+2. **STT Pipeline** — Runs a single always-on free-vocabulary Vosk transcription model that continuously transcribes audio. Wake detection and command recognition happen by matching the single transcription model's output.
 3. **Trigger Matching** — The transcript is matched against YAML-defined triggers using Italian phonetic normalization + fuzzy matching (RapidFuzz). Supports glob patterns, direct matches, and scoped wake-word groups.
 4. **Action Dispatch** — Matched triggers invoke registered handlers: TTS, MQTT, LiveKit, Telegram, shell, LLM chat, volume control, weather, and more.
 5. **Web & Integration** — aiohttp dashboard serves real-time status. MQTT publishes Home Assistant auto-discovery. LiveKit client manages JWT tokens and bidirectional audio.

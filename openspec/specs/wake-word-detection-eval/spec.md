@@ -42,16 +42,12 @@ The harness SHALL report, for a given configuration, the **false-positives-per-h
 - **WHEN** the harness is run twice on the same corpus with the same configuration
 - **THEN** the reported false-positive count, miss count, and rates are identical
 
-### Requirement: Configuration sweep for backend comparison
-The harness SHALL support sweeping across stage-1 configurations — at minimum the backend (`vosk`, `sherpa-onnx` KeywordSpotter), the acceptance threshold/confidence, and the Vosk confidence mode — and SHALL emit a comparison table of false-positives-per-hour versus miss-rate per configuration so that backend and threshold choices can be made from data.
+### Requirement: Configuration sweep for comparison
+The harness SHALL support sweeping across configurations — at minimum the acceptance threshold/confidence, and the Vosk confidence mode — and SHALL emit a comparison table of false-positives-per-hour versus miss-rate per configuration so that threshold choices can be made from data.
 
 #### Scenario: Sweep produces a comparison table
-- **WHEN** the harness is run with a sweep over backend and threshold values
+- **WHEN** the harness is run with a sweep over threshold values
 - **THEN** it emits one row per configuration showing the configuration and its false-positives-per-hour and miss-rate
-
-#### Scenario: Vosk and KWS compared on identical corpora
-- **WHEN** the sweep includes both the Vosk and sherpa-onnx KeywordSpotter stage-1 backends
-- **THEN** both are scored against the identical positive and negative corpora, enabling a like-for-like tradeoff comparison
 
 ### Requirement: Regression guard
 The harness SHALL be runnable as a repeatable check (CLI entry point and/or test skill) so that a configuration or code change which increases false-positives-per-hour or miss-rate beyond a recorded baseline can be detected.

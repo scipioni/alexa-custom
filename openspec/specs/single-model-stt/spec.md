@@ -23,17 +23,12 @@ The system SHALL load exactly one STT model and run it continuously over the cap
 
 ### Requirement: Configurable transcription backend
 
-The single model's backend SHALL be configurable via `stt.backend`, accepting at minimum `vosk` and `sherpa-onnx`. Backend-specific options (e.g. `model_path`, `num_threads`) SHALL be configurable under `stt`.
+The single model's backend SHALL be configurable via `stt.backend`, accepting `vosk`. Backend-specific options (e.g. `model_path`, `num_threads`) SHALL be configurable under `stt`.
 
 #### Scenario: Vosk backend selected
 
 - **WHEN** `stt.backend` is `vosk`
 - **THEN** the worker loads a Vosk free-vocabulary recognizer as the single model
-
-#### Scenario: Sherpa backend selected
-
-- **WHEN** `stt.backend` is `sherpa-onnx`
-- **THEN** the worker loads a sherpa-onnx recognizer as the single model
 
 #### Scenario: Invalid backend rejected
 

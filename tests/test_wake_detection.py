@@ -277,8 +277,8 @@ class TestSttConfigParsing:
         assert cfg.wake_match_threshold == pytest.approx(0.5)
 
     def test_explicit_backend(self):
-        cfg = _parse_stt_config({"backend": "sherpa-onnx"})
-        assert cfg.backend == "sherpa-onnx"
+        cfg = _parse_stt_config({"backend": "vosk"})
+        assert cfg.backend == "vosk"
 
     def test_explicit_vad_silence_ms(self):
         cfg = _parse_stt_config({"vad_silence_ms": 700})
@@ -293,6 +293,9 @@ class TestSttConfigParsing:
 
         with pytest.raises(ConfigError, match="stt.backend"):
             _parse_stt_config({"backend": "unknown"})
+
+        with pytest.raises(ConfigError, match="stt.backend"):
+            _parse_stt_config({"backend": "sherpa-onnx"})
 
 
 class TestRecognitionConfigParsing:

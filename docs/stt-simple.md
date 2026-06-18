@@ -36,14 +36,14 @@ Examples:
 "ascolta assistente puoi accendere la luce" -> emit bad tone if "puoi accendere la luce" is not a command
 
 
-# STT backend — vosk vs sherpa-onnx
+# STT backend — vosk
 
 The design uses **one always-on transcription model** (no cheap-gate stage). The
-backend is configurable; the two candidates were benchmarked on the real board
+backend is `vosk` (sherpa-onnx support was removed due to high CPU load, fragmented utterances, and long load times); the two candidates were benchmarked on the real board
 (Arduino Uno Q / Snapdragon 801, 4 cores) with `scripts/bench_stt.py`, driving the
 production capture path (`parec`) and the free-vocabulary model continuously.
 
-| Metric (live mic, always-on) | vosk | sherpa-onnx |
+| Metric (live mic, always-on) | vosk | sherpa-onnx (removed) |
 |---|---|---|
 | Model load time | **2.8 s** | 40 s |
 | CPU (continuous decode) | **66–70 %** (~⅔ core) | 103 % (~1 core) |
@@ -52,7 +52,7 @@ production capture path (`parec`) and the free-vocabulary model continuously.
 | Live transcripts | **clean, full** (`ascolta assistente che ore sono`, `aiuto aiuto`) | **fragmented** (`Ai`, `Ascolta`, mid-word cuts) |
 | Idle false fires | 0 | 0 |
 
-**Decision: `vosk` is the default; sherpa-onnx stays configurable.**
+**Decision: `vosk` is the default and only supported backend; sherpa-onnx support has been removed.**
 
 - sherpa's **40 s load** makes hot-reload (config changes apply in ~4 s) unusable.
 - sherpa **fragments utterances** at `vad_silence_ms=500`, chopping mid-phrase

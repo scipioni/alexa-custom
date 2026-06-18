@@ -9,7 +9,7 @@ Usage:
     alexa-stt                        # live microphone
     alexa-stt --record session.wav   # mic + save audio to WAV
     alexa-stt --play session.wav     # replay saved WAV instead of mic
-    LOG_LEVEL=DEBUG alexa-stt        # show sherpa/vosk debug traces
+    LOG_LEVEL=DEBUG alexa-stt        # show vosk debug traces
 """
 
 from __future__ import annotations

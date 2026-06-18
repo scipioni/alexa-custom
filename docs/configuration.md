@@ -103,44 +103,22 @@ triggers:
 
 ### STT — Speech-to-Text
 
-The two-stage pipeline uses a lightweight stage 1 for always-on wake detection and an independent stage 2 for command recognition. Backends can differ.
+Serena runs a single always-on free-vocabulary Vosk transcription model that continuously transcribes captured audio chunks. Wake word detection and command recognition both happen by matching this single transcription model's output.
 
 ```yaml
 stt:
-  vad_silence_ms: 700       # idle ms before the command window closes (stage-2)
-
-  stage1:                   # continuous wake-word detection (low CPU)
-    backend: vosk           # vosk | sherpa-onnx
-
-    # Vocabulary mode (Vosk only)
-    vosk_grammar: true      # true = grammar mode (default, recommended)
-                            #   restricts decoder to wake-word vocabulary only;
-                            #   lower CPU and higher accuracy for small models.
-                            # false = free-vocabulary: Vosk decodes the full language;
-                            #   unrelated speech is genuinely rejected; confidence
-                            #   scores are absolute.
-
-    # Confidence gating (grammar mode only — ignored in free-vocab mode)
-    confidence: 0.65        # minimum token confidence to accept wake word (0–1)
-    confidence_mode: first  # how to aggregate per-token confidence:
-                            #   first — only check first decoded token (fastest)
-                            #   min   — every token must clear the bar (strictest)
-                            #   mean  — average across tokens (moderate)
-
-    # Software VAD (stage-1 force-finalize)
-    vad_silence_ms: 500     # force-finalize after this many ms of silence
-    rms_threshold: 0.02     # minimum RMS energy level to count as speech
-    min_speech_ms: 200      # minimum sustained speech before silence timer starts
-
-  stage2:                   # command recognition after wake word
-    backend: vosk           # can use a higher-accuracy backend than stage1
-    vosk_grammar: true      # restrict Vosk to command vocabulary (grammar mode)
-    # model_path: models/it/kroko_128l
+  backend: vosk            # speech-to-text backend (must be vosk)
+  vad_silence_ms: 900      # idle ms before command window closes
+  rms_threshold: 0.02      # minimum RMS energy level to count as speech
+  adaptive_rms: true       # dynamically adjust threshold based on room noise floor
+  adaptive_rms_margin: 0.01
+  min_speech_ms: 200       # minimum sustained speech before silence timer starts
+  wake_match_threshold: 0.5 # similarity threshold (0.0 to 1.0) to match a wake word
 ```
 
 #### Inline command pass-through
 
-If the user speaks the wake word and a command in a single utterance — e.g. *"ehi galileo chiama mario"* — stage-1 extracts the trailing text and passes it directly to stage-2 dispatch, skipping the capture phase entirely. This eliminates one round-trip and makes same-breath commands instantaneous.
+If the user speaks the wake word and a command in a single utterance — e.g. *"ehi galileo chiama mario"* — Serena extracts the trailing text and passes it directly to dispatch, skipping the capture phase entirely. This eliminates one round-trip and makes same-breath commands instantaneous.
 
 ### TTS — Text-to-Speech
 

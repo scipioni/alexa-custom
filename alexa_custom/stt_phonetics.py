@@ -88,7 +88,7 @@ def _approx_wake_match(
     alias_map: dict[str, WakeWordGroup],
     threshold: float = 0.5,
 ) -> WakeWordGroup | None:
-    """Fuzzy wake-word match for open-vocabulary backends (sherpa-onnx).
+    """Fuzzy wake-word match for open-vocabulary backends.
 
     Exact alias-map lookup first; if that misses, scores each phrase by the
     fraction of its significant words (len >= 3) that appear anywhere in the

@@ -132,7 +132,7 @@ This headless host runs a modern **PipeWire** audio graph managed by **WirePlumb
 ```
 alexa_custom/
   client.py       main loop, LiveKit session, wake-word dispatch
-  stt.py          speech-to-text pipeline (Vosk + sherpa-onnx)
+  stt.py          speech-to-text pipeline (Vosk)
   tts.py          text-to-speech (Piper)
   audio.py        PipeWire routing, AudioWatcher, device enumeration
   mqtt.py         MQTT client, Home Assistant Discovery
@@ -158,7 +158,7 @@ wake_words:
 recognition:
   wake_window: 8.0         # seconds to listen after wake word
 stt:
-  backend: vosk            # vosk | sherpa-onnx (single always-on model)
+  backend: vosk            # vosk (single always-on model)
   vad_silence_ms: 900
 ```
 
@@ -208,7 +208,6 @@ Access via the web dashboard (http://localhost:8080/config):
 |---------|------|
 | `livekit` / `livekit-api` | LiveKit room client |
 | `vosk` | local wake-word + STT |
-| `sherpa-onnx` | alternative STT backend |
 | `piper-tts` | local TTS |
 | `pulsectl` | PipeWire/PulseAudio routing |
 | `sounddevice` | device enumeration only |

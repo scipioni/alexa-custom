@@ -7,53 +7,6 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-_SHERPA_MODELS = {
-    "kroko_128l": (
-        "https://huggingface.co/hudaiapa88/sherpa-stt-onnx/resolve/main/it/kroko_128l",
-        "models/it/kroko_128l",
-    ),
-    "kroko_64l": (
-        "https://huggingface.co/hudaiapa88/sherpa-stt-onnx/resolve/main/it/kroko_64l",
-        "models/it/kroko_64l",
-    ),
-}
-_SHERPA_FILES = [
-    "encoder.int8.onnx",
-    "decoder.int8.onnx",
-    "joiner.int8.onnx",
-    "tokens.txt",
-]
-
-
-def download_sherpa_onnx(model: str = "kroko_128l", force: bool = False) -> None:
-    if model not in _SHERPA_MODELS:
-        print(
-            f"Unknown sherpa-onnx model {model!r}. Available: {', '.join(_SHERPA_MODELS)}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    base_url, dest_path = _SHERPA_MODELS[model]
-    dest = Path(dest_path)
-
-    if dest.exists() and not force:
-        print(
-            f"sherpa-onnx model already present at {dest.resolve()} — skipping (use --force to replace)."
-        )
-        return
-
-    if dest.exists() and force:
-        print(f"Removing existing sherpa-onnx model at {dest.resolve()} …")
-        shutil.rmtree(dest)
-
-    dest.mkdir(parents=True, exist_ok=True)
-    for filename in _SHERPA_FILES:
-        print(f"Downloading sherpa-onnx {filename} …")
-        _download(f"{base_url}/{filename}", dest / filename)
-
-    print(f"sherpa-onnx model ready at {dest.resolve()}")
-
-
 _VOSK_MODELS = {
     "small": (
         "https://alphacephei.com/vosk/models/vosk-model-small-it-0.22.zip",
@@ -202,24 +155,12 @@ def main() -> None:
         action="store_true",
         help="Re-download even if assets are already present",
     )
-    parser.add_argument(
-        "--sherpa-onnx",
-        nargs="?",
-        const="kroko_128l",
-        metavar="MODEL",
-        help=(
-            "Download a sherpa-onnx Italian transducer model. "
-            f"MODEL is one of: {', '.join(_SHERPA_MODELS)} (default: kroko_128l)"
-        ),
-    )
     args = parser.parse_args()
 
     if not args.no_vosk:
         download_vosk(large=args.large, force=args.force)
     if not args.no_piper:
         download_piper_voice(args.piper_voice, force=args.force)
-    if args.sherpa_onnx:
-        download_sherpa_onnx(model=args.sherpa_onnx, force=args.force)
 
 
 if __name__ == "__main__":

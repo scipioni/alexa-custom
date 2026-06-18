@@ -30,7 +30,6 @@ from alexa_custom.config import (
 from alexa_custom.stt_backends import (
     STTBackend,
     VoskSTT,
-    SherpaOnnxSTT,
     _load_model,
     _MODEL_PATH,
     get_stt_backend,
@@ -63,7 +62,6 @@ from alexa_custom.stt_capture import (
 __all__ = [
     "STTBackend",
     "VoskSTT",
-    "SherpaOnnxSTT",
     "_load_model",
     "_MODEL_PATH",
     "get_stt_backend",
