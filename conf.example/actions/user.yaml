@@ -278,6 +278,7 @@ triggers:
   - commands:
       - "chiama Stefano"
     with_wake: false
+    tag: sos
     actions:
       - type: ask
         text: "Vuoi chiamare Stefano?"
@@ -301,9 +302,9 @@ triggers:
 
   - commands:
       - "chiama assistenza"
-      - "chiama"
-      - "aiuto"
+      - "aiuto aiuto"
     with_wake: false
+    tag: sos
     actions:
       - type: ask
         text: "Vuoi chiamare assistenza ?"

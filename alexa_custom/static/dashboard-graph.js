@@ -56,6 +56,58 @@
       const wws      = cfg.wake_words || [];   // flat string[]
       const triggers = cfg.triggers   || [];   // flat trigger list with with_wake bool
 
+      const untagged = [];
+      const groups = {};
+
+      triggers.forEach(t => {
+        if (t.tag) {
+          if (!groups[t.tag]) {
+            groups[t.tag] = [];
+          }
+          groups[t.tag].push(t);
+        } else {
+          untagged.push(t);
+        }
+      });
+
+      const processedTriggers = [];
+      untagged.forEach((t, idx) => {
+        processedTriggers.push({
+          id: `g${idx}`,
+          phrase: t.phrase,
+          commands: t.commands || [],
+          aliases: (t.aliases || []).map(al => ({ phrase: al, direct_match: false })),
+          with_wake: t.with_wake,
+          sleeping_only: !!t.sleeping_only,
+          actions: t.actions || []
+        });
+      });
+
+      Object.keys(groups).sort().forEach((tag, idx) => {
+        const trigs = groups[tag];
+        const commands = trigs.flatMap(t => t.commands || []);
+        
+        // Use the first trigger phrase as the main title
+        const primaryTrig = trigs[0];
+        // Remaining triggers become aliases and are checked for direct matches
+        const aliases = trigs.slice(1).map(t => ({ phrase: t.phrase, direct_match: !t.with_wake }));
+        
+        const actions = trigs.flatMap(t => t.actions || []);
+        const with_wake = primaryTrig.with_wake;
+        const sleeping_only = trigs.some(t => t.sleeping_only);
+
+        processedTriggers.push({
+          id: `group_${tag}`,
+          phrase: primaryTrig.phrase,
+          commands: commands,
+          aliases: aliases,
+          with_wake: with_wake,
+          sleeping_only: sleeping_only,
+          actions: actions,
+          tag: tag
+        });
+      });
+
       // Trigger pill height: max of left-section (phrase+aliases) and right-section (ask panel).
       function trigH(t) {
         const TR_H = 32;
@@ -77,13 +129,13 @@
       }
 
       // ── Triggers grid container ───────────────────────────────────────────
-      if (triggers.length > 0) {
+      if (processedTriggers.length > 0) {
         const CONT_PAD = 10, COLS = 3, GRID_GAP_X = 8, GRID_GAP_Y = 6, TITLE_H = 18;
         const contX = TR_X;
         const contW = Math.max(180, canvasW - TR_X - PAD);
         const cellW = Math.floor((contW - CONT_PAD * 2 - (COLS - 1) * GRID_GAP_X) / COLS);
-        const cellH = triggers.reduce((m, t) => Math.max(m, trigH(t)), 32);
-        const rows  = Math.ceil(triggers.length / COLS);
+        const cellH = processedTriggers.reduce((m, t) => Math.max(m, trigH(t)), 32);
+        const rows  = Math.ceil(processedTriggers.length / COLS);
         const contH = TITLE_H + CONT_PAD + rows * cellH + (rows - 1) * GRID_GAP_Y + CONT_PAD;
         const contY = PAD;
 
@@ -99,16 +151,17 @@
                        parts: [0.12, 0.52, 0.84].map(t0 => ({ t: t0 })) });
         }
 
-        triggers.forEach((t, i) => {
+        processedTriggers.forEach((t, i) => {
           const col = i % COLS, row = Math.floor(i / COLS);
           const cx  = contX + CONT_PAD + col * (cellW + GRID_GAP_X);
           const cy  = contY + TITLE_H + CONT_PAD + row * (cellH + GRID_GAP_Y) + cellH / 2;
-          nodes.push({ id: `g${i}`, type: 'global', label: t.phrase,
-                       commands: t.commands || [],
-                       aliases: t.aliases || [],
+          nodes.push({ id: t.id, type: 'global', label: t.phrase,
+                       commands: t.commands,
+                       aliases: t.aliases,
                        direct_match: !t.with_wake,
-                       sleeping_only: !!t.sleeping_only,
-                       actions: t.actions, x: cx, y: cy, w: cellW, h: cellH });
+                       sleeping_only: t.sleeping_only,
+                       actions: t.actions, x: cx, y: cy, w: cellW, h: cellH,
+                       tag: t.tag });
         });
 
         curY = contY + contH + PAD;
@@ -278,6 +331,17 @@
         ctx.strokeStyle = flash > 0.05 ? col + 'ee' : (isHov ? col + 'cc' : col + '55');
         ctx.lineWidth   = flash > 0.05 ? 1.5 + flash : 1;
         ctx.lineWidth   = 1; ctx.stroke();
+
+        // Tag inside the box, right bottom corner
+        if (n.tag) {
+          ctx.save();
+          ctx.font = 'bold 8px system-ui,sans-serif';
+          ctx.fillStyle = col + '60'; // subtle, minimally invasive matching color
+          ctx.textAlign = 'right';
+          ctx.textBaseline = 'bottom';
+          ctx.fillText(n.tag.toUpperCase(), x + w - 6, y + h - 5);
+          ctx.restore();
+        }
         if (flash > 0.05) {
           const pulse = Math.sin(performance.now() / 150) * 0.5 + 0.5;
           const offset = 1.5 + pulse * 3.5;
@@ -353,12 +417,33 @@
         }
         // Aliases
         if (aliases.length) {
-          ctx.fillStyle = isHov ? _tc(0.60) : _tc(0.45);
           ctx.font = '12px system-ui,sans-serif';
           ctx.textAlign = 'left';
-          aliases.forEach((a, i) => {
+          aliases.forEach((alRaw, i) => {
+            const al = typeof alRaw === 'string' ? { phrase: alRaw, direct_match: false } : alRaw;
             const ay = lblY + LINE_M / 2 + LINE_A / 2 + i * LINE_A;
-            ctx.fillText(a.length > maxCh ? a.slice(0, maxCh-1)+'…' : a, x + 10, ay);
+            const aStr = al.phrase.length > maxCh ? al.phrase.slice(0, maxCh-1)+'…' : al.phrase;
+            if (al.direct_match) {
+              ctx.save();
+              const PH_PAD_X = 6, PH_PAD_Y = 2, PH_R = 4;
+              ctx.font = '11px system-ui,sans-serif';
+              const textW = ctx.measureText(aStr).width;
+              const phW = textW + PH_PAD_X * 2;
+              const phH = 15;
+              const phX = x + 10, phY = ay - phH / 2 + 1;
+              ctx.beginPath(); _rrect(ctx, phX, phY, phW, phH, PH_R);
+              ctx.fillStyle = '#f973161c';
+              ctx.fill();
+              ctx.strokeStyle = '#f9731699';
+              ctx.lineWidth = 0.5;
+              ctx.stroke();
+              ctx.fillStyle = '#f97316';
+              ctx.fillText(aStr, phX + PH_PAD_X, ay + 0.5);
+              ctx.restore();
+            } else {
+              ctx.fillStyle = isHov ? _tc(0.60) : _tc(0.45);
+              ctx.fillText(aStr, x + 10, ay);
+            }
           });
         }
         // Ask panel — right section of the pill

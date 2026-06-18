@@ -36,6 +36,7 @@ class Trigger:
     with_wake: bool = True  # False = fires without a wake word
     follow_up: bool | None = None
     min_word_overlap: float | None = None
+    tag: str = ""
     # Legacy compat: populated from commands[0] / commands[1:] by the parser.
     # match_trigger_with_score() uses these — do not set directly.
     phrase: str = ""
@@ -477,6 +478,9 @@ def _parse_triggers(raw_triggers: list[Any], path_prefix: str) -> list[Trigger]:
             float(raw_min_word_overlap) if raw_min_word_overlap is not None else None
         )
 
+        # --- tag ---
+        tag = str(t.get("tag", ""))
+
         # Populate compat phrase/aliases from commands
         compat_phrase = commands[0] if commands else ""
         compat_aliases = commands[1:] if len(commands) > 1 else []
@@ -489,6 +493,7 @@ def _parse_triggers(raw_triggers: list[Any], path_prefix: str) -> list[Trigger]:
                 with_wake=with_wake,
                 follow_up=follow_up_val,
                 min_word_overlap=min_word_overlap_val,
+                tag=tag,
                 phrase=compat_phrase,
                 aliases=compat_aliases,
                 wake_words=[str(w) for w in raw_wake_words if w is not None]

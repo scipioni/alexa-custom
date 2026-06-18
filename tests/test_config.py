@@ -513,6 +513,20 @@ class TestLoadActionsDir:
         assert on_startup == []
         assert data.triggers == []
 
+    def test_trigger_tag_parsing(self, tmp_path):
+        actions_dir = tmp_path / "actions"
+        actions_dir.mkdir()
+        self._write_system(
+            actions_dir,
+            "triggers:\n  - phrase: untagged\n    actions:\n      - type: log\n        message: x\n  - phrase: tagged\n    tag: test-tag\n    actions:\n      - type: log\n        message: y\n",
+        )
+        from alexa_custom.config import _load_actions_dir
+
+        _, data, _ = _load_actions_dir(actions_dir, make_wake_words())
+        assert len(data.triggers) == 2
+        assert data.triggers[0].tag == ""
+        assert data.triggers[1].tag == "test-tag"
+
 
 # ---------------------------------------------------------------------------
 # LLM config tests

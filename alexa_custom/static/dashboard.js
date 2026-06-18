@@ -424,7 +424,22 @@
       const el = document.getElementById('ww-tree-body');
       if (!el) return;
       el.innerHTML = '';
-      const list = (actions.triggers||[]).map(t => {
+
+      const untagged = [];
+      const groups = {};
+
+      (actions.triggers || []).forEach(t => {
+        if (t.tag) {
+          if (!groups[t.tag]) {
+            groups[t.tag] = [];
+          }
+          groups[t.tag].push(t);
+        } else {
+          untagged.push(t);
+        }
+      });
+
+      function _renderTriggerCard(t) {
         const ph = t.phrase;
         const aliases = _aliases(t.aliases);
         const badges = _badges(t.actions);
@@ -440,11 +455,32 @@
           askHtml = `<div class="ask-card"><div class="aq">🗣️ "${esc(qText)}"</div><div class="abranches">${bHtml}</div></div>`;
         }
         return `<div class="tcard" onclick="_trigPhrase(this)"><div class="tcard-top"><span class="tphrase">${esc(ph)}</span>${badges}</div>${aliases}${askHtml}</div>`;
+      }
+
+      let html = '';
+
+      untagged.forEach(t => {
+        html += _renderTriggerCard(t);
       });
-      if (list.length === 0) {
+
+      Object.keys(groups).sort().forEach(tag => {
+        const trigs = groups[tag];
+        const cardsHtml = trigs.map(_renderTriggerCard).join('');
+        html += `
+          <div class="tcard-group" style="border: 1px dashed var(--border); border-radius: 12px; margin-bottom: 8px; padding: 4px 8px; background: rgba(255,255,255,0.02);">
+            <div style="font-size: 10px; font-weight: bold; text-transform: uppercase; color: var(--muted); margin: 4px 4px 6px; letter-spacing: 0.05em; display: flex; align-items: center; gap: 4px;">
+              <span>📁 ${esc(tag)}</span>
+              <span style="font-size: 9px; font-weight: normal; background: var(--border); padding: 1px 5px; border-radius: 10px; color: var(--text);">${trigs.length}</span>
+            </div>
+            <div>${cardsHtml}</div>
+          </div>
+        `;
+      });
+
+      if (!html) {
         el.innerHTML = '<div style="padding: 16px 12px; font-size: 11px; color: var(--muted); text-align: center; font-style: italic;">No triggers loaded</div>';
       } else {
-        el.innerHTML = list.join('');
+        el.innerHTML = html;
       }
     }
 

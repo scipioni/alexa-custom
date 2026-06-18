@@ -126,3 +126,11 @@ class TestValidateConfig:
     def test_accepts_minimal_valid(self, server):
         ok, _ = server._validate_config({"wake_words": [{"word": "galileo"}]})
         assert ok is True
+
+
+class TestSerializeTrigger:
+    def test_serialize_trigger_includes_tag(self, server):
+        from alexa_custom.config import Trigger
+        t = Trigger(phrase="test", commands=["test"], tag="speaker")
+        serialized = server._serialize_trigger(t)
+        assert serialized["tag"] == "speaker"

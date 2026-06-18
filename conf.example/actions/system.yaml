@@ -61,6 +61,7 @@ triggers:
 
   - commands:
       - "volume basso"
+    tag: speaker
     actions:
       - type: set_volume
         mode: absolute
@@ -70,6 +71,7 @@ triggers:
 
   - commands:
       - "volume medio"
+    tag: speaker
     actions:
       - type: set_volume
         mode: absolute
@@ -79,6 +81,7 @@ triggers:
 
   - commands:
       - "volume alto"
+    tag: speaker
     actions:
       - type: set_volume
         mode: absolute
@@ -88,6 +91,7 @@ triggers:
 
   - commands:
       - "alza il volume"
+    tag: speaker
     actions:
       - type: set_volume
         mode: up
@@ -97,6 +101,7 @@ triggers:
 
   - commands:
       - "abbassa il volume"
+    tag: speaker
     actions:
       - type: set_volume
         mode: down
@@ -107,6 +112,7 @@ triggers:
   - commands:
       - "che tempo farà domani"
     with_wake: false
+    tag: meteo
     patterns:
       - "che tempo * domani"
     actions:
@@ -119,6 +125,7 @@ triggers:
   - commands:
       - "che tempo farà oggi"
     with_wake: false
+    tag: meteo
     patterns:
       - "che tempo * oggi"
     actions:
