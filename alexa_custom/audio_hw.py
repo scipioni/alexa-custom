@@ -289,6 +289,8 @@ def find_alexa_card(pulse, spec: str | None = None):
     """Return the pulsectl card object matching the spec (name, desc, or index)."""
     if not spec:
         spec = _state.default_card_name
+    if not spec:
+        return None
 
     spec_lower = spec.lower()
     is_numeric = spec.strip().isdigit()
@@ -380,7 +382,9 @@ def enforce_audio_state(
     pulse: pulsectl.Pulse, input_spec: str | None = None, output_spec: str | None = None
 ) -> tuple[bool, str]:
     """Find configured card, force profile if it exists, and set default sink/source."""
-    is_virtual = (output_spec or "").lower() in ("pipewire", "default")
+    is_virtual = (output_spec or "").lower() in ("pipewire", "default") or (
+        output_spec is None and _state.default_card_name is None
+    )
 
     card = find_alexa_card(pulse, output_spec)
     if not card:
@@ -436,7 +440,9 @@ def check_newpie_ready(
         input_spec = os.environ.get("INPUT_DEVICE", "").strip() or None
     if output_spec is None:
         output_spec = os.environ.get("OUTPUT_DEVICE", "").strip() or None
-    is_virtual = (output_spec or "").lower() in ("pipewire", "default")
+    is_virtual = (output_spec or "").lower() in ("pipewire", "default") or (
+        output_spec is None and _state.default_card_name is None
+    )
 
     with pulse_session("alexa-check") as pulse:
         ok, conn = enforce_audio_state(pulse, input_spec, output_spec)

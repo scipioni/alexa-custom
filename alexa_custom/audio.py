@@ -185,13 +185,16 @@ def main_test():
 
     get_engine().say("Ciao, come ti chiami?")
 
-    print("3. Recording 5 seconds of audio...")
+    from alexa_custom.stt_gating import resolve_capture_source
+
+    capture_source, capture_channels = resolve_capture_source(input_spec)
+    print(f"3. Recording 5 seconds of audio (source={capture_source or 'default'}, ch={capture_channels})...")
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
         tmp_wav = f.name
 
     try:
         print("   [RECORDING NOW - SPEAK INTO MICROPHONE]")
-        record_wav_file(tmp_wav, 5.0)
+        record_wav_file(tmp_wav, 5.0, capture_source, capture_channels)
         print("   [DONE]")
 
         print("4. TTS: Announcing playback...")
