@@ -1,15 +1,28 @@
 [Unit]
 Description=Restore NewPie PCM volume and routing after PipeWire fully initialises
 After=wireplumber.service
-Requires=wireplumber.service
 
 [Service]
 Type=oneshot
-# Wait for NewPie to appear, set routing, then keep correcting PCM for 20s to
-# catch WirePlumber's late ACP profile init which resets PCM to 0 after we set it.
+# 1. Wait for NewPie to appear in the PipeWire graph.
+# 2. Restart WirePlumber so pipewire-pulse re-registers all cards and the
+#    NewPie source becomes visible to pulsectl (pactl list sources).
+#    Without this restart, WirePlumber may expose the card to wpctl but not
+#    to the PulseAudio compat layer at boot time.
+# 3. Wait for NewPie to reappear after the WirePlumber restart.
+# 4. Set analog-stereo profile, default routing, and keep restoring PCM for
+#    20 s to catch WirePlumber's late ACP profile reset.
 ExecStart=/bin/bash -c '\
   for i in $(seq 1 30); do \
     if wpctl status 2>/dev/null | grep -q "NewPie"; then \
+      break; \
+    fi; \
+    sleep 1; \
+  done; \
+  systemctl --user restart wireplumber; \
+  sleep 3; \
+  for i in $(seq 1 15); do \
+    if pactl list sources short 2>/dev/null | grep -q "NewPie"; then \
       break; \
     fi; \
     sleep 1; \
@@ -25,7 +38,7 @@ ExecStart=/bin/bash -c '\
     sleep 2; \
   done'
 RemainAfterExit=yes
-TimeoutStartSec=55
+TimeoutStartSec=90
 
 [Install]
 WantedBy=default.target
