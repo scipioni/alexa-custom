@@ -65,6 +65,10 @@ stt:
   #   (handles "ehi" transcribed as "e"/"ei"); 1.0 — exact match required.
   # num_threads: 2           # ONNX threads (sherpa-onnx only; ignored by vosk)
   # flush_ms: 300            # audio discarded after wake beep (absorbs speaker echo)
+  # mono_capture: false      # force parec to capture mono (--channels=1) so PipeWire
+  #   handles stereo→mono in the driver. Eliminates the Python-side max-abs downmix.
+  #   Trade-off: PipeWire averages the two mics; the default max-abs picks the louder
+  #   channel per frame, which is better when one mic dominates.
 
 # ---------------------------------------------------------------------------
 # TTS — text-to-speech
@@ -79,7 +83,7 @@ tts:
 # ---------------------------------------------------------------------------
 audio:
   #card_name: NewPie        # substring to identify audio card in PipeWire/ALSA
-  input_device: pipewire   # PipeWire source name substring, or 'pipewire' for default
+  input_device: NewPie   # PipeWire source name substring, or 'pipewire' for default
   output_device: pipewire  # PipeWire sink name substring, or 'pipewire' for default
   output_volume: 0.5       # speaker volume 0.0–1.0 (set via wpctl, persisted by WirePlumber)
   input_gain: 1.0          # microphone gain multiplier (1.0 = no change, 2.0 = double)
