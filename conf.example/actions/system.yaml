@@ -39,7 +39,7 @@ triggers:
       - "dimmi qualcosa"
     actions:
       - type: say
-        text: "$(/usr/games/fortune /home/arduino/alexa-custom/docs)"
+        text: "$(/usr/games/fortune /home/arduino/serena/docs)"
 
 
   - commands:
