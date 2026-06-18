@@ -539,16 +539,26 @@ def _find_alsa_card(needle: str) -> tuple[int, str] | None:
     return None
 
 
-def _find_pipewire_source(input_spec: str | None) -> str | None:
-    """Return the PipeWire source name matching input_spec, or None if not found."""
-    with pulse_session("alexa-source-lookup") as pulse:
-        if input_spec is None:
-            info = pulse.server_info()
-            return info.default_source_name or None
-        needle = input_spec.lower()
-        for s in pulse.source_list():
-            if "monitor" in s.name:
-                continue
-            if needle in s.description.lower() or needle in s.name.lower():
-                return s.name
+def _find_pipewire_source(input_spec: str | None, retries: int = 3) -> str | None:
+    """Return the PipeWire source name matching input_spec, or None if not found.
+
+    Retries up to `retries` times with a short sleep because opening a pulsectl
+    connection triggers pipewire-pulse to re-initialise the ALSA device, which
+    can transiently hide sources from the source list.
+    """
+    for attempt in range(retries):
+        with pulse_session("alexa-source-lookup") as pulse:
+            if input_spec is None:
+                info = pulse.server_info()
+                if info.default_source_name:
+                    return info.default_source_name
+            else:
+                needle = input_spec.lower()
+                for s in pulse.source_list():
+                    if "monitor" in s.name:
+                        continue
+                    if needle in s.description.lower() or needle in s.name.lower():
+                        return s.name
+        if attempt < retries - 1:
+            time.sleep(0.5)
     return None
