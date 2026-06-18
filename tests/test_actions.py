@@ -918,11 +918,9 @@ async def test_record_and_playback_action(
     assert args[2] == "mock_source"
     assert args[3] == 2
 
-    # Verify that play_wav_file was called with a processed (different) temp wav
+    # Verify that play_wav_file was called with the raw recorded wav
     mock_play_wav.assert_called_once()
-    played_path = mock_play_wav.call_args[0][0]
-    assert played_path.endswith(".wav")
-    assert played_path != args[0]  # processed file, not the raw capture
+    assert mock_play_wav.call_args[0][0] == args[0]
 
     # Verify that say was called to announce the calculated RMS score (fallback/empty file -> score 1)
     mock_engine.say.assert_called_once()
