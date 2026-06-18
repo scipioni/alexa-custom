@@ -160,6 +160,7 @@ class STTConfig:
     adaptive_rms_margin: float = 0.01
     min_speech_ms: int = 200
     wake_match_threshold: float = 0.5
+    mono_capture: bool = False
 
 
 @dataclass
@@ -714,6 +715,7 @@ def _parse_stt_config(raw: dict) -> STTConfig:
         adaptive_rms_margin=_get_float(raw, "adaptive_rms_margin", 0.01),
         min_speech_ms=_get_int(raw, "min_speech_ms", 200),
         wake_match_threshold=_get_float(raw, "wake_match_threshold", 0.5),
+        mono_capture=bool(raw.get("mono_capture", False)),
     )
 
 

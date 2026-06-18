@@ -641,6 +641,8 @@ def run_stt_worker(
 
     current_config = _get_config()
     source, channels = resolve_capture_source(current_config.audio.input_device)
+    if current_config.stt.mono_capture:
+        channels = 1
 
     logger.info(
         "STT: wake_words=%r backend=%s vad_silence_ms=%d source=%s (%d ch)",

@@ -169,6 +169,7 @@ def test_restore_hw_pcm_calls_amixer_when_newpie_found():
 
 def test_configure_propagates_to_globals(monkeypatch):
     monkeypatch.setattr("alexa_custom.audio_hw.load_volume_state", lambda: None)
+    monkeypatch.setattr("alexa_custom.audio_hw.load_input_gain_state", lambda: None)
     fake_audio = MagicMock()
     fake_audio.post_playback_ms = 200
     fake_audio.tone_preroll_ms = 400
