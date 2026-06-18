@@ -541,8 +541,8 @@
     }
 
     function _wakeChip(word, muted) {
-      const cls = muted ? 'ww-chip ww-muted' : 'ww-chip';
-      return `<span class="${cls}"><span class="material-symbols-outlined font-sm">bolt</span>${esc(word)}</span>`;
+      const cls = muted ? 'wake-chip ww-muted' : 'wake-chip';
+      return `<span class="${cls}"><span class="material-symbols-outlined wake-chip-icon">bolt</span>${esc(word)}</span>`;
     }
 
     function _setHeroContent(html) {
@@ -594,23 +594,20 @@
         if (_lastWake === '(reply)' && text) {
           dimNonMatchingReplies(text);
         }
-      } else if (state === 'match') {
+      } else if (state === 'match' || state === 'matched' || state === 'match_reply') {
+        // The backend emits a single "matched" event for both command and reply
+        // matches; distinguish them by whether we were awaiting a reply.
+        const isReply = state === 'match_reply' || _lastWake === '(reply)';
         _lastWake = '';
         setStatusListening(false);
         setLlmBadgeThinking(false);
         setLlmStatusDot(false);
+        if (isReply) clearReplyDim();
         _updateHeroText('wv-success', esc(text));
         heroAnim('wv-success', 1500);
-        highlightTrigger(text, false);
-      } else if (state === 'match_reply') {
-        _lastWake = '';
-        setStatusListening(false);
-        setLlmBadgeThinking(false);
-        setLlmStatusDot(false);
-        clearReplyDim();
-        _updateHeroText('wv-success', esc(text));
-        heroAnim('wv-success', 1500);
-        highlightTrigger(text, true);
+        // Prefer the canonical matched phrase so the trigger node flashes even
+        // when the spoken transcript differs from the command label.
+        highlightTrigger((m && m.phrase) || text, isReply);
       } else if (state === 'nomatch') {
         _lastWake = '';
         setStatusListening(false);
