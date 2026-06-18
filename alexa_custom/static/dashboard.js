@@ -27,9 +27,11 @@
       const slider = document.getElementById('volume-slider');
       const percent = document.getElementById('volume-percent');
       if (slider && percent) {
-        slider.value = volume * 100;
-        percent.textContent = Math.round(volume * 100) + '%';
-        _setSliderFill(volume);
+        if (!slider.classList.contains('dragging')) {
+          slider.value = volume * 100;
+          percent.textContent = Math.round(volume * 100) + '%';
+          _setSliderFill(volume);
+        }
         slider.oninput = () => {
           percent.textContent = slider.value + '%';
           _setSliderFill(parseFloat(slider.value) / 100);
@@ -129,8 +131,13 @@
             document.getElementById('hl').innerHTML = '';
             m.history.forEach(addSessionHistory);
           }
+          if (m.input_gain != null) {
+            const el = document.getElementById('mic-gain');
+            if (el) el.textContent = '×' + m.input_gain.toFixed(1);
+          }
           if (m.system) updateSparkline(m.system);
-          if (m.volume != null) initVolumeSlider(m.volume);
+          const volVal = m.output_volume != null ? m.output_volume : m.volume;
+          if (volVal != null) initVolumeSlider(volVal);
           break;
         }
         case 'participant_joined':
@@ -157,21 +164,20 @@
           }
           break;
         }
-        case 'audio_connect':
-          setAudio(true, m.conn_type); break;
-        case 'audio_disconnect':
-          setAudio(false, null); break;
+        case 'audio_status':
+          setAudio(m.connected, m.conn_type);
+          break;
         case 'room_status':
           setRoomStatus(m.status, m.timeout || 0);
           break;
-        case 'stt_update': {
-          let s = m.stt_state;
+        case 'stt': {
+          let s = m.state;
           const isFinished = s !== 'wake' && s !== 'partial' && s !== 'transcribing';
           if (s === 'reply') {
             const trigs = document.querySelectorAll('.htrig, .hnomatch');
             if (trigs.length) trigs[0].scrollIntoView({behavior: 'smooth', block: 'nearest'});
           }
-          if (s === 'match' || s === 'nomatch') {
+          if (s === 'match' || s === 'matched' || s === 'nomatch') {
             const word = _lastWakeWord;
             const text = m.text || m.word || m.transcript || '';
             updateInteraction(word, text, isFinished);
@@ -196,11 +202,18 @@
           _cfg = m.config;
           renderActions(_cfg);
           break;
-        case 'system_update':
-          updateSparkline(m.system);
+        case 'system_stats':
+          updateSparkline(m);
+          if (m.input_gain != null) {
+            const el = document.getElementById('mic-gain');
+            if (el) el.textContent = '×' + m.input_gain.toFixed(1);
+          }
+          if (m.output_volume != null) {
+            initVolumeSlider(m.output_volume);
+          }
           break;
         case 'volume_set':
-          initVolumeSlider(m.volume);
+          initVolumeSlider(m.volume != null ? m.volume : m.output_volume);
           break;
         case 'session_history':
           addSessionHistory(m.session);
@@ -239,19 +252,22 @@
       if (el) el.style.display = 'none';
     }
     function _checkRoomConfig(m) {
-      const llm = m.llm_config;
-      const el  = document.getElementById('ai-section');
-      if (el) {
-        el.style.display = llm && llm.enabled ? 'block' : 'none';
-        const modelEl = document.getElementById('llm-model-name');
-        if (modelEl) modelEl.textContent = llm.model.split('/').pop();
-      }
+      if (m.livekit_configured && m.telegram_configured) return;
+      const missing = [];
+      if (!m.livekit_configured) missing.push('LiveKit');
+      if (!m.telegram_configured) missing.push('Telegram');
+      const icon = document.getElementById('rs-icon');
+      const lbl  = document.getElementById('rs-label');
+      const sub  = document.getElementById('rs-sub');
+      if (icon) icon.textContent = '\u26A0\uFE0F';
+      if (lbl) lbl.textContent = 'Calls disabled';
+      if (sub) sub.textContent = 'Missing: ' + missing.join(', ');
     }
 
     function setRoomStatus(status, timeout) {
       const room = document.getElementById('room-status-body');
       const icon = document.getElementById('rs-icon');
-      const lbl  = document.getElementById('rs-lbl');
+      const lbl  = document.getElementById('rs-label');
       if (!room || !icon || !lbl) return;
 
       room.className = 'rstatus-' + status;
@@ -438,6 +454,25 @@
         _graphViewInited = true;
         renderGraph(cfg);
       }
+
+      // LLM section — render in monitoring column
+      const aiSection = document.getElementById('ai-section');
+      if (aiSection) {
+        if (cfg && cfg.llm) {
+          const llm = cfg.llm;
+          const aiContent = document.getElementById('ai-content');
+          aiSection.style.display = 'block';
+          if (aiContent) {
+            aiContent.innerHTML = '<div><span id="llm-status-dot"></span> <span class="llm-model-tag">' + esc(llm.model) + '</span></div>'
+              + '<div class="llm-attr">@ ' + esc(llm.host) + '</div>'
+              + (llm.fallback ? '<div class="llm-attr" style="color:var(--llm);opacity:0.7">⮑ on no match</div>' : '');
+          }
+          const modelEl = document.getElementById('llm-model-name');
+          if (modelEl) modelEl.textContent = llm.model.split('/').pop();
+        } else {
+          aiSection.style.display = 'none';
+        }
+      }
     }
 
     function setAudio(connected, connType) {
@@ -514,20 +549,15 @@
         setLlmStatusDot(false);
         _setHeroContent(_sttWave('wv-active') + _wakeChip(text, false) + '<span class="hero-text"><span class="hero-muted">listening…</span></span>');
         _graphFlashByWord(text);
-      } else if (state === 'partial') {
-        const textHtml = _lastWake ? _wakeChip(_lastWake, true) + ' ' + esc(text) : esc(text);
+      } else if (state === 'partial' || state === 'transcribing') {
+        const textHtml = text ? (_lastWake ? _wakeChip(_lastWake, true) + ' ' + esc(text) : esc(text)) : '<span class="hero-muted">elaborazione…</span>';
         setStatusListening(true);
         setLlmBadgeThinking(false);
         setLlmStatusDot(false);
         _updateHeroText('wv-active', textHtml);
-        if (_lastWake === '(reply)') {
+        if (_lastWake === '(reply)' && text) {
           dimNonMatchingReplies(text);
         }
-      } else if (state === 'transcribing') {
-        setStatusListening(true);
-        setLlmBadgeThinking(false);
-        setLlmStatusDot(false);
-        _updateHeroText('wv-active', '<span class="hero-muted">elaborazione…</span>');
       } else if (state === 'match') {
         _lastWake = '';
         setStatusListening(false);
