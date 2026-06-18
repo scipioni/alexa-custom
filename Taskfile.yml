@@ -192,10 +192,15 @@ tasks:
       # Remove any stale switch-on-connect drop-ins (module not available on this board)
       - rm -f ~/.config/pipewire/pipewire.conf.d/99-switch-on-connect.conf
       - rm -f ~/.config/pipewire/pipewire-pulse.conf.d/99-switch-on-connect.conf
-      # Disable USB autosuspend for NewPie (prevents mid-session PCM/routing resets on USB wake)
-      - sudo cp setup/99-newpie-no-autosuspend.rules /etc/udev/rules.d/99-newpie-no-autosuspend.rules
+      # Remove early-boot udev autosuspend rule — it fired during USB enumeration and caused
+      # the board to reboot when NewPie was connected at power-on. A system service installed
+      # below applies the same setting after multi-user.target instead.
+      - sudo rm -f /etc/udev/rules.d/99-newpie-no-autosuspend.rules
       - sudo udevadm control --reload-rules
-      - sudo udevadm trigger --subsystem-match=usb --attr-match=idVendor=0a12
+      # Install system service to disable autosuspend after boot (runs as root, avoids early-boot power spike)
+      - sudo cp setup/newpie-autosuspend.service /etc/systemd/system/newpie-autosuspend.service
+      - sudo systemctl daemon-reload
+      - sudo systemctl enable --now newpie-autosuspend.service
       # Switch device from pro-audio to analog-stereo profile (pro-audio disables endpoints on NewPie)
       - pactl set-card-profile alsa_card.usb-0a12_NewPie_SABINESMICDFU-00 output:analog-stereo+input:analog-stereo || true
       # Set WirePlumber persistent default routing by name (survives reboots)
@@ -215,11 +220,12 @@ tasks:
       - echo "USB Audio (NewPie) configured."
 
   audio:restart:
-    desc: Restart WirePlumber and restore NewPie routing and PCM volume
+    desc: Restart WirePlumber and restore NewPie routing, PCM volume, and autosuspend
     cmds:
       - systemctl --user restart wireplumber && sleep 3
       - amixer -c 0 sset PCM 100% || true
       - systemctl --user restart alsa-pcm-unmute.service
+      - sudo systemctl restart newpie-autosuspend.service || true
 
   audio:status:
     desc: Check and display beautifully formatted status about NewPie USB audio device
