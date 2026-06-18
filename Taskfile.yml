@@ -40,14 +40,14 @@ tasks:
       - PYTHONPATH={{.PYTHONPATH}} {{.PYTEST}} tests/
 
   run:
-    desc: Run the alexa-client (loads from conf/config.yaml)
+    desc: Run the serena (loads from conf/config.yaml)
     cmds:
       - PYTHONPATH={{.PYTHONPATH}} python3 alexa_custom/client.py {{.CLI_ARGS}}
 
   start:
     desc: Start alexa-client with hot-reload enabled
     cmds:
-      - alexa-client --hot-reload
+      - serena --hot-reload
 
   release:patch:
     desc: Bump patch version (x.y.Z+1), commit and tag
@@ -164,7 +164,7 @@ tasks:
       - uv pip install PyGObject
 
   setup:
-    desc: Install the alexa-custom systemd user service and enable it
+    desc: Install the serena systemd user service and enable it
     cmds:
       - |
         # Generate it_IT.UTF-8 locale only on Arduino board
@@ -173,18 +173,18 @@ tasks:
           sudo locale-gen it_IT.UTF-8
           sudo timedatectl set-timezone Europe/Rome
           mkdir -p ~/.config/systemd/user
-          cp setup/alexa-custom.service ~/.config/systemd/user/alexa-custom.service
+          cp setup/serena.service ~/.config/systemd/user/serena.service
           systemctl --user daemon-reload
-          systemctl --user enable alexa-custom
+          systemctl --user enable serena
         fi
       - |
         echo ""
         echo "Service installed. Useful commands:"
-        echo "  systemctl --user start   alexa-custom   # start now"
-        echo "  systemctl --user stop    alexa-custom   # stop"
-        echo "  systemctl --user restart alexa-custom   # restart"
-        echo "  systemctl --user status  alexa-custom   # check status"
-        echo "  journalctl --user -fu    alexa-custom   # follow logs"
+        echo "  systemctl --user start   serena   # start now"
+        echo "  systemctl --user stop    serena   # stop"
+        echo "  systemctl --user restart serena   # restart"
+        echo "  systemctl --user status  serena   # check status"
+        echo "  journalctl --user -fu    serena   # follow logs"
 
   audio:setup:
     desc: Set NewPie USB default sink/source persistently, unmute hardware, install PCM restore service, and disable USB autosuspend

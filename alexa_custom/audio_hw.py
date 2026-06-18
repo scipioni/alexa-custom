@@ -31,6 +31,7 @@ class _AudioState:
     default_card_name: str | None = None
     output_volume: float = 0.5
     input_gain: float = 1.0
+    hw_gain_applied: bool = False
 
 
 _state = _AudioState()
@@ -123,6 +124,12 @@ def get_output_volume() -> float:
 
 
 def get_input_gain() -> float:
+    return _state.input_gain
+
+
+def get_software_input_gain() -> float:
+    if _state.hw_gain_applied:
+        return 1.0
     return _state.input_gain
 
 
@@ -282,6 +289,8 @@ def find_alexa_card(pulse, spec: str | None = None):
     """Return the pulsectl card object matching the spec (name, desc, or index)."""
     if not spec:
         spec = _state.default_card_name
+    if not spec:
+        return None
 
     spec_lower = spec.lower()
     is_numeric = spec.strip().isdigit()
@@ -360,13 +369,10 @@ def set_input_gain(
                 f"falling back to software scaling for input gain"
             )
 
-        if hw_ok:
-            # Gain was applied at the source (hardware) level. The software
-            # scaling path in stt_gating multiplies every chunk by the input
-            # gain, so it must be a no-op here — else gain is applied twice (gain²).
-            _state.input_gain = 1.0
-        else:
-            _state.input_gain = max(0.0, gain)
+        _state.input_gain = max(0.0, gain)
+        _state.hw_gain_applied = hw_ok
+
+        if not hw_ok:
             logger.warning(
                 f"Input gain {gain:.0%} applied in software (CPU overhead, clipping risk)"
             )
@@ -376,7 +382,9 @@ def enforce_audio_state(
     pulse: pulsectl.Pulse, input_spec: str | None = None, output_spec: str | None = None
 ) -> tuple[bool, str]:
     """Find configured card, force profile if it exists, and set default sink/source."""
-    is_virtual = (output_spec or "").lower() in ("pipewire", "default")
+    is_virtual = (output_spec or "").lower() in ("pipewire", "default") or (
+        output_spec is None and _state.default_card_name is None
+    )
 
     card = find_alexa_card(pulse, output_spec)
     if not card:
@@ -432,7 +440,9 @@ def check_newpie_ready(
         input_spec = os.environ.get("INPUT_DEVICE", "").strip() or None
     if output_spec is None:
         output_spec = os.environ.get("OUTPUT_DEVICE", "").strip() or None
-    is_virtual = (output_spec or "").lower() in ("pipewire", "default")
+    is_virtual = (output_spec or "").lower() in ("pipewire", "default") or (
+        output_spec is None and _state.default_card_name is None
+    )
 
     with pulse_session("alexa-check") as pulse:
         ok, conn = enforce_audio_state(pulse, input_spec, output_spec)

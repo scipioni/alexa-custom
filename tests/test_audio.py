@@ -169,6 +169,7 @@ def test_restore_hw_pcm_calls_amixer_when_newpie_found():
 
 def test_configure_propagates_to_globals(monkeypatch):
     monkeypatch.setattr("alexa_custom.audio_hw.load_volume_state", lambda: None)
+    monkeypatch.setattr("alexa_custom.audio_hw.load_input_gain_state", lambda: None)
     fake_audio = MagicMock()
     fake_audio.post_playback_ms = 200
     fake_audio.tone_preroll_ms = 400
@@ -214,3 +215,54 @@ def test_pulse_session_restores_pcm_on_exception():
     # PCM must be restored even when the body raises.
     fake_pulse.close.assert_called_once()
     mock_restore.assert_called_once()
+
+
+def test_get_software_input_gain_hardware_vs_software_scaling():
+    # 1. When hardware gain succeeded
+    audio_hw._state.input_gain = 0.85
+    audio_hw._state.hw_gain_applied = True
+    assert audio_hw.get_input_gain() == 0.85
+    assert audio_hw.get_software_input_gain() == 1.0
+
+    # 2. When hardware gain failed (software scaling fallback)
+    audio_hw._state.hw_gain_applied = False
+    assert audio_hw.get_input_gain() == 0.85
+    assert audio_hw.get_software_input_gain() == 0.85
+
+
+def test_set_input_gain_sets_hw_gain_applied_correctly():
+    mock_source = MagicMock()
+    mock_source.name = "alsa_input.usb-0a12_NewPie_SABINESMICDFU-00.analog-stereo"
+    mock_source.description = "NewPie Audio"
+
+    mock_pulse_instance = MagicMock()
+    mock_pulse_instance.source_list.return_value = [mock_source]
+    mock_pulse_instance.__enter__ = MagicMock(return_value=mock_pulse_instance)
+    mock_pulse_instance.__exit__ = MagicMock(return_value=False)
+
+    # Success scenario (subprocess.run returncode = 0)
+    mock_res_success = MagicMock()
+    mock_res_success.returncode = 0
+
+    with (
+        patch("pulsectl.Pulse", return_value=mock_pulse_instance),
+        patch("subprocess.run", return_value=mock_res_success),
+        patch.object(audio_hw, "_restore_hw_pcm"),
+    ):
+        audio_hw.set_input_gain(None, "NewPie", 0.75)
+        assert audio_hw.get_input_gain() == 0.75
+        assert audio_hw.get_software_input_gain() == 1.0  # Hardware success -> bypass software scaling
+
+    # Failure scenario (subprocess.run returncode = 1)
+    mock_res_failure = MagicMock()
+    mock_res_failure.returncode = 1
+    mock_res_failure.stderr = b"error"
+
+    with (
+        patch("pulsectl.Pulse", return_value=mock_pulse_instance),
+        patch("subprocess.run", return_value=mock_res_failure),
+        patch.object(audio_hw, "_restore_hw_pcm"),
+    ):
+        audio_hw.set_input_gain(None, "NewPie", 0.75)
+        assert audio_hw.get_input_gain() == 0.75
+        assert audio_hw.get_software_input_gain() == 0.75  # Hardware failed -> use software scaling fallback

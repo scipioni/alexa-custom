@@ -903,19 +903,15 @@ def main() -> None:
         logger.info("Hot-reload enabled (watching alexa_custom/*.py)")
 
     from alexa_custom.web import run_web
+    import alexa_custom.audio_hw as audio_hw
+
+    if config is not None:
+        audio_hw.configure(config)
 
     input_spec = config.audio.input_device if config is not None else None
     output_spec = config.audio.output_device if config is not None else None
-    output_volume = config.audio.output_volume if config is not None else 0.5
-    input_gain = config.audio.input_gain if config is not None else 1.0
-    from alexa_custom.audio_hw import load_input_gain_state, load_volume_state
-
-    _state_gain = load_input_gain_state()
-    if _state_gain is not None:
-        input_gain = _state_gain
-    _state_vol = load_volume_state()
-    if _state_vol is not None:
-        output_volume = _state_vol
+    output_volume = audio_hw.get_output_volume()
+    input_gain = audio_hw.get_input_gain()
     room = os.environ.get("LIVEKIT_ROOM", "")
 
     # Optional display controller

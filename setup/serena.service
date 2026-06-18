@@ -5,15 +5,16 @@ Wants=pipewire.service pipewire-pulse.service
 
 [Service]
 Type=simple
-WorkingDirectory=%h/alexa-custom
+WorkingDirectory=%h/serena
 ExecStartPre=-/usr/bin/amixer -c 0 sset PCM 100%
 ExecStartPre=-/usr/bin/amixer -c NewPie sset PCM 100%
 ExecStartPre=-/usr/bin/wpctl set-volume @DEFAULT_SINK@ 1.0
-ExecStart=%h/alexa-custom/.venv/bin/alexa-client
+ExecStart=%h/serena/.venv/bin/serena
 Restart=on-failure
 RestartSec=5s
 Environment=PYTHONUNBUFFERED=1
 Environment=LANG=it
+Environment=LOG_LEVEL=DEBUG
 
 [Install]
 WantedBy=default.target

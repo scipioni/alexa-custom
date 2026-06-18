@@ -11,7 +11,7 @@ import numpy as np
 from typing import Iterator, Callable
 
 from alexa_custom.audio import is_playback_active
-from alexa_custom.audio_hw import get_input_gain
+from alexa_custom.audio_hw import get_software_input_gain
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +72,7 @@ def _drain_pipe(proc: subprocess.Popen, max_bytes: int = 1 << 20) -> int:
 
 def _apply_input_gain(data: bytes) -> bytes:
     """Scale s16le PCM bytes by the configured input gain (no-op when gain == 1.0)."""
-    gain = get_input_gain()
+    gain = get_software_input_gain()
     if abs(gain - 1.0) < 1e-6:
         return data
     arr = np.frombuffer(data, dtype=np.int16).astype(np.float32)

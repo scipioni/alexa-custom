@@ -127,8 +127,10 @@ class WebServer:
 
         if hot_reload:
             from alexa_custom.config_manager import ConfigManager
+            from alexa_custom.audio_hw import configure as audio_configure
 
             cm = ConfigManager(None)
+            cm.register_reload_callback(audio_configure)
             self._config_manager = cm
 
         self._livekit_ok = all(

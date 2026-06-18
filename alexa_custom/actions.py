@@ -1426,8 +1426,48 @@ async def handle_record_and_playback(
 
     try:
         await asyncio.to_thread(record_wav_file, tmp_wav, duration, source, channels)
+
         logger.info("record_and_playback: playing back recorded sample")
         await asyncio.to_thread(play_wav_file, tmp_wav)
+
+        import wave
+        import numpy as np
+        from alexa_custom.stt_gating import _apply_input_gain, _downmix_to_mono
+
+        rms_val = 0.0
+        try:
+            with wave.open(tmp_wav, "rb") as wf:
+                raw_data = wf.readframes(wf.getnframes())
+            # Apply same gain/downmix as STT pipeline so RMS reflects what Vosk hears
+            processed = _apply_input_gain(_downmix_to_mono(raw_data, channels))
+            samples = np.frombuffer(processed, dtype=np.int16)
+            n = len(samples)
+            if n > 0:
+                rms_val = float(np.linalg.norm(samples)) / (32768.0 * n**0.5)
+        except Exception as e:
+            logger.warning(
+                "record_and_playback: could not read recorded wav file for RMS calculation: %s",
+                e,
+            )
+
+        rms_score = int(round(rms_val * 100))
+        rms_score = max(1, min(10, rms_score))
+
+        logger.info(
+            "record_and_playback: calculated RMS value is %f, mapped score is %d/10",
+            rms_val,
+            rms_score,
+        )
+
+        from alexa_custom.tts import get_engine
+
+        lang = action.params.get("lang", "it-IT")
+        if lang.startswith("it"):
+            text = f"Il valore R M S calcolato per il messaggio registrato è {rms_score} su dieci."
+        else:
+            text = f"The calculated R M S value of the recorded message is {rms_score} out of ten."
+
+        await asyncio.to_thread(get_engine().say, text, lang)
     finally:
         try:
             os.unlink(tmp_wav)
