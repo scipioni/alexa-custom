@@ -130,21 +130,33 @@ def get_output_sink() -> str | None:
     return _state.output_sink
 
 
-def resolve_output_sink(output_spec: str | None) -> str | None:
+def resolve_output_sink(
+    output_spec: str | None, retries: int = 5, retry_delay: float = 1.0
+) -> str | None:
     """Look up and cache the PipeWire sink name for output_spec.
 
     Returns the sink node name for use as pw-play --target, or None when
     output_spec is 'pipewire'/'default'/None (let PipeWire route normally).
+    Retries up to `retries` times with `retry_delay` seconds between attempts
+    to survive the startup race where WirePlumber hasn't finished initializing
+    the USB device when the first pulsectl connection is opened.
     """
     if not output_spec or output_spec.lower() in ("pipewire", "default"):
         _state.output_sink = None
         return None
-    with pulse_session("alexa-sink-lookup") as pulse:
-        needle = output_spec.lower()
-        for s in pulse.sink_list():
-            if needle in s.description.lower() or needle in s.name.lower():
-                _state.output_sink = s.name
-                return s.name
+    needle = output_spec.lower()
+    for attempt in range(retries):
+        with pulse_session("alexa-sink-lookup") as pulse:
+            for s in pulse.sink_list():
+                if needle in s.description.lower() or needle in s.name.lower():
+                    _state.output_sink = s.name
+                    return s.name
+        if attempt < retries - 1:
+            logger.debug(
+                f"resolve_output_sink: sink {output_spec!r} not ready, "
+                f"retrying in {retry_delay}s ({attempt + 1}/{retries})"
+            )
+            time.sleep(retry_delay)
     logger.warning(f"resolve_output_sink: no sink found for {output_spec!r}")
     _state.output_sink = None
     return None
