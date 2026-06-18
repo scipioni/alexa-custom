@@ -31,6 +31,7 @@ class _AudioState:
     default_card_name: str | None = None
     output_volume: float = 0.5
     input_gain: float = 1.0
+    hw_gain_applied: bool = False
 
 
 _state = _AudioState()
@@ -123,6 +124,12 @@ def get_output_volume() -> float:
 
 
 def get_input_gain() -> float:
+    return _state.input_gain
+
+
+def get_software_input_gain() -> float:
+    if _state.hw_gain_applied:
+        return 1.0
     return _state.input_gain
 
 
@@ -360,13 +367,10 @@ def set_input_gain(
                 f"falling back to software scaling for input gain"
             )
 
-        if hw_ok:
-            # Gain was applied at the source (hardware) level. The software
-            # scaling path in stt_gating multiplies every chunk by the input
-            # gain, so it must be a no-op here — else gain is applied twice (gain²).
-            _state.input_gain = 1.0
-        else:
-            _state.input_gain = max(0.0, gain)
+        _state.input_gain = max(0.0, gain)
+        _state.hw_gain_applied = hw_ok
+
+        if not hw_ok:
             logger.warning(
                 f"Input gain {gain:.0%} applied in software (CPU overhead, clipping risk)"
             )

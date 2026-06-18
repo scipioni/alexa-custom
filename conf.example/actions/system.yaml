@@ -173,7 +173,7 @@ triggers:
         settle_ms: 500
 
   - commands:
-      - "registra campione"
+      - "registra messaggio"
       - "test audio"
       - "registra audio"
     actions:

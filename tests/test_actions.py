@@ -875,6 +875,7 @@ async def test_restart_action():
 
 
 @pytest.mark.asyncio
+@patch("alexa_custom.tts.get_engine")
 @patch("alexa_custom.stt_gating.resolve_capture_source")
 @patch("alexa_custom.audio_ops.record_wav_file")
 @patch("alexa_custom.audio_ops.play_wav_file")
@@ -884,7 +885,11 @@ async def test_record_and_playback_action(
     mock_play_wav,
     mock_record_wav,
     mock_resolve_capture_source,
+    mock_get_engine,
 ):
+    mock_engine = MagicMock()
+    mock_get_engine.return_value = mock_engine
+
     mock_resolve_capture_source.return_value = ("mock_source", 2)
 
     action = ActionEntry(type="record_and_playback", params={"duration": 7.5})
@@ -916,6 +921,10 @@ async def test_record_and_playback_action(
     # Verify that play_wav_file was called
     mock_play_wav.assert_called_once()
     assert mock_play_wav.call_args[0][0] == args[0]
+
+    # Verify that say was called to announce the calculated RMS score (fallback/empty file -> score 1)
+    mock_engine.say.assert_called_once()
+    assert "1 su dieci" in mock_engine.say.call_args[0][0]
 
 
 @pytest.mark.asyncio
