@@ -156,6 +156,11 @@
       animation: wake-pop 0.18s ease-out;
     }
     .wake-chip-icon { font-size: 11px; opacity: 0.8; }
+    .wake-chip.ww-muted {
+      opacity: 0.55;
+      background: rgba(251,146,60,0.06);
+      border-color: rgba(251,146,60,0.25);
+    }
     @keyframes wake-pop {
       from { transform: scale(0.75); opacity: 0; }
       to   { transform: scale(1);    opacity: 1; }
