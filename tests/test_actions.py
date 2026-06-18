@@ -6,9 +6,11 @@ from alexa_custom.actions import (
     _match_glob_pattern,
     _run_action,
     _trigger_matches_patterns,
+    dispatch,
     italian_phonetic,
     match_trigger,
     normalize_text,
+    registry,
 )
 from alexa_custom.config import ActionEntry, Trigger
 
@@ -138,9 +140,12 @@ async def test_action_registry_registration():
 
 @pytest.mark.asyncio
 async def test_action_registry_unknown_action():
-    registry = ActionRegistry()
-    # Should not raise exception, just log warning
-    await registry.execute("unknown")
+    from alexa_custom.actions import ActionError
+
+    reg = ActionRegistry()
+    # Unknown action types raise ActionError so _run_action can notify the UI.
+    with pytest.raises(ActionError, match="unknown action type"):
+        await reg.execute("unknown")
 
 
 @pytest.mark.asyncio
@@ -941,3 +946,118 @@ async def test_register_and_playback_action(
     # Defaults to 7.0 seconds
     args, kwargs = mock_record_wav.call_args
     assert args[1] == 7.0
+
+
+# ── action error notification ────────────────────────────────────────────────
+
+
+class TestActionErrorNotification:
+    """A problematic action must notify the UI via an ``action_error`` event
+    without aborting the trigger's remaining actions."""
+
+    def _ctx_with_recorder(self, **kwargs):
+        events: list[tuple[str, dict]] = []
+        ctx = ActionContext(
+            telegram_client=MagicMock(),
+            on_stt_event=lambda e, d: events.append((e, d)),
+            **kwargs,
+        )
+        return ctx, events
+
+    @pytest.mark.asyncio
+    async def test_mqtt_publish_no_client_notifies_ui(self):
+        ctx, events = self._ctx_with_recorder(mqtt_client=None)
+        action = ActionEntry(type="mqtt_publish", params={"topic": "x", "payload": "y"})
+
+        await _run_action(action, ctx)
+
+        errors = [d for e, d in events if e == "action_error"]
+        assert len(errors) == 1
+        assert errors[0]["action"] == "mqtt_publish"
+        assert "no mqtt_client available" in errors[0]["message"]
+
+    @pytest.mark.asyncio
+    async def test_mqtt_publish_no_topic_notifies_ui(self):
+        ctx, events = self._ctx_with_recorder(mqtt_client=AsyncMock())
+        action = ActionEntry(type="mqtt_publish", params={"payload": "y"})
+
+        await _run_action(action, ctx)
+
+        errors = [d for e, d in events if e == "action_error"]
+        assert len(errors) == 1
+        assert "no topic provided" in errors[0]["message"]
+
+    @pytest.mark.asyncio
+    async def test_unknown_action_type_notifies_ui(self):
+        ctx, events = self._ctx_with_recorder()
+        action = ActionEntry(type="does_not_exist", params={})
+
+        await _run_action(action, ctx)
+
+        errors = [d for e, d in events if e == "action_error"]
+        assert len(errors) == 1
+        assert "does_not_exist" in errors[0]["message"]
+
+    @pytest.mark.asyncio
+    async def test_unexpected_exception_notifies_ui(self):
+        ctx, events = self._ctx_with_recorder()
+
+        @registry.register("_boom_test")
+        async def _boom(**_):
+            raise RuntimeError("kaboom")
+
+        try:
+            await _run_action(ActionEntry(type="_boom_test", params={}), ctx)
+        finally:
+            registry._handlers.pop("_boom_test", None)
+
+        errors = [d for e, d in events if e == "action_error"]
+        assert len(errors) == 1
+        assert "kaboom" in errors[0]["message"]
+
+    @pytest.mark.asyncio
+    async def test_successful_action_does_not_notify(self):
+        ctx, events = self._ctx_with_recorder()
+        action = ActionEntry(type="log", params={"message": "hi"})
+
+        await _run_action(action, ctx)
+
+        assert not [e for e, _ in events if e == "action_error"]
+
+    @pytest.mark.asyncio
+    async def test_failing_action_does_not_abort_remaining_actions(self):
+        ctx, events = self._ctx_with_recorder(mqtt_client=None)
+        ran: list[str] = []
+
+        @registry.register("_marker_test")
+        async def _marker(action, **_):
+            ran.append(action.params.get("id", ""))
+
+        trigger = Trigger(
+            commands=["x"],
+            phrase="x",
+            actions=[
+                ActionEntry(type="mqtt_publish", params={"topic": "t"}),
+                ActionEntry(type="_marker_test", params={"id": "second"}),
+            ],
+        )
+        try:
+            await dispatch(trigger, ctx)
+        finally:
+            registry._handlers.pop("_marker_test", None)
+
+        # The mqtt failure was reported, and the action after it still ran.
+        assert [d for e, d in events if e == "action_error"]
+        assert ran == ["second"]
+
+    def test_action_error_event_emits_toast(self):
+        """web.py must turn an action_error event into an error toast."""
+        from alexa_custom.web import WebServer
+
+        srv = WebServer()
+        sent: list[tuple[str, dict]] = []
+        srv._enqueue = lambda event_type, data: sent.append((event_type, data))
+
+        srv.on_stt_event("action_error", {"action": "mqtt_publish", "message": "boom"})
+
+        assert ("toast", {"message": "boom", "level": "error"}) in sent

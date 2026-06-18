@@ -534,6 +534,15 @@ class WebServer:
         self._enqueue(event, data)
 
     def on_stt_event(self, event: str, data: dict) -> None:
+        if event == "action_error":
+            # An action could not complete (e.g. mqtt_publish with no broker).
+            # Surface it to the dashboard as a transient error toast. Not a
+            # session-lifecycle event, so skip history aggregation.
+            self._enqueue(
+                "toast",
+                {"message": data.get("message", "Action failed"), "level": "error"},
+            )
+            return
         if event == "level":
             loop = self._loop
             if loop and not loop.is_closed():

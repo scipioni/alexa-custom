@@ -21,6 +21,14 @@ from rapidfuzz.distance import Levenshtein as _lev
 logger = logging.getLogger(__name__)
 
 
+class ActionError(Exception):
+    """Raised by an action handler when it cannot complete (e.g. a required
+    dependency like the MQTT client is unavailable, or a mandatory param is
+    missing). Caught centrally in _run_action, which logs it and notifies the
+    UI via an ``action_error`` event — it does not abort the remaining actions
+    in the trigger."""
+
+
 @dataclasses.dataclass
 class ActionContext:
     """Carries all call-site dependencies for dispatch() / _run_action().
@@ -356,7 +364,7 @@ class ActionRegistry:
         if handler:
             await handler(**kwargs)
         else:
-            logger.warning(f"Unknown action type '{action_type}' — skipping")
+            raise ActionError(f"unknown action type '{action_type}'")
 
 
 registry = ActionRegistry()
@@ -373,10 +381,7 @@ async def handle_telegram(action: ActionEntry, telegram_client: TelegramClient, 
     chat_id = action.params.get("chat_id") or os.environ.get("TELEGRAM_CHAT_ID", "")
     text = action.params.get("text", "")
     if not chat_id:
-        logger.error(
-            "telegram action: no chat_id in action or TELEGRAM_CHAT_ID env var"
-        )
-        return
+        raise ActionError("no chat_id in action or TELEGRAM_CHAT_ID env var")
     if "<room>" in text:
         from alexa_custom.client import browser_join_url
 
@@ -679,14 +684,12 @@ async def handle_shell(action: ActionEntry, **_):
 @registry.register("mqtt_publish")
 async def handle_mqtt_publish(action: ActionEntry, mqtt_client: MQTTClient | None, **_):
     if mqtt_client is None:
-        logger.warning("mqtt_publish action: no mqtt_client available")
-        return
+        raise ActionError("no mqtt_client available")
     topic = action.params.get("topic")
     payload = action.params.get("payload", "")
     retain = action.params.get("retain", False)
     if not topic:
-        logger.error("mqtt_publish action: no topic provided")
-        return
+        raise ActionError("no topic provided")
     await mqtt_client.publish(topic, payload, retain=retain)
 
 
@@ -1432,6 +1435,19 @@ async def handle_record_and_playback(
             pass
 
 
+def _notify_action_error(ctx: ActionContext, action_type: str, message: str) -> None:
+    """Surface an action problem to the web UI as a transient toast."""
+    if not ctx.on_stt_event:
+        return
+    try:
+        ctx.on_stt_event(
+            "action_error",
+            {"action": action_type, "message": f"{action_type}: {message}"},
+        )
+    except Exception:
+        pass
+
+
 async def _run_action(
     action: ActionEntry,
     ctx: ActionContext,
@@ -1439,17 +1455,28 @@ async def _run_action(
     wake_word: str | None = None,
     transcript: str | None = None,
 ) -> None:
-    await registry.execute(
-        action.type,
-        action=action,
-        ctx=ctx,
-        telegram_client=ctx.telegram_client,
-        livekit_connect_fn=ctx.livekit_connect_fn,
-        livekit_connected=ctx.livekit_connected,
-        listen_fn=ctx.listen_fn,
-        mqtt_client=ctx.mqtt_client,
-        on_stt_event=ctx.on_stt_event,
-        actions_config=ctx.actions_config,
-        wake_word=wake_word,
-        transcript=transcript,
-    )
+    try:
+        await registry.execute(
+            action.type,
+            action=action,
+            ctx=ctx,
+            telegram_client=ctx.telegram_client,
+            livekit_connect_fn=ctx.livekit_connect_fn,
+            livekit_connected=ctx.livekit_connected,
+            listen_fn=ctx.listen_fn,
+            mqtt_client=ctx.mqtt_client,
+            on_stt_event=ctx.on_stt_event,
+            actions_config=ctx.actions_config,
+            wake_word=wake_word,
+            transcript=transcript,
+        )
+    except ActionError as e:
+        # Expected, recoverable failure — log and notify the UI, but let the
+        # rest of the trigger's actions run.
+        logger.warning("Action %r failed: %s", action.type, e)
+        _notify_action_error(ctx, action.type, str(e))
+    except Exception as e:
+        # Unexpected crash inside a handler — same UI notification, plus a full
+        # traceback in the logs.
+        logger.exception("Action %r raised an unexpected error", action.type)
+        _notify_action_error(ctx, action.type, str(e) or e.__class__.__name__)
