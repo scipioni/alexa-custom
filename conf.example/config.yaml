@@ -112,7 +112,7 @@ audio:
     agc_target_level_dbfs: -3     # AGC target peak level in dBFS (closer to 0 = louder; -3 is WebRTC default)
     agc_compression_gain_db: 9    # max makeup gain applied by digital AGC
     high_pass_filter: true        # 80 Hz high-pass (removes USB power hum)
-    compressor: true             # audiodynamic compressor after webrtcdsp
+    compressor: false             # audiodynamic compressor after webrtcdsp
     #compressor_threshold: 0.1     # normalized threshold 0.0–1.0
     #compressor_ratio: 3.0         # compression ratio
 
