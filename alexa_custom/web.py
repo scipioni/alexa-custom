@@ -275,6 +275,17 @@ class WebServer:
                 session = self._active_session
                 self._active_session = None
 
+                # Drop superseded partial-only sessions. When a wake word is
+                # re-finalized together with the command inside the open window
+                # (one-breath, e.g. "ehi serena volume basso"), the recognition
+                # loop emits a fresh `wake` event that flushes the prior session.
+                # That prior session may only ever have captured a `transcribing`
+                # partial — never a finalizing matched/nomatch — so persisting it
+                # produces a phantom history entry that looks like a nomatch even
+                # though the command matched in the next session. Discard it.
+                if session.pop("_partial_only", False):
+                    return
+
                 if not session.get("transcript"):
                     session["transcript"] = {
                         "text": "",
@@ -353,6 +364,7 @@ class WebServer:
 
             if event == "gated":
                 self._active_session["diagnostics"]["gated"] = True
+                self._active_session["_partial_only"] = False
                 _flush_session()
 
             elif event == "transcribing":
@@ -367,6 +379,10 @@ class WebServer:
                         }
                     else:
                         self._active_session["transcript"]["text"] = text
+                    # Mark as not-yet-finalized: a finalizing matched/nomatch/gated
+                    # event clears this. A session flushed while still flagged was
+                    # superseded mid-recognition and is dropped (see _flush_session).
+                    self._active_session["_partial_only"] = True
 
             elif event in ("matched", "nomatch"):
                 transcript_text = data.get("transcript", data.get("text", ""))
@@ -387,6 +403,7 @@ class WebServer:
                     "match_phrase": data.get("phrase", ""),
                     "match_score": data.get("score", 0),
                 }
+                self._active_session["_partial_only"] = False
                 if action_info:
                     self._active_session["action"] = action_info
 
@@ -1129,6 +1146,7 @@ class WebServer:
             "actions": WebServer._serialize_action_list(t.actions),
             "with_wake": t.with_wake,
             "sleeping_only": any(a.type == "start_listening" for a in t.actions),
+            "tag": t.tag,
         }
 
     @staticmethod

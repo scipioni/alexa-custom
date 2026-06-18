@@ -210,6 +210,61 @@ class TestSessionAggregation:
         assert record["transcript"]["is_matched"] is False
         assert record["diagnostics"]["gated"] is True
 
+    async def test_one_breath_partial_session_dropped(
+        self, server, temp_history_file
+    ):
+        """A wake session that only captured a transcribing partial, then was
+        superseded by a one-breath re-finalization, must not be persisted as a
+        phantom nomatch. Regression for the 'ehi serena volume basso' session
+        that logged is_matched=false while the command actually matched next.
+        """
+        server._loop = asyncio.get_running_loop()
+
+        # S1: wake opens window, partial bleeds in (wake word + command), no
+        # finalizing event before the next wake.
+        server._process_history_event("wake", {"word": "ehi serena", "timeout": 8.0})
+        server._process_history_event(
+            "transcribing", {"text": "ehi serena volume basso"}
+        )
+        # One-breath re-finalization: fresh wake (timeout 0) flushes S1 and opens S2.
+        server._process_history_event("wake", {"word": "ehi serena", "timeout": 0})
+        server._process_history_event(
+            "matched",
+            {
+                "transcript": "volume basso",
+                "phrase": "volume basso",
+                "score": 100,
+                "actions": [{"type": "set_volume"}],
+            },
+        )
+        await asyncio.sleep(0.01)
+
+        lines = temp_history_file.read_text(encoding="utf-8").splitlines()
+        # Only the matched session persists — the partial-only S1 is dropped.
+        assert len(lines) == 1
+        record = json.loads(lines[0])
+        assert record["transcript"]["text"] == "volume basso"
+        assert record["transcript"]["is_matched"] is True
+        assert "_partial_only" not in record
+
+    async def test_partial_then_nomatch_persists(self, server, temp_history_file):
+        """A partial followed by a genuine nomatch is a real outcome and must
+        still be persisted (the partial-only drop must not swallow it)."""
+        server._loop = asyncio.get_running_loop()
+
+        server._process_history_event("wake", {"word": "ehi serena", "timeout": 8.0})
+        server._process_history_event("transcribing", {"text": "ehi serena blah"})
+        server._process_history_event("nomatch", {"transcript": "blah", "score": 30})
+        server._process_history_event("listening", {})
+        await asyncio.sleep(0.01)
+
+        lines = temp_history_file.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1
+        record = json.loads(lines[0])
+        assert record["transcript"]["is_matched"] is False
+        assert record["transcript"]["text"] == "blah"
+        assert "_partial_only" not in record
+
     async def test_direct_command_aggregation(self, server, temp_history_file):
         """A direct command match (no wake event) must aggregate and append a session log."""
         server._loop = asyncio.get_running_loop()
