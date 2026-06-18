@@ -133,8 +133,8 @@ def resolve_capture_source(input_spec: str | None = None) -> tuple[str | None, i
     return None, channels
 
 
-def start_capture(source: str | None, channels: int = 1) -> subprocess.Popen:
-    """Start a low-latency recording process (parec)."""
+def _start_capture_parec(source: str | None, channels: int = 1) -> subprocess.Popen:
+    """Start a low-latency parec recording process."""
     import shutil
 
     tool = shutil.which("parec")
@@ -166,6 +166,18 @@ def start_capture(source: str | None, channels: int = 1) -> subprocess.Popen:
     return subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0
     )
+
+
+def start_capture(source: str | None, channels: int = 1, config=None) -> subprocess.Popen:
+    """Start audio capture — parec (default) or GStreamer pipeline.
+
+    Pass config (ActionsConfig) to allow the gstreamer backend to be selected
+    via config.stt.capture_backend == 'gstreamer'.
+    """
+    if config is not None and getattr(config.stt, "capture_backend", "parec") == "gstreamer":
+        from alexa_custom.stt_gst_capture import start_capture_gst
+        return start_capture_gst(source, config.audio.gstreamer)
+    return _start_capture_parec(source, channels)
 
 
 def _iter_gated_audio(

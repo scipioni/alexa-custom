@@ -155,7 +155,7 @@ def _make_play_capture(play_path: str, stop_event: threading.Event):
 
     _played = [False]
 
-    def _play_capture(source, channels: int = 1):
+    def _play_capture(source, channels: int = 1, config=None):
         if _played[0]:
             stop_event.set()
             proc = subprocess.Popen(
@@ -210,8 +210,8 @@ def _make_record_capture(record_path: str):
 
     _orig = _gating.start_capture
 
-    def _record_capture(source, channels: int = 1):
-        real_proc = _orig(source, channels)
+    def _record_capture(source, channels: int = 1, config=None):
+        real_proc = _orig(source, channels, config=config)
         print(f"alexa-stt: recording to {record_path}", file=sys.stderr)
         return _TeePopen(real_proc, channels, record_path)
 

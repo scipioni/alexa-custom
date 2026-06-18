@@ -69,6 +69,12 @@ stt:
   #   handles stereo→mono in the driver. Eliminates the Python-side max-abs downmix.
   #   Trade-off: PipeWire averages the two mics; the default max-abs picks the louder
   #   channel per frame, which is better when one mic dominates.
+  # capture_backend: parec   # parec (default) | gstreamer
+  capture_backend: gstreamer
+  #   gstreamer: routes mic through a GStreamer pipeline with webrtcdsp (WebRTC APM)
+  #   for noise suppression, AGC, and high-pass filtering before Vosk sees audio.
+  #   Requires: gstreamer1.0-plugins-bad (webrtcdsp), gstreamer1.0-pulseaudio (pulsesrc),
+  #             python3-gst-1.0 (gi bindings). Configure the pipeline under audio.gstreamer.
 
 # ---------------------------------------------------------------------------
 # TTS — text-to-speech
@@ -98,6 +104,17 @@ audio:
     aec: true              # Acoustic Echo Cancellation
     noise_suppression: true
     high_pass_filter: true
+  gstreamer:             # GStreamer capture pipeline (used when stt.capture_backend: gstreamer)
+    source: pulsesrc     # pulsesrc (default, proven) | pipewiresrc (native, experimental)
+    noise_suppression: true
+    noise_suppression_level: 2    # 0=mild 1=moderate 2=high 3=very-high
+    agc: true
+    agc_target_level_dbfs: -3     # AGC target peak level in dBFS (closer to 0 = louder; -3 is WebRTC default)
+    agc_compression_gain_db: 9    # max makeup gain applied by digital AGC
+    high_pass_filter: true        # 80 Hz high-pass (removes USB power hum)
+    compressor: true             # audiodynamic compressor after webrtcdsp
+    #compressor_threshold: 0.1     # normalized threshold 0.0–1.0
+    #compressor_ratio: 3.0         # compression ratio
 
 # ---------------------------------------------------------------------------
 # LLM (Ollama)

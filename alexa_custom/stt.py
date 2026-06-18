@@ -641,7 +641,7 @@ def run_stt_worker(
 
     current_config = _get_config()
     source, channels = resolve_capture_source(current_config.audio.input_device)
-    if current_config.stt.mono_capture:
+    if current_config.stt.mono_capture or current_config.stt.capture_backend == "gstreamer":
         channels = 1
 
     logger.info(
@@ -695,7 +695,7 @@ def run_stt_worker(
 
             proc: subprocess.Popen | None = None
             try:
-                proc = start_capture(source, channels)
+                proc = start_capture(source, channels, config=current_config)
                 if stt_ready_event is not None and not stt_ready_event.is_set():
                     stt_ready_event.set()
                     logger.info("STT ready — listening for wake words")

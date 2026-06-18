@@ -90,6 +90,20 @@ class AudioWebRTCConfig:
 
 
 @dataclass
+class GStreamerCaptureConfig:
+    source: str = "pulsesrc"           # pulsesrc | pipewiresrc
+    noise_suppression: bool = True
+    noise_suppression_level: int = 2   # 0=mild 1=moderate 2=high 3=very-high
+    agc: bool = True
+    agc_target_level_dbfs: int = -18   # dBFS target (-18 to -6)
+    agc_compression_gain_db: int = 9   # max makeup gain dB
+    high_pass_filter: bool = True
+    compressor: bool = False           # audiodynamic compressor stage
+    compressor_threshold: float = 0.1  # normalized 0.0–1.0
+    compressor_ratio: float = 3.0
+
+
+@dataclass
 class AudioConfig:
     card_name: str | None = None
     input_device: str | None = None
@@ -102,6 +116,7 @@ class AudioConfig:
     post_playback_ms: int = 100
     tone_preroll_ms: int = 50
     webrtc: AudioWebRTCConfig = field(default_factory=AudioWebRTCConfig)
+    gstreamer: GStreamerCaptureConfig = field(default_factory=GStreamerCaptureConfig)
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +176,7 @@ class STTConfig:
     min_speech_ms: int = 200
     wake_match_threshold: float = 0.5
     mono_capture: bool = False
+    capture_backend: str = "parec"     # parec | gstreamer
 
 
 @dataclass
@@ -666,6 +682,22 @@ def _parse_audio_config(raw: dict) -> AudioConfig:
     output_device = raw.get("output_device") or None
     card_name_raw = raw.get("card_name")
 
+    gst_raw = raw.get("gstreamer") or {}
+    if not isinstance(gst_raw, dict):
+        gst_raw = {}
+    gstreamer = GStreamerCaptureConfig(
+        source=str(gst_raw.get("source", "pulsesrc")),
+        noise_suppression=bool(gst_raw.get("noise_suppression", True)),
+        noise_suppression_level=int(gst_raw.get("noise_suppression_level", 2)),
+        agc=bool(gst_raw.get("agc", True)),
+        agc_target_level_dbfs=int(gst_raw.get("agc_target_level_dbfs", -18)),
+        agc_compression_gain_db=int(gst_raw.get("agc_compression_gain_db", 9)),
+        high_pass_filter=bool(gst_raw.get("high_pass_filter", True)),
+        compressor=bool(gst_raw.get("compressor", False)),
+        compressor_threshold=float(gst_raw.get("compressor_threshold", 0.1)),
+        compressor_ratio=float(gst_raw.get("compressor_ratio", 3.0)),
+    )
+
     return AudioConfig(
         card_name=str(card_name_raw) if card_name_raw else None,
         input_device=str(input_device) if input_device else None,
@@ -676,6 +708,7 @@ def _parse_audio_config(raw: dict) -> AudioConfig:
         post_playback_ms=int(raw.get("post_playback_ms", 100)),
         tone_preroll_ms=int(raw.get("tone_preroll_ms", 50)),
         webrtc=webrtc,
+        gstreamer=gstreamer,
     )
 
 
@@ -716,6 +749,7 @@ def _parse_stt_config(raw: dict) -> STTConfig:
         min_speech_ms=_get_int(raw, "min_speech_ms", 200),
         wake_match_threshold=_get_float(raw, "wake_match_threshold", 0.5),
         mono_capture=bool(raw.get("mono_capture", False)),
+        capture_backend=str(raw.get("capture_backend", "parec")),
     )
 
 
