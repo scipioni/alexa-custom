@@ -1455,9 +1455,10 @@
       font-size: 64px;
       color: var(--wake);
       position: absolute;
-      animation: spin 1.5s linear infinite;
+      animation: spin-ccw 1.5s linear infinite;
       opacity: 0.6;
     }
+    @keyframes spin-ccw { from { transform: rotate(0deg); } to { transform: rotate(-360deg); } }
     .popup-content h3 {
       font-size: 18px;
       font-weight: 600;

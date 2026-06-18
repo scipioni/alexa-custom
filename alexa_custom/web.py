@@ -8,8 +8,10 @@ import fcntl
 import json
 import logging
 import os
+import re
 import sys
 import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -114,7 +116,9 @@ class WebServer:
         self._extra_event_cb = extra_event_cb
         self._extra_stt_event_cb = extra_stt_event_cb
         self._config_manager: Any = None
-        self._html = _DASHBOARD_PATH.read_text()
+        _asset_ver = str(int(time.time()))
+        _raw_html = _DASHBOARD_PATH.read_text()
+        self._html = re.sub(r'(/static/[^"]+\.(js|css))"', rf'\1?v={_asset_ver}"', _raw_html)
         self._clients: set[web.WebSocketResponse] = set()
         self._queue: asyncio.Queue = asyncio.Queue(maxsize=200)
         self._pending_vu: dict[str, float] = {}
@@ -124,6 +128,7 @@ class WebServer:
         self._handler: _WebLogHandler | None = None
         self._shutting_down = False
         self._active_session: dict | None = None
+        self._last_history_clear: float = 0.0
 
         if hot_reload:
             from alexa_custom.config_manager import ConfigManager
@@ -679,6 +684,10 @@ class WebServer:
             else:
                 os.execv(sys.executable, [sys.executable] + sys.argv)
         elif action == "clear_history":
+            now = self._loop.time() if self._loop else time.monotonic()
+            if now - self._last_history_clear < 1.0:
+                return
+            self._last_history_clear = now
             logger.info("Clear history requested via web dashboard")
             self._active_session = None
             await self._clear_history_log()
