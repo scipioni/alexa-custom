@@ -14,6 +14,7 @@ import types
 from collections import deque
 from typing import Any
 
+import pytest
 
 import alexa_custom.stt as _stt_module
 from alexa_custom.actions import ActionEntry, TelegramClient
@@ -382,36 +383,23 @@ class TestReplyWindowTimeout:
 
 
 class TestSystemDirectTriggers:
-    """Direct triggers (with_wake=False) from system.yaml — fire without wake word."""
+    """Direct triggers (with_wake=False) — fire without a wake word. One case
+    per canonical phrase and per alias proves the alias list resolves."""
 
-    def test_che_ore_sono(self):
-        config = _make_config([_direct(["che ore sono", "che ora è"])])
-        events = run_pipeline(["che ore sono"], config)
-        assert "matched" in _event_names(events)
-
-    def test_che_ora_e_alias(self):
-        config = _make_config([_direct(["che ore sono", "che ora è"])])
-        events = run_pipeline(["che ora è"], config)
-        assert "matched" in _event_names(events)
-
-    def test_che_giorno_e(self):
-        config = _make_config([_direct(["che giorno è", "che giorno è oggi"])])
-        events = run_pipeline(["che giorno è"], config)
-        assert "matched" in _event_names(events)
-
-    def test_che_giorno_e_alias(self):
-        config = _make_config([_direct(["che giorno è", "che giorno è oggi"])])
-        events = run_pipeline(["che giorno è oggi"], config)
-        assert "matched" in _event_names(events)
-
-    def test_svegliati_adesso(self):
-        config = _make_config([_direct(["svegliati adesso", "attiva ascolto"])])
-        events = run_pipeline(["svegliati adesso"], config)
-        assert "matched" in _event_names(events)
-
-    def test_attiva_ascolto_alias(self):
-        config = _make_config([_direct(["svegliati adesso", "attiva ascolto"])])
-        events = run_pipeline(["attiva ascolto"], config)
+    @pytest.mark.parametrize(
+        "commands, utterance",
+        [
+            (["che ore sono", "che ora è"], "che ore sono"),
+            (["che ore sono", "che ora è"], "che ora è"),
+            (["che giorno è", "che giorno è oggi"], "che giorno è"),
+            (["che giorno è", "che giorno è oggi"], "che giorno è oggi"),
+            (["svegliati adesso", "attiva ascolto"], "svegliati adesso"),
+            (["svegliati adesso", "attiva ascolto"], "attiva ascolto"),
+        ],
+    )
+    def test_direct_trigger_matches(self, commands, utterance):
+        config = _make_config([_direct(commands)])
+        events = run_pipeline([utterance], config)
         assert "matched" in _event_names(events)
 
 
@@ -420,71 +408,56 @@ class TestSystemDirectTriggers:
 # ---------------------------------------------------------------------------
 
 
-class TestSystemGatedTriggers:
-    """Gated triggers from system.yaml — require a wake word first."""
+class TestGatedTriggers:
+    """Gated triggers — require a wake word first. Covers the canonical phrases
+    and aliases shipped in conf.example (system.yaml + user.yaml, including the
+    commented domotica/assistance examples)."""
 
-    def test_dimmi_qualcosa(self):
-        config = _make_config([_gated(["dimmi qualcosa"])])
-        events = run_pipeline(["ehi galileo", "dimmi qualcosa"], config)
-        assert "matched" in _event_names(events)
-
-    def test_riavvia(self):
-        config = _make_config([_gated(["riavvia"])])
-        events = run_pipeline(["ehi galileo", "riavvia"], config)
-        assert "matched" in _event_names(events)
-
-    def test_volume_basso(self):
-        config = _make_config([_gated(["volume basso"])])
-        events = run_pipeline(["ehi galileo", "volume basso"], config)
-        assert "matched" in _event_names(events)
-
-    def test_volume_medio(self):
-        config = _make_config([_gated(["volume medio"])])
-        events = run_pipeline(["ehi galileo", "volume medio"], config)
-        assert "matched" in _event_names(events)
-
-    def test_volume_alto(self):
-        config = _make_config([_gated(["volume alto"])])
-        events = run_pipeline(["ehi galileo", "volume alto"], config)
-        assert "matched" in _event_names(events)
-
-    def test_alza_il_volume(self):
-        config = _make_config([_gated(["alza il volume"])])
-        events = run_pipeline(["ehi galileo", "alza il volume"], config)
-        assert "matched" in _event_names(events)
-
-    def test_abbassa_il_volume(self):
-        config = _make_config([_gated(["abbassa il volume"])])
-        events = run_pipeline(["ehi galileo", "abbassa il volume"], config)
-        assert "matched" in _event_names(events)
-
-    def test_dormi(self):
-        config = _make_config([_gated(["dormi", "smetti di ascoltare"])])
-        events = run_pipeline(["ehi galileo", "dormi"], config)
-        assert "matched" in _event_names(events)
-
-    def test_smetti_di_ascoltare_alias(self):
-        config = _make_config([_gated(["dormi", "smetti di ascoltare"])])
-        events = run_pipeline(["ehi galileo", "smetti di ascoltare"], config)
-        assert "matched" in _event_names(events)
-
-    def test_come_stai(self):
-        config = _make_config([_gated(["come stai"])])
-        events = run_pipeline(["ehi galileo", "come stai"], config)
-        assert "matched" in _event_names(events)
-
-    def test_registra_campione(self):
-        config = _make_config(
-            [_gated(["registra campione", "test audio", "registra audio"])]
-        )
-        events = run_pipeline(["ehi galileo", "registra campione"], config)
-        assert "matched" in _event_names(events)
-
-    def test_test_audio_alias(self):
-        config = _make_config(
-            [_gated(["registra campione", "test audio", "registra audio"])]
-        )
-        events = run_pipeline(["ehi galileo", "test audio"], config)
+    @pytest.mark.parametrize(
+        "commands, utterance",
+        [
+            (["dimmi qualcosa"], "dimmi qualcosa"),
+            (["riavvia"], "riavvia"),
+            (["volume basso"], "volume basso"),
+            (["volume medio"], "volume medio"),
+            (["volume alto"], "volume alto"),
+            (["alza il volume"], "alza il volume"),
+            (["abbassa il volume"], "abbassa il volume"),
+            (["dormi", "smetti di ascoltare"], "dormi"),
+            (["dormi", "smetti di ascoltare"], "smetti di ascoltare"),
+            (["come stai"], "come stai"),
+            (
+                ["registra campione", "test audio", "registra audio"],
+                "registra campione",
+            ),
+            (["registra campione", "test audio", "registra audio"], "test audio"),
+            (["accendi la luce"], "accendi la luce"),
+            # Commented domotica examples from user.yaml.
+            (["di qualcosa"], "di qualcosa"),
+            (["suona"], "suona"),
+            (["connettiti"], "connettiti"),
+            (["spegni le luci"], "spegni le luci"),
+            (["alza il riscaldamento"], "alza il riscaldamento"),
+            (["abbassa il riscaldamento"], "abbassa il riscaldamento"),
+            (["alza le tapparelle"], "alza le tapparelle"),
+            (["abbassa le tapparelle"], "abbassa le tapparelle"),
+            (["accendi la tv"], "accendi la tv"),
+            (["spegni la tv"], "spegni la tv"),
+            (["buonanotte"], "buonanotte"),
+            # Commented assistance examples from user.yaml.
+            (["chiama il medico"], "chiama il medico"),
+            (["chiama i soccorsi"], "chiama i soccorsi"),
+            (["non sto bene"], "non sto bene"),
+            (["sono caduto"], "sono caduto"),
+            (["chiama la famiglia"], "chiama la famiglia"),
+            (["ho preso le medicine"], "ho preso le medicine"),
+            (["non ho preso le medicine"], "non ho preso le medicine"),
+            (["sto bene grazie"], "sto bene grazie"),
+        ],
+    )
+    def test_gated_trigger_matches(self, commands, utterance):
+        config = _make_config([_gated(commands)])
+        events = run_pipeline(["ehi galileo", utterance], config)
         assert "matched" in _event_names(events)
 
 
@@ -494,12 +467,8 @@ class TestSystemGatedTriggers:
 
 
 class TestUserActiveTriggers:
-    """Active (uncommented) triggers from user.yaml."""
-
-    def test_accendi_la_luce(self):
-        config = _make_config([_gated(["accendi la luce"])])
-        events = run_pipeline(["ehi galileo", "accendi la luce"], config)
-        assert "matched" in _event_names(events)
+    """Active (uncommented) triggers from user.yaml — ask/reply flows and
+    custom wake words (the plain gated phrases are covered by TestGatedTriggers)."""
 
     def test_chiama_stefano_direct_no_reply(self):
         ask_trigger = _ask_trigger(with_wake=False)
@@ -556,139 +525,21 @@ class TestUserActiveTriggers:
             f"'va bene' should match 'si' trigger; got {triggers}"
         )
 
-    def test_aiuto_wake_word_then_command(self):
-        # "aiuto" is both a wake word and a trigger command in user.yaml
+    @pytest.mark.parametrize(
+        "wake_words, wake_utterance",
+        [
+            # "aiuto"/"aiutami" are both wake words and trigger commands.
+            (["aiuto", "aiutami"], "aiuto"),
+            (["aiuto", "aiutami"], "aiutami"),
+            (["ehi galileo", "ascolta assistente"], "ascolta assistente"),
+        ],
+    )
+    def test_custom_wake_word_then_command(self, wake_words, wake_utterance):
         config = _make_config(
             triggers=[_gated(["che ore sono"])],
-            wake_words=["aiuto", "aiutami"],
+            wake_words=wake_words,
         )
-        events = run_pipeline(["aiuto", "che ore sono"], config)
+        events = run_pipeline([wake_utterance, "che ore sono"], config)
         names = _event_names(events)
         assert "wake" in names
         assert "matched" in names
-
-    def test_aiutami_wake_word(self):
-        config = _make_config(
-            triggers=[_gated(["che ore sono"])],
-            wake_words=["aiuto", "aiutami"],
-        )
-        events = run_pipeline(["aiutami", "che ore sono"], config)
-        names = _event_names(events)
-        assert "wake" in names
-        assert "matched" in names
-
-    def test_ascolta_assistente_wake_word(self):
-        config = _make_config(
-            triggers=[_gated(["che ore sono"])],
-            wake_words=["ehi galileo", "ascolta assistente"],
-        )
-        events = run_pipeline(["ascolta assistente", "che ore sono"], config)
-        names = _event_names(events)
-        assert "wake" in names
-        assert "matched" in names
-
-
-# ---------------------------------------------------------------------------
-# 7. Commented user.yaml examples (domotica + assistenza anziani)
-#    These show that the commented triggers work when uncommented.
-# ---------------------------------------------------------------------------
-
-
-class TestCommentedUserExamples:
-    """Commented triggers from user.yaml — verify they match when enabled."""
-
-    def test_di_qualcosa(self):
-        config = _make_config([_gated(["di qualcosa"])])
-        events = run_pipeline(["ehi galileo", "di qualcosa"], config)
-        assert "matched" in _event_names(events)
-
-    def test_suona(self):
-        config = _make_config([_gated(["suona"])])
-        events = run_pipeline(["ehi galileo", "suona"], config)
-        assert "matched" in _event_names(events)
-
-    def test_connettiti(self):
-        config = _make_config([_gated(["connettiti"])])
-        events = run_pipeline(["ehi galileo", "connettiti"], config)
-        assert "matched" in _event_names(events)
-
-    def test_spegni_le_luci(self):
-        config = _make_config([_gated(["spegni le luci"])])
-        events = run_pipeline(["ehi galileo", "spegni le luci"], config)
-        assert "matched" in _event_names(events)
-
-    def test_alza_il_riscaldamento(self):
-        config = _make_config([_gated(["alza il riscaldamento"])])
-        events = run_pipeline(["ehi galileo", "alza il riscaldamento"], config)
-        assert "matched" in _event_names(events)
-
-    def test_abbassa_il_riscaldamento(self):
-        config = _make_config([_gated(["abbassa il riscaldamento"])])
-        events = run_pipeline(["ehi galileo", "abbassa il riscaldamento"], config)
-        assert "matched" in _event_names(events)
-
-    def test_alza_le_tapparelle(self):
-        config = _make_config([_gated(["alza le tapparelle"])])
-        events = run_pipeline(["ehi galileo", "alza le tapparelle"], config)
-        assert "matched" in _event_names(events)
-
-    def test_abbassa_le_tapparelle(self):
-        config = _make_config([_gated(["abbassa le tapparelle"])])
-        events = run_pipeline(["ehi galileo", "abbassa le tapparelle"], config)
-        assert "matched" in _event_names(events)
-
-    def test_accendi_la_tv(self):
-        config = _make_config([_gated(["accendi la tv"])])
-        events = run_pipeline(["ehi galileo", "accendi la tv"], config)
-        assert "matched" in _event_names(events)
-
-    def test_spegni_la_tv(self):
-        config = _make_config([_gated(["spegni la tv"])])
-        events = run_pipeline(["ehi galileo", "spegni la tv"], config)
-        assert "matched" in _event_names(events)
-
-    def test_buonanotte(self):
-        config = _make_config([_gated(["buonanotte"])])
-        events = run_pipeline(["ehi galileo", "buonanotte"], config)
-        assert "matched" in _event_names(events)
-
-    # Assistenza anziani
-    def test_chiama_il_medico(self):
-        config = _make_config([_gated(["chiama il medico"])])
-        events = run_pipeline(["ehi galileo", "chiama il medico"], config)
-        assert "matched" in _event_names(events)
-
-    def test_chiama_i_soccorsi(self):
-        config = _make_config([_gated(["chiama i soccorsi"])])
-        events = run_pipeline(["ehi galileo", "chiama i soccorsi"], config)
-        assert "matched" in _event_names(events)
-
-    def test_non_sto_bene(self):
-        config = _make_config([_gated(["non sto bene"])])
-        events = run_pipeline(["ehi galileo", "non sto bene"], config)
-        assert "matched" in _event_names(events)
-
-    def test_sono_caduto(self):
-        config = _make_config([_gated(["sono caduto"])])
-        events = run_pipeline(["ehi galileo", "sono caduto"], config)
-        assert "matched" in _event_names(events)
-
-    def test_chiama_la_famiglia(self):
-        config = _make_config([_gated(["chiama la famiglia"])])
-        events = run_pipeline(["ehi galileo", "chiama la famiglia"], config)
-        assert "matched" in _event_names(events)
-
-    def test_ho_preso_le_medicine(self):
-        config = _make_config([_gated(["ho preso le medicine"])])
-        events = run_pipeline(["ehi galileo", "ho preso le medicine"], config)
-        assert "matched" in _event_names(events)
-
-    def test_non_ho_preso_le_medicine(self):
-        config = _make_config([_gated(["non ho preso le medicine"])])
-        events = run_pipeline(["ehi galileo", "non ho preso le medicine"], config)
-        assert "matched" in _event_names(events)
-
-    def test_sto_bene_grazie(self):
-        config = _make_config([_gated(["sto bene grazie"])])
-        events = run_pipeline(["ehi galileo", "sto bene grazie"], config)
-        assert "matched" in _event_names(events)
