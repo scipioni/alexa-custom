@@ -1423,20 +1423,29 @@ async def handle_record_and_playback(
 
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
         tmp_wav = f.name
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+        tmp_processed_wav = f.name
 
     try:
         await asyncio.to_thread(record_wav_file, tmp_wav, duration, source, channels)
-        logger.info("record_and_playback: playing back recorded sample")
-        await asyncio.to_thread(play_wav_file, tmp_wav)
 
         import wave
         import numpy as np
+        from alexa_custom.stt_gating import _apply_input_gain, _downmix_to_mono
 
         rms_val = 0.0
         try:
             with wave.open(tmp_wav, "rb") as wf:
                 raw_data = wf.readframes(wf.getnframes())
-            samples = np.frombuffer(raw_data, dtype=np.int16)
+                framerate = wf.getframerate()
+            # Apply same gain/downmix as STT pipeline so RMS reflects what Vosk hears
+            processed = _apply_input_gain(_downmix_to_mono(raw_data, channels))
+            with wave.open(tmp_processed_wav, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(framerate)
+                wf.writeframes(processed)
+            samples = np.frombuffer(processed, dtype=np.int16)
             n = len(samples)
             if n > 0:
                 rms_val = float(np.linalg.norm(samples)) / (32768.0 * n**0.5)
@@ -1445,6 +1454,9 @@ async def handle_record_and_playback(
                 "record_and_playback: could not read recorded wav file for RMS calculation: %s",
                 e,
             )
+
+        logger.info("record_and_playback: playing back recorded sample")
+        await asyncio.to_thread(play_wav_file, tmp_processed_wav)
 
         rms_score = int(round(rms_val * 100))
         rms_score = max(1, min(10, rms_score))
@@ -1465,10 +1477,11 @@ async def handle_record_and_playback(
 
         await asyncio.to_thread(get_engine().say, text, lang)
     finally:
-        try:
-            os.unlink(tmp_wav)
-        except OSError:
-            pass
+        for _f in (tmp_wav, tmp_processed_wav):
+            try:
+                os.unlink(_f)
+            except OSError:
+                pass
 
 
 def _notify_action_error(ctx: ActionContext, action_type: str, message: str) -> None:
