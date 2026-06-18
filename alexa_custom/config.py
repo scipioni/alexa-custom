@@ -242,6 +242,20 @@ class LLMConfig:
     request_timeout: float = 60.0
     exit_phrases: list[str] = field(default_factory=lambda: list(_DEFAULT_EXIT_PHRASES))
     api_key: str = ""
+    concern_escalation: bool = False
+    concern_threshold: str = "medium"
+    concern_escalation_prompt: str | None = None
+    concern_participant_threshold: int = 1
+    concern_m1_template: str = (
+        '🚨 {name} ha detto qualcosa di preoccupante\n\n'
+        '"{quote}"\n\n'
+        'Entra nella stanza: {url}'
+    )
+    concern_m2_template: str = (
+        '📋 Resoconto della conversazione\n\n'
+        '{points}\n\n'
+        'Stanza: {url}'
+    )
 
 
 # ---------------------------------------------------------------------------

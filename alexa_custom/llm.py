@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable
@@ -9,6 +10,16 @@ from typing import Any, Awaitable, Callable
 import httpx
 
 from alexa_custom.config import ActionEntry, ActionsData, LLMConfig, Trigger
+
+_META_TAG_RE = re.compile(
+    r'^\s*\[(CONCERN(?::(?:LOW|MEDIUM|HIGH))?|DANGER|NO_CONCERN)\]\s*$'
+)
+
+
+def _parse_meta_tag(text: str) -> str | None:
+    m = _META_TAG_RE.match(text)
+    return m.group(1) if m else None
+
 
 logger = logging.getLogger(__name__)
 
@@ -237,9 +248,25 @@ class ConversationEngine:
         self._history: list[dict[str, str]] = []
         self._last_ts: float = 0.0
 
+    def _concern_instructions(self) -> str:
+        if not self._config.concern_escalation:
+            return ""
+        if self._config.concern_escalation_prompt:
+            return "\n\n" + self._config.concern_escalation_prompt
+        return (
+            "\n\nSe l'utente dice qualcosa di preoccupante (sintomi medici, cadute, "
+            "solitudine, confusione, dolore, paura, o qualsiasi situazione di pericolo), "
+            "alla fine della tua risposta aggiungi una riga con [CONCERN:LOW], "
+            "[CONCERN:MEDIUM] o [CONCERN:HIGH] in base alla gravità. "
+            "Se la situazione è chiaramente pericolosa o urgente (dolore al petto, "
+            "difficoltà a respirare, sanguinamento, perdita di coscienza), usa [DANGER]. "
+            "Se non c'è nulla di preoccupante, aggiungi [NO_CONCERN]. "
+            "Questa riga non deve essere pronunciata all'utente."
+        )
+
     def _system_prompt(self) -> str:
         if self._config.system_prompt:
-            return self._config.system_prompt
+            return self._config.system_prompt + self._concern_instructions()
         lang_label = {
             "it-IT": "italiano",
             "en-US": "English",
@@ -252,7 +279,7 @@ class ConversationEngine:
             f"Sei un assistente vocale. Rispondi in modo conciso, in {lang_label}. "
             "Non usare elenchi, markdown, simboli speciali o formattazione. "
             "Le tue risposte saranno lette da un sintetizzatore vocale."
-        )
+        ) + self._concern_instructions()
 
     def _prepare_messages(self, user_text: str) -> list[dict[str, str]]:
         now = time.monotonic()
@@ -273,10 +300,13 @@ class ConversationEngine:
         self,
         user_text: str,
         say_fn: Callable[[str], Awaitable[None]],
+        meta_callback: Callable[[str], None] | None = None,
     ) -> str:
         """Stream tokens from Ollama and speak each sentence as it completes.
 
-        Returns the full reply text, or _UNREACHABLE on connection failure.
+        If meta_callback is provided, sentences matching _META_TAG_RE are not
+        spoken but forwarded to the callback instead.
+        Returns the full reply text (with meta-tags stripped), or _UNREACHABLE.
         """
         messages = self._prepare_messages(user_text)
         buf = ""
@@ -289,13 +319,22 @@ class ConversationEngine:
                     buf += token
                     sentences, buf = _split_sentences(buf)
                     for sentence in sentences:
+                        tag = _parse_meta_tag(sentence)
+                        if tag:
+                            if meta_callback:
+                                meta_callback(tag)
+                            continue
                         full_text += sentence + " "
                         await say_fn(sentence)
-            # Speak any remaining fragment (no trailing punctuation)
             remainder = buf.strip()
             if remainder:
-                full_text += remainder
-                await say_fn(remainder)
+                tag = _parse_meta_tag(remainder)
+                if tag:
+                    if meta_callback:
+                        meta_callback(tag)
+                elif remainder:
+                    full_text += remainder
+                    await say_fn(remainder)
         except (OllamaUnreachable, TimeoutError) as e:
             logger.warning("Ollama streaming error or timeout: %s", e)
             if self._history:

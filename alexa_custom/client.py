@@ -153,6 +153,8 @@ class LiveKitSessionManager:
         empty_room_timeout: int = 0,
         wait_for_participant: bool = True,
         answer_timeout: float = 60,
+        on_caregiver_arrived: asyncio.Event | None = None,
+        caregiver_threshold: int = 3,
     ):
         self.mic = mic
         self.devices = devices
@@ -161,6 +163,8 @@ class LiveKitSessionManager:
         self._empty_room_timeout = empty_room_timeout
         self._wait_for_participant = wait_for_participant
         self._answer_timeout = answer_timeout
+        self._on_caregiver_arrived = on_caregiver_arrived
+        self._caregiver_threshold = caregiver_threshold
         self.room = Room()
         self.disconnected = asyncio.Event()
         self._participant_arrived = asyncio.Event()
@@ -211,6 +215,15 @@ class LiveKitSessionManager:
             logger.info(f"Participant joined: {participant.identity}")
             self._participant_arrived.set()
             self.emit("participant_joined", {"identity": participant.identity})
+            if self._on_caregiver_arrived is not None:
+                remote_count = len(self.room.remote_participants)
+                if remote_count >= self._caregiver_threshold:
+                    logger.info(
+                        "Caregiver arrived — %d remote participants (threshold=%d)",
+                        remote_count,
+                        self._caregiver_threshold,
+                    )
+                    self._on_caregiver_arrived.set()
 
         @self.room.on("participant_disconnected")
         def on_participant_disconnected(participant):
@@ -445,6 +458,8 @@ async def run_session(
     empty_room_timeout: int = 0,
     wait_for_participant: bool = True,
     answer_timeout: float = 60,
+    on_caregiver_arrived: asyncio.Event | None = None,
+    caregiver_threshold: int = 3,
 ):
     """Connect to one LiveKit session; return when disconnected or stop_event fires."""
     manager = LiveKitSessionManager(
@@ -455,6 +470,8 @@ async def run_session(
         empty_room_timeout,
         wait_for_participant,
         answer_timeout,
+        on_caregiver_arrived=on_caregiver_arrived,
+        caregiver_threshold=caregiver_threshold,
     )
     await manager.run(stop_event)
 
@@ -559,9 +576,9 @@ async def _async_main(
         try:
             from alexa_custom.agent_daemon import AgentDaemon
 
-            async def _dispatch_cb(reason: str):
+            async def _dispatch_cb(report: str):
                 url = browser_join_url()
-                msg = f"\U0001f6a8 EMERGENZA (da agente): {reason}\n\nEntra nella stanza: {url}"
+                msg = f"\U0001f6a8 EMERGENZA (da agente)\n\n{report}\n\nEntra nella stanza: {url}"
                 chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
                 token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
                 if not token:
@@ -697,6 +714,18 @@ async def _async_main(
         sd_notify("READY=1")
         last_watchdog_ping = time.time()
 
+    caregiver_arrived = asyncio.Event()
+    from alexa_custom.actions import set_caregiver_event as _set_caregiver_event
+
+    _set_caregiver_event(caregiver_arrived)
+    _caregiver_threshold = (
+        actions_config.llm.concern_participant_threshold
+        if actions_config is not None
+        and actions_config.llm is not None
+        and actions_config.llm.concern_escalation
+        else 0
+    )
+
     try:
         while not stop_event.is_set():
             # Periodically ping systemd watchdog to prevent auto-restart.
@@ -798,6 +827,8 @@ async def _async_main(
                     empty_room_timeout=_empty_room_timeout,
                     wait_for_participant=False,
                     answer_timeout=_answer_timeout,
+                    on_caregiver_arrived=caregiver_arrived if _caregiver_threshold > 0 else None,
+                    caregiver_threshold=_caregiver_threshold,
                 )
             except Exception as e:
                 logger.error(f"Session error: {e}")

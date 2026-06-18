@@ -25,7 +25,8 @@ _TRIAGE_PROMPT = (
     "Il tuo lavoro: parlare con una persona anziana che potrebbe stare male. "
     "Chiedi come si sente, quali sintomi ha. "
     "Se i sintomi sono gravi (dolore al petto, difficoltà a respirare, "
-    "svenimento, sangue abbondante) dì che chiami subito aiuto.\n\n"
+    "svenimento, sangue abbondante) dì 'chiamo aiuto, resto con lei.' "
+    "Usa sempre parole semplici. Non fare riferimenti a numeri telefonici.\n\n"
     "Regole: "
     "1. Mai la stessa risposta due volte. "
     "2. Usa parole diverse: 'come va?', 'cosa succede?', 'mi dica', "
@@ -249,6 +250,8 @@ class AgentDaemon:
         self._device_identity: str | None = None
         self._responder_joined = asyncio.Event()
         self._llm_client = None
+        self._dispatched = False
+        self._pending_confirm = False
         self._groq_stt: GroqSTT | None = None
         groq_key = os.environ.get("GROQ_API_KEY", "")
         if groq_key:
@@ -359,30 +362,37 @@ class AgentDaemon:
             logger.error("TTS data send error: %s", e)
 
     async def _wait_for_responder(self) -> None:
-        """Wait for a responder to join. Send final summary via Telegram then exit."""
+        """Wait for a responder to join. Send final report then leave the room."""
         for attempt in range(5):
             self._responder_joined.clear()
             try:
                 await asyncio.wait_for(self._responder_joined.wait(), timeout=30.0)
-                if self._conversation_history and self._dispatch_cb:
-                    summary = "\n".join(self._conversation_history[-5:])
-                    await self._dispatch_cb(f"DIAGNOSI (dopo emergenza):\n{summary}")
+                if self._dispatch_cb:
+                    report = await self._generate_report()
+                    await self._dispatch_cb(
+                        f"Caregiver arrivato\n\n{report}"
+                    )
+                logger.info("Agent: caregiver arrived — leaving room")
+                self._participant_identity = None
+                self._device_identity = None
+                if self._room:
+                    await self._room.disconnect()
                 return
             except asyncio.TimeoutError:
                 logger.warning(
                     "Agent: responder not joined after %ds", (attempt + 1) * 30
                 )
                 if self._dispatch_cb:
+                    report = await self._generate_report()
                     await self._dispatch_cb(
-                        f"RIPETO: Nessuno è ancora entrato nella stanza di emergenza. "
-                        f"Tentativo {attempt + 1}/5"
+                        f"Tentativo {attempt + 1}/5 — nessuno e' ancora entrato\n\n{report}"
                     )
                 await self._say(
                     "Non è ancora entrato nessuno. Stiamo ancora aspettando."
                 )
         logger.error("Agent: no responder after max attempts")
         await self._say(
-            "Mi dispiace, nessuno ha risposto. Chiamerò il numero di emergenza."
+            "Mi dispiace, nessuno ha risposto."
         )
 
     async def _handle_participant(self, participant) -> None:
@@ -412,6 +422,7 @@ class AgentDaemon:
             logger.warning("Agent: no audio track within 30s")
 
     async def _run_conversation(self, track) -> None:
+        self._dispatched = False
         stream = AudioStream(track)
         resampler = _AudioResampler()
         skill_text = self._skill_text
@@ -523,22 +534,46 @@ class AgentDaemon:
     ) -> bool:
         """Process transcribed text. Returns False if conversation should end."""
         logger.info("STT: '%s'", text)
-        if text.lower() in _END_PHRASES or any(p in text.lower() for p in _END_PHRASES):
-            await self._say("Arrivederci, stammi bene!")
-            return False
 
         self._busy.set()
         drainer = asyncio.create_task(_drain())
 
+        # Match end phrases as whole words — avoids accidental exit on
+        # STT mis-transcriptions (e.g. "chiama aiuto" heard as "ciao").
+        words = set(text.lower().split())
+        is_end = text.lower() in _END_PHRASES or (words & _END_PHRASES)
+
+        if is_end and self._pending_confirm:
+            # Second consecutive end-phrase match → confirmed exit
+            await self._say("Arrivederci, stammi bene!")
+            await _echo_drain()
+            self._busy.clear()
+            await drainer
+            self._pending_confirm = False
+            return False
+
+        if is_end:
+            # First match — ask for confirmation
+            await self._say("Vuoi davvero uscire? Rispondi sì o no.")
+            await _echo_drain()
+            self._busy.clear()
+            await drainer
+            self._pending_confirm = True
+            return True
+
+        # Not an end phrase — cancel any pending confirmation
+        self._pending_confirm = False
+
         urgency, reply = await self._combined_chat(text, llm_history)
         if urgency in ("HIGH", "CRITICAL"):
             logger.critical("Agent: emergency assessed %s", urgency)
-            if self._dispatch_cb:
-                await self._dispatch_cb(f"URGENCY:{urgency}:{text}")
-            await self._say("Ho capito, chiamo subito aiuto. Come sta adesso?")
-            asyncio.create_task(self._wait_for_responder())
-        else:
-            await self._say(reply)
+            if not self._dispatched:
+                self._dispatched = True
+                report = await self._generate_report()
+                if self._dispatch_cb:
+                    await self._dispatch_cb(report)
+                asyncio.create_task(self._wait_for_responder())
+        await self._say(reply)
         await _echo_drain()
 
         self._busy.clear()
@@ -594,16 +629,14 @@ class AgentDaemon:
                         urgency, reply = await self._combined_chat(text, llm_history)
                         if urgency in ("HIGH", "CRITICAL"):
                             logger.critical("Agent: emergency assessed %s", urgency)
-                            if self._dispatch_cb:
-                                await self._dispatch_cb(f"URGENCY:{urgency}:{text}")
-                            await self._say(
-                                "Ho capito, chiamo subito aiuto. Come sta adesso?"
-                            )
-                            asyncio.create_task(self._wait_for_responder())
-                            await _echo_drain()
-                        else:
-                            await self._say(reply)
-                            await _echo_drain()
+                            if not self._dispatched:
+                                self._dispatched = True
+                                report = await self._generate_report()
+                                if self._dispatch_cb:
+                                    await self._dispatch_cb(report)
+                                asyncio.create_task(self._wait_for_responder())
+                        await self._say(reply)
+                        await _echo_drain()
 
                         self._busy.clear()
                         await drainer
@@ -644,18 +677,14 @@ class AgentDaemon:
                                     logger.critical(
                                         "Agent: emergency assessed %s", urgency
                                     )
-                                    if self._dispatch_cb:
-                                        await self._dispatch_cb(
-                                            f"URGENCY:{urgency}:{text}"
-                                        )
-                                    await self._say(
-                                        "Ho capito, chiamo subito aiuto. Come sta adesso?"
-                                    )
-                                    asyncio.create_task(self._wait_for_responder())
-                                    await _echo_drain()
-                                else:
-                                    await self._say(reply)
-                                    await _echo_drain()
+                                    if not self._dispatched:
+                                        self._dispatched = True
+                                        report = await self._generate_report()
+                                        if self._dispatch_cb:
+                                            await self._dispatch_cb(report)
+                                        asyncio.create_task(self._wait_for_responder())
+                                await self._say(reply)
+                                await _echo_drain()
                                 self._busy.clear()
                                 await drainer
                                 resampler = _AudioResampler()
@@ -737,6 +766,39 @@ class AgentDaemon:
         history.append({"role": "assistant", "content": reply})
         self._conversation_history.append(f"Assistente: {reply}")
         return urgency, reply
+
+    async def _generate_report(self) -> str:
+        """Use the LLM to write a detailed report from conversation history."""
+        if not self._conversation_history:
+            return "L'anziano non ha ancora parlato con l'assistente."
+        from alexa_custom.llm import OpenAIClient
+        cfg = self._config.llm
+        if cfg is None:
+            return "\n".join(self._conversation_history[-10:])
+        history_text = "\n".join(self._conversation_history[-10:])
+        client = OpenAIClient(cfg.host, cfg.api_key, cfg.request_timeout)
+        try:
+            result = await asyncio.wait_for(
+                client.chat(
+                    [
+                    {"role": "system", "content":
+                     "Sei un assistente sociale. Scrivi un breve rapporto in italiano "
+                     "in terza persona sullo stato di una persona anziana. "
+                     "Sii conciso: sintomi, stato emotivo, urgenza. "
+                     "Massimo 3-4 frasi. Non usare virgolette."},
+                    {"role": "user", "content":
+                     "Ecco la conversazione con l'anziano:\n"
+                     + history_text
+                     + "\n\nScrivi un breve rapporto sullo stato dell'anziano."},
+                    ],
+                    cfg.model,
+                ),
+                timeout=15.0,
+            )
+            return result.strip()
+        except Exception as e:
+            logger.error("Report generation failed: %s", e)
+            return "Rapporto non disponibile. Conversazione:\n" + history_text
 
     async def _llm_chat(self, history: list[dict]) -> str:
         from alexa_custom.llm import OpenAIClient

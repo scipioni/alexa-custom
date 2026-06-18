@@ -282,6 +282,8 @@ def find_alexa_card(pulse, spec: str | None = None):
     """Return the pulsectl card object matching the spec (name, desc, or index)."""
     if not spec:
         spec = _state.default_card_name
+    if not spec:
+        return None
 
     spec_lower = spec.lower()
     is_numeric = spec.strip().isdigit()
@@ -452,17 +454,19 @@ def check_newpie_ready(
         default_sink = sinks.get(info.default_sink_name)
         default_source = sources.get(info.default_source_name)
 
-        target_out = (output_spec or _state.default_card_name).lower()
-        if not default_sink or (
+        target_out = (output_spec or _state.default_card_name or "")
+        if target_out:
+            target_out = target_out.lower()
+        if target_out and (not default_sink or (
             target_out not in default_sink.description.lower()
             and target_out not in default_sink.name.lower()
-        ):
+        )):
             print(
                 f"WARNING: Default sink is not the expected device (got: {info.default_sink_name})"
             )
             ok = False
 
-        target_in = (input_spec or _state.default_card_name).lower()
+        target_in = (input_spec or _state.default_card_name or "")
         if not default_source or (
             target_in not in default_source.description.lower()
             and target_in not in default_source.name.lower()

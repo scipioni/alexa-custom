@@ -5,6 +5,7 @@ import dataclasses
 import logging
 import os
 import re
+import time
 import unicodedata
 from typing import Awaitable, Callable, TYPE_CHECKING
 
@@ -19,6 +20,13 @@ from rapidfuzz import fuzz as _fuzz
 from rapidfuzz.distance import Levenshtein as _lev
 
 logger = logging.getLogger(__name__)
+
+_caregiver_arrived: asyncio.Event | None = None
+
+
+def set_caregiver_event(event: asyncio.Event | None) -> None:
+    global _caregiver_arrived
+    _caregiver_arrived = event
 
 
 @dataclasses.dataclass
@@ -80,8 +88,10 @@ def italian_phonetic(text: str) -> str:
 class TelegramClient:
     def __init__(self) -> None:
         self._token: str | None = os.environ.get("TELEGRAM_BOT_TOKEN")
+        self._default_chat_id: str | None = os.environ.get("TELEGRAM_CHAT_ID")
 
     async def send_message(self, chat_id: str, text: str) -> None:
+        chat_id = chat_id or self._default_chat_id or "me"
         if not self._token:
             logger.error("TELEGRAM_BOT_TOKEN not set — telegram action skipped")
             return
@@ -90,6 +100,7 @@ class TelegramClient:
             async with httpx.AsyncClient(timeout=5.0) as client:
                 resp = await client.post(url, json={"chat_id": chat_id, "text": text})
                 resp.raise_for_status()
+            logger.info("Telegram message sent to %s", chat_id)
         except Exception as e:
             logger.error(f"Telegram send_message failed: {e}")
 
@@ -254,6 +265,8 @@ def match_trigger(
 
 _dispatch_depth = 0
 _MAX_DISPATCH_DEPTH = 10
+_last_emergency_ts: float = 0.0
+_EMERGENCY_COOLDOWN = 300.0  # seconds (5 min) before allowing a new emergency dispatch
 
 
 async def dispatch(
@@ -628,9 +641,12 @@ async def handle_llm_chat(
     actions_config=None,
     wake_word: str | None = None,
     transcript: str | None = None,
+    telegram_client=None,
+    livekit_connect_fn: Callable[[], Awaitable[None]] | None = None,
+    livekit_connected: bool = False,
     **_,
 ) -> None:
-    from alexa_custom.llm import _UNREACHABLE, get_engine
+    from alexa_custom.llm import _UNREACHABLE, get_engine, is_exit_phrase
     from alexa_custom.tts import get_engine as get_tts
 
     if actions_config is None or actions_config.llm is None:
@@ -660,54 +676,271 @@ async def handle_llm_chat(
 
     await asyncio.to_thread(play_tone, "info")
 
-    # Use the command that triggered this action as the first turn so the LLM
-    # has context about what the user said.  Subsequent turns come from listen_fn.
     _pending = transcript or ""
+    _escalated = False
+    _room_connected = False
+    _confirmed_this_turn = False
+    concerns: list[tuple[str, str, float]] = []
+
+    async def _say(text: str) -> None:
+        await asyncio.to_thread(get_tts().say, text, lang)
+
+    def _on_tag(tag: str) -> None:
+        nonlocal _escalated
+        if tag in ("NO_CONCERN",):
+            return
+        if not cfg.concern_escalation:
+            return
+        level = tag.replace("CONCERN:", "") if tag.startswith("CONCERN:") else tag
+        now = time.time()
+        concerns.append((_last_turn_text, level, now))
+
+    _last_turn_text = ""
+
+    async def _render_m1(quote: str) -> str | None:
+        import os
+        name = os.uname().nodename
+        url = ""
+        try:
+            from alexa_custom.client import browser_join_url
+            url = browser_join_url()
+        except Exception:
+            url = "(LiveKit room)"
+        # Use the LLM to generate a report about what the elder said
+        report_prompt = (
+            "L'anziano ha detto: \"" + quote + "\". "
+            "Scrivi un breve rapporto su cosa ha riferito l'anziano "
+            "(sintomi, preoccupazioni, stato di salute). "
+            "Non usare virgolette — scrivi in terza persona."
+        )
+        try:
+            from alexa_custom.llm import OpenAIClient
+            client = OpenAIClient(cfg.host, cfg.api_key, cfg.request_timeout)
+            report = await asyncio.wait_for(
+                client.chat(
+                    [
+                        {"role": "system", "content": "Sei un assistente che scrive rapporti. "
+                         "Riassumi in italiano cosa ha detto l'utente."},
+                        {"role": "user", "content": report_prompt},
+                    ],
+                    cfg.model,
+                ),
+                timeout=10.0,
+            )
+            report = report.strip()
+        except Exception:
+            report = f"L'anziano ha detto: \"{quote}\""
+        template = cfg.concern_m1_template
+        return template.format(name=name, summary=report, url=url)
+
+    async def _render_m2() -> str | None:
+        import os
+        name = os.uname().nodename
+        url = ""
+        try:
+            from alexa_custom.client import browser_join_url
+            url = browser_join_url()
+        except Exception:
+            url = "(LiveKit room)"
+        if not concerns:
+            return cfg.concern_m2_template.format(
+                name=name,
+                summary="Nessuna preoccupazione segnalata.",
+                url=url,
+            )
+        # Use the LLM to generate a report from all accumulated concerns
+        import datetime
+        concern_lines = []
+        for text, level, ts in concerns:
+            t = datetime.datetime.fromtimestamp(ts).strftime("%H:%M")
+            concern_lines.append(f"• {text} ({t}) — {level}")
+        concern_text = "\n".join(concern_lines)
+        report_prompt = (
+            "L'anziano ha riferito le seguenti preoccupazioni:\n"
+            + concern_text + "\n\n"
+            "Scrivi un breve rapporto sullo stato dell'anziano "
+            "basato su queste informazioni. "
+            "Non usare virgolette. Scrivi in terza persona."
+        )
+        try:
+            from alexa_custom.llm import OpenAIClient
+            client = OpenAIClient(cfg.host, cfg.api_key, cfg.request_timeout)
+            report = await asyncio.wait_for(
+                client.chat(
+                    [
+                        {"role": "system", "content": "Sei un assistente che scrive rapporti medici. "
+                         "Riassumi in italiano lo stato dell'utente."},
+                        {"role": "user", "content": report_prompt},
+                    ],
+                    cfg.model,
+                ),
+                timeout=10.0,
+            )
+            report = report.strip()
+        except Exception:
+            report = concern_text
+        return cfg.concern_m2_template.format(
+            name=name,
+            summary=report,
+            url=url,
+        )
+
+    async def _escalate(turn_text: str) -> None:
+        nonlocal _escalated, _room_connected
+        _escalated = True
+        msg = await _render_m1(turn_text)
+        if msg and telegram_client:
+            try:
+                await telegram_client.send_message(
+                    os.environ.get("TELEGRAM_CHAT_ID", ""), msg
+                )
+                logger.info("Concern escalation M1 sent")
+            except Exception as e:
+                logger.error("Concern escalation M1 failed: %s", e)
+        if livekit_connect_fn and not livekit_connected and not _room_connected:
+            try:
+                await livekit_connect_fn()
+                _room_connected = True
+            except Exception as e:
+                logger.error("LiveKit connect for escalation failed: %s", e)
+
+    async def _confirm_and_escalate(turn_text: str) -> bool:
+        nonlocal _confirmed_this_turn
+        await _say(
+            "Ho sentito che hai detto che " + turn_text[:100]
+            + ". Vuoi che chiami qualcuno?"
+        )
+        reply_text = (await listen_fn(10.0, flush_ms=300)).strip().lower() if listen_fn else ""
+        is_yes = any(w in reply_text for w in ("sì", "si", "ok", "va bene", "certo", "per favore"))
+        if is_yes:
+            _confirmed_this_turn = True
+            await _escalate(turn_text)
+            return True
+        concerns.clear()
+        return False
+
+    _last_concern_level: str | None = None
+
+    _conv_start = time.monotonic()
+    _max_conv_duration = max(30.0, cfg.context_turns * 12.0)
+
     try:
-        for _ in range(cfg.context_turns):
-            if _pending:
-                turn_text = _pending
-                _pending = ""
-            else:
+        try:
+            for turn_idx in range(cfg.context_turns):
+                if time.monotonic() - _conv_start > _max_conv_duration:
+                    logger.info("Conversation max duration reached — ending")
+                    break
+
+                if _pending:
+                    turn_text = _pending
+                    _pending = ""
+                else:
+                    if mqtt_client:
+                        await mqtt_client.publish(
+                            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
+                            "listening",
+                        )
+                    turn_text = (await listen_fn(10.0, flush_ms=300)).strip()
+
+                # Check caregiver arrival right after listen_fn returns (instant quit)
+                if _caregiver_arrived is not None and _caregiver_arrived.is_set():
+                    logger.info("Caregiver arrived — ending conversation silently")
+                    if telegram_client:
+                        msg2 = await _render_m2()
+                        if msg2:
+                            try:
+                                await telegram_client.send_message(
+                                    os.environ.get("TELEGRAM_CHAT_ID", ""), msg2
+                                )
+                            except Exception:
+                                pass
+                    break
+
+                if not turn_text:
+                    if _escalated and _last_concern_level in ("HIGH", "DANGER"):
+                        logger.critical("Silence after escalation — remaining escalated")
+                        continue
+                    break
+
+                _last_turn_text = turn_text
+                _confirmed_this_turn = False
+
+                if is_exit_phrase(turn_text, cfg.exit_phrases):
+                    engine.reset()
+                    break
+
+                if on_stt_event:
+                    on_stt_event("llm_thinking", {"transcript": turn_text})
                 if mqtt_client:
                     await mqtt_client.publish(
                         f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
-                        "listening",
+                        "speaking",
                     )
-                turn_text = (await listen_fn(10.0, flush_ms=300)).strip()
-            if not turn_text:
-                break
-            from alexa_custom.llm import is_exit_phrase
 
-            if is_exit_phrase(turn_text, cfg.exit_phrases):
-                engine.reset()
-                break
-            if on_stt_event:
-                on_stt_event("llm_thinking", {"transcript": turn_text})
+                reply = await engine.reply_streaming(
+                    turn_text, _say, meta_callback=_on_tag
+                )
+
+                if reply == _UNREACHABLE:
+                    if on_stt_event:
+                        on_stt_event("llm_unreachable", {})
+                    await asyncio.to_thread(
+                        get_tts().say, "agente remoto non raggiungibile", lang
+                    )
+                    break
+
+                # Check again after reply_streaming completes (caregiver could have joined during LLM reply)
+                if _caregiver_arrived is not None and _caregiver_arrived.is_set():
+                    logger.info("Caregiver arrived during LLM reply — ending")
+                    if telegram_client:
+                        msg2 = await _render_m2()
+                        if msg2:
+                            try:
+                                await telegram_client.send_message(
+                                    os.environ.get("TELEGRAM_CHAT_ID", ""), msg2
+                                )
+                            except Exception:
+                                pass
+                    break
+
+                if not cfg.concern_escalation or _escalated:
+                    if on_stt_event:
+                        on_stt_event("llm_reply", {"transcript": turn_text, "reply": reply})
+                    continue
+
+                last_concern = concerns[-1] if concerns else None
+                if last_concern is None:
+                    if on_stt_event:
+                        on_stt_event("llm_reply", {"transcript": turn_text, "reply": reply})
+                    continue
+
+                _text, level, _ts = last_concern
+                _last_concern_level = level
+
+                if level == "DANGER" or (level in ("HIGH", "CRITICAL")):
+                    logger.critical("Immediate escalation for level=%s", level)
+                    await _escalate(turn_text)
+                elif level in ("LOW", "MEDIUM"):
+                    threshold = cfg.concern_threshold.lower()
+                    threshold_map = {"low": 0, "medium": 1, "high": 2}
+                    level_map = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3, "DANGER": 4}
+                    if level_map.get(level, 0) >= threshold_map.get(threshold, 1):
+                        confirmed = await _confirm_and_escalate(turn_text)
+                        if not confirmed:
+                            logger.info("Elder declined escalation — continuing")
+                            concerns.clear()
+
+                if on_stt_event:
+                    on_stt_event("llm_reply", {"transcript": turn_text, "reply": reply})
+        except Exception as e:
+            logger.error("llm_chat conversation error: %s", e)
+        finally:
             if mqtt_client:
                 await mqtt_client.publish(
-                    f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
-                    "speaking",
+                    f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "active"
                 )
-
-            async def _say(text: str) -> None:
-                await asyncio.to_thread(get_tts().say, text, lang)
-
-            reply = await engine.reply_streaming(turn_text, _say)
-            if reply == _UNREACHABLE:
-                if on_stt_event:
-                    on_stt_event("llm_unreachable", {})
-                await asyncio.to_thread(
-                    get_tts().say, "agente remoto non raggiungibile", lang
-                )
-                break
-            if on_stt_event:
-                on_stt_event("llm_reply", {"transcript": turn_text, "reply": reply})
-    finally:
-        if mqtt_client:
-            await mqtt_client.publish(
-                f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "idle"
-            )
+    except Exception as e:
+        logger.error("llm_chat fatal error: %s", e)
 
 
 _URGENCY_PROMPT = (
@@ -729,9 +962,11 @@ _TRIAGE_PROMPT = (
     "3. Se i sintomi sono lievi, dai consigli su come stare meglio.\n"
     "4. Se i sintomi sono gravi (dolore al petto, difficoltà a respirare, "
     "perdita di coscienza, sangue abbondante, confusione), "
-    "dì che stai chiamando aiuto.\n"
-    "5. Se la persona non risponde o è confusa, attiva i soccorsi.\n"
-    "Non dare diagnosi mediche. Sii rassicurante ma onesta."
+    "rassicura la persona e avvisa che il caregiver sarà contattato.\n"
+    "5. Se la persona non risponde o è confusa, resta in linea e "
+    "continua a parlare con calma finché il caregiver arriva.\n"
+    "Dirai che stai chiamando aiuto. "
+    "Il caregiver verrà avvisato tramite Telegram."
 )
 
 
@@ -773,6 +1008,7 @@ async def handle_emergenza(
         context_turns=min(cfg.context_turns, 6),
     )
     engine = get_engine(triage_cfg, lang)
+    engine.reset()
 
     from alexa_custom.audio import play_tone
 
@@ -781,6 +1017,21 @@ async def handle_emergenza(
     dispatched = False
     silence_count = 0
     _pending = transcript or ""
+
+    global _last_emergency_ts
+    in_cooldown = (_last_emergency_ts > 0
+                   and time.monotonic() - _last_emergency_ts < _EMERGENCY_COOLDOWN)
+    
+    async def _maybe_dispatch(reason: str):
+        nonlocal dispatched
+        if dispatched:
+            return
+        if in_cooldown:
+            logger.info("emergenza: in cooldown — skipping dispatch")
+            return
+        dispatched = True
+        _last_emergency_ts = time.monotonic()
+        await _dispatch_emergency(ctx, reason)
 
     try:
         for turn in range(triage_cfg.context_turns):
@@ -799,13 +1050,20 @@ async def handle_emergenza(
                 silence_count += 1
                 if silence_count >= 2 and not dispatched:
                     logger.critical("emergenza: silence timeout — dispatching")
-                    dispatched = True
-                    await _dispatch_emergency(ctx, "SILENCE_TIMEOUT")
-                    await asyncio.to_thread(
-                        get_tts().say,
-                        "Non sento risposta. Sto chiamando aiuto. Rimanga in linea.",
-                        lang,
+                    await _maybe_dispatch("SILENCE_TIMEOUT")
+                    # Let the LLM respond naturally to silence
+                    async def _silence_say(text: str) -> None:
+                        await asyncio.to_thread(get_tts().say, text, lang)
+                    reply = await engine.reply_streaming(
+                        "L'utente non risponde. Rassicuralo con calma.",
+                        _silence_say,
                     )
+                    if reply == _UNREACHABLE:
+                        await asyncio.to_thread(
+                            get_tts().say,
+                            "Non sento risposta. Avviso il caregiver.",
+                            lang,
+                        )
                     continue
                 break
 
@@ -817,18 +1075,22 @@ async def handle_emergenza(
                 engine.reset()
                 break
 
-            # LLM-based urgency assessment — replaces hard-coded keyword matching
+            # LLM-based urgency assessment
+            async def _say(text: str) -> None:
+                await asyncio.to_thread(get_tts().say, text, lang)
+
             if not dispatched:
                 urgency = await _assess_urgency(cfg, turn_text)
                 if urgency in ("HIGH", "CRITICAL"):
                     logger.critical("emergenza: LLM assessed %s — dispatching", urgency)
-                    dispatched = True
-                    await _dispatch_emergency(ctx, f"URGENCY:{urgency}:{turn_text}")
-                    await asyncio.to_thread(
-                        get_tts().say,
-                        "Ho capito, chiamo subito aiuto. Rimanga calmo, i soccorsi stanno arrivando.",
-                        lang,
-                    )
+                    await _maybe_dispatch(f"URGENCY:{urgency}:{turn_text}")
+                    reply = await engine.reply_streaming(turn_text, _say)
+                    if reply == _UNREACHABLE:
+                        await asyncio.to_thread(
+                            get_tts().say,
+                            "Non riesco a parlare con l'assistente. Avviso il caregiver.",
+                            lang,
+                        )
                     continue
 
             if on_stt_event:
@@ -838,9 +1100,6 @@ async def handle_emergenza(
                     f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
                     "speaking",
                 )
-
-            async def _say(text: str) -> None:
-                await asyncio.to_thread(get_tts().say, text, lang)
 
             reply = await engine.reply_streaming(turn_text, _say)
             if reply == _UNREACHABLE:
@@ -857,7 +1116,7 @@ async def handle_emergenza(
     finally:
         if mqtt_client:
             await mqtt_client.publish(
-                f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "idle"
+                f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "active"
             )
         if not dispatched:
             await asyncio.to_thread(
@@ -900,12 +1159,36 @@ async def _dispatch_emergency(ctx: ActionContext, reason: str):
             logger.info("LiveKit room connected for emergency")
         except Exception as e:
             logger.error("LiveKit connect failed: %s", e)
-    if ctx.telegram_client:
+    if ctx.telegram_client and ctx.actions_config and ctx.actions_config.llm:
+        try:
+            from alexa_custom.llm import OpenAIClient
+            cfg = ctx.actions_config.llm
+            client = OpenAIClient(cfg.host, cfg.api_key, cfg.request_timeout)
+            report = await asyncio.wait_for(
+                client.chat(
+                    [
+                        {"role": "system", "content": "Sei un assistente sociale. "
+                         "Scrivi un breve rapporto in italiano in terza persona "
+                         "sullo stato di una persona anziana. "
+                         "Massimo 3-4 frasi. Non usare virgolette."},
+                        {"role": "user", "content": "L'anziano ha riferito: " + reason
+                         + ". Scrivi un breve rapporto su cosa ha riferito l'anziano. "
+                         "Non usare virgolette."},
+                    ],
+                    cfg.model,
+                ),
+                timeout=10.0,
+            )
+            report = report.strip()
+        except Exception as e:
+            logger.error("Telegram report generation failed: %s", e)
+            report = reason
         try:
             await ctx.telegram_client.send_message(
                 ctx.telegram_client._default_chat_id or "me",
-                f"\U0001f6a8 EMERGENZA: {reason}",
+                f"\U0001f6a8 EMERGENZA\n\n{report}",
             )
+            logger.info("Emergency Telegram sent with LLM report")
         except Exception as e:
             logger.error("Telegram dispatch failed: %s", e)
 
