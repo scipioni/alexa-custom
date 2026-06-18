@@ -10,6 +10,7 @@ import numpy as np
 
 from alexa_custom import audio_hw
 from alexa_custom.audio_hw import (
+    get_output_sink,
     get_output_volume,
     get_post_playback_ms,
     get_tone_preroll_ms,
@@ -76,11 +77,14 @@ def _play_array(audio: np.ndarray, samplerate: int) -> None:
             wf.setframerate(samplerate)
             wf.writeframes(pcm16.tobytes())
 
-        cmd = (
-            [_PW_PLAY, tmp_path]
-            if _PW_PLAY
-            else ["aplay", "-D", "pipewire", "-q", tmp_path]
-        )
+        sink = get_output_sink()
+        if _PW_PLAY:
+            cmd = [_PW_PLAY]
+            if sink:
+                cmd += ["--target", sink]
+            cmd.append(tmp_path)
+        else:
+            cmd = ["aplay", "-D", "pipewire", "-q", tmp_path]
 
         with _audio_lock:
             _playback_active.set()
@@ -128,11 +132,14 @@ def _play_raw(data: bytes, samplerate: int, channels: int) -> None:
             wf.setframerate(samplerate)
             wf.writeframes(pcm16.tobytes())
 
-        cmd = (
-            [_PW_PLAY, tmp_path]
-            if _PW_PLAY
-            else ["aplay", "-D", "pipewire", "-q", tmp_path]
-        )
+        sink = get_output_sink()
+        if _PW_PLAY:
+            cmd = [_PW_PLAY]
+            if sink:
+                cmd += ["--target", sink]
+            cmd.append(tmp_path)
+        else:
+            cmd = ["aplay", "-D", "pipewire", "-q", tmp_path]
 
         with _audio_lock:
             _playback_active.set()
@@ -176,8 +183,12 @@ def play_wav_file(file_path: str) -> None:
     except Exception:
         pass
 
+    sink = get_output_sink()
     if _PW_PLAY:
-        cmd = [_PW_PLAY, "--volume", f"{volume:.3f}", file_path]
+        cmd = [_PW_PLAY, "--volume", f"{volume:.3f}"]
+        if sink:
+            cmd += ["--target", sink]
+        cmd.append(file_path)
     else:
         cmd = ["aplay", "-D", "pipewire", "-q", file_path]
 
