@@ -25,7 +25,7 @@ The system SHALL support a `ConversationEngine` that sends user utterances to a 
 - **THEN** the system prompt instructs the model to reply in English
 
 ### Requirement: Rolling conversation history with time-windowed reset
-The `ConversationEngine` SHALL maintain a rolling history of the last `context_turns` user/assistant exchange pairs (default 10). The history SHALL be cleared if the elapsed time since the last interaction exceeds `context_window_secs` (default 60). A new interaction always appends to the current history before sending to Ollama.
+The `ConversationEngine` SHALL maintain a rolling history of the last `context_turns` user/assistant exchange pairs (default 10). The history SHALL be cleared if the elapsed time since the last interaction exceeds `context_window_secs` (default 60). A new interaction always appends to the current history before sending to the LLM. History is shared across all action types that use the same engine instance — including both `llm_chat` and `say-with-llm`.
 
 #### Scenario: Follow-up question uses prior context
 - **WHEN** the user asks "chi è Einstein?" and then (within 60 s) asks "quanti anni aveva?"
@@ -37,7 +37,11 @@ The `ConversationEngine` SHALL maintain a rolling history of the last `context_t
 
 #### Scenario: History capped at context_turns
 - **WHEN** more than `context_turns` exchanges have occurred
-- **THEN** only the most recent `context_turns` pairs are included in the Ollama request
+- **THEN** only the most recent `context_turns` pairs are included in the LLM request
+
+#### Scenario: say-with-llm turn enters shared history
+- **WHEN** a `say-with-llm` action fires and the LLM replies successfully
+- **THEN** the prompt (user turn) and reply (assistant turn) are recorded in the same `ConversationEngine` history used by `llm_chat`, so a subsequent `llm_chat` session can reference them
 
 ### Requirement: `llm_chat` action type for explicit LLM conversation
 The system SHALL support a `llm_chat` action type that enters the `ConversationEngine` loop directly. An optional `system_prompt` parameter in the action overrides the global system prompt for that invocation.

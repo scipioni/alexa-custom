@@ -826,6 +826,56 @@ async def handle_llm_learn(
     await wizard.run(listen_fn, say_fn)
 
 
+@registry.register("say-with-llm")
+async def handle_say_with_llm(
+    action: ActionEntry,
+    actions_config=None,
+    **_,
+):
+    from alexa_custom.llm import _UNREACHABLE, get_engine as get_llm_engine
+    from alexa_custom.tts import get_engine as get_tts
+
+    prompt = await _render_text(action.params.get("prompt", ""))
+    file_path = action.params.get("file")
+    lang = action.params.get("lang", "it-IT")
+    max_chars = int(action.params.get("max_chars", 4000))
+    model_override = action.params.get("model")
+
+    file_content = ""
+    if file_path:
+        try:
+            with open(file_path, encoding="utf-8") as fh:
+                file_content = fh.read(max_chars)
+        except OSError as e:
+            logger.warning("say-with-llm: cannot read file %r: %s", file_path, e)
+
+    parts = [p for p in [file_content.strip(), prompt.strip()] if p]
+    user_text = "\n\n".join(parts)
+
+    if not user_text:
+        return
+
+    async def _say(text: str) -> None:
+        await asyncio.to_thread(get_tts().say, text, lang)
+
+    if actions_config is None or actions_config.llm is None:
+        logger.info("say-with-llm: LLM not configured, speaking text literally")
+        await _say(user_text)
+        return
+
+    cfg = actions_config.llm
+    if model_override:
+        cfg = dataclasses.replace(cfg, model=model_override)
+
+    engine = get_llm_engine(cfg, lang)
+    reply = await engine.reply_streaming(user_text, _say)
+
+    if reply == _UNREACHABLE:
+        fallback = prompt.strip() or user_text
+        if fallback:
+            await _say(fallback)
+
+
 ITALIAN_CITIES: dict[str, tuple[float, float]] = {
     "roma": (41.8919, 12.5113),
     "milano": (45.4642, 9.1900),

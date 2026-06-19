@@ -74,9 +74,22 @@ level=INFO source=routes.go:1919 msg="server config" env="map[... OLLAMA_FLASH_A
 
 ## Recommended Models
 
-For lightweight or resource-constrained devices, a highly optimized nano model is recommended:
+All models run on the Ollama **server** (not the Arduino Uno Q board). Choose based on available server RAM and your latency/quality trade-off:
 
-- **`ssfdre38/gemma4-nano`**: A tiny, efficient model ideal for low-latency local execution. For more details, see the [ssfdre38/gemma4-turbo GitHub repository](https://github.com/ssfdre38/gemma4-turbo).
+| Model | Size (Q4) | Italian | Notes |
+|---|---|---|---|
+| `ssfdre38/gemma4-nano` | ~0.5 GB | good | Default — fastest, lowest RAM, ideal for quick one-shot prompts |
+| `gemma2:2b` | ~1.6 GB | excellent | Best quality/speed for Italian at 2 B parameters |
+| `qwen2.5:3b` | ~2.0 GB | very good | Strong multilingual instruction-following |
+| `llama3.2:3b` | ~2.0 GB | good | Meta's current small model, solid general purpose |
+| `phi4-mini` | ~2.5 GB | good | Microsoft; very precise instruction-following |
+| `mistral:7b` | ~4.1 GB | excellent | Best output quality; needs ≥ 8 GB server RAM |
+| `gemma3:4b` | ~3.0 GB | very good | Google's updated line; good Italian prose |
+
+**Tips for voice use:**
+- Smaller models start replying faster — important for perceived latency on the first TTS sentence.
+- Any model benefits from the system prompt instructing it to avoid markdown (already done by default).
+- `ollama pull <model>` on the server to download; then set `model:` in `config.yaml`.
 
 ---
 
@@ -103,7 +116,49 @@ triggers:
         # system_prompt: "..."  # optional per-trigger override
 ```
 
-### 3. Command Learning (`llm_learn` action type)
+### 3. One-shot LLM narration (`say-with-llm` action type)
+
+A trigger can send a prompt (and optionally the contents of a file) to the LLM and speak the streaming reply — without entering a listening loop. The exchange is recorded in the shared `ConversationEngine` history, so a subsequent `llm_chat` session can reference it.
+
+```yaml
+triggers:
+  # Generative prompt
+  - phrase: "dimmi qualcosa di interessante"
+    actions:
+      - type: say-with-llm
+        prompt: "Dimmi una curiosità scientifica curiosa e poco nota"
+
+  # File narration with instruction
+  - phrase: "leggi le note"
+    actions:
+      - type: say-with-llm
+        file: /home/scipio/notes.txt
+        prompt: "Riassumi in modo conciso"
+        max_chars: 2000    # default: 4000
+
+  # Model override for this trigger only
+  - phrase: "scrivi una poesia"
+    actions:
+      - type: say-with-llm
+        prompt: "Scrivi una breve poesia sul tramonto"
+        model: mistral:7b
+```
+
+**Parameters:**
+
+| Parameter | Default | Description |
+|---|---|---|
+| `prompt` | `""` | Prompt sent to the LLM. Supports `$(shell)` substitution. |
+| `file` | — | Path to a text file; content is prepended to `prompt`. |
+| `max_chars` | `4000` | Max characters to read from `file`. |
+| `lang` | `it-IT` | Language tag passed to TTS. |
+| `model` | `llm.model` | Override the configured model for this action only. |
+
+**Fallback behaviour:**
+- If `llm:` is not configured in `config.yaml`, the text is spoken literally via TTS.
+- If the Ollama endpoint is unreachable, the rendered `prompt` is spoken literally.
+
+### 4. Command Learning (`llm_learn` action type)
 
 A trigger can launch a voice wizard that teaches the agent a new command without editing config files:
 
