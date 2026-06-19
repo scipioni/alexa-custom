@@ -95,7 +95,7 @@ class GStreamerCaptureConfig:
     noise_suppression: bool = True
     noise_suppression_level: int = 2   # 0=mild 1=moderate 2=high 3=very-high
     agc: bool = True
-    agc_target_level_dbfs: int = -18   # dBFS target (-18 to -6)
+    agc_target_level_dbfs: int = -3    # dBFS target (negative; abs() passed to GStreamer, range 0–31)
     agc_compression_gain_db: int = 9   # max makeup gain dB
     high_pass_filter: bool = True
     compressor: bool = False           # audiodynamic compressor stage

@@ -214,6 +214,10 @@ tasks:
       - cp setup/alsa-pcm-unmute.service ~/.config/systemd/user/alsa-pcm-unmute.service
       - systemctl --user daemon-reload
       - systemctl --user enable alsa-pcm-unmute.service
+      # Install WirePlumber rule to keep NewPie source always active (prevents suspension so
+      # native PipeWire clients such as pipewiresrc can connect and receive data immediately)
+      - mkdir -p ~/.config/wireplumber/wireplumber.conf.d
+      - cp setup/51-newpie-no-suspend.conf ~/.config/wireplumber/wireplumber.conf.d/51-newpie-no-suspend.conf
       # Restart WirePlumber so it re-evaluates routing with NewPie as the configured default
       - systemctl --user restart wireplumber && sleep 3
       - systemctl --user restart alsa-pcm-unmute.service

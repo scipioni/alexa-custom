@@ -37,8 +37,15 @@ def _build_pipeline_string(
 
     latency = "" if use_pipewire else " latency-time=10000 buffer-time=20000"
 
+    # pipewiresrc lets GStreamer negotiate caps all the way to PipeWire, which
+    # then can't resample internally on this board. Pin the source to its native
+    # format so GStreamer's audioconvert/audioresample handle the conversion.
+    native_caps = (
+        " ! audio/x-raw,format=S16LE,rate=48000" if use_pipewire else ""
+    )
+
     ns_level = max(0, min(3, config.noise_suppression_level))
-    target_dbfs = max(-60, min(0, config.agc_target_level_dbfs))
+    target_dbfs = max(0, min(31, abs(config.agc_target_level_dbfs)))
     compression_db = max(0, min(90, config.agc_compression_gain_db))
 
     webrtc_props = (
@@ -65,6 +72,7 @@ def _build_pipeline_string(
 
     return (
         f"{src_element}{device_prop}{latency}"
+        f"{native_caps}"
         " ! audioconvert"
         " ! audioresample"
         " ! audio/x-raw,format=S16LE,rate=16000,channels=1"

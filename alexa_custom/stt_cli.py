@@ -71,6 +71,9 @@ class _TeePopen:
     def returncode(self):
         return self._real.returncode
 
+    def poll(self):
+        return self._real.poll()
+
     def terminate(self) -> None:
         self._real.terminate()
 
