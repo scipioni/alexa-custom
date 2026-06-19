@@ -4,7 +4,7 @@
 </div>
 
 <p align="center">
-  <em>Turn any USB speakerphone into an Italian-speaking AI assistant with an arduino— optional fully local, open source, zero cloud.</em>
+  <em>Turn any USB speakerphone into an Italian-speaking AI assistant with an Arduino Uno Q — optional fully local, open source, zero cloud.</em>
 </p>
 
 <p align="center">
@@ -129,17 +129,100 @@ task audio:status   # audio device health dashboard
 
 ## 🏗️ Architecture
 
-<p align="center">
-  <img src="docs/how-it-works.png" alt="Serena architecture diagram" width="800">
-</p>
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                        🎙️  AUDIO CAPTURE LAYER                        │
+│                                                                        │
+│   [🎙️ USB Mic (NewPie)] ───► ALSA/PipeWire Sound Daemon                 │
+│                                │                                       │
+│          ┌─────────────────────┴─────────────────────┐                 │
+│          ▼                                           ▼                 │
+│   [Legacy Backend]                            [Modern Backend]         │
+│   "parec" subprocess                          "gstreamer" pipeline     │
+│          │                                           │                 │
+│          │ (Raw s16le PCM)                           │ (pulsesrc/pw)   │
+│          │                                           ▼                 │
+│          │                                    ┌──────────────┐         │
+│          │                                    │  webrtcdsp   │ (C++ NS │
+│          │                                    │  Noise & AGC │  & AGC) │
+│          │                                    └──────┬───────┘         │
+│          │                                           ▼                 │
+│          │                                    ┌──────────────┐         │
+│          │                                    │ audiodynamic │ (C++    │
+│          │                                    │  Compressor  │  Comp)  │
+│          │                                    └──────┬───────┘         │
+│          │                                           │                 │
+│          ▼                                           ▼                 │
+│   ┌──────────────────────────────────────────────────────────────┐     │
+│   │                 📬  Non-blocking OS Pipe (stdout)             │     │
+│   └──────────────────────────────┬───────────────────────────────┘     │
+└──────────────────────────────────┼─────────────────────────────────────┘
+                                   │ Raw 16kHz s16le Mono
+                                   ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                        🧠  STT PIPELINE LAYER                          │
+│                                                                        │
+│          ┌───────────────────────────────────────────┐                 │
+│          │  VAD Gate (RMS Energy & Silence Filter)   │                 │
+│          └─────────────────────┬─────────────────────┘                 │
+│                                │                                       │
+│                                ▼                                       │
+│          ┌───────────────────────────────────────────┐                 │
+│          │  Vosk / sherpa-onnx Single Always-On Model│                 │
+│          └─────────────────────┬─────────────────────┘                 │
+└──────────────────────────────────┼─────────────────────────────────────┘
+                                   │ 📝 Live Text Transcript
+                                   ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                        🎯  TRIGGER MATCHING LAYER                      │
+│                                                                        │
+│          ┌───────────────────────────────────────────┐                 │
+│          │ Italian Phonetic Normalization (graphemes)│                 │
+│          └─────────────────────┬─────────────────────┘                 │
+│                                │                                       │
+│                                ▼                                       │
+│          ┌───────────────────────────────────────────┐                 │
+│          │   Fuzzy String Distance Match (RapidFuzz)  │                 │
+│          └─────────────────────┬─────────────────────┘                 │
+└──────────────────────────────────┼─────────────────────────────────────┘
+                                   │ ⚡ Intent Match
+                                   ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                        ⚙️  ACTION DISPATCH LAYER                       │
+│                                                                        │
+│   ┌───────────────┐ ┌───────────────┐ ┌───────────────┐ ┌───────────┐  │
+│   │ 🐚 Shell      │ │ 📡 MQTT      │ │ 📞 LiveKit    │ │ 🤖 LLM    │  │
+│   │   Command     │ │   Publish     │ │   Room Join   │ │   Chat    │  │
+│   └──────┬────────┘ └───────┬───────┘ └───────┬───────┘ └─────┬─────┘  │
+│          │                  │                 │               │        │
+│          └──────────────────┴────────┬────────┴───────────────┘        │
+│                                      ▼                                 │
+└────────────────────────────────────────────────────────────────────────┘
+                                       │
+                                       ▼ Output Response
+┌────────────────────────────────────────────────────────────────────────┐
+│                        🗣️  TTS & WEB INTERFACE                         │
+│                                                                        │
+│          ┌───────────────────────────────────────────┐                 │
+│          │     Piper / Pico Neural TTS Synthesizer   │                 │
+│          └─────────────────────┬─────────────────────┘                 │
+│                                │                                       │
+│                                ▼                                       │
+│          ┌───────────────────────────────────────────┐                 │
+│          │        🔊 Playback via pw-play client     │                 │
+│          └───────────────────────────────────────────┘                 │
+│                                                                        │
+│   🖥️  aiohttp Web Dashboard ◄───[WebSockets]───► Client Daemon          │
+└────────────────────────────────────────────────────────────────────────┘
+```
 
 Serena is built in five layers:
 
-1. **Audio Pipeline** — `parec` captures raw 16 kHz s16le from the USB microphone. A VAD gate filters audio during TTS playback to prevent echo loops. Input gain is applied in software.
-2. **STT Pipeline** — Runs a single always-on free-vocabulary Vosk transcription model that continuously transcribes audio. Wake detection and command recognition happen by matching the single transcription model's output.
+1. **Audio Pipeline** — Captures raw 16 kHz s16le audio from the USB microphone using either a standard `parec` subprocess or a high-performance **GStreamer pipeline** (`pulsesrc`/`pipewiresrc` + `webrtcdsp`). The GStreamer backend performs hardware-accelerated noise suppression, high-pass filtering, automatic gain control (AGC), and dynamic range compression (`audiodynamic`) natively in C++ before sending audio to the STT pipeline. A VAD gate filters audio during TTS playback to prevent echo loops.
+2. **STT Pipeline** — Runs a single always-on free-vocabulary Vosk or sherpa-onnx transcription model that continuously transcribes the captured audio stream. Wake detection and command recognition both happen by matching this single model's live output.
 3. **Trigger Matching** — The transcript is matched against YAML-defined triggers using Italian phonetic normalization + fuzzy matching (RapidFuzz). Supports glob patterns, direct matches, and scoped wake-word groups.
 4. **Action Dispatch** — Matched triggers invoke registered handlers: TTS, MQTT, LiveKit, Telegram, shell, LLM chat, volume control, weather, and more.
-5. **Web & Integration** — aiohttp dashboard serves real-time status. MQTT publishes Home Assistant auto-discovery. LiveKit client manages JWT tokens and bidirectional audio.
+5. **Web & Integration** — aiohttp dashboard serves real-time status and hot-reloads configuration. MQTT publishes Home Assistant auto-discovery. LiveKit client manages JWT tokens and bidirectional audio.
 
 ---
 

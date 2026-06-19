@@ -50,14 +50,15 @@
                               │
                     ┌─────────┴──────────┐
                     │    Audio I/O        │
-                    │  parec · pw-play   │
-                    │  pulsectl · amixer │
+                    │  parec / gstreamer │
+                    │  pw-play · amixer  │
+                    │  pulsectl          │
                     └────────────────────┘
 ```
 
 ### Data Flow
 
-1. **Capture**: `parec` streams raw s16le audio from the USB microphone
+1. **Capture**: `parec` or `gstreamer` streams raw s16le audio from the USB microphone
 2. **STT Pipeline**: Single always-on free-vocabulary Vosk transcription model processes the audio stream continuously
 3. **Trigger matching**: The transcript is matched against configured triggers (wake words, commands) using phonetic normalization + fuzzy matching
 5. **Action dispatch**: Matched actions execute — LiveKit join, MQTT publish, shell command, Telegram, LLM chat, etc.
@@ -415,17 +416,41 @@ The Arduino Uno Q's PortAudio was compiled with only the ALSA backend — no nat
 
 ### Capture Path
 
+The daemon supports two capture backends, selectable via `stt.capture_backend` in `config.yaml`:
+
+#### 1. `parec` (Default / Legacy Subprocess)
+
 ```
 USB Mic (NewPie) → ALSA → PipeWire → PulseAudio compat socket
                     ↓
               parec (pulseaudio-utils)
                     ↓
-              s16le 16 kHz stereo → daemon
+              s16le 16 kHz mono/stereo → daemon (via subprocess stdout)
 ```
 
 - **Command**: `parec --device=<source> --rate=16000 --format=s16le --channels=1`
-- **Device selection**: By name, accessed via PulseAudio compat socket at `/run/user/1000/pulse/native`
-- **Never use**: `sounddevice` or `PyAudio` for capture
+- **Device selection**: By name, accessed via PulseAudio compat socket at `/run/user/1000/pulse/native`.
+
+#### 2. `gstreamer` (Modern Pipeline)
+
+```
+USB Mic (NewPie) → ALSA → PipeWire (pulsesrc/pipewiresrc)
+                               ↓
+                        GStreamer Pipeline
+                         - webrtcdsp (Noise Suppress & AGC)
+                         - audiodynamic (Optional Compressor)
+                               ↓
+                        fdsink (os.pipe write-end)
+                               ↓
+                        s16le 16 kHz mono → daemon (via os.pipe read-end)
+```
+
+- **Pipeline**: Configured via `audio.gstreamer` in `config.yaml`.
+- **Duck-typing**: `GStreamerCapture` acts as a drop-in replacement for a `subprocess.Popen` object, exposing a non-blocking `stdout` file-like object read via `os.pipe()`.
+- **Features**: Performs hardware-accelerated, real-time noise suppression, automatic gain control (AGC), high-pass filtering, and dynamic range compression natively in C++.
+
+#### Capture Mandates
+- **Never use**: `sounddevice` or `PyAudio` for capture.
 
 ### Playback Path
 
@@ -821,7 +846,8 @@ Rollback: `task release:rollback`
 │   ├── record.py           # WAV recording utility
 │   ├── stt_backends.py     # STT backend wrappers (Vosk)
 │   ├── stt_capture.py      # Stage-2 command capture
-│   ├── stt_gating.py       # Audio capture via parec, gating logic
+│   ├── stt_gating.py       # Audio capture routing and gating logic
+│   ├── stt_gst_capture.py  # GStreamer audio capture backend
 │   ├── stt_phonetics.py    # Phonetic matching and normalization
 │   └── static/             # Web assets (CSS, JS, favicon)
 ├── conf/                   # Live configuration (hot-reloaded)
