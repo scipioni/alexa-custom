@@ -130,18 +130,22 @@ audio:
         agc_compression_gain_db: 18
 
 # ---------------------------------------------------------------------------
-# LLM (Ollama)
+# LLM — OpenAI-compatible backend
 # ---------------------------------------------------------------------------
+# Uses the official openai Python package; works with any OpenAI-compatible
+# endpoint (Ollama, OpenAI API, LM Studio, vLLM, etc.).
+# Set llm_host (and optionally llm_api_key) in conf/secrets.yaml.
 llm:
-  backend: ollama
+  backend: ollama              # ollama | openai  (both use /v1/chat/completions)
   # host is set in conf/secrets.yaml as 'llm_host'
-  model: ssfdre38/gemma4-nano   # model name as shown by 'ollama list'
-  context_turns: 10             # conversation pairs kept in history
-  context_window_secs: 60       # inactivity seconds before history resets
-  fallback_on_no_match: false   # route unmatched commands to LLM
-  learn_commands: true          # enable llm_learn action type
-  request_timeout: 60.0         # HTTP request timeout
-  # system_prompt: null         # optional override for the default system prompt
+  # api_key is set in conf/secrets.yaml as 'llm_api_key' (or here for non-secret cases)
+  model: ssfdre38/gemma4-nano  # model name (e.g. 'gpt-4o' for OpenAI)
+  context_turns: 10            # conversation pairs kept in history
+  context_window_secs: 60      # inactivity seconds before history resets
+  fallback_on_no_match: false  # route unmatched commands to LLM
+  learn_commands: true         # enable llm_learn action type
+  request_timeout: 60.0        # HTTP request timeout
+  # system_prompt: null        # optional override for the default system prompt
 
 # ---------------------------------------------------------------------------
 # MQTT / Home Assistant

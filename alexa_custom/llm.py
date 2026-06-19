@@ -6,8 +6,6 @@ import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-import httpx
-
 from alexa_custom.config import ActionEntry, ActionsData, LLMConfig, Trigger
 
 logger = logging.getLogger(__name__)
@@ -57,11 +55,12 @@ _PARAM_QUESTIONS: dict[str, dict[str, str]] = {
 }
 
 
-class OllamaUnreachable(Exception):
+class LLMUnreachable(Exception):
     pass
 
 
-_CONNECT_TIMEOUT = 5.0  # seconds to establish TCP connection
+# Keep the old name as an alias so external code that catches OllamaUnreachable still works.
+OllamaUnreachable = LLMUnreachable
 
 # Sentence boundary characters used by the streaming sentence splitter.
 _SENTENCE_END = frozenset(".!?")
@@ -98,13 +97,36 @@ def _split_sentences(buf: str) -> tuple[list[str], str]:
     return sentences, buf[start:]
 
 
-class OllamaClient:
-    def __init__(self, host: str, timeout: float = 60.0) -> None:
-        self._host = host.rstrip("/")
-        self._timeout = timeout
-        self._http_timeout = httpx.Timeout(
-            connect=_CONNECT_TIMEOUT, read=self._timeout, write=10.0, pool=5.0
+class LLMClient:
+    """Unified LLM client using the official openai package.
+
+    Works with any OpenAI-compatible endpoint (OpenAI, Ollama /v1, LM Studio,
+    vLLM, etc.) by configuring base_url and api_key.
+
+    For backend='ollama', /v1 is appended to the host automatically so the
+    existing ``llm_host: http://127.0.0.1:11434`` config format still works.
+    """
+
+    def __init__(
+        self,
+        host: str,
+        api_key: str = "",
+        timeout: float = 60.0,
+        backend: str = "openai",
+    ) -> None:
+        import openai
+
+        base_url = host.rstrip("/")
+        if backend == "ollama" and not base_url.endswith("/v1"):
+            base_url = base_url + "/v1"
+
+        self._client = openai.AsyncOpenAI(
+            api_key=api_key or "sk-no-key",  # openai library requires a non-empty string
+            base_url=base_url,
+            timeout=timeout,
+            max_retries=0,  # let the caller decide on retry/timeout policy
         )
+        self._timeout = timeout
 
     async def chat(self, messages: list[dict[str, str]], model: str) -> str:
         """Collect a full reply (non-streaming). Used by LearnWizard."""
@@ -114,126 +136,46 @@ class OllamaClient:
         return "".join(tokens)
 
     async def warmup(self, model: str) -> None:
-        """Pre-load the model by sending an empty generation request."""
-        url = f"{self._host}/api/generate"
-        payload = {"model": model, "prompt": "", "stream": False, "keep_alive": -1}
-        try:
-            async with httpx.AsyncClient(timeout=self._http_timeout) as client:
-                await client.post(url, json=payload)
-            logger.debug("Ollama warmup complete for model %s", model)
-        except Exception as e:
-            logger.debug("Ollama warmup skipped: %s", e)
-
-    async def chat_stream(
-        self,
-        messages: list[dict[str, str]],
-        model: str,
-    ):
-        """Yield text token strings as they arrive from the streaming API."""
-        url = f"{self._host}/api/chat"
-        payload = {
-            "model": model,
-            "messages": messages,
-            "stream": True,
-            "keep_alive": -1,
-        }
-        try:
-            async with httpx.AsyncClient(timeout=self._http_timeout) as client:
-                async with client.stream("POST", url, json=payload) as resp:
-                    if resp.status_code >= 400:
-                        body = await resp.aread()
-                        raise OllamaUnreachable(
-                            f"Ollama returned HTTP {resp.status_code}: {body[:200]}"
-                        )
-                    async for line in resp.aiter_lines():
-                        if not line:
-                            continue
-                        try:
-                            chunk = __import__("json").loads(line)
-                        except ValueError:
-                            continue
-                        token = chunk.get("message", {}).get("content", "")
-                        if token:
-                            yield token
-                        if chunk.get("done"):
-                            break
-        except httpx.TimeoutException as e:
-            raise OllamaUnreachable(
-                f"Ollama timeout after {self._timeout}s: {e}"
-            ) from e
-        except httpx.HTTPError as e:
-            raise OllamaUnreachable(f"Ollama HTTP error: {e}") from e
-
-
-class OpenAIClient:
-    """OpenAI-compatible chat client (any /v1/chat/completions endpoint)."""
-
-    def __init__(self, host: str, api_key: str = "", timeout: float = 60.0) -> None:
-        self._host = host.rstrip("/")
-        self._api_key = api_key
-        self._timeout = timeout
-        self._http_timeout = httpx.Timeout(
-            connect=_CONNECT_TIMEOUT, read=timeout, write=10.0, pool=5.0
-        )
-
-    async def chat(self, messages: list[dict[str, str]], model: str) -> str:
-        tokens: list[str] = []
-        async for token in self.chat_stream(messages, model):
-            tokens.append(token)
-        return "".join(tokens)
-
-    async def warmup(self, model: str) -> None:
         pass
 
     async def chat_stream(self, messages: list[dict[str, str]], model: str):
-        url = f"{self._host}/v1/chat/completions"
-        headers = {"Authorization": f"Bearer {self._api_key}"} if self._api_key else {}
-        payload = {"model": model, "messages": messages, "stream": True}
+        """Yield text token strings as they arrive from the streaming API."""
+        import openai
+
         try:
-            async with httpx.AsyncClient(timeout=self._http_timeout) as client:
-                async with client.stream(
-                    "POST", url, json=payload, headers=headers
-                ) as resp:
-                    if resp.status_code >= 400:
-                        body = await resp.aread()
-                        raise OllamaUnreachable(
-                            f"OpenAI API returned HTTP {resp.status_code}: {body[:200]}"
-                        )
-                    async for line in resp.aiter_lines():
-                        if not line.startswith("data: "):
-                            continue
-                        data = line[6:]
-                        if data.strip() == "[DONE]":
-                            break
-                        try:
-                            chunk = __import__("json").loads(data)
-                        except ValueError:
-                            continue
-                        token = (
-                            chunk.get("choices", [{}])[0]
-                            .get("delta", {})
-                            .get("content", "")
-                        )
-                        if token:
-                            yield token
-        except httpx.TimeoutException as e:
-            raise OllamaUnreachable(
-                f"OpenAI API timeout after {self._timeout}s: {e}"
+            stream = await self._client.chat.completions.create(
+                model=model,
+                messages=messages,  # type: ignore[arg-type]
+                stream=True,
+            )
+            async for chunk in stream:
+                if not chunk.choices:
+                    continue
+                token = chunk.choices[0].delta.content or ""
+                if token:
+                    yield token
+        except openai.APITimeoutError as e:
+            raise LLMUnreachable(f"LLM timeout after {self._timeout}s: {e}") from e
+        except openai.APIConnectionError as e:
+            raise LLMUnreachable(f"LLM connection error: {e}") from e
+        except openai.APIStatusError as e:
+            raise LLMUnreachable(
+                f"LLM returned HTTP {e.status_code}: {e.message}"
             ) from e
-        except httpx.HTTPError as e:
-            raise OllamaUnreachable(f"OpenAI API HTTP error: {e}") from e
+        except openai.OpenAIError as e:
+            raise LLMUnreachable(f"LLM error: {e}") from e
 
 
 class ConversationEngine:
     def __init__(self, config: LLMConfig, lang: str = "it-IT") -> None:
         self._config = config
         self._lang = lang
-        if config.backend == "openai":
-            self._client: OllamaClient | OpenAIClient = OpenAIClient(
-                config.host, config.api_key, config.request_timeout
-            )
-        else:
-            self._client = OllamaClient(config.host, config.request_timeout)
+        self._client = LLMClient(
+            config.host,
+            api_key=config.api_key,
+            timeout=config.request_timeout,
+            backend=config.backend,
+        )
         self._history: list[dict[str, str]] = []
         self._last_ts: float = 0.0
 
@@ -459,7 +401,12 @@ class LearnWizard:
         self._lang = lang
         self._actions_file = Path(actions_file_path)
         self._wake_word = wake_word
-        self._client = OllamaClient(config.host, config.request_timeout)
+        self._client = LLMClient(
+            config.host,
+            api_key=config.api_key,
+            timeout=config.request_timeout,
+            backend=config.backend,
+        )
 
     async def run(
         self,

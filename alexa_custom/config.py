@@ -317,6 +317,7 @@ class SecretsConfig:
     livekit: LiveKitSecretsConfig = field(default_factory=LiveKitSecretsConfig)
     telegram: TelegramSecretsConfig = field(default_factory=TelegramSecretsConfig)
     llm_host: str | None = None
+    llm_api_key: str | None = None
     mqtt: MQTTSecretsConfig = field(default_factory=MQTTSecretsConfig)
 
 
@@ -868,7 +869,10 @@ def _parse_actions_dir_config(raw: dict) -> ActionsDirectoryConfig:
 
 
 def _parse_llm_config(
-    raw_llm: dict, source: str, host_override: str | None = None
+    raw_llm: dict,
+    source: str,
+    host_override: str | None = None,
+    api_key_override: str | None = None,
 ) -> LLMConfig:
     backend = str(raw_llm.get("backend", ""))
     if backend not in {"ollama", "openai"}:
@@ -889,6 +893,8 @@ def _parse_llm_config(
         if isinstance(raw_exit, list)
         else list(_DEFAULT_EXIT_PHRASES)
     )
+    # api_key precedence: secrets.yaml llm_api_key > config.yaml llm.api_key
+    api_key = api_key_override or str(raw_llm.get("api_key", ""))
     return LLMConfig(
         backend=backend,
         host=host,
@@ -900,7 +906,7 @@ def _parse_llm_config(
         system_prompt=raw_llm.get("system_prompt") or None,
         request_timeout=float(raw_llm.get("request_timeout", 60.0)),
         exit_phrases=exit_phrases,
-        api_key=str(raw_llm.get("api_key", "")),
+        api_key=api_key,
     )
 
 
@@ -1051,8 +1057,11 @@ def load_secrets(path: str | Path = "conf/secrets.yaml") -> SecretsConfig:
     llm_host = raw.get("llm_host") or None
     if llm_host:
         llm_host = str(llm_host)
+    llm_api_key = raw.get("llm_api_key") or None
+    if llm_api_key:
+        llm_api_key = str(llm_api_key)
 
-    secrets = SecretsConfig(livekit=lk, telegram=tg, llm_host=llm_host, mqtt=mq)
+    secrets = SecretsConfig(livekit=lk, telegram=tg, llm_host=llm_host, llm_api_key=llm_api_key, mqtt=mq)
 
     env_updates: list[str] = []
     if lk.url:
@@ -1186,6 +1195,7 @@ def _parse_actions_config(
         llm_host_override = (secrets.llm_host if secrets else None) or raw_llm.get(
             "host"
         )
+        llm_api_key_override = (secrets.llm_api_key if secrets else None) or None
         if not llm_host_override:
             logger.warning(
                 "%s: LLM disabled — 'llm_host' not set in conf/secrets.yaml or 'llm.host' in config",
@@ -1194,7 +1204,10 @@ def _parse_actions_config(
         else:
             try:
                 llm = _parse_llm_config(
-                    raw_llm, source, host_override=str(llm_host_override)
+                    raw_llm,
+                    source,
+                    host_override=str(llm_host_override),
+                    api_key_override=llm_api_key_override,
                 )
             except ConfigError as e:
                 logger.warning("LLM config error — LLM disabled: %s", e)
