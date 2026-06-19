@@ -189,6 +189,7 @@ def _recognition_loop(
     mqtt_client: "MQTTClient | None" = None,
     loop: asyncio.AbstractEventLoop | None = None,
     dispatch_loop: asyncio.AbstractEventLoop | None = None,
+    capture_restart_event: threading.Event | None = None,
 ) -> None:
     """Single-model transcribe→match→gate→tone→dispatch recognition loop."""
     assert dispatch_loop is not None
@@ -327,6 +328,7 @@ def _recognition_loop(
         name="single-model",
         post_playback_ms=config.audio.post_playback_ms,
         dispatch_ended_at=_dispatch_ended_at,
+        restart_event=capture_restart_event,
     ):
         _stt_heartbeat[0] = time.monotonic()
 
@@ -674,6 +676,8 @@ def run_stt_worker(
     backend_key = _get_backend_key(current_config)
     _dispatch_loop = asyncio.new_event_loop()
 
+    from alexa_custom.audio_hw import gst_profile_change_event
+
     try:
         while not stop_event.is_set():
             current_config = _get_config()
@@ -712,14 +716,19 @@ def run_stt_worker(
                     mqtt_client=mqtt_client,
                     loop=loop,
                     dispatch_loop=_dispatch_loop,
+                    capture_restart_event=gst_profile_change_event,
                 )
             except Exception as e:
                 logger.error("STT error: %s", e, exc_info=True)
                 stop_event.wait(2)
             else:
                 if not stop_event.is_set():
-                    logger.info("Capture ended unexpectedly — restarting in 2s")
-                    stop_event.wait(2.0)
+                    if gst_profile_change_event.is_set():
+                        gst_profile_change_event.clear()
+                        logger.info("GStreamer profile changed — restarting capture")
+                    else:
+                        logger.info("Capture ended unexpectedly — restarting in 2s")
+                        stop_event.wait(2.0)
             finally:
                 if proc is not None:
                     try:

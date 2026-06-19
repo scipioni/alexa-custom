@@ -172,11 +172,16 @@ def start_capture(source: str | None, channels: int = 1, config=None) -> subproc
     """Start audio capture — parec (default) or GStreamer pipeline.
 
     Pass config (ActionsConfig) to allow the gstreamer backend to be selected
-    via config.stt.capture_backend == 'gstreamer'.
+    via config.stt.capture_backend == 'gstreamer'.  When using GStreamer the
+    active named profile (persisted in state.yaml) is resolved and merged with
+    the base GStreamerCaptureConfig before the pipeline is built.
     """
     if config is not None and getattr(config.stt, "capture_backend", "parec") == "gstreamer":
         from alexa_custom.stt_gst_capture import start_capture_gst
-        return start_capture_gst(source, config.audio.gstreamer)
+        from alexa_custom.config import resolve_gst_profile
+        from alexa_custom.audio_hw import get_active_gst_profile
+        gst_cfg = resolve_gst_profile(config.audio.gstreamer, get_active_gst_profile())
+        return start_capture_gst(source, gst_cfg)
     return _start_capture_parec(source, channels)
 
 
@@ -188,6 +193,7 @@ def _iter_gated_audio(
     name: str = "stt",
     post_playback_ms: float = 100.0,
     dispatch_ended_at: list[float] | None = None,
+    restart_event: threading.Event | None = None,
 ) -> Iterator[bytes | None]:
     """Yield downmixed mono chunks; yield None once per playback-end drain.
 
@@ -206,6 +212,9 @@ def _iter_gated_audio(
     post_playback_s = post_playback_ms / 1000.0
     assert proc.stdout is not None
     while not stop_event.is_set():
+        if restart_event is not None and restart_event.is_set():
+            logger.info("restart_event set — stopping capture for profile reload")
+            return
         raw_data = _read_with_timeout(proc.stdout, _CHUNK * channels, 2.0)
         if not raw_data:
             if proc.poll() is not None:

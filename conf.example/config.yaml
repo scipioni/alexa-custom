@@ -115,6 +115,18 @@ audio:
     compressor: false             # audiodynamic compressor after webrtcdsp
     #compressor_threshold: 0.1     # normalized threshold 0.0–1.0
     #compressor_ratio: 3.0         # compression ratio
+    profiles:
+      # Named profiles — each overrides any subset of the gstreamer fields above.
+      # Active profile is stored in conf/state.yaml and switched at runtime via
+      # the set_audio_profile action (voice triggers in conf/actions/user.yaml).
+      normal:                      # default: optimised for normal indoor conversation
+        noise_suppression_level: 2
+        agc_target_level_dbfs: -3
+        agc_compression_gain_db: 9
+      sensitive:                   # reverberant / distant-mic environments
+        noise_suppression_level: 3
+        agc_target_level_dbfs: -6
+        agc_compression_gain_db: 18
 
 # ---------------------------------------------------------------------------
 # LLM (Ollama)

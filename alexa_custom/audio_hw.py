@@ -41,6 +41,10 @@ _pw_device_resolved = False
 _pw_device_index: int | None = None
 _STATE_FILE = "conf/state.yaml"
 
+# Fired by set_active_gst_profile(); the STT worker clears it and restarts
+# the capture process so the new profile takes effect without a full restart.
+gst_profile_change_event = threading.Event()
+
 
 def _load_state_file() -> dict:
     """Read conf/state.yaml, return empty dict on any error."""
@@ -100,6 +104,20 @@ def load_input_gain_state() -> float | None:
     if gain is not None and gain >= 0.0:
         return float(gain)
     return None
+
+
+def get_active_gst_profile() -> str:
+    """Return the persisted GStreamer capture profile name (default: 'normal')."""
+    return str(_load_state_file().get("gst_profile", "normal"))
+
+
+def set_active_gst_profile(profile: str) -> None:
+    """Persist a new GStreamer capture profile and signal the STT worker to restart."""
+    state = _load_state_file()
+    state["gst_profile"] = profile
+    _save_state_file(state)
+    gst_profile_change_event.set()
+    logger.info("GStreamer audio profile changed to: %s", profile)
 
 
 def configure(cfg) -> None:

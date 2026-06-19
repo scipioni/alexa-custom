@@ -101,6 +101,25 @@ class GStreamerCaptureConfig:
     compressor: bool = False           # audiodynamic compressor stage
     compressor_threshold: float = 0.1  # normalized 0.0–1.0
     compressor_ratio: float = 3.0
+    profiles: dict = field(default_factory=dict)  # name → {field: override_value}
+
+
+def resolve_gst_profile(base: "GStreamerCaptureConfig", profile_name: str) -> "GStreamerCaptureConfig":
+    """Return a GStreamerCaptureConfig with named profile overrides applied over base.
+
+    Unknown profile names silently fall back to base (no crash at runtime).
+    """
+    import dataclasses as _dc
+
+    overrides = base.profiles.get(profile_name) or {}
+    if not overrides:
+        return base
+    _valid = {f.name for f in _dc.fields(base) if f.name != "profiles"}
+    merged = {f.name: getattr(base, f.name) for f in _dc.fields(base) if f.name != "profiles"}
+    for k, v in overrides.items():
+        if k in _valid:
+            merged[k] = v
+    return GStreamerCaptureConfig(**merged, profiles=base.profiles)
 
 
 @dataclass
@@ -685,17 +704,24 @@ def _parse_audio_config(raw: dict) -> AudioConfig:
     gst_raw = raw.get("gstreamer") or {}
     if not isinstance(gst_raw, dict):
         gst_raw = {}
+    profiles_raw = gst_raw.get("profiles") or {}
+    profiles: dict = {}
+    if isinstance(profiles_raw, dict):
+        for pname, pdict in profiles_raw.items():
+            if isinstance(pdict, dict):
+                profiles[str(pname)] = dict(pdict)
     gstreamer = GStreamerCaptureConfig(
         source=str(gst_raw.get("source", "pulsesrc")),
         noise_suppression=bool(gst_raw.get("noise_suppression", True)),
         noise_suppression_level=int(gst_raw.get("noise_suppression_level", 2)),
         agc=bool(gst_raw.get("agc", True)),
-        agc_target_level_dbfs=int(gst_raw.get("agc_target_level_dbfs", -18)),
+        agc_target_level_dbfs=int(gst_raw.get("agc_target_level_dbfs", -3)),
         agc_compression_gain_db=int(gst_raw.get("agc_compression_gain_db", 9)),
         high_pass_filter=bool(gst_raw.get("high_pass_filter", True)),
         compressor=bool(gst_raw.get("compressor", False)),
         compressor_threshold=float(gst_raw.get("compressor_threshold", 0.1)),
         compressor_ratio=float(gst_raw.get("compressor_ratio", 3.0)),
+        profiles=profiles,
     )
 
     return AudioConfig(

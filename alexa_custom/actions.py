@@ -1475,6 +1475,30 @@ async def handle_record_and_playback(
             pass
 
 
+@registry.register("set_audio_profile")
+async def handle_set_audio_profile(action: ActionEntry, **_) -> None:
+    """Switch the active GStreamer audio capture profile.
+
+    Params:
+      profile: str — name of a profile defined under audio.gstreamer.profiles
+                     in config.yaml (e.g. "normal", "sensitive").
+    """
+    from alexa_custom.audio_hw import set_active_gst_profile
+    from alexa_custom.tts import get_engine
+
+    profile = action.params.get("profile", "")
+    if not profile:
+        raise ActionError("set_audio_profile: 'profile' param is required")
+
+    set_active_gst_profile(profile)
+    logger.info("Audio profile set to %r", profile)
+
+    confirm = action.params.get("say", "")
+    if confirm:
+        lang = action.params.get("lang", "it-IT")
+        await asyncio.to_thread(get_engine().say, confirm, lang)
+
+
 def _notify_action_error(ctx: ActionContext, action_type: str, message: str) -> None:
     """Surface an action problem to the web UI as a transient toast."""
     if not ctx.on_stt_event:

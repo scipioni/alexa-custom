@@ -55,10 +55,37 @@ triggers:
   #       text: "Messaggio vocale ricevuto"
 
   - commands:
+      - "attiva microfono normale"
+      - "microfono normale"
+    patterns:
+      - "attiv* * microfon* normal*"
+      - "microfon* normal*"
+    tag: microfono
+    actions:
+      - type: set_audio_profile
+        profile: normal
+        say: "Microfono impostato su normale"
+        lang: "it-IT"
+
+  - commands:
+      - "attiva microfono sensibile"
+      - "microfono sensibile"
+    patterns:
+      - "attiv* * microfon* sensibil*"
+      - "microfon* sensibil*"
+    tag: microfono
+    actions:
+      - type: set_audio_profile
+        profile: sensitive
+        say: "Microfono impostato su sensibile"
+        lang: "it-IT"
+
+  - commands:
       - "accendi la luce"
     patterns:
       - "accend* * luc*"          # accendi/accenda/accendere … luci/luce
       - "mett* * luc*"            # metti/mettere la luce
+    tag: luci
     actions:
       - type: mqtt_publish
         topic: "home/light/set"

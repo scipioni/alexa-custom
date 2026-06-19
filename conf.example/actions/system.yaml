@@ -163,6 +163,7 @@ triggers:
 
   - commands:
       - "calibra microfono"
+    tag: microfono
     actions:
       - type: calibrate_input_gain
         sentence: "uno due tre quattro cinque"
