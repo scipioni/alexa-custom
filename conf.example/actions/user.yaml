@@ -31,6 +31,33 @@ triggers:
   #       text: "Ciao dal sistema vocale"
   #       lang: "it-IT"
 
+  # # One-shot LLM narration — speaks the reply, no listening loop
+  # # Requires llm: configured in config.yaml. Falls back to literal TTS if LLM is unavailable.
+  # - commands:
+  #     - "dimmi qualcosa di interessante"
+  #   actions:
+  #     - type: say-with-llm
+  #       prompt: "Dimmi una curiosità scientifica poco nota"
+  #       lang: "it-IT"
+
+  # # File narration — reads a file and asks the LLM to summarise it
+  # - commands:
+  #     - "leggi le note"
+  #   actions:
+  #     - type: say-with-llm
+  #       file: "/home/user/notes.txt"
+  #       prompt: "Riassumi queste note in modo conciso"
+  #       max_chars: 2000     # default: 4000 — caps how many chars are read from file
+  #       lang: "it-IT"
+
+  # # Model override — uses a different Ollama model for this trigger only
+  # - commands:
+  #     - "scrivi una poesia"
+  #   actions:
+  #     - type: say-with-llm
+  #       prompt: "Scrivi una breve poesia sul tramonto"
+  #       model: "mistral:7b"  # overrides llm.model from config.yaml
+
   # - commands:
   #     - "suona"
   #   actions:
