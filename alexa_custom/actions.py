@@ -1476,14 +1476,16 @@ async def handle_record_and_playback(
 
 
 @registry.register("set_audio_profile")
-async def handle_set_audio_profile(action: ActionEntry, **_) -> None:
+async def handle_set_audio_profile(
+    action: ActionEntry, *, actions_config=None, **_
+) -> None:
     """Switch the active GStreamer audio capture profile.
 
     Params:
       profile: str — name of a profile defined under audio.gstreamer.profiles
                      in config.yaml (e.g. "normal", "sensitive").
     """
-    from alexa_custom.audio_hw import set_active_gst_profile
+    from alexa_custom.audio_hw import set_active_gst_profile, set_profile_stt_overrides
     from alexa_custom.tts import get_engine
 
     profile = action.params.get("profile", "")
@@ -1491,7 +1493,20 @@ async def handle_set_audio_profile(action: ActionEntry, **_) -> None:
         raise ActionError("set_audio_profile: 'profile' param is required")
 
     set_active_gst_profile(profile)
-    logger.info("Audio profile set to %r", profile)
+
+    stt_overrides: dict = {}
+    if actions_config is not None:
+        from alexa_custom.config import get_gst_profile_stt_overrides
+        stt_overrides = get_gst_profile_stt_overrides(
+            actions_config.audio.gstreamer, profile
+        )
+    set_profile_stt_overrides(stt_overrides)
+
+    logger.info(
+        "Audio profile set to %r%s",
+        profile,
+        f" (STT overrides: {stt_overrides})" if stt_overrides else "",
+    )
 
     confirm = action.params.get("say", "")
     if confirm:

@@ -196,19 +196,29 @@ def _recognition_loop(
 
     wake_deadline: float = 0.0
     _dispatch_ended_at: list[float] = [0.0]
-    _eff_rms = config.stt.rms_threshold
     _noise_floor: list[float] = []
     speech_ms: float = 0.0
     last_speech_t: float = 0.0
     was_gated = False
     _last_partial: str = ""
 
+    from alexa_custom.audio_hw import get_profile_stt_overrides as _get_stt_overrides
+    _profile_stt = _get_stt_overrides()
+    _eff_rms = float(_profile_stt.get("rms_threshold", config.stt.rms_threshold))
+    _vad_silence_ms = int(_profile_stt.get("vad_silence_ms", config.stt.vad_silence_ms))
+    if _profile_stt:
+        logger.debug(
+            "Profile STT overrides active: rms_threshold=%.4f vad_silence_ms=%d",
+            _eff_rms,
+            _vad_silence_ms,
+        )
+
     _audio_buf: collections.deque[bytes] = collections.deque(
         maxlen=int(8 * 16000 * 2 * channels // 4096) + 1
     )
 
     _listen_fn = _make_listen_fn(
-        proc, channels, backend, stop_event, on_stt_event, config.stt.vad_silence_ms
+        proc, channels, backend, stop_event, on_stt_event, _vad_silence_ms
     )
     _ctx = ActionContext(
         telegram_client=telegram_client,

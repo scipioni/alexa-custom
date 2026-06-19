@@ -50,6 +50,20 @@ gst_profile_change_event = threading.Event()
 _profile_callbacks: list = []
 
 
+# STT-level overrides carried by the active profile (rms_threshold, vad_silence_ms).
+# Stored in memory only — derived from config at the time the profile is activated.
+_profile_stt_overrides: dict = {}
+
+
+def set_profile_stt_overrides(overrides: dict) -> None:
+    global _profile_stt_overrides
+    _profile_stt_overrides = dict(overrides)
+
+
+def get_profile_stt_overrides() -> dict:
+    return dict(_profile_stt_overrides)
+
+
 def register_profile_callback(cb) -> None:
     """Register a callable(profile: str) notified when the active GST profile changes."""
     _profile_callbacks.append(cb)

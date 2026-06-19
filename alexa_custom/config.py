@@ -108,6 +108,8 @@ def resolve_gst_profile(base: "GStreamerCaptureConfig", profile_name: str) -> "G
     """Return a GStreamerCaptureConfig with named profile overrides applied over base.
 
     Unknown profile names silently fall back to base (no crash at runtime).
+    Non-GStreamer keys (rms_threshold, vad_silence_ms) are silently skipped here
+    and extracted separately by get_gst_profile_stt_overrides().
     """
     import dataclasses as _dc
 
@@ -120,6 +122,19 @@ def resolve_gst_profile(base: "GStreamerCaptureConfig", profile_name: str) -> "G
         if k in _valid:
             merged[k] = v
     return GStreamerCaptureConfig(**merged, profiles=base.profiles)
+
+
+_STT_PROFILE_KEYS = {"rms_threshold", "vad_silence_ms"}
+
+
+def get_gst_profile_stt_overrides(base: "GStreamerCaptureConfig", profile_name: str) -> dict:
+    """Return STT-level keys (rms_threshold, vad_silence_ms) from a profile dict.
+
+    These keys are not GStreamer params so resolve_gst_profile ignores them.
+    The recognition loop applies them after a profile-triggered capture restart.
+    """
+    raw = base.profiles.get(profile_name) or {}
+    return {k: v for k, v in raw.items() if k in _STT_PROFILE_KEYS}
 
 
 @dataclass

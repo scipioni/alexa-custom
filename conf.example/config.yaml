@@ -24,7 +24,7 @@ wake_words:
 recognition:
   wake_window: 8.0          # seconds after a wake word to listen for a command
   wake_tone: wake           # tone on wake: wake | startup | success | error | info | warning | none
-  # call_tone: true         # play rising/falling tones on call connect/disconnect (default: true)
+  call_tone: false          # play rising/falling tones on call connect/disconnect
   matching_algorithm: token_sort_ratio  # token_sort_ratio | token_set_ratio | levenshtein | ratio
   matching_threshold: 75.0              # similarity threshold (0-100)
   #   token_sort_ratio (default) is order-tolerant AND length-aware, so a single
@@ -116,17 +116,22 @@ audio:
     #compressor_threshold: 0.1     # normalized threshold 0.0–1.0
     #compressor_ratio: 3.0         # compression ratio
     profiles:
-      # Named profiles — each overrides any subset of the gstreamer fields above.
+      # Named profiles — each overrides any subset of the gstreamer fields above
+      # plus rms_threshold and vad_silence_ms (STT-level overrides).
       # Active profile is stored in conf/state.yaml and switched at runtime via
       # the set_audio_profile action (voice triggers in conf/actions/user.yaml).
-      normal:                      # default: optimised for normal indoor conversation
+      normal:                      # default: normal indoor conversation
         noise_suppression_level: 2
         agc_target_level_dbfs: -3
         agc_compression_gain_db: 9
+        rms_threshold: 0.02
+        vad_silence_ms: 900
       sensitive:                   # reverberant / distant-mic environments
-        noise_suppression_level: 3
-        agc_target_level_dbfs: -6
-        agc_compression_gain_db: 18
+        noise_suppression_level: 2  # keep moderate — aggressive suppression removes reverb tail
+        agc_target_level_dbfs: -3   # same loud target so Vosk gets strong signal
+        agc_compression_gain_db: 30 # much more gain to boost distant/quiet speech
+        rms_threshold: 0.008        # accept quieter speech through the VAD gate
+        vad_silence_ms: 1200        # wait longer for reverb to decay before ending utterance
 
 # ---------------------------------------------------------------------------
 # LLM — OpenAI-compatible backend
