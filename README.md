@@ -63,16 +63,16 @@
 
 | | |
 |---|---|
-| 🧠 **Two-Stage STT** | Lightweight wake-word runs continuously (stage 1). Full command recognition fires only after activation (stage 2). Backends configurable independently per stage. |
-| ⚡ **Smart Inline Pass-Through** | If the command follows the wake word in one breath, stage 2 fires immediately — no second capture round-trip. Three speaking patterns for different use cases. |
-| 🗣️ **Neural Italian TTS** | Piper speaks back with natural intonation. Falls back to lightweight Pico when every millisecond counts. Both run locally — zero API fees. |
-| 📞 **Polite LiveKit Join** | Polls the room via REST API; only connects when a remote participant is present. Disconnects cleanly if nobody joins within the timeout. |
-| 🏠 **Home Assistant Discovery** | Auto-registers as Media Player and Voice Assistant entities via MQTT. No configuration needed — just point at your broker. |
-| 🤖 **LLM Chat & Learning** | Chat with a cloud LLM through voice. Say *"impara nuovo comando"* to teach new triggers interactively — no YAML editing required. |
-| 🔄 **Hot-Reload Everything** | Edit config, triggers, or the dashboard HTML while the daemon runs. Changes apply in ~2 seconds — no restart. |
-| 🖥️ **Real-Time Dashboard** | Live VU meters with RMS needle, STT status badges, room panel, streaming logs, and an in-browser config editor. |
-| 🔌 **17+ Action Types** | Voice triggers run shell commands, publish MQTT, send Telegram alerts, control volume, query weather, and more. All wired in plain YAML. |
-| 💡 **LED Matrix Feedback** | Animated icons on the built-in 8×13 display: scanning wave while listening, hourglass while thinking, checkmark on success. |
+| 🧠 **Single-Model STT** | One always-on Vosk model handles both wake word and command recognition. No stage separation, no mode switching. GStreamer backend with webrtcdsp for noise suppression and AGC. |
+| ⚡ **One-Breath Commands** | Speak wake word + command in one utterance — dispatches directly, no second capture. |
+| 🗣️ **Neural Italian TTS** | Piper speaks back with natural intonation. Falls back to lightweight Pico. Both run locally — zero API fees. |
+| 📞 **Polite LiveKit Join** | Polls the room via REST API; only connects when a remote participant appears. |
+| 🏠 **Home Assistant Discovery** | Auto-registers as Sensor and Text entities via MQTT Discovery. No configuration needed. |
+| 🤖 **LLM Chat & Learning** | Chat via voice with Ollama or OpenAI. Teach new triggers interactively — no YAML editing. |
+| 🔄 **Hot-Reload Everything** | Edit config, triggers, or dashboard HTML while running. Changes apply in ~2 seconds. |
+| 🖥️ **Real-Time Dashboard** | VU meters, STT status, room panel, streaming logs, config editor, dark/light theme. |
+| 🔌 **20+ Action Types** | Shell, MQTT, Telegram, LiveKit, LLM, weather, volume, mic calibration, and more. |
+| 💡 **LED Matrix Feedback** | Animated icons on built-in 8×13 display via UART bridge. |
 
 
 ---
@@ -106,7 +106,7 @@ cp conf.example/secrets.yaml conf/secrets.yaml
 # 7A. Install as a systemd service (recommended for headless use)
 task setup
 sudo loginctl enable-linger arduino 
-systemctl --user start alexa-custom
+systemctl --user start serena
 
 # 7B.  or start the assistant directly
 alexa-client
@@ -168,7 +168,7 @@ task audio:status   # audio device health dashboard
 │                                │                                       │
 │                                ▼                                       │
 │          ┌───────────────────────────────────────────┐                 │
-│          │  Vosk / sherpa-onnx Single Always-On Model│                 │
+│          │  Vosk Single Always-On Model              │                 │
 │          └─────────────────────┬─────────────────────┘                 │
 └──────────────────────────────────┼─────────────────────────────────────┘
                                    │ 📝 Live Text Transcript
@@ -218,11 +218,11 @@ task audio:status   # audio device health dashboard
 
 Serena is built in five layers:
 
-1. **Audio Pipeline** — Captures raw 16 kHz s16le audio from the USB microphone using either a standard `parec` subprocess or a high-performance **GStreamer pipeline** (`pulsesrc`/`pipewiresrc` + `webrtcdsp`). The GStreamer backend performs hardware-accelerated noise suppression, high-pass filtering, automatic gain control (AGC), and dynamic range compression (`audiodynamic`) natively in C++ before sending audio to the STT pipeline. A VAD gate filters audio during TTS playback to prevent echo loops.
-2. **STT Pipeline** — Runs a single always-on free-vocabulary Vosk or sherpa-onnx transcription model that continuously transcribes the captured audio stream. Wake detection and command recognition both happen by matching this single model's live output.
-3. **Trigger Matching** — The transcript is matched against YAML-defined triggers using Italian phonetic normalization + fuzzy matching (RapidFuzz). Supports glob patterns, direct matches, and scoped wake-word groups.
-4. **Action Dispatch** — Matched triggers invoke registered handlers: TTS, MQTT, LiveKit, Telegram, shell, LLM chat, volume control, weather, and more.
-5. **Web & Integration** — aiohttp dashboard serves real-time status and hot-reloads configuration. MQTT publishes Home Assistant auto-discovery. LiveKit client manages JWT tokens and bidirectional audio.
+1. **Audio Pipeline** — Captures raw 16 kHz s16le audio from the USB microphone using either `parec` or a **GStreamer pipeline** (`pulsesrc` + `webrtcdsp` + `audiodynamic`). The GStreamer backend delivers noise suppression, AGC, and dynamic compression in C++ before audio reaches the STT pipeline. An **AudioWatcher** background thread monitors the PipeWire graph and auto-restores PCM volume when pulsectl resets it. Capture profiles allow per-backend tuning of sample rate, format, channels, and VAD thresholds.
+2. **STT Pipeline** — A single always-on Vosk free-vocabulary model transcribes the captured stream continuously. Wake-word and command detection both happen by matching this single model's live output. A VAD gate (RMS energy + silence filter) gates audio during TTS playback to prevent echo loops.
+3. **Trigger Matching** — The transcript is matched against YAML-defined triggers using Italian phonetic normalization + fuzzy matching (RapidFuzz). Supports glob patterns, direct matches, scoped wake-word groups, and two-phase matching (glob first, phonetic fallback).
+4. **Action Dispatch** — 20+ handler types: TTS, MQTT, LiveKit, Telegram, shell, LLM (Ollama / OpenAI), volume control, weather, call_tone, mic calibration, display, and more.
+5. **Web & Integration** — aiohttp dashboard with live VU meters, STT status, WebSocket logs, config editor. MQTT publishes Home Assistant Discovery (Sensor + Text entities). Display feedback via UART bridge.
 
 ---
 
@@ -267,16 +267,16 @@ Configuration lives in `conf/` with hot-reload support:
 
 ```yaml
 wake_words:
-  - word: galileo
-    lang: it-IT
+  - "galileo"
 
 triggers:
-  - phrase: che ore sono
+  - commands:
+      - "che ore sono"
     actions:
       - type: shell
         command: date +%H:%M
-  - phrase: accendi la luce
-    wake_words: [galileo]
+  - commands:
+      - "accendi la luce"
     actions:
       - type: mqtt_publish
         topic: home/light/set
@@ -333,6 +333,8 @@ triggers:
 | `alexa-audio-doctor` | Full audio diagnostics |
 | `alexa-record --duration 5` | Record and transcribe audio |
 | `alexa-stt --text "..."` | Test STT without microphone |
+| `serena` | Daemon alias (same as `alexa-client`) |
+| `serena-stt` | Standalone STT mode (capture + transcribe only) |
 
 ---
 
@@ -344,7 +346,7 @@ triggers:
 | Audio drops mid-session | `task audio:restart` — restores routing and PCM |
 | Microphone not detected | `alexa-devices` to list cards; check `wpctl status` |
 | LiveKit join hangs | Verify `wait_for_participant` and `answer_timeout` in config |
-| Service won't start | `journalctl --user -fu alexa-custom` — check logs |
+| Service won't start | `journalctl --user -fu serena` — check logs |
 
 ---
 
@@ -360,7 +362,7 @@ triggers:
 | `piper-tts` | Local text-to-speech |
 | `aiomqtt` | MQTT / Home Assistant |
 | `aiohttp` | Web dashboard server |
-| `httpx` | HTTP client for LLM/Ollama |
+| `openai` | HTTP client for LLM (Ollama / OpenAI API) |
 | `rapidfuzz` | Fuzzy phonetic matching |
 | `ruamel.yaml` | YAML round-trip editing |
 
@@ -375,7 +377,7 @@ triggers:
 | [→ Software Installation](docs/setup_software.md) | Dependencies, virtual environment, model downloads |
 | [→ Configuration Reference](docs/configuration.md) | Every config field documented |
 | [→ Audio Architecture](docs/audio.md) | Capture and playback paths, known bugs and workarounds |
-| [→ STT Pipeline](docs/stt.md) | Two-stage detection, Italian phonetics, trigger matching |
+| [→ STT Pipeline](docs/stt.md) | Single-model Vosk, capture backends, trigger matching, sleeping mode |
 | [→ MQTT & HA](docs/mqtt_integration.md) | Home Assistant auto-discovery, entities, bidirectional control |
 | [→ Displays](docs/display_setup.md) | LED matrix, I2C OLED, GPIO LED configuration |
 | [→ Troubleshooting](docs/troubleshooting.md) | Common issues: audio, connection, permissions |
