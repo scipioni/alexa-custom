@@ -143,6 +143,7 @@ class LiveKitSessionManager:
         empty_room_timeout: int = 0,
         wait_for_participant: bool = True,
         answer_timeout: float = 60,
+        call_tone: bool = True,
     ):
         self.mic = mic
         self.devices = devices
@@ -151,6 +152,7 @@ class LiveKitSessionManager:
         self._empty_room_timeout = empty_room_timeout
         self._wait_for_participant = wait_for_participant
         self._answer_timeout = answer_timeout
+        self._call_tone = call_tone
         self.room = Room()
         self.disconnected = asyncio.Event()
         self._participant_arrived = asyncio.Event()
@@ -320,7 +322,8 @@ class LiveKitSessionManager:
                         self.emit("answer_timeout", {})
                     return
 
-            asyncio.create_task(asyncio.to_thread(play_call_start))
+            if self._call_tone:
+                asyncio.create_task(asyncio.to_thread(play_call_start))
 
             track = LocalAudioTrack.create_audio_track("microphone", self.mic.source)
             opts = TrackPublishOptions()
@@ -360,7 +363,7 @@ class LiveKitSessionManager:
         # The room "disconnected" event may not fire until room.disconnect() below.
         logger.debug("cleanup: emitting early 'disconnected' to ungate STT")
         self.emit("disconnected", {})
-        if self.call_connected:
+        if self.call_connected and self._call_tone:
             try:
                 await asyncio.to_thread(play_call_end)
             except Exception:
@@ -422,6 +425,7 @@ async def run_session(
     empty_room_timeout: int = 0,
     wait_for_participant: bool = True,
     answer_timeout: float = 60,
+    call_tone: bool = True,
 ):
     """Connect to one LiveKit session; return when disconnected or stop_event fires."""
     manager = LiveKitSessionManager(
@@ -432,6 +436,7 @@ async def run_session(
         empty_room_timeout,
         wait_for_participant,
         answer_timeout,
+        call_tone,
     )
     await manager.run(stop_event)
 
@@ -738,6 +743,9 @@ async def _async_main(
                 await asyncio.sleep(reconnect_delay)
                 continue
 
+            _call_tone = (
+                actions_config.recognition.call_tone if actions_config else True
+            )
             try:
                 await run_session(
                     mic,
@@ -748,6 +756,7 @@ async def _async_main(
                     empty_room_timeout=_empty_room_timeout,
                     wait_for_participant=False,
                     answer_timeout=_answer_timeout,
+                    call_tone=_call_tone,
                 )
             except Exception as e:
                 logger.error(f"Session error: {e}")

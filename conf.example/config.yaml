@@ -24,6 +24,7 @@ wake_words:
 recognition:
   wake_window: 8.0          # seconds after a wake word to listen for a command
   wake_tone: wake           # tone on wake: wake | startup | success | error | info | warning | none
+  # call_tone: true         # play rising/falling tones on call connect/disconnect (default: true)
   matching_algorithm: token_sort_ratio  # token_sort_ratio | token_set_ratio | levenshtein | ratio
   matching_threshold: 75.0              # similarity threshold (0-100)
   #   token_sort_ratio (default) is order-tolerant AND length-aware, so a single

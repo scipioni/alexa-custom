@@ -225,6 +225,7 @@ class RecognitionConfig:
     post_dispatch_cooldown_ms: int = 800
     min_cmd_words: int = 1
     dispatch_timeout: float = 90.0
+    call_tone: bool = True
 
 
 @dataclass
@@ -832,6 +833,7 @@ def _parse_recognition_config(raw: dict) -> RecognitionConfig:
         post_dispatch_cooldown_ms=_get_int(raw, "post_dispatch_cooldown_ms", 800),
         min_cmd_words=_get_int(raw, "min_cmd_words", 1),
         dispatch_timeout=_get_float(raw, "dispatch_timeout", 90.0),
+        call_tone=bool(raw.get("call_tone", True)),
     )
 
 
