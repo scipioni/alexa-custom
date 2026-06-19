@@ -371,9 +371,12 @@ def _recognition_loop(
             _noise_floor.append(rms)
             if len(_noise_floor) > 50:
                 _noise_floor.pop(0)
-                _eff_rms = (
+                _adaptive = (
                     sum(_noise_floor) / len(_noise_floor)
                 ) + config.stt.adaptive_rms_margin
+                # Profile rms_threshold acts as a ceiling: the adaptive
+                # mechanism cannot raise sensitivity above the profile value.
+                _eff_rms = min(_adaptive, float(_profile_stt.get("rms_threshold", _adaptive)))
 
         if on_stt_event:
             on_stt_event(
