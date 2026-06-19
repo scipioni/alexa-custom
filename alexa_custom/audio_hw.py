@@ -45,6 +45,22 @@ _STATE_FILE = "conf/state.yaml"
 # the capture process so the new profile takes effect without a full restart.
 gst_profile_change_event = threading.Event()
 
+# Optional callbacks invoked (with the new profile name) when the active
+# GStreamer capture profile changes.  Register via register_profile_callback().
+_profile_callbacks: list = []
+
+
+def register_profile_callback(cb) -> None:
+    """Register a callable(profile: str) notified when the active GST profile changes."""
+    _profile_callbacks.append(cb)
+
+
+def unregister_profile_callback(cb) -> None:
+    try:
+        _profile_callbacks.remove(cb)
+    except ValueError:
+        pass
+
 
 def _load_state_file() -> dict:
     """Read conf/state.yaml, return empty dict on any error."""
@@ -118,6 +134,11 @@ def set_active_gst_profile(profile: str) -> None:
     _save_state_file(state)
     gst_profile_change_event.set()
     logger.info("GStreamer audio profile changed to: %s", profile)
+    for cb in list(_profile_callbacks):
+        try:
+            cb(profile)
+        except Exception as exc:
+            logger.warning("Profile callback error: %s", exc)
 
 
 def configure(cfg) -> None:

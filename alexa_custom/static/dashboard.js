@@ -138,6 +138,7 @@
           if (m.system) updateSparkline(m.system);
           const volVal = m.output_volume != null ? m.output_volume : m.volume;
           if (volVal != null) initVolumeSlider(volVal);
+          setGstProfile(m.gst_profile || 'normal');
           break;
         }
         case 'participant_joined':
@@ -224,6 +225,9 @@
           break;
         case 'reload':
           setTimeout(() => location.reload(), 200);
+          break;
+        case 'gst_profile':
+          setGstProfile(m.profile || 'normal');
           break;
         case 'toast':
           showToast(m.message, m.level || 'info');
@@ -520,6 +524,18 @@
 
     function setAudio(connected, connType) {
       // no-op: device labels removed in the panel restructure
+    }
+
+    function setGstProfile(profile) {
+      const el = document.getElementById('mic-profile-badge');
+      if (!el) return;
+      if (!profile || profile === 'normal') {
+        el.classList.remove('visible', 'profile-sensitive');
+        return;
+      }
+      el.textContent = profile;
+      el.classList.add('visible');
+      el.classList.toggle('profile-sensitive', profile === 'sensitive');
     }
 
     let _lastWake = '';

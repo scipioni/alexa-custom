@@ -1068,6 +1068,22 @@
       text-align: center;
     }
     .vu-gain { color: var(--muted); font-size: 9px; opacity: 0.7; }
+    .mic-profile-badge {
+      font-size: 9px;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      padding: 1px 5px;
+      border-radius: 3px;
+      background: var(--accent);
+      color: var(--bg);
+      opacity: 0.85;
+      display: none;
+    }
+    .mic-profile-badge.visible { display: inline-block; }
+    .mic-profile-badge.profile-sensitive {
+      background: #e07b00;
+    }
     .vu-vol-col {
       display: flex;
       flex-direction: column;

@@ -156,6 +156,7 @@ class WebServer:
         )
         self._history_file = Path("conf/history.jsonl")
         # snapshot for hello message on new WS connects
+        from alexa_custom.audio_hw import get_active_gst_profile, register_profile_callback
         self._state: dict[str, Any] = {
             "status": "Starting…",
             "room": "",
@@ -168,7 +169,9 @@ class WebServer:
             "llm_state": "idle",
             "room_status": "closed",
             "room_answer_timeout": 0,
+            "gst_profile": get_active_gst_profile(),
         }
+        register_profile_callback(self._on_gst_profile_change)
 
     # ── persistent history helpers ────────────────────────────────────────────
 
@@ -617,6 +620,10 @@ class WebServer:
         self._state["audio_conn_type"] = conn_type
         self._enqueue("audio_status", {"connected": connected, "conn_type": conn_type})
 
+    def _on_gst_profile_change(self, profile: str) -> None:
+        self._state["gst_profile"] = profile
+        self._enqueue("gst_profile", {"profile": profile})
+
     # ── HTTP / WebSocket routes ───────────────────────────────────────────────
 
     async def _handle_index(self, request: web.Request) -> web.Response:
@@ -650,6 +657,7 @@ class WebServer:
                     "cpu_limit": self._cpu_limit,
                     "livekit_configured": self._livekit_ok,
                     "telegram_configured": self._telegram_ok,
+                    "gst_profile": self._state["gst_profile"],
                     "history": await self._read_last_history_entries(20),
                 }
             )
