@@ -26,7 +26,7 @@
 ### System Components
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
+┌────────────────────────────────────────────────────────────────────┐
 │                        alexa-custom daemon                       │
 │                                                                   │
 │  ┌──────────┐  ┌─────────────────┐  ┌──────────┐  ┌──────────┐ │
@@ -47,11 +47,11 @@
 │                    │  (bridge/   │                                │
 │                    │   gpio/i2c) │                                │
 │                    └────────────┘                                │
-└─────────────────────────────────────────────────────────────────┘
+└────────────────────────────────────────────────────────────────────┘
                               │
                     ┌─────────┴──────────┐
                     │    Audio I/O        │
-                    │  parec / gstreamer │
+                    │  gstreamer         │
                     │  pw-play · amixer  │
                     │  pulsectl          │
                     └────────────────────┘
@@ -92,7 +92,7 @@
 # Core
 sudo apt install python3 python3-pip python3-venv
 sudo apt install pipewire pipewire-pulse wireplumber
-sudo apt install pulseaudio-utils    # parec, paplay
+sudo apt install gstreamer1.0-tools gstreamer1.0-plugins-good
 sudo apt install pipewire-bin        # pw-play, pw-metadata, wpctl
 sudo apt install alsa-utils          # amixer
 
@@ -449,22 +449,9 @@ The Arduino Uno Q's PortAudio was compiled with only the ALSA backend — no nat
 
 ### Capture Path
 
-The daemon supports two capture backends, selectable via `stt.capture_backend` in `config.yaml`:
+The daemon uses **GStreamer** for audio capture, configured via `audio.gstreamer` in `config.yaml`.
 
-#### 1. `parec` (Default / Legacy Subprocess)
-
-```
-USB Mic (NewPie) → ALSA → PipeWire → PulseAudio compat socket
-                    ↓
-              parec (pulseaudio-utils)
-                    ↓
-              s16le 16 kHz mono/stereo → daemon (via subprocess stdout)
-```
-
-- **Command**: `parec --device=<source> --rate=16000 --format=s16le --channels=1`
-- **Device selection**: By name, accessed via PulseAudio compat socket at `/run/user/1000/pulse/native`.
-
-#### 2. `gstreamer` (Modern Pipeline)
+#### GStreamer Pipeline
 
 ```
 USB Mic (NewPie) → ALSA → PipeWire (pulsesrc/pipewiresrc)
@@ -483,7 +470,8 @@ USB Mic (NewPie) → ALSA → PipeWire (pulsesrc/pipewiresrc)
 - **Features**: Performs hardware-accelerated, real-time noise suppression, automatic gain control (AGC), high-pass filtering, and dynamic range compression natively in C++.
 
 #### Capture Mandates
-- **Never use**: `sounddevice` or `PyAudio` for capture.
+- **Only use**: GStreamer for audio capture.
+- **Never use**: `sounddevice`, `PyAudio`, or legacy subprocess-based capture for STT.
 
 ### Playback Path
 
@@ -526,7 +514,7 @@ Piper TTS → s16le WAV file (temp) → pw-play <file> → PipeWire → ALSA →
 
 **Fix**: The `alsa-pcm-unmute.service` polls and calls `pw-metadata` to force the active sink/source.
 
-**Note**: `libpipewire-module-switch-on-connect` is NOT available on this board's PipeWire 1.4.2 build. The `ifexists nofail` flag doesn't work — it crashes PipeWire and `pipewire-pulse`. `task audio:setup` actively removes stale config drop-ins.
+**Note**: `libpipewire-module-switch-on-connect` is NOT available on this board's PipeWire 1.4.2 build. The `ifexists nofail` flag doesn't work — it crashes PipeWire and `pipewire-pulse`.
 
 #### 3. USB Autosuspend (Mid-Session Audio Loss)
 
