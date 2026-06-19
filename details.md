@@ -26,7 +26,7 @@
 ### System Components
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
+┌────────────────────────────────────────────────────────────────────┐
 │                        alexa-custom daemon                       │
 │                                                                   │
 │  ┌──────────┐  ┌─────────────────┐  ┌──────────┐  ┌──────────┐ │
@@ -46,11 +46,11 @@
 │                    │  display.py │                                │
 │                    │  (LED/OLED) │                                │
 │                    └────────────┘                                │
-└─────────────────────────────────────────────────────────────────┘
+└────────────────────────────────────────────────────────────────────┘
                               │
                     ┌─────────┴──────────┐
                     │    Audio I/O        │
-                    │  parec / gstreamer │
+                    │  gstreamer         │
                     │  pw-play · amixer  │
                     │  pulsectl          │
                     └────────────────────┘
@@ -58,7 +58,7 @@
 
 ### Data Flow
 
-1. **Capture**: `parec` or `gstreamer` streams raw s16le audio from the USB microphone
+1. **Capture**: GStreamer streams raw s16le audio from the USB microphone with noise suppression and AGC
 2. **STT Pipeline**: Single always-on free-vocabulary Vosk transcription model processes the audio stream continuously
 3. **Trigger matching**: The transcript is matched against configured triggers (wake words, commands) using phonetic normalization + fuzzy matching
 5. **Action dispatch**: Matched actions execute — LiveKit join, MQTT publish, shell command, Telegram, LLM chat, etc.
@@ -90,7 +90,7 @@
 # Core
 sudo apt install python3 python3-pip python3-venv
 sudo apt install pipewire pipewire-pulse wireplumber
-sudo apt install pulseaudio-utils    # parec, paplay
+sudo apt install gstreamer1.0-tools gstreamer1.0-plugins-good
 sudo apt install pipewire-bin        # pw-play, pw-metadata, wpctl
 sudo apt install alsa-utils          # amixer
 
@@ -416,22 +416,9 @@ The Arduino Uno Q's PortAudio was compiled with only the ALSA backend — no nat
 
 ### Capture Path
 
-The daemon supports two capture backends, selectable via `stt.capture_backend` in `config.yaml`:
+The daemon uses **GStreamer** for audio capture, configured via `audio.gstreamer` in `config.yaml`.
 
-#### 1. `parec` (Default / Legacy Subprocess)
-
-```
-USB Mic (NewPie) → ALSA → PipeWire → PulseAudio compat socket
-                    ↓
-              parec (pulseaudio-utils)
-                    ↓
-              s16le 16 kHz mono/stereo → daemon (via subprocess stdout)
-```
-
-- **Command**: `parec --device=<source> --rate=16000 --format=s16le --channels=1`
-- **Device selection**: By name, accessed via PulseAudio compat socket at `/run/user/1000/pulse/native`.
-
-#### 2. `gstreamer` (Modern Pipeline)
+#### GStreamer Pipeline
 
 ```
 USB Mic (NewPie) → ALSA → PipeWire (pulsesrc/pipewiresrc)
@@ -450,7 +437,8 @@ USB Mic (NewPie) → ALSA → PipeWire (pulsesrc/pipewiresrc)
 - **Features**: Performs hardware-accelerated, real-time noise suppression, automatic gain control (AGC), high-pass filtering, and dynamic range compression natively in C++.
 
 #### Capture Mandates
-- **Never use**: `sounddevice` or `PyAudio` for capture.
+- **Only use**: GStreamer for audio capture.
+- **Never use**: `sounddevice`, `PyAudio`, or legacy subprocess-based capture for STT.
 
 ### Playback Path
 
@@ -493,7 +481,7 @@ Piper TTS → s16le WAV file (temp) → pw-play <file> → PipeWire → ALSA →
 
 **Fix**: The `alsa-pcm-unmute.service` polls and calls `pw-metadata` to force the active sink/source.
 
-**Note**: `libpipewire-module-switch-on-connect` is NOT available on this board's PipeWire 1.4.2 build. The `ifexists nofail` flag doesn't work — it crashes PipeWire and `pipewire-pulse`. `task audio:setup` actively removes stale config drop-ins.
+**Note**: `libpipewire-module-switch-on-connect` is NOT available on this board's PipeWire 1.4.2 build. The `ifexists nofail` flag doesn't work — it crashes PipeWire and `pipewire-pulse`.
 
 #### 3. USB Autosuspend (Mid-Session Audio Loss)
 
@@ -547,7 +535,7 @@ Audio Stream ──▶ Stage 1 (always-on, low CPU) ──▶ Wake word?
 
 ### Speech-to-Text (STT) Pipeline
 
-Serena runs a single always-on free-vocabulary Vosk transcription model that continuously transcribes captured audio chunks. Wake word detection and command recognition both happen by matching this single transcription model's output.
+Serena runs a single always-on free-vocabulary Vosk transcription model that continuously transcribes captured audio chunks. Wake word detection and command recognition both happen by matching this single transcription stream against configured wake words and trigger phrases.
 
 Key parameters under `stt`:
 - `backend`: Must be `"vosk"`.
@@ -685,7 +673,7 @@ arduino-cli compile --upload --fqbn arduino:zephyr:unoq \
 sudo systemctl restart arduino-router
 ```
 
-**Router TCP port fix**: Some UNO Q board images have a systemd drop-in that removes the `--listen-port` flag. If `ss -tlnp | grep 7501` shows nothing, check `sudo systemctl cat arduino-router` for drop-ins.
+**Router TCP port fix**: Some UNO Q board images have a systemd drop-in that removes the `--listen-port` flag. If `ss -tlnp | grep 7501` shows nothing, check `sudo systemctl cat arduino-router` for drop-ins in `/etc/systemd/system/arduino-router.service.d/`.
 
 ### I2C OLED (SSD1306)
 
