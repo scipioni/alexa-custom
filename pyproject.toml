@@ -18,6 +18,7 @@ dependencies = [
     "vosk>=0.3.45",
     "pyyaml>=6.0",
     "httpx>=0.27",
+    "openai>=1.0",
     "aiomqtt>=2.5.1",
     "aiohttp>=3.9",
     "piper-tts>=1.2.0",
@@ -45,6 +46,10 @@ include = ["alexa_custom*"]
 
 [project.optional-dependencies]
 i2c = ["smbus2>=0.4.0"]
+# GStreamer capture backend (stt.capture_backend: gstreamer).
+# System packages also required (apt): gstreamer1.0-plugins-bad (webrtcdsp),
+#   gstreamer1.0-pulseaudio (pulsesrc), gstreamer1.0-pipewire (pipewiresrc),
+#   python3-gst-1.0 (gi bindings — prefer system package over pip on Debian).
 gstreamer = ["PyGObject>=3.46"]
 
 [dependency-groups]
