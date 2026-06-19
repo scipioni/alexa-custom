@@ -18,11 +18,13 @@ USB is the most reliable method and requires zero profile configuration.
    pactl list cards short   # should show alsa_card.usb-... for NewPie
    wpctl status             # confirm NewPie sink and source are listed
    ```
-3. **Set Default**:
+3. **Set Default** (or use `task audio:setup`):
    ```bash
    wpctl set-default <newpie-sink-id>
    wpctl set-default <newpie-source-id>
    ```
+
+4. **GStreamer Capture (Optional)**: For noise suppression and AGC via webrtcdsp, install GStreamer packages (`task setup:gstreamer`) and set `stt.capture_backend: gstreamer` in config. See [`docs/stt-simple.md`](stt-simple.md).
 
 ---
 
@@ -68,7 +70,7 @@ EOF
 
 ## Arduino Uno Q — Special Fixes
 
-If using the factory board image, apply these two fixes:
+If using the factory board image, apply these fixes:
 
 ### 1. PipeWire ALSA Plugin
 Expose PipeWire as a virtual ALSA device:
@@ -76,19 +78,26 @@ Expose PipeWire as a virtual ALSA device:
 sudo apt-get install pipewire-alsa portaudio19-dev
 ```
 
-### 2. Persistent `pro-audio` Profile
-Required for the USB card to expose both sink and source:
+### 2. Analog-Stereo Profile (NOT pro-audio)
+Use `analog-stereo` profile, NOT `pro-audio`. The `pro-audio` profile disables playback/capture endpoints on the NewPie hardware, making the device unusable for voice applications.
+
+The recommended approach is to run `task audio:setup` which handles everything automatically:
 ```bash
-mkdir -p ~/.config/wireplumber/wireplumber.conf.d
-cat > ~/.config/wireplumber/wireplumber.conf.d/40-newpie-pro-audio.conf << 'EOF'
-monitor.alsa.rules = [
-  {
-    matches = [ { device.name = "alsa_card.usb-0a12_NewPie_SABINESMICDFU-00" } ]
-    actions = {
-      update-props = { device.profile = "pro-audio" }
-    }
-  }
-]
-EOF
-systemctl --user restart wireplumber
+task audio:setup
 ```
+
+This configures:
+- `analog-stereo` profile for NewPie
+- Persistent default sink/source via `pw-metadata`
+- Hardware PCM volume restore service (`alsa-pcm-unmute.service`)
+- USB autosuspend disabled via systemd service (`newpie-autosuspend.service`)
+- WirePlumber no-suspend config for native PipeWire clients
+- Removes stale `switch-on-connect` drop-in configs
+
+### 3. Audio Capture Profiles
+
+When using `stt.capture_backend: gstreamer`, you can configure named capture profiles under `audio.gstreamer.profiles` in `config.yaml`. These profiles switch at runtime via voice command using the `set_audio_profile` action. See [`docs/configuration.md`](configuration.md) for profile syntax.
+
+### 4. Display Feedback (Optional)
+
+The Arduino UNO Q has a built-in LED matrix. See [`docs/display_setup.md`](display_setup.md) for setup instructions.

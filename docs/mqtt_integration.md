@@ -1,47 +1,55 @@
-# 🤖 MQTT & Home Assistant Integration
+# MQTT & Home Assistant Integration
 
-This project transforms your speakerphone into a smart "Media Player" and "Voice Assistant" entity in Home Assistant.
+The client registers itself with Home Assistant via **MQTT Discovery** on startup. No manual YAML configuration is needed in HA.
 
-## MQTT Discovery
+## Exposed Entities
 
-When the client starts, it automatically registers itself with Home Assistant via **MQTT Discovery**. No manual YAML configuration is needed in HA.
+- **Status (Sensor)**: `idle`, `listening`, `speaking`, `gated` (during calls).
+- **Last Command (Sensor)**: Text of the last recognized voice command.
+- **Speak Text (Text)**: Type a message in HA → the speakerphone says it.
 
-### Exposed Entities
-- **Status (Sensor)**: Reports `idle`, `listening`, `speaking`, or `gated` (during calls).
-- **Last Command (Sensor)**: Shows the text of the last voice command recognized.
-- **Speak Text (Text)**: A text input in HA. Type a message and the speakerphone will say it.
+> Note: The client publishes **Sensor** and **Text** entities, not Media Player or Voice Assistant entities.
 
 ---
 
 ## Bidirectional Communication
 
-### 1. Client → Home Assistant (Publishing)
-Every time you say a command (e.g., "Galileo, accendi la luce"), the client publishes a JSON payload to `alexa/<node_id>/command`. 
-- **Hybrid Model**: If the phrase matches a local trigger in `actions.yaml`, it executes locally. **Regardless**, the transcript is always sent to MQTT so HA can trigger complex automations.
+### 1. Client → HA (Publishing)
 
-### 2. Home Assistant → Client (Listening)
-The client listens on `alexa/<node_id>/action/run` for remote instructions. You can send any valid action type as a JSON payload:
+Every recognized command publishes to `alexa/<node_id>/command` as JSON:
 
-**Example Payload to trigger a chime:**
 ```json
-{
-  "type": "tone",
-  "params": {"name": "success"}
-}
+{"text": "accendi la luce", "source": "voice", "wake_word": "ehi serena"}
 ```
 
-**Example Payload to join the LiveKit room:**
-```json
-{
-  "type": "livekit_join"
-}
-```
+State changes publish to `alexa/<node_id>/state`:
+- `idle`, `listening`, `speaking`, `sleeping`, `in_call`
+
+### 2. HA → Client (Listening)
+
+| Topic | Payload | Effect |
+|---|---|---|
+| `alexa/<node_id>/speak` | `{ "text": "Ciao!", "lang": "it-IT" }` | Speak via TTS |
+| `alexa/<node_id>/action/run` | `{"type": "tone", "params": {"name": "info"}}` | Execute any action type |
+| `alexa/<node_id>/config/set` | `{"recognition": {"wake_window": 10.0}}` | Update config at runtime |
 
 ---
 
-## Automation Example (Home Assistant)
+## Action Type
 
-You can use the forwarded voice command in an HA automation:
+Use `mqtt_publish` in triggers:
+
+```yaml
+triggers:
+  - commands: ["accendi la luce"]
+    actions:
+      - type: mqtt_publish
+        topic: home/light/set
+        payload: "ON"
+        retain: false
+```
+
+## Automation Example (HA)
 
 ```yaml
 alias: "Voice Control: Kitchen Lights"

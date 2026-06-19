@@ -63,8 +63,8 @@
 
 | | |
 |---|---|
-| 🧠 **Two-Stage STT** | Lightweight wake-word runs continuously (stage 1). Full command recognition fires only after activation (stage 2). Backends configurable independently per stage. |
-| ⚡ **Smart Inline Pass-Through** | If the command follows the wake word in one breath, stage 2 fires immediately — no second capture round-trip. Three speaking patterns for different use cases. |
+| 🧠 **Single-Model STT** | One always-on free-vocabulary model transcribes continuously. Wake-word detection and command matching both run on the same transcript — no model switching, lower latency. |
+| ⚡ **Smart Inline Pass-Through** | If the command follows the wake word in one breath, it's matched immediately — no second capture round-trip. Three speaking patterns for different use cases. |
 | 🗣️ **Neural Italian TTS** | Piper speaks back with natural intonation. Falls back to lightweight Pico when every millisecond counts. Both run locally — zero API fees. |
 | 📞 **Polite LiveKit Join** | Polls the room via REST API; only connects when a remote participant is present. Disconnects cleanly if nobody joins within the timeout. |
 | 🏠 **Home Assistant Discovery** | Auto-registers as Media Player and Voice Assistant entities via MQTT. No configuration needed — just point at your broker. |
@@ -105,8 +105,8 @@ cp conf.example/secrets.yaml conf/secrets.yaml
 
 # 7A. Install as a systemd service (recommended for headless use)
 task setup
-sudo loginctl enable-linger arduino 
-systemctl --user start alexa-custom
+sudo loginctl enable-linger $(whoami)
+systemctl --user start serena
 
 # 7B.  or start the assistant directly
 alexa-client
@@ -267,16 +267,22 @@ Configuration lives in `conf/` with hot-reload support:
 
 ```yaml
 wake_words:
-  - word: galileo
-    lang: it-IT
+  - "ehi serena"
+
+recognition:
+  wake_window: 8.0
+  matching_threshold: 75.0
+
+stt:
+  backend: vosk
+  vad_silence_ms: 900
 
 triggers:
-  - phrase: che ore sono
+  - commands: ["che ore sono"]
     actions:
       - type: shell
         command: date +%H:%M
-  - phrase: accendi la luce
-    wake_words: [galileo]
+  - commands: ["accendi la luce"]
     actions:
       - type: mqtt_publish
         topic: home/light/set
@@ -286,9 +292,11 @@ triggers:
 ### Key environment variables
 
 | Variable | Description |
-|---|---|
-| `ALEXA_CONFIG` | Path to config directory (default: `conf/`) |
-| `ALEXA_WEB_PORT` | Override web dashboard port |
+|---|---|---|
+| `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` / `LIVEKIT_ROOM` | LiveKit connection (required for calls) |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | Telegram notifications |
+| `LLM_HOST` / `LLM_API_KEY` | OpenAI-compatible LLM endpoint |
+| `LOG_LEVEL` | Python log level (default: `INFO`) |
 
 ---
 
@@ -332,7 +340,6 @@ triggers:
 | `alexa-audio` | Microphone → speaker loopback test |
 | `alexa-audio-doctor` | Full audio diagnostics |
 | `alexa-record --duration 5` | Record and transcribe audio |
-| `alexa-stt --text "..."` | Test STT without microphone |
 
 ---
 
@@ -344,7 +351,7 @@ triggers:
 | Audio drops mid-session | `task audio:restart` — restores routing and PCM |
 | Microphone not detected | `alexa-devices` to list cards; check `wpctl status` |
 | LiveKit join hangs | Verify `wait_for_participant` and `answer_timeout` in config |
-| Service won't start | `journalctl --user -fu alexa-custom` — check logs |
+| Service won't start | `journalctl --user -fu serena` — check logs |
 
 ---
 
@@ -363,6 +370,9 @@ triggers:
 | `httpx` | HTTP client for LLM/Ollama |
 | `rapidfuzz` | Fuzzy phonetic matching |
 | `ruamel.yaml` | YAML round-trip editing |
+| `openai` | OpenAI-compatible LLM backend |
+| `pyyaml` | Base YAML loading |
+| `smbus2` | I2C OLED display (optional) |
 
 ---
 
@@ -399,5 +409,5 @@ task fix           # auto-fix, format, and test
   <a href="LICENSE"><img src="https://img.shields.io/badge/Apache_2.0-D22128?style=for-the-badge&logo=apache&logoColor=white" alt="Apache 2.0"></a>
 </p>
 <p align="center">
-  Made by Galielo Team for privacy-first voice assistants
+  Made by Galileo Team for privacy-first voice assistants
 </p>

@@ -1,74 +1,101 @@
-# Ollama Configuration
+# LLM Integration
 
-This document tracks local configuration changes made to the Ollama service on this host.
-
-## Environment Variables Configuration
-
-The following environment variables have been enabled to optimize performance and memory usage:
-
-1. **`OLLAMA_FLASH_ATTENTION=1`**: Enables Flash Attention to speed up inference and reduce attention memory consumption.
-2. **`OLLAMA_KV_CACHE_TYPE=q8_0`**: Enables 8-bit quantization for the Key-Value (KV) cache, significantly reducing memory usage per context token with negligible impact on accuracy.
+The daemon integrates with any OpenAI-compatible LLM endpoint (Ollama, OpenAI API, LM Studio, vLLM). Two backends are supported: `ollama` and `openai`.
 
 ---
 
-## Configuration Details
+## Backends
 
-These variables are defined in the Systemd drop-in configuration file for the Ollama service:
-
-- **Configuration File Path:** `/etc/systemd/system/ollama.service.d/override.conf`
-- **Backup File Path:** `/etc/systemd/system/ollama.service.d/override.conf.bak`
-
-### Active Configuration
-
-```ini
-[Service]
-Environment="OLLAMA_HOST=0.0.0.0:11434"
-Environment="OLLAMA_CONTEXT_LENGTH=32768"
-Environment="OLLAMA_FLASH_ATTENTION=1"
-Environment="OLLAMA_KV_CACHE_TYPE=q8_0"
-```
-
----
-
-## Applying Changes
-
-To apply or modify these settings manually in the future, run:
+### Ollama (local)
 
 ```bash
-# 1. Reload the Systemd daemon configuration
 sudo systemctl daemon-reload
-
-# 2. Restart the Ollama service
 sudo systemctl restart ollama
 ```
 
+Recommended: `OLLAMA_FLASH_ATTENTION=1`, `OLLAMA_KV_CACHE_TYPE=q8_0`, `OLLAMA_CONTEXT_LENGTH=32768`.
+
+### OpenAI API (remote)
+
+Set `llm.backend: openai` and provide `llm_api_key` in `conf/secrets.yaml`. Works with any OpenAI-compatible endpoint — just set `llm_host` to the full base URL (e.g. `https://api.openai.com/v1`).
+
 ---
 
-## Verification
+## Features
 
-### 1. Active Environment Verification
-To verify that the environment variables are active in the running systemd service:
+### 1. Fallback Conversation
 
-```bash
-systemctl show --property=Environment ollama
+When `llm.fallback_on_no_match: true`, unmatched commands are routed to the LLM. The system replies via TTS and listens for follow-up. Exit phrases end the session:
+
+```yaml
+llm:
+  fallback_on_no_match: true
 ```
 
-**Expected Output:**
-```text
-Environment=HOME=/var/lib/ollama OLLAMA_MODELS=/var/lib/ollama OLLAMA_HOST=0.0.0.0:11434 OLLAMA_CONTEXT_LENGTH=32768 OLLAMA_FLASH_ATTENTION=1 
+Default exit phrases: `stop`, `esci`, `basta`, `fine`, `fermati`, `chiudi`, `exit`, `quit`, `annulla`, `cancella`. Override with `llm.exit_phrases:`.
+
+### 2. Explicit Chat (`llm_chat`)
+
+```yaml
+triggers:
+  - commands: ["parliamo"]
+    actions:
+      - type: llm_chat
+        # system_prompt: "..."  # per-trigger override
 ```
 
-### 2. Service Logs Verification
-To confirm that Ollama successfully recognized and loaded these settings at startup:
+Multi-turn conversation via listen → LLM reply → speak loop. History resets after `context_window_secs` of inactivity. Max `context_turns` exchange pairs.
 
-```bash
-journalctl -u ollama -n 50 --no-pager
+### 3. One-shot LLM narration (`say-with-llm`)
+
+A trigger sends a prompt (and optionally a file) to the LLM and speaks the streaming reply — without entering a listening loop. The exchange is recorded in the shared `ConversationEngine` history, so a subsequent `llm_chat` session can reference it.
+
+```yaml
+triggers:
+  # Generative prompt
+  - commands: ["dimmi qualcosa di interessante"]
+    actions:
+      - type: say-with-llm
+        prompt: "Dimmi una curiosità scientifica poco nota"
+
+  # File narration with instruction
+  - commands: ["leggi le note"]
+    actions:
+      - type: say-with-llm
+        file: /home/scipio/notes.txt
+        prompt: "Riassumi in modo conciso"
+        max_chars: 2000    # default: 4000
+
+  # Model override for this trigger only
+  - commands: ["scrivi una poesia"]
+    actions:
+      - type: say-with-llm
+        prompt: "Scrivi una breve poesia sul tramonto"
+        model: mistral:7b
 ```
 
-**Expected Log Confirmation:**
-```text
-level=INFO source=routes.go:1919 msg="server config" env="map[... OLLAMA_FLASH_ATTENTION:true ... OLLAMA_KV_CACHE_TYPE:q8_0 ...]"
+| Parameter | Default | Description |
+|---|---|---|
+| `prompt` | `""` | Prompt sent to the LLM. Supports `$(shell)` substitution. |
+| `file` | — | Path to a text file; content is prepended to `prompt`. |
+| `max_chars` | `4000` | Max characters to read from `file`. |
+| `lang` | `it-IT` | Language tag passed to TTS. |
+| `model` | `llm.model` | Override the configured model for this action only. |
+
+Falls back to literal TTS if `llm:` is not configured or the endpoint is unreachable.
+
+### 4. Command Learning (`llm_learn`)
+
+Voice wizard that creates new triggers without editing config files:
+
+```yaml
+triggers:
+  - commands: ["impara nuovo comando"]
+    actions:
+      - type: llm_learn
 ```
+
+The wizard asks for a trigger phrase, what the command should do, collects parameters, confirms, and writes to `actions.learn_file` (default: `conf/actions/learned.yaml`). Hot-reloaded automatically.
 
 ---
 
@@ -93,114 +120,29 @@ All models run on the Ollama **server** (not the Arduino Uno Q board). Choose ba
 
 ---
 
-## Agent Functionality
-
-The alexa-custom daemon integrates Ollama as an optional voice AI backend. When configured, it provides two capabilities:
-
-### 1. Free-form Conversation (fallback)
-
-When a spoken command does not match any configured trigger, the transcript is automatically routed to the LLM if `fallback_on_no_match: true`. The conversation continues in a loop — the agent replies via TTS and listens for a follow-up — until the user says an exit phrase or stays silent for 10 seconds.
-
-Say any exit phrase to end the session immediately and return to wake-word listening. The conversation history is preserved across exchanges within the same session and reset after `context_window_secs` of inactivity.
-
-### 2. Explicit Chat (`llm_chat` action type)
-
-A trigger can be configured to start a dedicated chat session directly:
-
-```yaml
-# in actions.yaml
-triggers:
-  - phrase: "parliamo"
-    actions:
-      - type: llm_chat
-        # system_prompt: "..."  # optional per-trigger override
-```
-
-### 3. One-shot LLM narration (`say-with-llm` action type)
-
-A trigger can send a prompt (and optionally the contents of a file) to the LLM and speak the streaming reply — without entering a listening loop. The exchange is recorded in the shared `ConversationEngine` history, so a subsequent `llm_chat` session can reference it.
-
-```yaml
-triggers:
-  # Generative prompt
-  - phrase: "dimmi qualcosa di interessante"
-    actions:
-      - type: say-with-llm
-        prompt: "Dimmi una curiosità scientifica curiosa e poco nota"
-
-  # File narration with instruction
-  - phrase: "leggi le note"
-    actions:
-      - type: say-with-llm
-        file: /home/scipio/notes.txt
-        prompt: "Riassumi in modo conciso"
-        max_chars: 2000    # default: 4000
-
-  # Model override for this trigger only
-  - phrase: "scrivi una poesia"
-    actions:
-      - type: say-with-llm
-        prompt: "Scrivi una breve poesia sul tramonto"
-        model: mistral:7b
-```
-
-**Parameters:**
-
-| Parameter | Default | Description |
-|---|---|---|
-| `prompt` | `""` | Prompt sent to the LLM. Supports `$(shell)` substitution. |
-| `file` | — | Path to a text file; content is prepended to `prompt`. |
-| `max_chars` | `4000` | Max characters to read from `file`. |
-| `lang` | `it-IT` | Language tag passed to TTS. |
-| `model` | `llm.model` | Override the configured model for this action only. |
-
-**Fallback behaviour:**
-- If `llm:` is not configured in `config.yaml`, the text is spoken literally via TTS.
-- If the Ollama endpoint is unreachable, the rendered `prompt` is spoken literally.
-
-### 4. Command Learning (`llm_learn` action type)
-
-A trigger can launch a voice wizard that teaches the agent a new command without editing config files:
-
-```yaml
-triggers:
-  - phrase: "impara un comando"
-    actions:
-      - type: llm_learn
-```
-
-The wizard asks for a trigger phrase, what the command should do (free-form, parsed by the LLM), collects any required parameters, asks for confirmation, and writes the new trigger to `actions.yaml`. The file is hot-reloaded automatically.
-
----
-
-## Configuration Reference (`config.yaml`)
+## Configuration
 
 ```yaml
 llm:
-  backend: ollama
-  host: http://192.168.1.10:11434   # remote Ollama URL (no local backend support)
-  model: ssfdre38/gemma4-nano        # model name as shown by 'ollama list'
-  context_turns: 10                 # conversation history depth (pairs of messages)
-  context_window_secs: 60           # inactivity timeout before history is reset
-  fallback_on_no_match: true        # route unmatched commands to LLM
+  backend: ollama                   # ollama | openai
+  model: ssfdre38/gemma4-nano       # model name
+  context_turns: 10                 # conversation history depth
+  context_window_secs: 60           # timeout before history reset
+  fallback_on_no_match: false       # route unmatched commands to LLM
   learn_commands: true              # enable llm_learn action type
-  request_timeout: 10.0             # HTTP timeout for each Ollama request (seconds)
-  system_prompt: null               # override the default voice-assistant system prompt
-  exit_phrases:                     # words/phrases that end the conversation immediately
-    - stop                          # omit this field to use the built-in defaults
-    - basta
+  request_timeout: 60.0             # HTTP timeout
+  system_prompt: null               # optional system prompt override
+  exit_phrases:                     # override default exit phrases
+    - stop
     - esci
-    - fine
-    - fermati
-    - chiudi
-    - exit
-    - quit
-    - annulla
-    - cancella
+    - basta
 ```
 
-**Notes:**
-- `llm:` absent or `llm:` set to null disables the feature entirely.
-- `exit_phrases` replaces the default list when set; list all phrases you want active.
-- The conversation language follows the wake word group's `lang:` field (default `it-IT`).
-- Ollama must be reachable at `host` before the first LLM call; if unreachable, the agent says *"agente remoto non raggiungibile"* and returns to wake-word listening.
+`llm_host` (required) and `llm_api_key` (optional) go in `conf/secrets.yaml`:
+
+```yaml
+llm_host: http://127.0.0.1:11434
+# llm_api_key: sk-...
+```
+
+> **Note**: If the LLM endpoint is unreachable, the agent says *"agente remoto non raggiungibile"* and returns to wake-word listening.
