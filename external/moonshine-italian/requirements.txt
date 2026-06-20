@@ -18,7 +18,7 @@ onnxruntime>=1.17.0
 # Training utilities
 accelerate>=0.27.0
 tensorboard>=2.14.0           # optional, for --tensorboard flag
-schedule-free>=1.2.5          # optional schedule-free AdamW optimizer
+schedulefree>=1.2.5           # optional schedule-free AdamW optimizer
 
 # Dataset specific
 # Common Voice (mozilla-foundation/common_voice_17_0) requires HF auth:
