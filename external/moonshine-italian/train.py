@@ -146,7 +146,6 @@ class DataCollatorSpeechSeq2Seq:
                            for f in features]
         labels_batch = self.processor.tokenizer.pad(
             label_features,
-            max_length=self.max_label_length,
             padding=True,
             return_tensors="pt",
         )
