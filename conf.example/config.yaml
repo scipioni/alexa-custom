@@ -152,11 +152,12 @@ audio:
         agc_compression_gain_db: 9  # conservative gain; 18/30 amplify noise floor and hurt speech_ratio
         rms_threshold: 0.02
         vad_silence_ms: 900
-      sensitive:                   # reverberant / distant-mic environments
-        noise_suppression_level: 2  # keep moderate — aggressive suppression removes reverb tail
-        agc_target_level_dbfs: -3   # same loud target so Vosk gets strong signal
-        agc_compression_gain_db: 30 # much more gain to boost distant/quiet speech
-        rms_threshold: 0.008        # accept quieter speech through the VAD gate
+      sensitive:                   # reverberant / distant-mic environments (calibrated on NewPie USB mic)
+        noise_suppression: false    # NS treats quiet distant speech as noise and suppresses it
+        noise_suppression_level: 2  # (irrelevant when noise_suppression: false)
+        agc_target_level_dbfs: -3
+        agc_compression_gain_db: 70 # was 30 — calibration confirmed 70 needed for distant mic
+        rms_threshold: 0.006        # was 0.008 — lower to catch weaker distant signal
         vad_silence_ms: 1200        # wait longer for reverb to decay before ending utterance
 
 # ---------------------------------------------------------------------------
