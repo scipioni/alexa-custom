@@ -69,7 +69,10 @@ def _match_wake_word(
         # Strip wake word tokens from transcript to get trailing command
         norm_w = normalize_text(best_phrase)
         wake_tokens = set(norm_w.split())
-        command = " ".join(t for t in norm_text.split() if t not in wake_tokens)
+        command = " ".join(
+            t for t in norm_text.split()
+            if not any(_word_token_match(wt, t) for wt in wake_tokens)
+        )
         return best_phrase, command
 
     return None, ""
