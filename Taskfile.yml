@@ -146,6 +146,18 @@ tasks:
         echo "Released v${NEW}"
         echo "Push with: git push && git push --tags"
 
+  init:
+    desc: Full board init — install service, configure audio, restart audio (Arduino board only, aborts on Arch Linux)
+    cmds:
+      - |
+        if [ -f /etc/arch-release ] || grep -qi '^ID=arch' /etc/os-release 2>/dev/null; then
+          echo "Error: 'task init' targets the Arduino board — cannot run on Arch Linux."
+          exit 1
+        fi
+      - task: setup
+      - task: audio:setup
+      - task: audio:restart
+
   setup:gstreamer:
     desc: Install GStreamer PipeWire plugin, GI typelibs, dev headers, and PyGObject into the venv
     cmds:
