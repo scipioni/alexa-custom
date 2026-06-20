@@ -18,6 +18,13 @@ Moonshine does not ship Italian ASR models out of the box. These scripts:
    dataset using curriculum learning (short clips → medium → full), then optionally exports to
    ONNX for deployment.
 
+3. **`export_streaming.py`** — converts the fine-tuned HuggingFace model to the 5-component
+   streaming ORT format required by `ModelArch.TINY_STREAMING` / `MEDIUM_STREAMING`.
+
+4. **`mic_transcriber_it.py`** — microphone transcriber for the fine-tuned Italian model.
+
+A **`Taskfile.yml`** wraps the full pipeline — use `task --list` to see all targets.
+
 ### Models targeted
 
 | Variant | Base checkpoint | Params | VRAM needed | Est. training time |
@@ -702,6 +709,39 @@ WER varies significantly with audio quality, domain, and speaker diversity in yo
 **ROCm: `pip install -r requirements.txt` overwrites the ROCm PyTorch wheel with CUDA**
 → Install the ROCm wheel first (step 2 above), then pin torch in requirements.txt or pass
   `--extra-index-url https://download.pytorch.org/whl/rocm6.2` when installing the rest.
+
+---
+
+## Task quick-reference
+
+```bash
+task --list   # show all targets with descriptions
+```
+
+| Task | Description |
+|---|---|
+| `task download` | Download FLEURS (+ Common Voice if `HF_TOKEN` is set) |
+| `task download:full` | Download all sources including MLS (~440 h) |
+| `task train:tiny` | Fine-tune tiny-streaming, export ONNX |
+| `task train:medium` | Fine-tune medium-streaming, export ONNX |
+| `task train:tiny:resume` | Resume tiny-streaming from latest checkpoint |
+| `task train:medium:resume` | Resume medium-streaming from latest checkpoint |
+| `task export:ort:tiny` | Convert tiny ONNX → ORT + copy `tokenizer.bin` |
+| `task export:ort:medium` | Convert medium ONNX → ORT + copy `tokenizer.bin` |
+| `task export:streaming:tiny` | Export tiny to 5-component streaming ORT |
+| `task export:streaming:medium` | Export medium to 5-component streaming ORT |
+| `task all:tiny` | Full pipeline: download → train → export tiny |
+| `task all:medium` | Full pipeline: download → train → export medium |
+| `task run:tiny` | Run mic transcriber, tiny non-streaming |
+| `task run:tiny:streaming` | Run mic transcriber, tiny streaming |
+| `task run:medium` | Run mic transcriber, medium non-streaming |
+| `task run:medium:streaming` | Run mic transcriber, medium streaming |
+
+Pass extra arguments to any `train:*` or `run:*` task with `--`:
+```bash
+task train:tiny -- --fp16 --eval-steps 200
+task run:tiny:streaming -- --device 2 --update-interval 0.3
+```
 
 ---
 

@@ -126,9 +126,15 @@ def main() -> None:
         "--streaming",
         action="store_true",
         help=(
-            "Use ModelArch.TINY_STREAMING (requires streaming ORT files from export_streaming.py). "
-            "Default is ModelArch.TINY (non-streaming, from standard ONNX export)."
+            "Use streaming ModelArch (TINY_STREAMING or MEDIUM_STREAMING depending on model size). "
+            "Requires streaming ORT files from export_streaming.py. "
+            "Default is ModelArch.TINY (non-streaming)."
         ),
+    )
+    parser.add_argument(
+        "--medium",
+        action="store_true",
+        help="Use MEDIUM_STREAMING instead of TINY_STREAMING when --streaming is set.",
     )
     parser.add_argument(
         "--device",
@@ -145,10 +151,13 @@ def main() -> None:
     args = parser.parse_args()
 
     model_dir = Path(args.model_dir).resolve()
-    model_arch = ModelArch.TINY_STREAMING if args.streaming else ModelArch.TINY
+    if args.streaming:
+        model_arch = ModelArch.MEDIUM_STREAMING if args.medium else ModelArch.TINY_STREAMING
+    else:
+        model_arch = ModelArch.TINY
     _check_model_dir(model_dir)
 
-    arch_label = "TINY_STREAMING" if args.streaming else "TINY"
+    arch_label = model_arch.name
     print(f"Loading Italian model ({arch_label}) from {model_dir} ...", file=sys.stderr)
     transcriber = MicTranscriber(
         model_path=str(model_dir),
