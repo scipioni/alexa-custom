@@ -47,6 +47,7 @@
 - [🛠️ Commands](#%EF%B8%8F-commands)
 - [🔧 Troubleshooting](#-troubleshooting)
 - [📚 Documentation](#-documentation)
+- [🗜️ Headroom](#%EF%B8%8F-headroom--context-compression-for-ai-agents)
 - [🤝 Contributing](#-contributing)
 
 ---
@@ -389,6 +390,55 @@ triggers:
 | [→ MQTT & HA](docs/mqtt_integration.md) | Home Assistant auto-discovery, entities, bidirectional control |
 | [→ Displays](docs/display_setup.md) | LED matrix, I2C OLED, GPIO LED configuration |
 | [→ Troubleshooting](docs/troubleshooting.md) | Common issues: audio, connection, permissions |
+
+---
+
+## 🗜️ Headroom — Context Compression for AI Agents
+
+[Headroom](https://github.com/chopratejas/headroom) is installed as an MCP server so Claude Code and Gemini CLI can compress tool outputs, logs, and conversation history before they reach the model — reducing token usage by 60–95% on large contexts.
+
+### MCP server
+
+The server is registered in `.claude/settings.json` (Claude Code) and `~/.gemini/settings.json` (Gemini CLI):
+
+```json
+{
+  "mcpServers": {
+    "headroom": {
+      "command": "headroom",
+      "args": ["mcp", "serve"]
+    }
+  }
+}
+```
+
+Both tools expose three MCP tools automatically: `headroom_compress`, `headroom_retrieve`, and `headroom_stats`.
+
+### Using headroom in Python
+
+```python
+from headroom import compress
+
+# Compress a large log or tool output before sending to a model
+compressed = compress(log_text)
+```
+
+### CLI proxy (zero-code integration)
+
+Run headroom as a drop-in proxy in front of any OpenAI-compatible endpoint:
+
+```bash
+headroom proxy --port 8787
+# Then point your LLM_HOST to http://localhost:8787
+```
+
+### Installation
+
+```bash
+pip install "headroom-ai[mcp,proxy]"
+```
+
+> Requires Python ≤ 3.13 for source builds. On Python 3.14+ use `--only-binary headroom-ai`.
 
 ---
 

@@ -23,6 +23,7 @@ dependencies = [
     "aiohttp>=3.9",
     "piper-tts>=1.2.0",
     "rapidfuzz>=3.0.0",
+    "headroom-ai[mcp,proxy]>=0.20.15",
     "ruamel.yaml>=0.18",
     "smbus2>=0.6.1",
 ]
