@@ -39,7 +39,11 @@ Uses `parec` (pulseaudio-utils) speaking the PulseAudio compat socket at `/run/u
 
 Routes mic through a GStreamer pipeline with **webrtcdsp** (WebRTC Audio Processing Module) for noise suppression, AGC, high-pass filtering, and optional compressor before Vosk decodes. Configured under `audio.gstreamer.*`.
 
-Activate with `stt.capture_backend: gstreamer`. Requires system packages: `gstreamer1.0-plugins-bad` (webrtcdsp), `gstreamer1.0-pulseaudio` (pulsesrc), `python3-gst-1.0` (gi bindings), and optional `gstreamer1.0-pipewire` (pipewiresrc). Install with `task setup:gstreamer`.
+Activate with `stt.capture_backend: gstreamer`. Requires system packages:
+- **Debian/Ubuntu**: `gstreamer1.0-plugins-bad` (webrtcdsp), `gstreamer1.0-pulseaudio` (pulsesrc), `python3-gst-1.0` (gi bindings), and optional `gstreamer1.0-pipewire` (pipewiresrc).
+- **Arch Linux**: `gstreamer`, `gst-plugins-bad`, `gst-plugins-good`, `gst-plugins-base`, `gst-plugin-pipewire`, `python-gobject`.
+
+Install with `task setup:gstreamer` (or `go-task setup:gstreamer` on Arch).
 
 ```yaml
 stt:

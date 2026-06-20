@@ -3,6 +3,7 @@ from __future__ import annotations
 import abc
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -35,6 +36,38 @@ class TTSBackend(abc.ABC):
     def say(self, text: str, lang: str = "it-IT") -> None:
         """Speak the given text in the specified language."""
         pass
+
+
+_CLAUSE_RE = re.compile(r"[^.!?;:,]+[.!?;:,]*")
+
+
+def _split_clauses(text: str, min_len: int = 12) -> list[str]:
+    """Split text into clause-sized units to lower TTS time-to-first-audio.
+
+    Piper synthesizes one AudioChunk per *sentence*, so a long comma-spliced
+    sentence must be fully synthesized before any audio plays. Breaking on
+    commas/semicolons/colons too lets the first unit synthesize and start
+    playing sooner. Fragments shorter than ``min_len`` are merged into the
+    neighbouring piece so prosody stays natural instead of choppy.
+    """
+    parts = [p.strip() for p in _CLAUSE_RE.findall(text)]
+    parts = [p for p in parts if p]
+    if not parts:
+        return []
+
+    merged: list[str] = []
+    buf = ""
+    for p in parts:
+        buf = f"{buf} {p}".strip() if buf else p
+        if len(buf) >= min_len:
+            merged.append(buf)
+            buf = ""
+    if buf:
+        if merged:
+            merged[-1] = f"{merged[-1]} {buf}".strip()
+        else:
+            merged.append(buf)
+    return merged
 
 
 def _read_wav_as_float32(path: str) -> tuple[np.ndarray, int]:
@@ -144,6 +177,35 @@ class PiperTTS(TTSBackend):
             or getattr(self._voice, "sample_rate", 22050)
         )
 
+        # Warm up ORT: the first inference pays a one-time graph-optimization
+        # cost. Run a throwaway synth at load so the first real reply doesn't
+        # eat that latency. Suppress stderr as in load (ORT device warnings).
+        _saved = _os.dup(2)
+        _devnull = _os.open(_os.devnull, _os.O_WRONLY)
+        _os.dup2(_devnull, 2)
+        _os.close(_devnull)
+        try:
+            for _ in self._voice.synthesize("ok"):
+                pass
+        except Exception as e:
+            logger.debug(f"Piper warmup skipped: {e}")
+        finally:
+            _os.dup2(_saved, 2)
+            _os.close(_saved)
+
+    def _synthesize(self, text: str):
+        """Yield ``(int16_array, samplerate)`` clause-by-clause.
+
+        Splitting into clauses lowers time-to-first-audio (Piper yields one
+        chunk per sentence). Audio extraction lives here so both the streaming
+        and WAV-fallback paths share one code path.
+        """
+        for clause in _split_clauses(text):
+            for chunk in self._voice.synthesize(clause):
+                arr = np.asarray(chunk.audio_int16_array, dtype=np.int16)
+                samplerate = int(getattr(chunk, "sample_rate", self._samplerate))
+                yield arr, samplerate
+
     def say(self, text: str, lang: str = "it-IT") -> None:
         if not text:
             return
@@ -162,15 +224,9 @@ class PiperTTS(TTSBackend):
         proc: subprocess.Popen | None = None
 
         try:
-            for chunk in self._voice.synthesize(text):
-                # piper-tts >=1.2 yields AudioChunk; older releases yield raw bytes.
-                arr = getattr(chunk, "audio_int16_array", None)
-                if arr is None:
-                    raw = getattr(chunk, "audio_int16_bytes", None) or bytes(chunk)
-                    arr = np.frombuffer(raw, dtype=np.int16)
-
+            for arr, chunk_rate in self._synthesize(text):
                 if samplerate is None:
-                    samplerate = int(getattr(chunk, "sample_rate", self._samplerate))
+                    samplerate = chunk_rate
 
                 if proc is None:
                     proc = subprocess.Popen(
@@ -192,9 +248,11 @@ class PiperTTS(TTSBackend):
                         proc.stdin.write(bytes(n_preroll * 2))  # type: ignore[union-attr]
 
                 assert proc.stdin is not None
-                # Digitally scale the audio chunk by the global output volume
+                # Digitally scale the audio chunk by the global output volume.
+                # Clip before casting: volume > 1.0 would otherwise wrap int16
+                # (matches _play_array / _play_raw in audio_ops).
                 volume = get_output_volume()
-                scaled_arr = (np.asarray(arr, dtype=np.int16) * volume).astype(np.int16)
+                scaled_arr = np.clip(arr * volume, -32768, 32767).astype(np.int16)
                 proc.stdin.write(scaled_arr.tobytes())
                 n = len(scaled_arr)
                 if n:
@@ -208,6 +266,7 @@ class PiperTTS(TTSBackend):
             if proc is None:
                 return
 
+            assert proc.stdin is not None
             proc.stdin.close()
             try:
                 proc.wait(timeout=60.0)
@@ -240,14 +299,10 @@ class PiperTTS(TTSBackend):
         try:
             buffers: list[np.ndarray] = []
             chunk_rate: int | None = None
-            for chunk in self._voice.synthesize(text):
-                arr = getattr(chunk, "audio_int16_array", None)
-                if arr is None:
-                    raw = getattr(chunk, "audio_int16_bytes", None) or bytes(chunk)
-                    arr = np.frombuffer(raw, dtype=np.int16)
-                buffers.append(np.asarray(arr, dtype=np.int16))
+            for arr, rate in self._synthesize(text):
+                buffers.append(arr)
                 if chunk_rate is None:
-                    chunk_rate = int(getattr(chunk, "sample_rate", self._samplerate))
+                    chunk_rate = rate
 
             if not buffers:
                 return

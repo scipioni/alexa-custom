@@ -161,18 +161,37 @@ tasks:
   setup:gstreamer:
     desc: Install GStreamer PipeWire plugin, GI typelibs, dev headers, and PyGObject into the venv
     cmds:
-      - sudo apt-get install -y
-          gstreamer1.0-pipewire
-          gstreamer1.0-tools
-          gir1.2-gstreamer-1.0
-          gir1.2-gst-plugins-base-1.0
-          libgstreamer1.0-dev
-          libgstreamer-plugins-base1.0-dev
-          libgirepository-2.0-dev
-          libgirepository1.0-dev
-          libcairo2-dev
-          python3.13-dev
-          pkg-config
+      - |
+        if command -v pacman &>/dev/null; then
+          echo "Arch Linux detected. Installing dependencies via pacman..."
+          sudo pacman -S --needed --noconfirm \
+            gstreamer \
+            gst-plugin-pipewire \
+            gst-plugins-base \
+            gst-plugins-good \
+            gst-plugins-bad \
+            gobject-introspection \
+            cairo \
+            python-gobject \
+            pkgconf
+        elif command -v apt-get &>/dev/null; then
+          echo "Debian/Ubuntu detected. Installing dependencies via apt-get..."
+          sudo apt-get update && sudo apt-get install -y \
+            gstreamer1.0-pipewire \
+            gstreamer1.0-tools \
+            gir1.2-gstreamer-1.0 \
+            gir1.2-gst-plugins-base-1.0 \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            libgirepository-2.0-dev \
+            libgirepository1.0-dev \
+            libcairo2-dev \
+            python3.13-dev \
+            pkg-config
+        else
+          echo "Unsupported package manager. Please install GStreamer and development headers manually."
+          exit 1
+        fi
       - uv pip install PyGObject
 
   setup:

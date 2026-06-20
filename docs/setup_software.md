@@ -10,6 +10,8 @@
 
 ## 1. System Dependencies
 
+### Debian/Ubuntu (Target Board)
+
 ```bash
 # Core dependencies
 sudo apt-get install pulseaudio-utils alsa-utils python3-venv
@@ -25,6 +27,21 @@ sudo loginctl enable-linger $(whoami)
 # Install Task runner
 curl -1sLf 'https://dl.cloudsmith.io/public/task/task/setup.deb.sh' | sudo -E bash
 sudo apt install task
+```
+
+### Arch Linux (Development Machine)
+
+```bash
+# Core dependencies
+sudo pacman -S --needed pulseaudio-alsa alsa-utils
+
+# GStreamer backend (optional, for stt.capture_backend: gstreamer)
+sudo pacman -S --needed gstreamer gst-plugin-pipewire gst-plugins-base \
+                        gst-plugins-good gst-plugins-bad gobject-introspection \
+                        cairo python-gobject pkgconf
+
+# Install Task runner (aliased as 'task' or run via 'go-task')
+sudo pacman -S go-task
 ```
 
 ---

@@ -70,7 +70,7 @@ stt:
   #   handles stereo→mono in the driver. Eliminates the Python-side max-abs downmix.
   #   Trade-off: PipeWire averages the two mics; the default max-abs picks the louder
   #   channel per frame, which is better when one mic dominates.
-  # capture_backend: parec   # parec (default) | gstreamer
+  capture_backend: gstreamer   # parec (default) | gstreamer
   #   gstreamer: routes mic through a GStreamer pipeline with webrtcdsp (WebRTC APM)
   #   for noise suppression, AGC, and high-pass filtering before Vosk sees audio.
   #   Requires: gstreamer1.0-plugins-bad (webrtcdsp), gstreamer1.0-pulseaudio (pulsesrc),
@@ -105,7 +105,7 @@ audio:
     noise_suppression: true
     high_pass_filter: true
   gstreamer:             # GStreamer capture pipeline (used when stt.capture_backend: gstreamer)
-    # source: pulsesrc   # pulsesrc (default, proven) | pipewiresrc (native, experimental)
+    source: pipewiresrc   # pulsesrc (default, proven) | pipewiresrc (native, experimental)
     noise_suppression: true
     noise_suppression_level: 2    # 0=mild 1=moderate 2=high 3=very-high
     agc: true
