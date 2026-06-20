@@ -40,9 +40,15 @@ task setup         # install systemd user service
 Manual entry points:
 ```bash
 alexa-client [--web-port PORT]             # main daemon (web dashboard with config panel)
+serena                                   # alias for alexa-client
 alexa-audio                              # mic→speaker loopback test
 alexa-devices                            # list audio devices
 alexa-setup                              # download/update STT models
+serena-stt                               # STT diagnostic (same pipeline as daemon, live mic)
+serena-stt --record FILE                 # record mic to WAV while listening
+serena-stt --play FILE                   # replay saved WAV through STT pipeline
+serena-stt --calibrate-gstreamer         # one-shot GStreamer parameter calibration (prints JSON)
+serena-calibrate-mcp                     # MCP server for calibration (keeps Vosk resident; faster)
 ```
 
 ### Targeted Testing
@@ -131,20 +137,31 @@ This headless host runs a modern **PipeWire** audio graph managed by **WirePlumb
 
 ```
 alexa_custom/
-  client.py       main loop, LiveKit session, wake-word dispatch
-  stt.py          speech-to-text pipeline (Vosk)
-  tts.py          text-to-speech (Piper)
-  audio.py        PipeWire routing, AudioWatcher, device enumeration
-  mqtt.py         MQTT client, Home Assistant Discovery
-  actions.py      action dispatcher (livekit_join, ask, telegram, …)
-  config.py       config dataclasses
-  config_manager.py  hot-reload watcher (~4 s polling)
-  web.py          aiohttp web dashboard
-config.yaml       live config (credentials, triggers, wake words)
-models/           bundled STT/TTS model files
-docs/             extended notes (audio platform, hardware, setup)
-kernel/           kernel build scripts/configs for the board
-setup/            systemd service unit
+  client.py           main loop, LiveKit session, wake-word dispatch
+  stt.py              speech-to-text pipeline (Vosk)
+  stt_cli.py          serena-stt entry point (diagnostic + calibration modes)
+  stt_backends.py     Vosk backend abstraction
+  stt_gating.py       RMS/VAD gating, capture source resolution
+  stt_gst_capture.py  GStreamer capture pipeline
+  tts.py              text-to-speech (Piper)
+  audio.py            PipeWire routing, AudioWatcher, device enumeration
+  audio_ops.py        low-level playback helpers (pw-play, tones)
+  mcp_calibrate.py    serena-calibrate-mcp MCP server (keeps Vosk resident)
+  mqtt.py             MQTT client, Home Assistant Discovery
+  actions.py          action dispatcher (livekit_join, ask, telegram, …)
+  config.py           config dataclasses
+  config_manager.py   hot-reload watcher (~4 s polling)
+  web.py              aiohttp web dashboard
+conf/               live config (gitignored; copy from conf.example/)
+conf.example/       example config shipped with the repo
+models/             bundled STT/TTS model files
+docs/               extended notes (audio platform, hardware, setup)
+  stt-simple.md     STT pipeline, GStreamer calibration, config reference
+kernel/             kernel build scripts/configs for the board
+setup/              systemd service unit
+.claude/
+  settings.json     MCP server registration (serena-calibrate, headroom)
+  skills/           agent skills (calibrate-gstreamer, …)
 ```
 
 ## Configuration
@@ -213,3 +230,5 @@ Access via the web dashboard (http://localhost:8080/config):
 | `sounddevice` | device enumeration only |
 | `aiomqtt` | MQTT / Home Assistant |
 | `aiohttp` | web dashboard |
+| `mcp` *(optional: `[calibrate]`)* | MCP server for `serena-calibrate-mcp` |
+| `PyGObject` *(optional: `[gstreamer]`)* | GStreamer Python bindings for capture pipeline |
