@@ -1,0 +1,26 @@
+# Core ML
+torch>=2.1.0
+transformers>=4.48.0          # Moonshine support added in 4.48
+datasets>=2.18.0
+evaluate>=0.4.0
+jiwer>=3.0.0                  # WER metric backend used by evaluate
+
+# Data processing
+soundfile>=0.12.1
+librosa>=0.10.0
+audioread>=3.0.0
+
+# Export to ONNX (for deployment)
+optimum[exporters]>=1.17.0
+onnx>=1.15.0
+onnxruntime>=1.17.0
+
+# Training utilities
+accelerate>=0.27.0
+tensorboard>=2.14.0           # optional, for --tensorboard flag
+schedule-free>=1.2.5          # optional schedule-free AdamW optimizer
+
+# Dataset specific
+# Common Voice (mozilla-foundation/common_voice_17_0) requires HF auth:
+#   huggingface-hub login  OR  pass --hf-token
+huggingface-hub>=0.20.0
