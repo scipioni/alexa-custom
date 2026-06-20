@@ -131,14 +131,14 @@ audio:
     noise_suppression: true
     high_pass_filter: true
   gstreamer:             # GStreamer capture pipeline (used when stt.capture_backend: gstreamer)
-    source: pipewiresrc   # pulsesrc (default, proven) | pipewiresrc (native, experimental)
+    source: pipewiresrc   # pulsesrc | pipewiresrc — both work; pipewiresrc confirmed on NewPie + PipeWire 1.4.2
     noise_suppression: true
-    noise_suppression_level: 2    # 0=mild 1=moderate 2=high 3=very-high
+    noise_suppression_level: 2    # 0=mild 1=moderate 2=high 3=very-high (2 calibration-verified optimal)
     agc: true
-    agc_target_level_dbfs: -3     # AGC target peak level in dBFS (closer to 0 = louder; -3 is WebRTC default)
-    agc_compression_gain_db: 9    # max makeup gain applied by digital AGC
-    high_pass_filter: true        # 80 Hz high-pass (removes USB power hum)
-    compressor: false             # audiodynamic compressor after webrtcdsp
+    agc_target_level_dbfs: -3     # AGC target peak level in dBFS (−3 calibration-verified optimal; lower = weaker signal)
+    agc_compression_gain_db: 9    # max makeup gain applied by digital AGC (9 calibration-verified; higher amplifies noise floor)
+    high_pass_filter: true        # 80 Hz high-pass (removes USB power hum; essential for wake-word clarity)
+    compressor: false             # audiodynamic compressor after webrtcdsp (on reduces speech_ratio, no transcript benefit)
     #compressor_threshold: 0.1     # normalized threshold 0.0–1.0
     #compressor_ratio: 3.0         # compression ratio
     profiles:
@@ -146,10 +146,10 @@ audio:
       # plus rms_threshold and vad_silence_ms (STT-level overrides).
       # Active profile is stored in conf/state.yaml and switched at runtime via
       # the set_audio_profile action (voice triggers in conf/actions/user.yaml).
-      normal:                      # default: normal indoor conversation
-        noise_suppression_level: 2
-        agc_target_level_dbfs: -3
-        agc_compression_gain_db: 9
+      normal:                      # default: normal indoor conversation (calibration-verified on NewPie USB mic)
+        noise_suppression_level: 2  # sweet spot — 0/1/3 all score lower in calibration
+        agc_target_level_dbfs: -3   # WebRTC default; −6/−9 reduce signal with no quality gain
+        agc_compression_gain_db: 9  # conservative gain; 18/30 amplify noise floor and hurt speech_ratio
         rms_threshold: 0.02
         vad_silence_ms: 900
       sensitive:                   # reverberant / distant-mic environments

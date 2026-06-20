@@ -39,6 +39,7 @@ alexa-audio-doctor = "alexa_custom.audio:main_doctor"
 alexa-wake-eval = "alexa_custom.wake_eval:main"
 alexa-record = "alexa_custom.record:main"
 serena-stt = "alexa_custom.stt_cli:main"
+serena-calibrate-mcp = "alexa_custom.mcp_calibrate:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -51,6 +52,9 @@ i2c = ["smbus2>=0.4.0"]
 #   gstreamer1.0-pulseaudio (pulsesrc), gstreamer1.0-pipewire (pipewiresrc),
 #   python3-gst-1.0 (gi bindings — prefer system package over pip on Debian).
 gstreamer = ["PyGObject>=3.46"]
+calibrate = [
+    "mcp>=1.28.0",
+]
 
 [dependency-groups]
 dev = [
