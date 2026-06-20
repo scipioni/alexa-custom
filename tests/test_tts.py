@@ -4,7 +4,7 @@ from unittest.mock import patch, MagicMock
 
 import numpy as np
 
-from alexa_custom.tts import PicoTTS
+from alexa_custom.tts import PicoTTS, _split_clauses
 
 
 def _write_test_wav(path: str, samplerate: int = 16000, n_samples: int = 1600) -> None:
@@ -44,6 +44,33 @@ class TestTTS(unittest.TestCase):
         assert audio.shape[1] == 1
         # Leading region is all zeros
         assert float(np.max(np.abs(audio[:8000]))) == 0.0
+
+
+class TestSplitClauses(unittest.TestCase):
+    def test_long_sentence_breaks_on_commas(self):
+        # A comma-spliced sentence is broken so the first unit is short, which
+        # lets Piper synthesize and start playing it before the rest is done.
+        text = "Sto chiamando Stefano adesso, attendi un momento per favore."
+        clauses = _split_clauses(text)
+        assert len(clauses) == 2
+        assert clauses[0] == "Sto chiamando Stefano adesso,"
+
+    def test_short_text_stays_whole(self):
+        assert _split_clauses("Certo.") == ["Certo."]
+
+    def test_tiny_fragments_merge(self):
+        # Fragments below min_len merge instead of producing choppy 1-word chunks.
+        assert _split_clauses("Sì, no.") == ["Sì, no."]
+
+    def test_empty(self):
+        assert _split_clauses("") == []
+        assert _split_clauses("   ") == []
+
+    def test_reassembles_full_text(self):
+        text = "Uno, due; tre: quattro. Cinque!"
+        joined = " ".join(_split_clauses(text))
+        # Same words, same order, no content lost.
+        assert joined.replace(" ", "") == text.replace(" ", "")
 
 
 if __name__ == "__main__":
