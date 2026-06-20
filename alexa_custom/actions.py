@@ -82,6 +82,8 @@ def italian_phonetic(text: str) -> str:
     t = re.sub(r"gh([ei])", r"g\1", t)
     # 8. qu → k
     t = t.replace("qu", "k")
+    # 9. esist -> asist (align 'esistente' / 'assistente' etc. acoustically)
+    t = t.replace("esist", "asist")
     return t
 
 

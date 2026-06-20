@@ -55,6 +55,11 @@ class TestItalianPhonetic:
         # diacritics are stripped by normalize_text; no phonetic rule changes 'si'
         assert italian_phonetic("sì") == "si"
 
+    def test_esistente_assistente_alignment(self):
+        assert italian_phonetic("esistente") == italian_phonetic("assistente")
+        assert italian_phonetic("esistenti") == italian_phonetic("assistenti")
+        assert italian_phonetic("esistenza") == italian_phonetic("assistenza")
+
     def test_idempotent(self):
         result = italian_phonetic("chiama")
         assert italian_phonetic(result) == result

@@ -128,6 +128,13 @@ class TestMatchWakeWord:
         phrase, _ = _match_wake_word("kiave apri", ["chiave"])
         assert phrase == "chiave"
 
+    def test_esistente_ascolta_assistente_match(self):
+        phrase, residual = _match_wake_word(
+            "ascolta esistente attiva microfono normale", ["ascolta assistente"]
+        )
+        assert phrase == "ascolta assistente"
+        assert residual == "attiva microfono normale"
+
     def test_midword_occurrence_no_longer_false_wakes(self):
         # "galileo" buried mid-word must NOT fire the wake word — prefix-anchored
         # matching rejects substring-anywhere hits that used to leak through.
