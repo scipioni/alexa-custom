@@ -193,10 +193,14 @@ def _match_glob_pattern(
         if p_tok.endswith("*"):
             prefix = italian_phonetic(p_tok[:-1])
             return t_phon.startswith(prefix)
-        return (
-            get_similarity_score(italian_phonetic(p_tok), t_phon, algorithm)
-            >= threshold
-        )
+        p_phon = italian_phonetic(p_tok)
+        # Short pattern tokens (≤3 phonetic chars) always score ≥75% against any
+        # word sharing their characters via SequenceMatcher's multi-block matching,
+        # making the configured threshold irrelevant.  Require exact phonetic match
+        # instead: "ore" must match "ore", not "forze"/"amore"/"cuore".
+        if len(p_phon) <= 3:
+            return t_phon == p_phon
+        return get_similarity_score(p_phon, t_phon, algorithm) >= threshold
 
     # Recursive ordered-subsequence walk with memoisation.
     from functools import lru_cache
