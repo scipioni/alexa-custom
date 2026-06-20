@@ -51,28 +51,96 @@ stt:
 
 audio:
   gstreamer:
-    source: pulsesrc           # pulsesrc (default) | pipewiresrc (experimental)
+    source: pipewiresrc        # pulsesrc | pipewiresrc (confirmed on NewPie + PipeWire 1.4.2)
     noise_suppression: true
     noise_suppression_level: 2 # 0=mild 1=moderate 2=high 3=very-high
     agc: true
-    agc_target_level_dbfs: -3
-    agc_compression_gain_db: 9
-    high_pass_filter: true     # 80 Hz (removes USB power hum)
+    agc_target_level_dbfs: -3  # calibration-verified optimal
+    agc_compression_gain_db: 9 # calibration-verified optimal for normal distance
+    high_pass_filter: true     # 80 Hz (removes USB power hum; essential for wake-word clarity)
     compressor: false
     profiles:
-      normal:
+      normal:                  # calibration-verified on NewPie USB mic
         noise_suppression_level: 2
         agc_target_level_dbfs: -3
+        agc_compression_gain_db: 9
         rms_threshold: 0.02
         vad_silence_ms: 900
-      sensitive:
-        noise_suppression_level: 2
-        agc_compression_gain_db: 30
-        rms_threshold: 0.008
+      sensitive:               # calibration-verified for distant-mic use
+        noise_suppression: false        # NS suppresses quiet distant speech as noise
+        noise_suppression_level: 2      # (irrelevant when noise_suppression: false)
+        agc_target_level_dbfs: -3
+        agc_compression_gain_db: 70    # much higher gain for distant mic
+        rms_threshold: 0.006            # lower to catch weaker signal
         vad_silence_ms: 1200
 ```
 
 Each profile can override GStreamer parameters AND STT parameters (`rms_threshold`, `vad_silence_ms`). Switch at runtime via the `set_audio_profile` action type.
+
+### GStreamer calibration
+
+The `serena-stt --calibrate-gstreamer` mode lets you systematically tune the pipeline for your hardware and room. It speaks a phrase via TTS, plays a ready tone, captures your voice through the GStreamer pipeline, decodes with Vosk, and prints a JSON result:
+
+```bash
+# One-shot trial with default params
+uv run --active serena-stt --calibrate-gstreamer --phrase "ehi serena volume alto"
+
+# Override any GStreamer parameter for the trial
+uv run --active serena-stt --calibrate-gstreamer --phrase "ehi serena volume alto" \
+  --no-noise-suppression --agc-compression-gain-db 70 --rms-threshold 0.008
+```
+
+**Available override flags:**
+
+| Flag | Default | Range |
+|------|---------|-------|
+| `--noise-suppression` / `--no-noise-suppression` | true | — |
+| `--noise-suppression-level N` | 2 | 0–3 |
+| `--agc` / `--no-agc` | true | — |
+| `--agc-target-level-dbfs N` | -3 | negative int |
+| `--agc-compression-gain-db N` | 9 | 0–90 |
+| `--high-pass-filter` / `--no-high-pass-filter` | true | — |
+| `--compressor` / `--no-compressor` | false | — |
+| `--compressor-threshold F` | 0.1 | 0.0–1.0 |
+| `--compressor-ratio F` | 3.0 | ≥1.0 |
+| `--listen-seconds N` | 4.0 | float |
+| `--rms-threshold F` | from config | float |
+
+**JSON output fields:**
+
+| Field | Meaning |
+|-------|---------|
+| `transcript` | What Vosk heard |
+| `match_score` | Fuzzy similarity 0–100 |
+| `speech_ratio` | Fraction of chunks above RMS threshold — proxy for signal strength |
+| `rms_peak` | Peak RMS across the capture window |
+| `captured_seconds` | Actual capture duration (< 3.0 = pipeline failure) |
+| `gst_params` | Full parameter set used for this trial |
+
+**MCP server (faster iteration):**
+
+The `serena-calibrate-mcp` server keeps the Vosk model and TTS engine resident between trials, saving ~5 s per trial compared to the CLI. It is registered in `.claude/settings.json` and starts automatically in Claude Code sessions:
+
+```
+calibrate_init(phrase, listen_seconds?, rms_threshold?)   ← load once
+calibrate_trial(noise_suppression?, agc_compression_gain_db?, …)  ← one trial
+calibrate_summary()   ← ranked table + winning YAML
+```
+
+**Calibration findings (NewPie USB mic, Arduino Uno Q):**
+
+*Normal profile (≤ 2 m from mic):*
+- `noise_suppression_level: 2` is the sweet spot — levels 0, 1, 3 all score lower
+- `agc_compression_gain_db: 9` — higher values amplify the noise floor
+- HPF is essential — disabling it garbles the wake word
+- Compressor off — enabling it reduces `speech_ratio` with no transcript benefit
+
+*Sensitive profile (distant mic / reverberant room):*
+- `noise_suppression: false` — NS treats quiet distant speech as noise and suppresses it
+- `agc_compression_gain_db: 70` — higher gain is needed to reach Vosk's recognition threshold
+- Wake word detection at distance remains limited by SNR; command words are more reliably captured than the "ehi serena" prefix
+
+Run the `/calibrate-gstreamer` agent skill in Claude Code to redo the sweep automatically.
 
 ## Trigger matching
 
