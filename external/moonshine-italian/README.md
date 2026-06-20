@@ -1,8 +1,9 @@
 # Moonshine Italian STT — Fine-tuning scripts
 
 Fine-tune [Moonshine](https://github.com/moonshine-ai/moonshine) streaming ASR models for Italian.
-Produces `moonshine-tiny-streaming` and `moonshine-medium-streaming` models ready to drop into
-the Moonshine C++ runtime.
+Produces Italian ASR models deployable in the Moonshine C++ runtime as either
+`ModelArch.TINY` (non-streaming, default) or `ModelArch.TINY_STREAMING` (streaming, lower
+latency) — see [Training vs deployment architecture](#training-vs-deployment-architecture).
 
 ---
 
@@ -69,6 +70,9 @@ Key packages:
 | `evaluate` + `jiwer` | WER metric during training |
 | `accelerate` | Multi-GPU / mixed-precision training backend |
 | `optimum[exporters]` | ONNX export after training |
+| `optimum-onnx` | Required for Optimum 2.0+ ONNX export pipeline |
+| `torchcodec` | PyTorch-native audio decoding (replaces torchaudio in HuggingFace datasets) |
+| `schedulefree` | Schedule-free AdamW optimizer (optional, alternative to AdamW) |
 
 ### HuggingFace account
 
@@ -276,8 +280,12 @@ output/moonshine-it-tiny-streaming/
     ...
   onnx/                 ← ONNX export (only if --export-onnx)
     encoder_model.onnx
-    decoder_model_merged.onnx
-    ...
+    decoder_model.onnx
+    decoder_with_past_model.onnx
+    decoder_model_merged.onnx  ← encoder_model.ort + this are the two files needed for ORT conversion
+    config.json
+    generation_config.json
+    preprocessor_config.json
 ```
 
 ---
@@ -445,19 +453,6 @@ accelerate launch train.py \
 
 ---
 
-## Manual ONNX export
-
-If you skipped `--export-onnx` during training, export at any time:
-
-```bash
-optimum-cli export onnx \
-    --model ./output/moonshine-it-tiny-streaming/final \
-    --task automatic-speech-recognition-with-past \
-    ./output/moonshine-it-tiny-streaming/onnx
-```
-
----
-
 ## Using the trained model
 
 Two deployment paths are available from the same fine-tuned weights:
@@ -473,7 +468,7 @@ Two deployment paths are available from the same fine-tuned weights:
 
 ### Non-streaming deployment (ModelArch.TINY)
 
-**1. Export ONNX** (if not already done during training)
+**1. Export ONNX** (skip if you used `--export-onnx` during training)
 
 ```bash
 optimum-cli export onnx \
@@ -481,6 +476,9 @@ optimum-cli export onnx \
     --task automatic-speech-recognition-with-past \
     output/moonshine-it-tiny-streaming/onnx
 ```
+
+This produces `encoder_model.onnx`, `decoder_model_merged.onnx`, and supporting JSON files
+in the output directory. Only the two `.onnx` files matter for the next step.
 
 **2. Convert `.onnx` → `.ort`**
 
@@ -523,24 +521,61 @@ generates the `streaming_config.json` that the Moonshine C runtime needs.
 **1. Export streaming components**
 
 ```bash
+# tiny-streaming
 python export_streaming.py \
     --model-dir output/moonshine-it-tiny-streaming/final \
     --output-dir output/moonshine-it-tiny-streaming/streaming
+
+# medium-streaming
+python export_streaming.py \
+    --model-dir output/moonshine-it-medium-streaming/final \
+    --output-dir output/moonshine-it-medium-streaming/streaming
 ```
 
-This runs the ONNX trace, converts to `.ort`, and copies `tokenizer.bin` automatically.
+This traces each component, converts to `.ort`, and copies `tokenizer.bin` automatically.
 Expected output:
 
 ```
 output/moonshine-it-tiny-streaming/streaming/
-  frontend.ort          audio frontend (conv layers + state)
+  frontend.ort          audio frontend (conv layers + rolling state buffers)
   encoder.ort           causal sliding-window transformer body
-  adapter.ort           encoder → decoder projection
+  adapter.ort           encoder → decoder dimension projection
   cross_kv.ort          precomputed cross-attention K/V per decoder layer
-  decoder_kv.ort        one decoder step with KV cache
+  decoder_kv.ort        one decoder step with self-attention KV cache
   streaming_config.json architecture parameters for the C runtime
   tokenizer.bin
 ```
+
+The generated `streaming_config.json` for `tiny-streaming` looks like this (values derived
+automatically from the model's `config.json`):
+
+```json
+{
+  "encoder_dim": 320,
+  "decoder_dim": 320,
+  "depth": 6,
+  "nheads": 8,
+  "head_dim": 40,
+  "vocab_size": 32768,
+  "bos_id": 1,
+  "eos_id": 2,
+  "frame_len": 80,
+  "total_lookahead": 16,
+  "d_model_frontend": 320,
+  "c1": 640,
+  "c2": 320,
+  "frontend_state_shapes": {
+    "sample_buffer": [1, 79],
+    "sample_len":    [1],
+    "conv1_buffer":  [1, 640, 4],
+    "conv2_buffer":  [1, 320, 4],
+    "frame_count":   [1]
+  }
+}
+```
+
+For `medium-streaming` the values differ: `encoder_dim=768`, `decoder_dim=640`, `depth=14`,
+`nheads=10`, `head_dim=64`, `c1=1536`, `c2=768`.
 
 **2. Run with streaming inference**
 
