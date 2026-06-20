@@ -141,10 +141,10 @@ def run_pipeline(
     orig_start_capture = _stt_module.start_capture
     orig_get_backend = _stt_module.get_stt_backend
 
-    def _fake_start_capture(source: Any, channels: int = 1):
+    def _fake_start_capture(source: Any, channels: int = 1, config: Any = None):
         return fake_proc
 
-    def _fake_get_backend(stt_config: Any):
+    def _fake_get_backend(stt_config: Any, keywords: Any = None, grammar: Any = None):
         return scripted
 
     _stt_module.start_capture = _fake_start_capture

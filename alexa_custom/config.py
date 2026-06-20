@@ -211,6 +211,15 @@ class STTConfig:
     wake_match_threshold: float = 0.5
     mono_capture: bool = False
     capture_backend: str = "parec"     # parec | gstreamer
+    # Constrain the always-on recognizer to a grammar built from the wake words
+    # and trigger phrases. Cheaper and snappier, but forces every utterance onto
+    # the closest phrase — only safe with confidence gating below.
+    vosk_grammar: bool = False
+    # Minimum acoustic confidence (0..1) to accept a wake/command match. 0.0
+    # disables the gate (free-text default). ~0.65 is a sane starting point for
+    # grammar mode; sweep with `alexa-wake-eval`.
+    confidence: float = 0.0
+    confidence_mode: str = "first"     # first | min | mean
 
 
 @dataclass
@@ -766,10 +775,6 @@ def _parse_stt_config(raw: dict) -> STTConfig:
         logger.warning(
             "stt.stage2 is removed — update to flat stt fields. See docs/stt-simple.md."
         )
-    if raw.get("vosk_grammar") is not None:
-        logger.warning(
-            "stt.vosk_grammar is removed — free-vocabulary mode is always used."
-        )
     if raw.get("keyword_spotter") is not None:
         logger.warning(
             "stt.keyword_spotter is removed — single-model design uses no KWS."
@@ -793,6 +798,9 @@ def _parse_stt_config(raw: dict) -> STTConfig:
         wake_match_threshold=_get_float(raw, "wake_match_threshold", 0.5),
         mono_capture=bool(raw.get("mono_capture", False)),
         capture_backend=str(raw.get("capture_backend", "parec")),
+        vosk_grammar=bool(raw.get("vosk_grammar", False)),
+        confidence=_get_float(raw, "confidence", 0.0),
+        confidence_mode=str(raw.get("confidence_mode", "first")),
     )
 
 

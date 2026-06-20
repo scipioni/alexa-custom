@@ -63,7 +63,33 @@ stt:
   # min_speech_ms: 200      # minimum sustained speech before silence timer starts
   # wake_match_threshold: 0.5  # fraction of wake-phrase tokens that must appear in
   #   the transcript to count as a hit. 0.5 (default) — one of two words is enough
-  #   (handles "ehi" transcribed as "e"/"ei"); 1.0 — exact match required.
+  #   (handles "ehi" transcribed as "e"/"ei"); 1.0 — require the full phrase. Raise
+  #   to 1.0 ONLY in grammar mode (see below): it structurally blocks single-word
+  #   snaps like "serena"→wake, at the cost of recall if a real wake drops "ehi".
+  #
+  # --- Recognizer vocabulary (the main false-wake lever) ---------------------
+  # RECOMMENDED: free-text. The always-on model writes down what was actually
+  # said, so real speech/noise transcribes to real words and does NOT get forced
+  # onto a wake word. Validated with `alexa-wake-eval` against real room audio:
+  # free-text gave 0 false wakes + 100% recall, while grammar mode snapped noise
+  # onto "serena" and false-fired. Free-text also keeps free-form commands and the
+  # LLM fallback accurate; the ask/reply windows still apply their own per-call
+  # grammar regardless of this setting, so constrained replies ("sì" vs "se") are
+  # unaffected.
+  vosk_grammar: false       # false (recommended) = free-text. true = constrain the
+  #   always-on recognizer to the wake words + every trigger phrase. Grammar is
+  #   cheaper/snappier on the board but FORCES every utterance onto the closest
+  #   phrase, so it snaps noise onto wake words — only viable with confidence > 0
+  #   AND wake_match_threshold: 1.0, and still loses to free-text on real-audio FPs.
+  confidence: 0.0           # minimum acoustic confidence (0..1) to accept a wake or
+  #   command; 0.0 disables the gate. Leave at 0.0 with free-text — free-text recall
+  #   degrades sharply under the gate (clean wake clips score low) and it doesn't
+  #   need the gate (no snapping). The gate exists mainly to claw back grammar-mode
+  #   false wakes; if you run grammar mode, ~0.65 and tune with `alexa-wake-eval`.
+  # confidence_mode: first  # how to aggregate confidence across the wake-word
+  #   tokens (trailing command excluded): first (wake word, default) | min
+  #   (strictest) | mean. Scored identically online and in `alexa-wake-eval`, so
+  #   the sweep predicts runtime. Only relevant when confidence > 0.
   # num_threads: 2           # ONNX threads (sherpa-onnx only; ignored by vosk)
   # flush_ms: 300            # audio discarded after wake beep (absorbs speaker echo)
   # mono_capture: false      # force parec to capture mono (--channels=1) so PipeWire

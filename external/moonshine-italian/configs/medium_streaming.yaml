@@ -1,0 +1,40 @@
+# Moonshine medium-streaming Italian fine-tuning config
+# Target: UsefulSensors/moonshine-medium-streaming (245M params)
+# Hardware: A100 40GB or 2× RTX 3090 (24 GB each with FSDP); ~72h on 100h data
+# For single-GPU with 24 GB: reduce per_device_batch_size to 1, increase gradient_accumulation to 64
+
+model: medium-streaming
+
+# Dataset (output of download_dataset.py)
+dataset_dir: ./data/italian/combined
+
+# Output directory
+output_dir: ./output/moonshine-it-medium-streaming
+
+# Training hyperparameters
+per_device_batch_size: 2
+gradient_accumulation: 32         # effective batch = 64
+learning_rate: 1.0e-4
+warmup_steps: 1000
+eval_steps: 1000
+max_steps: 20000                  # ~20 epochs on 100h dataset
+
+# Memory (critical for 245M model)
+gradient_checkpointing: true
+bf16: true                        # bf16 preferred for large models; use fp16 if bf16 unavailable
+# fp16: true                      # uncomment if your GPU does not support bf16
+
+# Curriculum learning phases
+# Phase 1: short clips (0.5–6s)   — 4000 steps
+# Phase 2: medium clips (2–12s)   — 8000 steps
+# Phase 3: full range (0.5–20s)   — remaining steps
+skip_curriculum: false
+
+# Encoder freezing for phase 1 (warm up decoder only, less memory pressure)
+# Set to false for full fine-tuning (higher accuracy, more VRAM)
+freeze_encoder: false
+
+# Export
+export_onnx: true
+tensorboard: true
+seed: 42
