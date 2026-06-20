@@ -151,6 +151,72 @@ class _RealTimePopen:
         return self._src.wait(timeout=timeout)
 
 
+class _WavFilePopen:
+    """Pure-Python WAV reader — fallback when ffmpeg/sox are absent.
+
+    Reads raw PCM frames from a WAV file at real-time pace and feeds them
+    through an os.pipe(), mimicking the Popen interface expected by the STT
+    pipeline.  Only works for WAV files already at 16 kHz / s16le; if the
+    file has a different rate or depth the output will be garbled.
+    """
+
+    def __init__(self, wav_path: str, channels: int, pad_s: float = 1.5) -> None:
+        import wave as _wave
+        import time as _time
+
+        self._returncode: int | None = None
+        r_fd, w_fd = os.pipe()
+        self.stdout = os.fdopen(r_fd, "rb", buffering=0)
+        chunk_frames = 4096 * channels // 2  # s16le: 2 bytes/sample
+        seconds_per_chunk = chunk_frames / 16000.0
+
+        def _feed() -> None:
+            try:
+                with _wave.open(wav_path, "rb") as wf:
+                    silence = b"\x00" * (chunk_frames * wf.getsampwidth() * wf.getnchannels())
+                    while True:
+                        t0 = _time.monotonic()
+                        data = wf.readframes(chunk_frames)
+                        if not data:
+                            break
+                        try:
+                            os.write(w_fd, data)
+                        except OSError:
+                            return
+                        elapsed = _time.monotonic() - t0
+                        delay = seconds_per_chunk - elapsed
+                        if delay > 0:
+                            _time.sleep(delay)
+                pad_chunks = int(pad_s / seconds_per_chunk) + 1
+                for _ in range(pad_chunks):
+                    try:
+                        os.write(w_fd, silence)
+                    except OSError:
+                        break
+                    _time.sleep(seconds_per_chunk)
+            finally:
+                self._returncode = 0
+                try:
+                    os.close(w_fd)
+                except OSError:
+                    pass
+
+        threading.Thread(target=_feed, daemon=True).start()
+
+    @property
+    def returncode(self):
+        return self._returncode
+
+    def poll(self):
+        return self._returncode
+
+    def terminate(self) -> None:
+        pass
+
+    def wait(self, timeout=None):
+        return self._returncode
+
+
 def _make_play_capture(play_path: str, stop_event: threading.Event):
     """Return a start_capture replacement that streams a WAV file at real-time speed."""
     import shutil
@@ -197,7 +263,7 @@ def _make_play_capture(play_path: str, stop_event: threading.Event):
                 "-",
             ]
         else:
-            raise RuntimeError("ffmpeg or sox is required for --play")
+            return _WavFilePopen(play_path, channels)
 
         src = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0
@@ -219,6 +285,234 @@ def _make_record_capture(record_path: str):
         return _TeePopen(real_proc, channels, record_path)
 
     return _record_capture
+
+
+# ---------------------------------------------------------------------------
+# GStreamer calibration
+# ---------------------------------------------------------------------------
+
+
+def _build_gst_config(base, args):
+    """Return a GStreamerCaptureConfig with CLI overrides applied over base."""
+    import dataclasses
+
+    overrides = {}
+    if args.gst_source is not None:
+        overrides["source"] = args.gst_source
+    if args.gst_noise_suppression is not None:
+        overrides["noise_suppression"] = args.gst_noise_suppression
+    if args.gst_noise_suppression_level is not None:
+        overrides["noise_suppression_level"] = args.gst_noise_suppression_level
+    if args.gst_agc is not None:
+        overrides["agc"] = args.gst_agc
+    if args.gst_agc_target_level_dbfs is not None:
+        overrides["agc_target_level_dbfs"] = args.gst_agc_target_level_dbfs
+    if args.gst_agc_compression_gain_db is not None:
+        overrides["agc_compression_gain_db"] = args.gst_agc_compression_gain_db
+    if args.gst_high_pass_filter is not None:
+        overrides["high_pass_filter"] = args.gst_high_pass_filter
+    if args.gst_compressor is not None:
+        overrides["compressor"] = args.gst_compressor
+    if args.gst_compressor_threshold is not None:
+        overrides["compressor_threshold"] = args.gst_compressor_threshold
+    if args.gst_compressor_ratio is not None:
+        overrides["compressor_ratio"] = args.gst_compressor_ratio
+    return dataclasses.replace(base, **overrides) if overrides else base
+
+
+def _run_calibrate_gstreamer(args, config) -> None:
+    import dataclasses
+    import json
+    import random
+    import time
+
+    import numpy as np
+
+    from alexa_custom.stt_backends import get_stt_backend
+    from alexa_custom.stt_gating import resolve_capture_source, _rms_level
+    from alexa_custom.stt_phonetics import _match_wake_word
+    from alexa_custom.actions import match_trigger_with_score
+    import alexa_custom.tts as _tts_module
+
+    # Build the effective GStreamer config.
+    gst_cfg = _build_gst_config(config.audio.gstreamer, args)
+
+    # Collect all candidate phrases (wake words + first command of every trigger).
+    phrases = list(config.wake_words)
+    for t in config.triggers:
+        if t.commands:
+            phrases.append(t.commands[0])
+    phrase = args.phrase if args.phrase else random.choice(phrases)
+
+    # Effective RMS threshold (CLI override or from config).
+    rms_threshold = args.rms_threshold if args.rms_threshold is not None else config.stt.rms_threshold
+
+    # Initialise TTS (real engine — calibration needs to speak).
+    try:
+        tts_cfg = config.tts if hasattr(config, "tts") else None
+        backend_type = tts_cfg.backend if tts_cfg else "piper"
+        voice = tts_cfg.voice if tts_cfg else "it_IT-paola-medium"
+        _tts_module.init_engine(backend_type, voice=voice)
+    except Exception as e:
+        print(f"[calibrate] TTS init failed ({e}); prompts will be text-only", file=sys.stderr)
+
+    # --- Announce the phrase ---
+    try:
+        _tts_module.get_engine().say(f"Di' questo: {phrase}")
+    except Exception as e:
+        print(f"[calibrate] TTS say failed: {e}", file=sys.stderr)
+    print(f"[calibrate] phrase  : {phrase!r}", file=sys.stderr)
+
+    # Short gap, then a ready tone.
+    time.sleep(0.3)
+    try:
+        from alexa_custom.audio_ops import play_tone
+        play_tone("wake")
+    except Exception:
+        pass
+    time.sleep(0.5)
+
+    # --- Capture audio via GStreamer ---
+    try:
+        from alexa_custom.stt_gst_capture import start_capture_gst
+    except ImportError as e:
+        print(json.dumps({"error": f"GStreamer unavailable: {e}"}))
+        return
+
+    source, _ = resolve_capture_source(config.audio.input_device)
+    print(f"[calibrate] capturing {args.listen_seconds}s via GStreamer …", file=sys.stderr)
+
+    try:
+        proc = start_capture_gst(source, gst_cfg)
+    except RuntimeError as e:
+        print(json.dumps({"error": str(e)}))
+        return
+
+    target_bytes = int(args.listen_seconds * 16000 * 2)  # s16le mono
+    collected = bytearray()
+    rms_chunks: list[float] = []
+    deadline = time.monotonic() + args.listen_seconds + 2.0  # hard timeout
+
+    while len(collected) < target_bytes and time.monotonic() < deadline:
+        want = min(4096, target_bytes - len(collected))
+        try:
+            chunk = proc.stdout.read(want)
+        except OSError:
+            break
+        if not chunk:
+            break
+        collected += chunk
+        if len(chunk) >= 2:
+            rms_chunks.append(_rms_level(chunk))
+
+    proc.terminate()
+    try:
+        proc.wait(timeout=2)
+    except Exception:
+        pass
+
+    captured_bytes = len(collected)
+    captured_s = captured_bytes / (16000 * 2)
+    print(f"[calibrate] captured : {captured_s:.2f}s ({captured_bytes} bytes)", file=sys.stderr)
+
+    # --- Run STT ---
+    try:
+        backend = get_stt_backend(config.stt)
+    except RuntimeError as e:
+        print(json.dumps({"error": f"STT backend: {e}"}))
+        return
+
+    chunk_size = 4096
+    for i in range(0, len(collected), chunk_size):
+        backend.accept_waveform(bytes(collected[i : i + chunk_size]))
+    transcript = backend.finalize().strip()
+    print(f"[calibrate] transcript: {transcript!r}", file=sys.stderr)
+
+    # --- Score the result ---
+    # Wake word match
+    wake_phrase, residual = _match_wake_word(transcript, config.wake_words)
+
+    # Trigger match (threshold=0 so we always get a score, even if it misses production gate)
+    trig, score = match_trigger_with_score(
+        transcript,
+        config.triggers,
+        algorithm=config.recognition.matching_algorithm,
+        threshold=0.0,
+    )
+
+    # Exact-phrase match: was the right phrase identified?
+    exact_ok = False
+    if wake_phrase and any(w == phrase for w in config.wake_words):
+        exact_ok = True
+    elif trig and phrase in (trig.commands or [trig.phrase]):
+        exact_ok = True
+
+    # RMS stats
+    rms_peak = max(rms_chunks, default=0.0)
+    rms_mean = float(np.mean(rms_chunks)) if rms_chunks else 0.0
+    chunks_above = sum(1 for r in rms_chunks if r > rms_threshold)
+
+    result = {
+        "phrase_played": phrase,
+        "transcript": transcript,
+        "exact_match": exact_ok,
+        "matched_trigger": trig.phrase if trig else None,
+        "matched_wake": wake_phrase,
+        "match_score": round(score, 1),
+        "production_threshold": config.recognition.matching_threshold,
+        "rms_peak": round(rms_peak, 4),
+        "rms_mean": round(rms_mean, 4),
+        "rms_threshold": rms_threshold,
+        "chunks_above_rms": chunks_above,
+        "total_chunks": len(rms_chunks),
+        "speech_ratio": round(chunks_above / len(rms_chunks), 3) if rms_chunks else 0.0,
+        "captured_seconds": round(captured_s, 2),
+        "gst_params": {
+            f.name: getattr(gst_cfg, f.name)
+            for f in dataclasses.fields(gst_cfg)
+            if f.name != "profiles"
+        },
+    }
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+
+# ---------------------------------------------------------------------------
+# Dataset printer
+# ---------------------------------------------------------------------------
+
+
+def _print_dataset(config) -> None:
+    """Print all wake words and trigger commands to stdout as a recording guide."""
+    lines = []
+    lines.append("")
+    lines.append("=== DATASET — phrases to record ===")
+    lines.append("")
+    lines.append("Wake words (say these to activate):")
+    for w in config.wake_words:
+        lines.append(f"  {w}")
+    lines.append("")
+    lines.append("Direct commands (no wake word needed):")
+    for t in config.triggers:
+        if not t.with_wake:
+            for cmd in (t.commands or [t.phrase]):
+                lines.append(f"  {cmd}")
+    lines.append("")
+    lines.append("Wake-gated commands (say a wake word first, then):")
+    for t in config.triggers:
+        if t.with_wake:
+            for cmd in (t.commands or [t.phrase]):
+                lines.append(f"  {cmd}")
+    lines.append("")
+    lines.append("One-breath examples (wake word + command in one utterance):")
+    wake = config.wake_words[0] if config.wake_words else "ehi serena"
+    for t in config.triggers:
+        if t.with_wake:
+            cmd = t.commands[0] if t.commands else t.phrase
+            lines.append(f"  {wake} {cmd}")
+    lines.append("")
+    lines.append("=" * 38)
+    lines.append("")
+    print("\n".join(lines), flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +540,65 @@ def main() -> None:
         metavar="FILE",
         help="replay a previously recorded WAV file instead of using the microphone",
     )
+
+    # --calibrate-gstreamer mode
+    parser.add_argument(
+        "--calibrate-gstreamer",
+        action="store_true",
+        help="one-shot GStreamer calibration: speak a phrase, capture, decode, print JSON result",
+    )
+    parser.add_argument(
+        "--phrase",
+        metavar="TEXT",
+        help="specific phrase to use in calibration (default: random from config)",
+    )
+    parser.add_argument(
+        "--listen-seconds",
+        type=float,
+        default=4.0,
+        metavar="N",
+        help="seconds to capture audio after the ready tone (default: 4.0)",
+    )
+    parser.add_argument(
+        "--rms-threshold",
+        type=float,
+        default=None,
+        metavar="F",
+        help="RMS threshold for speech-ratio stats (default: from config)",
+    )
+    # GStreamer parameter overrides
+    gst = parser.add_argument_group("GStreamer overrides (--calibrate-gstreamer)")
+    gst.add_argument("--source", dest="gst_source", metavar="SRC",
+                     help="pulsesrc | pipewiresrc")
+    gst.add_argument("--noise-suppression", dest="gst_noise_suppression",
+                     action="store_true", default=None)
+    gst.add_argument("--no-noise-suppression", dest="gst_noise_suppression",
+                     action="store_false")
+    gst.add_argument("--noise-suppression-level", dest="gst_noise_suppression_level",
+                     type=int, choices=[0, 1, 2, 3], metavar="0-3",
+                     help="0=mild 1=moderate 2=high 3=very-high")
+    gst.add_argument("--agc", dest="gst_agc", action="store_true", default=None)
+    gst.add_argument("--no-agc", dest="gst_agc", action="store_false")
+    gst.add_argument("--agc-target-level-dbfs", dest="gst_agc_target_level_dbfs",
+                     type=int, metavar="N",
+                     help="AGC target level in dBFS (negative int, e.g. -3)")
+    gst.add_argument("--agc-compression-gain-db", dest="gst_agc_compression_gain_db",
+                     type=int, metavar="N",
+                     help="AGC max compression gain in dB (0-90)")
+    gst.add_argument("--high-pass-filter", dest="gst_high_pass_filter",
+                     action="store_true", default=None)
+    gst.add_argument("--no-high-pass-filter", dest="gst_high_pass_filter",
+                     action="store_false")
+    gst.add_argument("--compressor", dest="gst_compressor",
+                     action="store_true", default=None)
+    gst.add_argument("--no-compressor", dest="gst_compressor", action="store_false")
+    gst.add_argument("--compressor-threshold", dest="gst_compressor_threshold",
+                     type=float, metavar="F",
+                     help="Compressor threshold, normalised 0.0-1.0")
+    gst.add_argument("--compressor-ratio", dest="gst_compressor_ratio",
+                     type=float, metavar="F",
+                     help="Compressor ratio (≥1.0)")
+
     args = parser.parse_args()
 
     from pathlib import Path
@@ -266,19 +619,27 @@ def main() -> None:
     import alexa_custom.stt as _stt_module
     import alexa_custom.tts as _tts_module
 
-    # Silence TTS — log instead of speaking.
+    secrets = load_secrets(conf_dir / "secrets.yaml")
+    config = load_config(conf_dir / "config.yaml", secrets=secrets)
+    if config is None:
+        print(f"ERROR: could not load {conf_dir / 'config.yaml'}", file=sys.stderr)
+        sys.exit(1)
+
+    from alexa_custom import audio_hw as _audio_hw
+    _audio_hw.configure(config)
+
+    # --calibrate-gstreamer: run one-shot calibration and exit (uses real TTS).
+    if args.calibrate_gstreamer:
+        _run_calibrate_gstreamer(args, config)
+        return
+
+    # All other modes: silence TTS — log instead of speaking.
     class _SilentTTS(_tts_module.TTSBackend):
         def say(self, text: str, lang: str = "it-IT") -> None:
             print(f"[tts]        {text!r}", flush=True)
 
     _silent_tts = _SilentTTS()
     _tts_module.get_engine = lambda: _silent_tts
-
-    secrets = load_secrets(conf_dir / "secrets.yaml")
-    config = load_config(conf_dir / "config.yaml", secrets=secrets)
-    if config is None:
-        print(f"ERROR: could not load {conf_dir / 'config.yaml'}", file=sys.stderr)
-        sys.exit(1)
 
     stop_event = threading.Event()
     connected_flag = threading.Event()
@@ -293,6 +654,10 @@ def main() -> None:
         print(f"alexa-stt: playing from {args.play}", file=sys.stderr)
     elif args.record:
         _stt_module.start_capture = _make_record_capture(args.record)
+        # Silence tones so they don't contaminate the recording.
+        import alexa_custom.stt_capture as _stt_cap
+        _stt_module.play_wake_beep = lambda *_a, **_kw: None
+        _stt_cap._play_timeout = lambda: None
 
     def on_stt_event(event: str, data: dict) -> None:
         if event == "listening":
@@ -327,6 +692,8 @@ def main() -> None:
         f"wake words={config.wake_words}",
         file=sys.stderr,
     )
+
+    _print_dataset(config)
 
     stt_thread = start_stt_thread(
         config=config,
