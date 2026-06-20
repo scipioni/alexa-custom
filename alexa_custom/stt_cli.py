@@ -151,6 +151,72 @@ class _RealTimePopen:
         return self._src.wait(timeout=timeout)
 
 
+class _WavFilePopen:
+    """Pure-Python WAV reader — fallback when ffmpeg/sox are absent.
+
+    Reads raw PCM frames from a WAV file at real-time pace and feeds them
+    through an os.pipe(), mimicking the Popen interface expected by the STT
+    pipeline.  Only works for WAV files already at 16 kHz / s16le; if the
+    file has a different rate or depth the output will be garbled.
+    """
+
+    def __init__(self, wav_path: str, channels: int, pad_s: float = 1.5) -> None:
+        import wave as _wave
+        import time as _time
+
+        self._returncode: int | None = None
+        r_fd, w_fd = os.pipe()
+        self.stdout = os.fdopen(r_fd, "rb", buffering=0)
+        chunk_frames = 4096 * channels // 2  # s16le: 2 bytes/sample
+        seconds_per_chunk = chunk_frames / 16000.0
+
+        def _feed() -> None:
+            try:
+                with _wave.open(wav_path, "rb") as wf:
+                    silence = b"\x00" * (chunk_frames * wf.getsampwidth() * wf.getnchannels())
+                    while True:
+                        t0 = _time.monotonic()
+                        data = wf.readframes(chunk_frames)
+                        if not data:
+                            break
+                        try:
+                            os.write(w_fd, data)
+                        except OSError:
+                            return
+                        elapsed = _time.monotonic() - t0
+                        delay = seconds_per_chunk - elapsed
+                        if delay > 0:
+                            _time.sleep(delay)
+                pad_chunks = int(pad_s / seconds_per_chunk) + 1
+                for _ in range(pad_chunks):
+                    try:
+                        os.write(w_fd, silence)
+                    except OSError:
+                        break
+                    _time.sleep(seconds_per_chunk)
+            finally:
+                self._returncode = 0
+                try:
+                    os.close(w_fd)
+                except OSError:
+                    pass
+
+        threading.Thread(target=_feed, daemon=True).start()
+
+    @property
+    def returncode(self):
+        return self._returncode
+
+    def poll(self):
+        return self._returncode
+
+    def terminate(self) -> None:
+        pass
+
+    def wait(self, timeout=None):
+        return self._returncode
+
+
 def _make_play_capture(play_path: str, stop_event: threading.Event):
     """Return a start_capture replacement that streams a WAV file at real-time speed."""
     import shutil
@@ -197,7 +263,7 @@ def _make_play_capture(play_path: str, stop_event: threading.Event):
                 "-",
             ]
         else:
-            raise RuntimeError("ffmpeg or sox is required for --play")
+            return _WavFilePopen(play_path, channels)
 
         src = subprocess.Popen(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0
@@ -219,6 +285,45 @@ def _make_record_capture(record_path: str):
         return _TeePopen(real_proc, channels, record_path)
 
     return _record_capture
+
+
+# ---------------------------------------------------------------------------
+# Dataset printer
+# ---------------------------------------------------------------------------
+
+
+def _print_dataset(config) -> None:
+    """Print all wake words and trigger commands to stdout as a recording guide."""
+    lines = []
+    lines.append("")
+    lines.append("=== DATASET — phrases to record ===")
+    lines.append("")
+    lines.append("Wake words (say these to activate):")
+    for w in config.wake_words:
+        lines.append(f"  {w}")
+    lines.append("")
+    lines.append("Direct commands (no wake word needed):")
+    for t in config.triggers:
+        if not t.with_wake:
+            for cmd in (t.commands or [t.phrase]):
+                lines.append(f"  {cmd}")
+    lines.append("")
+    lines.append("Wake-gated commands (say a wake word first, then):")
+    for t in config.triggers:
+        if t.with_wake:
+            for cmd in (t.commands or [t.phrase]):
+                lines.append(f"  {cmd}")
+    lines.append("")
+    lines.append("One-breath examples (wake word + command in one utterance):")
+    wake = config.wake_words[0] if config.wake_words else "ehi serena"
+    for t in config.triggers:
+        if t.with_wake:
+            cmd = t.commands[0] if t.commands else t.phrase
+            lines.append(f"  {wake} {cmd}")
+    lines.append("")
+    lines.append("=" * 38)
+    lines.append("")
+    print("\n".join(lines), flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +385,9 @@ def main() -> None:
         print(f"ERROR: could not load {conf_dir / 'config.yaml'}", file=sys.stderr)
         sys.exit(1)
 
+    from alexa_custom import audio_hw as _audio_hw
+    _audio_hw.configure(config)
+
     stop_event = threading.Event()
     connected_flag = threading.Event()
 
@@ -293,6 +401,10 @@ def main() -> None:
         print(f"alexa-stt: playing from {args.play}", file=sys.stderr)
     elif args.record:
         _stt_module.start_capture = _make_record_capture(args.record)
+        # Silence tones so they don't contaminate the recording.
+        import alexa_custom.stt_capture as _stt_cap
+        _stt_module.play_wake_beep = lambda *_a, **_kw: None
+        _stt_cap._play_timeout = lambda: None
 
     def on_stt_event(event: str, data: dict) -> None:
         if event == "listening":
@@ -327,6 +439,8 @@ def main() -> None:
         f"wake words={config.wake_words}",
         file=sys.stderr,
     )
+
+    _print_dataset(config)
 
     stt_thread = start_stt_thread(
         config=config,
