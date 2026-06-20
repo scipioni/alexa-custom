@@ -33,13 +33,14 @@ Training starts from the English checkpoint and adapts it to Italian via supervi
 
 ### Hardware
 
-- **Tiny streaming**: any NVIDIA GPU with ≥ 6 GB VRAM (RTX 3060 / 4060 or better).
-- **Medium streaming**: ≥ 24 GB VRAM (RTX 3090, A5000, A100 40 GB, or multi-GPU).
+- **Tiny streaming**: any NVIDIA GPU with ≥ 6 GB VRAM (RTX 3060 / 4060 or better),
+  or AMD GPU with ≥ 8 GB VRAM (RX 6700 XT or better).
+- **Medium streaming**: ≥ 24 GB VRAM (RTX 3090, A5000, A100 40 GB, RX 7900 XTX, or multi-GPU).
 - CPU-only training is possible but impractically slow (days per epoch).
 
 ### Software
 
-Python ≥ 3.10, CUDA ≥ 11.8.
+Python ≥ 3.10, CUDA ≥ 11.8 **or** ROCm ≥ 6.0.
 
 ```bash
 pip install -r requirements.txt
@@ -290,6 +291,146 @@ If you run out of memory, apply these in order (each trades speed or accuracy fo
 
 ---
 
+## Training on AMD GPUs (ROCm)
+
+The training scripts work on ROCm without code changes. Only the environment setup differs.
+
+### Supported hardware
+
+| GPU | Architecture | ROCm gfx | bf16 | fp16 |
+|---|---|---|---|---|
+| RX 6700 XT / 6800 / 6900 XT | RDNA2 | gfx1030 | No | Yes |
+| RX 7700 XT / 7800 XT / 7900 XT / 7900 XTX | RDNA3 | gfx1100 | Yes | Yes |
+| RX 9070 / 9070 XT | RDNA4 | gfx1200 | Yes | Yes |
+| MI100 | CDNA1 | gfx908 | No | Yes |
+| MI200 / MI210 / MI250 | CDNA2 | gfx90a | Yes | Yes |
+| MI300X | CDNA3 | gfx942 | Yes | Yes |
+
+### 1. Install ROCm
+
+Follow the [official ROCm install guide](https://rocm.docs.amd.com/projects/install-on-linux/en/latest/)
+for your distro. Verify with:
+
+```bash
+rocminfo | grep "gfx"
+```
+
+### 2. Install ROCm PyTorch
+
+Do **not** run `pip install torch` from `requirements.txt` first — it pulls the CUDA wheel.
+Install the ROCm wheel explicitly, then install the rest:
+
+```bash
+# ROCm 6.2 — adjust the rocm version suffix to match your install
+pip install torch torchvision torchaudio \
+    --index-url https://download.pytorch.org/whl/rocm6.2
+
+# Then install all other dependencies (torch is already satisfied)
+pip install -r requirements.txt
+```
+
+Verify PyTorch sees your GPU:
+
+```bash
+python -c "import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))"
+# Expected: True  AMD Radeon RX 7900 XTX  (or similar)
+```
+
+### 3. Set the gfx version override (consumer GPUs only)
+
+Official ROCm support targets datacenter GPUs (MI series). Consumer RDNA cards often need an
+explicit override so that ROCm targets the correct ISA:
+
+```bash
+# RDNA3 (RX 7000 series)
+export HSA_OVERRIDE_GFX_VERSION=11.0.0
+
+# RDNA2 (RX 6000 series)
+export HSA_OVERRIDE_GFX_VERSION=10.3.0
+
+# RDNA4 (RX 9000 series)
+export HSA_OVERRIDE_GFX_VERSION=12.0.0
+```
+
+Add the relevant line to your shell profile (`~/.bashrc` / `~/.zshrc`) so it persists across
+sessions, or prefix every command:
+
+```bash
+HSA_OVERRIDE_GFX_VERSION=11.0.0 python train.py ...
+```
+
+### 4. Specify precision explicitly
+
+`train.py` auto-detects precision via `torch.cuda.get_device_capability()`. On ROCm this
+returns `(0, 0)` for all devices, so auto-detection falls back to fp32. Always pass the
+precision flag manually:
+
+```bash
+# RDNA3 / CDNA2+ — bf16 preferred
+python train.py --dataset-dir ./data/italian/combined --model tiny-streaming --bf16
+
+# RDNA2 / MI100 — fp16 only
+python train.py --dataset-dir ./data/italian/combined --model tiny-streaming --fp16
+```
+
+### 5. Complete example — tiny streaming on RX 7900 XTX (24 GB)
+
+```bash
+export HSA_OVERRIDE_GFX_VERSION=11.0.0
+
+python train.py \
+    --dataset-dir ./data/italian/combined \
+    --model tiny-streaming \
+    --bf16 \
+    --per-device-batch-size 8 \
+    --gradient-accumulation 8 \
+    --export-onnx
+```
+
+### 6. Complete example — medium streaming on RX 7900 XTX (24 GB)
+
+The 245 M model is tight on 24 GB without FlashAttention (not available on RDNA via ROCm).
+Use batch size 1 and maximum gradient accumulation to compensate:
+
+```bash
+export HSA_OVERRIDE_GFX_VERSION=11.0.0
+
+python train.py \
+    --dataset-dir ./data/italian/combined \
+    --model medium-streaming \
+    --bf16 \
+    --per-device-batch-size 1 \
+    --gradient-accumulation 64 \
+    --freeze-encoder \
+    --export-onnx
+```
+
+Remove `--freeze-encoder` if you have ≥ 32 GB VRAM (MI200/MI300X or multi-GPU).
+
+### 7. Multi-GPU on ROCm
+
+ROCm supports multi-GPU training via `accelerate` exactly as on CUDA:
+
+```bash
+accelerate config   # select "multi-GPU", "ROCm" when prompted
+accelerate launch train.py \
+    --dataset-dir ./data/italian/combined \
+    --model medium-streaming \
+    --bf16
+```
+
+### Known limitations on ROCm
+
+- **No FlashAttention**: `flash-attn` does not build against ROCm for most consumer GPUs.
+  Gradient checkpointing (`--gradient-checkpointing`, on by default) partially compensates
+  for the higher activation memory, but throughput will be lower than an equivalent NVIDIA GPU.
+- **`torch.compile` may be unstable**: avoid `torch.compile()` calls if you extend the scripts.
+- **bitsandbytes QLoRA is unsupported on ROCm** at the time of writing. Use full fine-tuning
+  or `--freeze-encoder` instead of LoRA-based memory reduction.
+- **ONNX export** runs on CPU and is fully ROCm-agnostic — no changes needed.
+
+---
+
 ## Manual ONNX export
 
 If you skipped `--export-onnx` during training, export at any time:
@@ -365,6 +506,18 @@ WER varies significantly with audio quality, domain, and speaker diversity in yo
 
 **`optimum-cli: command not found`**
 → Install with `pip install optimum[exporters]`.
+
+**ROCm: `RuntimeError: HIP error: invalid device function`**
+→ The gfx override is missing or wrong. Run `rocminfo | grep gfx` to find your GPU's ISA,
+  then set `HSA_OVERRIDE_GFX_VERSION` to the matching value (e.g. `11.0.0` for gfx1100).
+
+**ROCm: training runs but produces NaN loss immediately**
+→ Switch from `--bf16` to `--fp16`. Some RDNA2 cards advertise bf16 but produce incorrect
+  results in practice. fp16 is reliable on all supported AMD GPUs.
+
+**ROCm: `pip install -r requirements.txt` overwrites the ROCm PyTorch wheel with CUDA**
+→ Install the ROCm wheel first (step 2 above), then pin torch in requirements.txt or pass
+  `--extra-index-url https://download.pytorch.org/whl/rocm6.2` when installing the rest.
 
 ---
 
