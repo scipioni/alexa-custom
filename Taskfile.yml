@@ -232,12 +232,16 @@ tasks:
       - sudo cp setup/newpie-autosuspend.service /etc/systemd/system/newpie-autosuspend.service
       - sudo systemctl daemon-reload
       - sudo systemctl enable --now newpie-autosuspend.service
-      # Switch device from pro-audio to analog-stereo profile (pro-audio disables endpoints on NewPie)
-      - pactl set-card-profile alsa_card.usb-0a12_NewPie_SABINESMICDFU-00 output:analog-stereo+input:analog-stereo || true
-      # Set WirePlumber persistent default routing by name (survives reboots)
+      # Set pro-audio profile — the only profile that exposes both a sink and source on the NewPie
+      # (combined output:analog-stereo+input:* profiles are not generated for this hardware)
+      - pactl set-card-profile alsa_card.usb-0a12_NewPie_SABINESMICDFU-00 pro-audio
+      # Set WirePlumber persistent default routing dynamically by name (survives reboots)
       # Must use default.configured.audio.* — WirePlumber reads these keys to restore state on restart
-      - pw-metadata -n default 0 default.configured.audio.sink '{"name":"alsa_output.usb-0a12_NewPie_SABINESMICDFU-00.analog-stereo"}' 'Spa:String:JSON'
-      - pw-metadata -n default 0 default.configured.audio.source '{"name":"alsa_input.usb-0a12_NewPie_SABINESMICDFU-00.analog-stereo"}' 'Spa:String:JSON'
+      - |
+        SINK=$(pactl list sinks short | awk '/[Nn]ew[Pp]ie/ && !/monitor/{print $2; exit}')
+        SOURCE=$(pactl list sources short | awk '/[Nn]ew[Pp]ie/ && !/monitor/{print $2; exit}')
+        [ -n "$SINK" ] && pw-metadata -n default 0 default.configured.audio.sink "{\"name\":\"$SINK\"}" 'Spa:String:JSON'
+        [ -n "$SOURCE" ] && pw-metadata -n default 0 default.configured.audio.source "{\"name\":\"$SOURCE\"}" 'Spa:String:JSON'
       # Unmute hardware PCM volume now (software volume is set from conf/config.yaml at startup)
       - amixer -c 0 sset PCM 100% || amixer -c NewPie sset PCM 100% || true
       # Install user service to re-apply PCM 100% after PipeWire init on every boot
