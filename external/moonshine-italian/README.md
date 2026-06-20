@@ -446,29 +446,102 @@ optimum-cli export onnx \
 
 ## Using the trained model
 
-### Python (HuggingFace transformers)
+The fine-tuned model is a standard **seq2seq encoder-decoder** (`ModelArch.TINY`), produced
+by HuggingFace's `MoonshineForConditionalGeneration`. This is distinct from the streaming
+architecture (`ModelArch.TINY_STREAMING`): the streaming decomposition
+(frontend / adapter / cross\_kv / decoder\_kv) is an inference-time optimisation that is
+compiled separately from training weights and is not exposed by the HuggingFace API.
+
+---
+
+### Option A — Moonshine C runtime (mic_transcriber_it.py)
+
+This is the fastest path: uses the same Moonshine C library as the built-in `mic_transcriber`,
+requires conversion of the ONNX files to ORT flatbuffer format first.
+
+**1. Convert `.onnx` → `.ort`**
+
+```bash
+python -m onnxruntime.tools.convert_onnx_models_to_ort \
+    --optimization_style Fixed \
+    output/moonshine-it-tiny-streaming/onnx/
+```
+
+This writes `encoder_model.ort` and `decoder_model_merged.ort` into the same directory.
+
+**2. Copy `tokenizer.bin` from the cached English model**
+
+The vocabulary is identical (fine-tuning changes weights only), so the English binary tokenizer
+works for Italian.
+
+```bash
+cp ~/.cache/moonshine_voice/download.moonshine.ai/model/medium-streaming-en/quantized/tokenizer.bin \
+   output/moonshine-it-tiny-streaming/onnx/
+```
+
+If you have not downloaded an English model yet:
+```bash
+python -m moonshine_voice.download --language en
+```
+
+**3. Run the transcriber**
+
+```bash
+python mic_transcriber_it.py --model-dir output/moonshine-it-tiny-streaming/onnx
+```
+
+The script selects a specific input device, adjusts the update interval, and prints a helpful
+error if the `.ort` files or `tokenizer.bin` are missing.
+
+```
+--model-dir        Path to the ORT model directory  [default: output/moonshine-it-tiny-streaming/onnx]
+--device           sounddevice input device index   [default: system default]
+--update-interval  Transcription update interval (s) [default: 0.5]
+```
+
+---
+
+### Option B — HuggingFace ONNX runtime (no conversion needed)
+
+Works directly from the `onnx/` directory produced by `--export-onnx`. Slightly slower than
+option A but requires no extra steps.
+
+```bash
+pip install optimum[onnxruntime]
+```
+
+```python
+from optimum.onnxruntime import ORTModelForSpeechSeq2Seq
+from transformers import AutoProcessor
+import soundfile as sf
+
+model_dir = "./output/moonshine-it-tiny-streaming/onnx"
+processor = AutoProcessor.from_pretrained(model_dir)
+model = ORTModelForSpeechSeq2Seq.from_pretrained(model_dir)
+
+audio, sr = sf.read("audio_italiano.wav")
+inputs = processor(audio, sampling_rate=sr, return_tensors="pt")
+ids = model.generate(**inputs)
+print(processor.batch_decode(ids, skip_special_tokens=True)[0])
+```
+
+---
+
+### Option C — HuggingFace PyTorch (no ONNX conversion, for evaluation / fine-tuning iteration)
 
 ```python
 from transformers import AutoProcessor, MoonshineForConditionalGeneration
 import soundfile as sf
 
-processor = AutoProcessor.from_pretrained("./output/moonshine-it-tiny-streaming/final")
-model = MoonshineForConditionalGeneration.from_pretrained(
-    "./output/moonshine-it-tiny-streaming/final"
-)
+model_dir = "./output/moonshine-it-tiny-streaming/final"
+processor = AutoProcessor.from_pretrained(model_dir)
+model = MoonshineForConditionalGeneration.from_pretrained(model_dir)
 
 audio, sr = sf.read("audio_italiano.wav")
 inputs = processor(audio, sampling_rate=sr, return_tensors="pt")
-predicted_ids = model.generate(**inputs)
-transcript = processor.batch_decode(predicted_ids, skip_special_tokens=True)[0]
-print(transcript)
+ids = model.generate(**inputs)
+print(processor.batch_decode(ids, skip_special_tokens=True)[0])
 ```
-
-### Moonshine C++ runtime (ONNX)
-
-Place the contents of the `onnx/` directory alongside a `tokenizer.bin` and
-`streaming_config.json` (copy from the original English model directory) and load with the
-standard Moonshine C API or Python bindings.
 
 ---
 
