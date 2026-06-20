@@ -23,7 +23,18 @@ Moonshine does not ship Italian ASR models out of the box. These scripts:
 
 4. **`mic_transcriber_it.py`** — microphone transcriber for the fine-tuned Italian model.
 
-A **`Taskfile.yml`** wraps the full pipeline — use `task --list` to see all targets.
+A **`Taskfile.yml`** wraps the full pipeline:
+
+```bash
+# Full pipeline — tiny streaming, no auth required (FLEURS ~10 h)
+task all:tiny
+
+# Full pipeline — medium streaming, with Common Voice (set HF_TOKEN first)
+HF_TOKEN=hf_xxx task all:medium
+
+# List all targets
+task --list
+```
 
 ### Models targeted
 
@@ -95,40 +106,42 @@ To create a token:
 
 ## Step 1 — Download the dataset
 
-`download_dataset.py` supports three Italian speech sources:
-
-| Source | Flag | Size | Auth |
-|---|---|---|---|
-| Mozilla Common Voice 17 | `common_voice` | ~200 h validated | HF token required |
-| Google FLEURS | `fleurs` | ~10 h | None |
-| Multilingual LibriSpeech | `mls` | ~230 h | None |
-
-### Quickstart (no auth, FLEURS only)
-
-Suitable for smoke-testing the pipeline. ~10 h of data.
+| Source | Size | Auth |
+|---|---|---|
+| Mozilla Common Voice 17 | ~200 h validated | HF token required |
+| Google FLEURS | ~10 h | None |
+| Multilingual LibriSpeech (MLS) | ~230 h | None |
 
 ```bash
-python download_dataset.py --sources fleurs
+# No auth — FLEURS only (~10 h, good for smoke-testing)
+task download
+
+# Recommended (~210 h) — set HF_TOKEN first
+HF_TOKEN=hf_YOUR_TOKEN_HERE task download
+
+# All sources including MLS (~440 h)
+HF_TOKEN=hf_YOUR_TOKEN_HERE task download:full
 ```
 
-### Recommended (~210 h)
+<details>
+<summary>Direct Python commands</summary>
 
 ```bash
+# FLEURS only
+python download_dataset.py --sources fleurs
+
+# Common Voice + FLEURS
 python download_dataset.py \
     --sources common_voice fleurs \
     --hf-token hf_YOUR_TOKEN_HERE
-```
 
-### Maximum coverage (~440 h)
-
-```bash
+# All sources
 python download_dataset.py \
     --sources common_voice fleurs mls \
     --hf-token hf_YOUR_TOKEN_HERE
 ```
 
-### Options
-
+Options:
 ```
 --sources          One or more of: common_voice fleurs mls  [default: common_voice fleurs]
 --output-dir       Where to write the merged dataset        [default: ./data/italian]
@@ -136,6 +149,8 @@ python download_dataset.py \
 --hf-token         HuggingFace access token
 --num-proc         CPU workers for text normalisation        [default: 4]
 ```
+
+</details>
 
 ### What the script does
 
@@ -164,11 +179,8 @@ data/italian/
 
 ## Step 2 — Train
 
-`train.py` fine-tunes either `tiny-streaming` or `medium-streaming` using curriculum learning.
-
-### Curriculum learning
-
-Training proceeds in three phases, each restricting the dataset to a duration window:
+`train.py` uses curriculum learning: three phases that progressively widen the duration window
+until the model is trained on the full range of clip lengths.
 
 | Phase | Duration window | Default steps | Advance when WER < |
 |---|---|---|---|
@@ -176,72 +188,55 @@ Training proceeds in three phases, each restricting the dataset to a duration wi
 | `medium` | 2 – 12 s | 4 000 | 35 % |
 | `full` | 0.5 – 20 s | remaining | — |
 
-Short clips are easier to overfit correctly; starting there accelerates convergence before the
-model is exposed to longer, noisier samples.
-
-### Tiny streaming
-
-Fits on a single 12 GB GPU (RTX 3060/3080, RTX 4060/4070 Ti, etc.).
-
 ```bash
-python train.py \
-    --dataset-dir ./data/italian/combined \
-    --model tiny-streaming
+# Tiny streaming — fits on 12 GB VRAM (RTX 3060/3080, RTX 4060/4070 Ti…)
+task train:tiny
+
+# Medium streaming — requires ≥ 24 GB VRAM
+task train:medium
+
+# Resume from the latest checkpoint after an interruption
+task train:tiny:resume
+task train:medium:resume
+
+# Pass extra flags with --
+task train:tiny -- --fp16 --eval-steps 200 --tensorboard
 ```
 
-Mixed precision is auto-detected (bf16 on Ampere+, fp16 otherwise). Gradient checkpointing is
-on by default.
+ONNX export runs automatically at the end of each `train:*` task.
+Mixed precision is auto-detected (bf16 on Ampere+ / RDNA3+, fp16 otherwise) unless overridden.
 
-Effective batch size: `8 (per-device) × 8 (accumulation) = 64`.
-
-### Medium streaming
-
-Requires ≥ 24 GB VRAM. Reduce `per-device-batch-size` to 1 if you only have 24 GB.
+<details>
+<summary>Direct Python commands and all options</summary>
 
 ```bash
-python train.py \
-    --dataset-dir ./data/italian/combined \
-    --model medium-streaming \
-    --per-device-batch-size 2 \
-    --gradient-accumulation 32
-```
-
-### With ONNX export
-
-Automatically exports the final model to ONNX after training, ready for the Moonshine runtime:
-
-```bash
+# Tiny — effective batch 64 (8 per-device × 8 accumulation)
 python train.py \
     --dataset-dir ./data/italian/combined \
     --model tiny-streaming \
     --export-onnx
-```
 
-### With TensorBoard
+# Medium — reduce batch size for 24 GB GPUs
+python train.py \
+    --dataset-dir ./data/italian/combined \
+    --model medium-streaming \
+    --per-device-batch-size 2 \
+    --gradient-accumulation 32 \
+    --export-onnx
 
-```bash
+# Resume from a specific checkpoint
 python train.py \
     --dataset-dir ./data/italian/combined \
     --model tiny-streaming \
-    --tensorboard
+    --resume-from-checkpoint ./output/moonshine-it-tiny-streaming/phase-medium/checkpoint-1500 \
+    --export-onnx
 
-# In a separate terminal:
-tensorboard --logdir ./output/moonshine-it-tiny-streaming
+# TensorBoard monitoring
+python train.py --dataset-dir ./data/italian/combined --model tiny-streaming --tensorboard
+tensorboard --logdir ./output/moonshine-it-tiny-streaming   # separate terminal
 ```
 
-### Resume after interruption
-
-Each curriculum phase saves checkpoints every `--eval-steps` steps. Resume from the last one:
-
-```bash
-python train.py \
-    --dataset-dir ./data/italian/combined \
-    --model tiny-streaming \
-    --resume-from-checkpoint ./output/moonshine-it-tiny-streaming/phase-medium/checkpoint-1500
-```
-
-### All options
-
+All options:
 ```
 --model                  tiny-streaming | medium-streaming | tiny | base  [default: tiny-streaming]
 --base-model-id          Override HuggingFace model ID (skips registry lookup)
@@ -263,6 +258,8 @@ python train.py \
 --tensorboard            Enable TensorBoard logging
 --seed                                                                      [default: 42]
 ```
+
+</details>
 
 ### Output structure
 
@@ -475,7 +472,20 @@ Two deployment paths are available from the same fine-tuned weights:
 
 ### Non-streaming deployment (ModelArch.TINY)
 
-**1. Export ONNX** (skip if you used `--export-onnx` during training)
+```bash
+# Convert ONNX → ORT and copy tokenizer.bin in one step
+task export:ort:tiny     # for tiny-streaming
+task export:ort:medium   # for medium-streaming
+
+# Run
+task run:tiny
+task run:medium
+```
+
+<details>
+<summary>Manual steps</summary>
+
+**1. Export ONNX** (skip if you used `--export-onnx` / `task train:*` during training)
 
 ```bash
 optimum-cli export onnx \
@@ -484,8 +494,8 @@ optimum-cli export onnx \
     output/moonshine-it-tiny-streaming/onnx
 ```
 
-This produces `encoder_model.onnx`, `decoder_model_merged.onnx`, and supporting JSON files
-in the output directory. Only the two `.onnx` files matter for the next step.
+Produces `encoder_model.onnx`, `decoder_model_merged.onnx`, and supporting JSON files.
+Only the two `.onnx` files are needed for the next step.
 
 **2. Convert `.onnx` → `.ort`**
 
@@ -495,19 +505,15 @@ python -m onnxruntime.tools.convert_onnx_models_to_ort \
     output/moonshine-it-tiny-streaming/onnx/
 ```
 
-Produces `encoder_model.ort` and `decoder_model_merged.ort` alongside the `.onnx` files.
-
 **3. Copy `tokenizer.bin`**
 
-Fine-tuning only changes weights — the vocabulary is identical to English, so the binary
-tokenizer is reused directly.
+Fine-tuning changes weights only — the vocabulary is identical to English.
 
 ```bash
-# If you have any Moonshine model cached already:
 cp ~/.cache/moonshine_voice/download.moonshine.ai/model/medium-streaming-en/quantized/tokenizer.bin \
    output/moonshine-it-tiny-streaming/onnx/
 
-# If not, download the English model first:
+# If no English model is cached yet:
 python -m moonshine_voice.download --language en
 ```
 
@@ -517,13 +523,28 @@ python -m moonshine_voice.download --language en
 python mic_transcriber_it.py --model-dir output/moonshine-it-tiny-streaming/onnx
 ```
 
+</details>
+
 ---
 
-### Streaming deployment (ModelArch.TINY_STREAMING)
+### Streaming deployment (ModelArch.TINY_STREAMING / MEDIUM_STREAMING)
 
-The streaming inference path splits the model into five separately-invocable ONNX components.
-`export_streaming.py` traces each component from the fine-tuned HuggingFace weights and
-generates the `streaming_config.json` that the Moonshine C runtime needs.
+The streaming path splits the model into five separately-invocable components that the
+Moonshine C runtime calls incrementally as audio frames arrive. `export_streaming.py` traces
+each component from the fine-tuned HuggingFace weights and generates `streaming_config.json`.
+
+```bash
+# Export streaming ORT files
+task export:streaming:tiny     # → output/moonshine-it-tiny-streaming/streaming/
+task export:streaming:medium   # → output/moonshine-it-medium-streaming/streaming/
+
+# Run
+task run:tiny:streaming
+task run:medium:streaming
+```
+
+<details>
+<summary>Manual steps</summary>
 
 **1. Export streaming components**
 
@@ -539,8 +560,10 @@ python export_streaming.py \
     --output-dir output/moonshine-it-medium-streaming/streaming
 ```
 
-This traces each component, converts to `.ort`, and copies `tokenizer.bin` automatically.
-Expected output:
+</details>
+
+`export_streaming.py` traces each component, converts to `.ort`, and copies `tokenizer.bin`
+automatically. Output directory:
 
 ```
 output/moonshine-it-tiny-streaming/streaming/
@@ -553,55 +576,33 @@ output/moonshine-it-tiny-streaming/streaming/
   tokenizer.bin
 ```
 
-The generated `streaming_config.json` for `tiny-streaming` looks like this (values derived
-automatically from the model's `config.json`):
+The generated `streaming_config.json` for `tiny-streaming` (all values derived automatically
+from `config.json`):
 
 ```json
 {
-  "encoder_dim": 320,
-  "decoder_dim": 320,
-  "depth": 6,
-  "nheads": 8,
-  "head_dim": 40,
-  "vocab_size": 32768,
-  "bos_id": 1,
-  "eos_id": 2,
-  "frame_len": 80,
-  "total_lookahead": 16,
-  "d_model_frontend": 320,
-  "c1": 640,
-  "c2": 320,
+  "encoder_dim": 320,  "decoder_dim": 320,  "depth": 6,
+  "nheads": 8,  "head_dim": 40,  "vocab_size": 32768,
+  "bos_id": 1,  "eos_id": 2,  "frame_len": 80,  "total_lookahead": 16,
+  "d_model_frontend": 320,  "c1": 640,  "c2": 320,
   "frontend_state_shapes": {
-    "sample_buffer": [1, 79],
-    "sample_len":    [1],
-    "conv1_buffer":  [1, 640, 4],
-    "conv2_buffer":  [1, 320, 4],
-    "frame_count":   [1]
+    "sample_buffer": [1, 79],  "sample_len": [1],
+    "conv1_buffer": [1, 640, 4],  "conv2_buffer": [1, 320, 4],  "frame_count": [1]
   }
 }
 ```
 
-For `medium-streaming` the values differ: `encoder_dim=768`, `decoder_dim=640`, `depth=14`,
-`nheads=10`, `head_dim=64`, `c1=1536`, `c2=768`.
-
-**2. Run with streaming inference**
-
-```bash
-python mic_transcriber_it.py \
-    --model-dir output/moonshine-it-tiny-streaming/streaming \
-    --streaming
-```
-
-The `--streaming` flag selects `ModelArch.TINY_STREAMING`; omitting it selects
-`ModelArch.TINY`.
+For `medium-streaming`: `encoder_dim=768`, `decoder_dim=640`, `depth=14`, `nheads=10`,
+`head_dim=64`, `c1=1536`, `c2=768`.
 
 **`mic_transcriber_it.py` options**
 
 ```
---model-dir        Path to ORT model directory            [default: output/.../onnx]
---streaming        Use ModelArch.TINY_STREAMING           [default: TINY]
---device           sounddevice input device index         [default: system default]
---update-interval  Transcription update interval (s)      [default: 0.5]
+--model-dir        Path to ORT model directory (non-streaming or streaming)
+--streaming        Use TINY_STREAMING or MEDIUM_STREAMING arch  [default: TINY]
+--medium           Select MEDIUM_STREAMING instead of TINY_STREAMING (with --streaming)
+--device           sounddevice input device index               [default: system default]
+--update-interval  Transcription update interval in seconds     [default: 0.5]
 ```
 
 ---
