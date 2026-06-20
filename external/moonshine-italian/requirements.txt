@@ -12,6 +12,7 @@ audioread>=3.0.0
 
 # Export to ONNX (for deployment)
 optimum[exporters]>=1.17.0
+optimum-onnx>=0.1.0           # Required for Optimum 2.0+ ONNX exports
 onnx>=1.15.0
 onnxruntime>=1.17.0
 
