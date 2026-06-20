@@ -53,8 +53,8 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 MODEL_REGISTRY = {
-    "tiny-streaming": "UsefulSensors/moonshine-tiny-streaming",
-    "medium-streaming": "UsefulSensors/moonshine-medium-streaming",
+    "tiny-streaming": "UsefulSensors/moonshine-streaming-tiny",
+    "medium-streaming": "UsefulSensors/moonshine-streaming-medium",
     # Non-streaming fallbacks (same seq2seq API, usable if streaming HF weights
     # are not yet released as PyTorch checkpoints):
     "tiny": "UsefulSensors/moonshine-tiny",
@@ -146,7 +146,6 @@ class DataCollatorSpeechSeq2Seq:
                            for f in features]
         labels_batch = self.processor.tokenizer.pad(
             label_features,
-            max_length=self.max_label_length,
             padding=True,
             return_tensors="pt",
         )
@@ -158,8 +157,26 @@ class DataCollatorSpeechSeq2Seq:
         if (labels[:, 0] == self.processor.tokenizer.bos_token_id).all():
             labels = labels[:, 1:]
 
+        # Shift labels to create decoder_input_ids (required because label_smoothing_factor pops "labels" inside the trainer)
+        bos_token_id = self.processor.tokenizer.bos_token_id
+        if bos_token_id is None:
+            bos_token_id = 1
+        pad_token_id = self.processor.tokenizer.pad_token_id
+        if pad_token_id is None:
+            pad_token_id = 0
+
+        # Create copy of labels with -100 replaced by pad_token_id to shift safely
+        clean_labels = labels.clone()
+        clean_labels.masked_fill_(clean_labels == -100, pad_token_id)
+
+        decoder_input_ids = clean_labels.new_zeros(clean_labels.shape)
+        decoder_input_ids[:, 1:] = clean_labels[:, :-1].clone()
+        decoder_input_ids[:, 0] = bos_token_id
+
         return {
-            "input_features": inputs.input_features,
+            "input_values": inputs.input_values,
+            "attention_mask": inputs.attention_mask,
+            "decoder_input_ids": decoder_input_ids,
             "labels": labels,
         }
 
@@ -251,7 +268,7 @@ def train_phase(
         fp16=fp16,
         bf16=bf16,
         gradient_checkpointing=args.gradient_checkpointing,
-        evaluation_strategy="steps",
+        eval_strategy="steps",
         eval_steps=args.eval_steps,
         save_strategy="steps",
         save_steps=args.eval_steps,
@@ -278,7 +295,7 @@ def train_phase(
         args=training_args,
         train_dataset=phase_dataset["train"],
         eval_dataset=phase_dataset.get("validation"),
-        tokenizer=processor.feature_extractor,
+        processing_class=processor.feature_extractor,
         data_collator=collator,
         compute_metrics=compute_metrics,
         callbacks=callbacks,
