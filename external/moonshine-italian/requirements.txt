@@ -24,3 +24,5 @@ schedulefree>=1.2.5           # optional schedule-free AdamW optimizer
 # Common Voice (mozilla-foundation/common_voice_17_0) requires HF auth:
 #   huggingface-hub login  OR  pass --hf-token
 huggingface-hub>=0.20.0
+
+torchcodec>=0.14.0
