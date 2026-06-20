@@ -35,9 +35,12 @@ from alexa_custom.stt_backends import (
     get_stt_backend,
     _phrases_to_grammar,
     _grammar_json,
+    _vosk_confidence,
+    _vosk_check_result,
 )
 from alexa_custom.stt_phonetics import (
     _match_wake_word,
+    _wake_token_count,
     _approx_wake_match,
     _resolve_triggers,
     _build_alias_map,
@@ -67,6 +70,9 @@ __all__ = [
     "get_stt_backend",
     "_phrases_to_grammar",
     "_grammar_json",
+    "_vosk_confidence",
+    "_vosk_check_result",
+    "_loop_grammar",
     "_approx_wake_match",
     "_resolve_triggers",
     "_build_alias_map",
@@ -112,8 +118,32 @@ def is_stt_sleeping() -> bool:
     return _stt_sleeping
 
 
+def _loop_grammar(cfg: ActionsConfig) -> str | None:
+    """Grammar for the always-on recognizer, or None for free-text.
+
+    When ``stt.vosk_grammar`` is set, restrict the recognizer to the wake words
+    plus every trigger command/alias so it can only emit phrases the matcher
+    accepts — an omitted phrase is physically unrecognisable. Confidence gating
+    (``stt.confidence``) then rejects whatever the constrained model snapped out
+    of noise.
+    """
+    if not cfg.stt.vosk_grammar:
+        return None
+    phrases: list[str] = list(cfg.wake_words)
+    for t in cfg.triggers:
+        phrases.extend(t.commands or [t.phrase])
+        phrases.extend(t.aliases)
+    return _phrases_to_grammar(phrases, label="wake-loop")
+
+
 def _get_backend_key(cfg: ActionsConfig) -> tuple:
-    return (cfg.stt.backend, cfg.stt.model_path, cfg.stt.num_threads)
+    return (
+        cfg.stt.backend,
+        cfg.stt.model_path,
+        cfg.stt.num_threads,
+        cfg.stt.vosk_grammar,
+        _loop_grammar(cfg),
+    )
 
 
 def _dump_trigger_wav(
@@ -218,7 +248,14 @@ def _recognition_loop(
     )
 
     _listen_fn = _make_listen_fn(
-        proc, channels, backend, stop_event, on_stt_event, _vad_silence_ms
+        proc,
+        channels,
+        backend,
+        stop_event,
+        on_stt_event,
+        _vad_silence_ms,
+        confidence=config.stt.confidence,
+        confidence_mode=config.stt.confidence_mode,
     )
     _ctx = ActionContext(
         telegram_client=telegram_client,
@@ -436,14 +473,44 @@ def _recognition_loop(
         if not text:
             continue
 
-        logger.debug("Transcript: %r", text)
-
         # --- Wake word detection ---
         wake_phrase, residual = _match_wake_word(
             text,
             config.wake_words,
             threshold=config.stt.wake_match_threshold,
         )
+
+        # --- Acoustic confidence gate ---
+        # In grammar mode the recognizer snaps noise onto the closest phrase;
+        # the per-word `conf` is the only signal that separates that from a real
+        # utterance. 0.0 disables the gate (free-text default). When a wake word
+        # matched, score only its tokens (transcript minus the trailing command)
+        # — this mirrors the offline eval harness (_vosk_check_result), so
+        # first/min/mean behave identically online and offline, and a low-
+        # confidence trailing command can't sink an otherwise-clear wake. The
+        # command/direct-trigger path (no wake word) is scored over the full
+        # transcript, since there is no wake portion to isolate.
+        _conf = None
+        if config.stt.confidence > 0.0 and isinstance(backend, VoskSTT):
+            _n_words = (
+                _wake_token_count(text, residual) if wake_phrase is not None else None
+            )
+            _conf = backend.last_confidence(
+                config.stt.confidence_mode, n_words=_n_words
+            )
+            if _conf < config.stt.confidence:
+                logger.debug(
+                    "Confidence gate rejected %r (conf=%.2f < %.2f, mode=%s, wake=%s)",
+                    text,
+                    _conf,
+                    config.stt.confidence,
+                    config.stt.confidence_mode,
+                    wake_phrase,
+                )
+                metrics.inc("confidence_rejections")
+                continue
+
+        logger.debug("Transcript: %r (conf=%s)", text, _conf)
 
         if wake_phrase is not None:
             if is_stt_sleeping():
@@ -676,11 +743,16 @@ def run_stt_worker(
 
     try:
         t0 = time.monotonic()
-        backend = get_stt_backend(current_config.stt)
+        backend = get_stt_backend(
+            current_config.stt, grammar=_loop_grammar(current_config)
+        )
         logger.info(
-            "STT backend (%s) loaded in %.1fs",
+            "STT backend (%s) loaded in %.1fs (grammar=%s, confidence=%.2f/%s)",
             current_config.stt.backend,
             time.monotonic() - t0,
+            current_config.stt.vosk_grammar,
+            current_config.stt.confidence,
+            current_config.stt.confidence_mode,
         )
     except RuntimeError as e:
         logger.error("STT backend creation failed: %s", e)
@@ -699,7 +771,9 @@ def run_stt_worker(
             if new_key != backend_key:
                 try:
                     t0 = time.monotonic()
-                    backend = get_stt_backend(current_config.stt)
+                    backend = get_stt_backend(
+                        current_config.stt, grammar=_loop_grammar(current_config)
+                    )
                     backend_key = new_key
                     logger.info(
                         "STT backend reloaded (%.1fs) after config change",

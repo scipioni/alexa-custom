@@ -30,6 +30,20 @@ def _word_overlap_score(phrase_words: list[str], text_words: set[str]) -> float:
     return matched / total
 
 
+def _wake_token_count(text: str, residual: str) -> int:
+    """Number of transcript tokens forming the wake word (``text`` minus ``residual``).
+
+    Used to slice a Vosk per-word confidence list down to just the wake-word
+    portion, so a low-confidence trailing command can't drag the wake's
+    confidence below the gate. Counts raw ``text`` tokens (these align 1:1 with
+    Vosk's ``result`` word list) but compares them in normalized form against the
+    residual. Never returns 0.
+    """
+    residual_words = set(normalize_text(residual).split())
+    n = sum(1 for w in text.split() if normalize_text(w) not in residual_words)
+    return n or 1
+
+
 def _match_wake_word(
     text: str,
     wake_words: list[str],
