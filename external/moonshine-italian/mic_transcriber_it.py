@@ -49,7 +49,7 @@ class TerminalListener(TranscriptEventListener):
             print(" " * pad, end="", flush=True)
         self._last_len = len(text)
 
-    def on_line_started(self, _event) -> None:
+    def on_line_started(self, event) -> None:  # noqa: ARG002
         self._last_len = 0
 
     def on_line_text_changed(self, event) -> None:
@@ -66,20 +66,46 @@ class FileListener(TranscriptEventListener):
         print(event.line.text, flush=True)
 
 
+_NON_STREAMING_FILES = ["encoder_model.ort", "decoder_model_merged.ort", "tokenizer.bin"]
+_STREAMING_FILES = [
+    "frontend.ort", "encoder.ort", "adapter.ort",
+    "cross_kv.ort", "decoder_kv.ort",
+    "streaming_config.json", "tokenizer.bin",
+]
+
+
 def _check_model_dir(model_dir: Path) -> None:
-    required = ["encoder_model.ort", "decoder_model_merged.ort", "tokenizer.bin"]
+    # Auto-detect which file set to validate based on what's present
+    has_streaming  = (model_dir / "frontend.ort").exists()
+    has_non_stream = (model_dir / "encoder_model.ort").exists()
+
+    if has_streaming:
+        required = _STREAMING_FILES
+    elif has_non_stream:
+        required = _NON_STREAMING_FILES
+    else:
+        # Neither set found — check both and report
+        required = _NON_STREAMING_FILES
+
     missing = [f for f in required if not (model_dir / f).exists()]
-    if missing:
-        print(f"ERROR: missing files in {model_dir}:", file=sys.stderr)
-        for f in missing:
-            print(f"  {f}", file=sys.stderr)
+    if not missing:
+        return
+
+    print(f"ERROR: missing files in {model_dir}:", file=sys.stderr)
+    for f in missing:
+        print(f"  {f}", file=sys.stderr)
+
+    if has_streaming or not has_non_stream:
+        print("\nFor streaming ORT files, run:", file=sys.stderr)
+        print(f"  python export_streaming.py --model-dir <final-dir> --output-dir {model_dir}", file=sys.stderr)
+    else:
         print("\nConvert .onnx → .ort:", file=sys.stderr)
         print(f"  python -m onnxruntime.tools.convert_onnx_models_to_ort "
               f"--optimization_style Fixed {model_dir}/", file=sys.stderr)
         print("\nCopy tokenizer.bin from any cached English model:", file=sys.stderr)
         print(f"  cp ~/.cache/moonshine_voice/download.moonshine.ai/model/"
               f"medium-streaming-en/quantized/tokenizer.bin {model_dir}/", file=sys.stderr)
-        sys.exit(1)
+    sys.exit(1)
 
 
 def main() -> None:
@@ -90,7 +116,19 @@ def main() -> None:
     parser.add_argument(
         "--model-dir",
         default="output/moonshine-it-tiny-streaming/onnx",
-        help="Directory containing encoder_model.ort, decoder_model_merged.ort, tokenizer.bin",
+        help=(
+            "Non-streaming: directory with encoder_model.ort + decoder_model_merged.ort + tokenizer.bin\n"
+            "Streaming:     directory with frontend.ort + encoder.ort + adapter.ort + "
+            "cross_kv.ort + decoder_kv.ort + streaming_config.json + tokenizer.bin"
+        ),
+    )
+    parser.add_argument(
+        "--streaming",
+        action="store_true",
+        help=(
+            "Use ModelArch.TINY_STREAMING (requires streaming ORT files from export_streaming.py). "
+            "Default is ModelArch.TINY (non-streaming, from standard ONNX export)."
+        ),
     )
     parser.add_argument(
         "--device",
@@ -107,12 +145,14 @@ def main() -> None:
     args = parser.parse_args()
 
     model_dir = Path(args.model_dir).resolve()
+    model_arch = ModelArch.TINY_STREAMING if args.streaming else ModelArch.TINY
     _check_model_dir(model_dir)
 
-    print(f"Loading Italian model from {model_dir} ...", file=sys.stderr)
+    arch_label = "TINY_STREAMING" if args.streaming else "TINY"
+    print(f"Loading Italian model ({arch_label}) from {model_dir} ...", file=sys.stderr)
     transcriber = MicTranscriber(
         model_path=str(model_dir),
-        model_arch=ModelArch.TINY,
+        model_arch=model_arch,
         update_interval=args.update_interval,
         device=args.device,
     )

@@ -27,6 +27,20 @@ Moonshine does not ship Italian ASR models out of the box. These scripts:
 Training starts from the English checkpoint and adapts it to Italian via supervised fine-tuning
 (cross-entropy loss on the decoder token sequence). No training from scratch.
 
+### Training vs deployment architecture
+
+HuggingFace trains the model as a standard **seq2seq encoder-decoder** regardless of the base
+checkpoint. After training, two deployment paths are available:
+
+| Path | Script | ModelArch | Inference mode |
+|---|---|---|---|
+| Non-streaming | `train.py --export-onnx` + ORT conversion | `TINY` | Full-context seq2seq |
+| Streaming | `export_streaming.py` | `TINY_STREAMING` | Frame-by-frame, lower latency |
+
+Both paths use the same fine-tuned weights. The streaming path splits the model into five
+separately-invocable components (frontend / encoder / adapter / cross\_kv / decoder\_kv) that
+the Moonshine C runtime can call incrementally as audio arrives.
+
 ---
 
 ## Requirements
@@ -446,20 +460,29 @@ optimum-cli export onnx \
 
 ## Using the trained model
 
-The fine-tuned model is a standard **seq2seq encoder-decoder** (`ModelArch.TINY`), produced
-by HuggingFace's `MoonshineForConditionalGeneration`. This is distinct from the streaming
-architecture (`ModelArch.TINY_STREAMING`): the streaming decomposition
-(frontend / adapter / cross\_kv / decoder\_kv) is an inference-time optimisation that is
-compiled separately from training weights and is not exposed by the HuggingFace API.
+Two deployment paths are available from the same fine-tuned weights:
+
+| | Non-streaming (`ModelArch.TINY`) | Streaming (`ModelArch.TINY_STREAMING`) |
+|---|---|---|
+| Files needed | `encoder_model.ort` + `decoder_model_merged.ort` + `tokenizer.bin` | `frontend.ort` + `encoder.ort` + `adapter.ort` + `cross_kv.ort` + `decoder_kv.ort` + `streaming_config.json` + `tokenizer.bin` |
+| Produced by | `train.py --export-onnx` + ORT conversion | `export_streaming.py` |
+| Latency | Transcribes after speech ends | Frame-by-frame, lower latency |
+| Inference | Full-context attention over whole utterance | Causal sliding-window, incremental |
 
 ---
 
-### Option A — Moonshine C runtime (mic_transcriber_it.py)
+### Non-streaming deployment (ModelArch.TINY)
 
-This is the fastest path: uses the same Moonshine C library as the built-in `mic_transcriber`,
-requires conversion of the ONNX files to ORT flatbuffer format first.
+**1. Export ONNX** (if not already done during training)
 
-**1. Convert `.onnx` → `.ort`**
+```bash
+optimum-cli export onnx \
+    --model output/moonshine-it-tiny-streaming/final \
+    --task automatic-speech-recognition-with-past \
+    output/moonshine-it-tiny-streaming/onnx
+```
+
+**2. Convert `.onnx` → `.ort`**
 
 ```bash
 python -m onnxruntime.tools.convert_onnx_models_to_ort \
@@ -467,41 +490,81 @@ python -m onnxruntime.tools.convert_onnx_models_to_ort \
     output/moonshine-it-tiny-streaming/onnx/
 ```
 
-This writes `encoder_model.ort` and `decoder_model_merged.ort` into the same directory.
+Produces `encoder_model.ort` and `decoder_model_merged.ort` alongside the `.onnx` files.
 
-**2. Copy `tokenizer.bin` from the cached English model**
+**3. Copy `tokenizer.bin`**
 
-The vocabulary is identical (fine-tuning changes weights only), so the English binary tokenizer
-works for Italian.
+Fine-tuning only changes weights — the vocabulary is identical to English, so the binary
+tokenizer is reused directly.
 
 ```bash
+# If you have any Moonshine model cached already:
 cp ~/.cache/moonshine_voice/download.moonshine.ai/model/medium-streaming-en/quantized/tokenizer.bin \
    output/moonshine-it-tiny-streaming/onnx/
-```
 
-If you have not downloaded an English model yet:
-```bash
+# If not, download the English model first:
 python -m moonshine_voice.download --language en
 ```
 
-**3. Run the transcriber**
+**4. Run**
 
 ```bash
 python mic_transcriber_it.py --model-dir output/moonshine-it-tiny-streaming/onnx
 ```
 
-The script selects a specific input device, adjusts the update interval, and prints a helpful
-error if the `.ort` files or `tokenizer.bin` are missing.
+---
+
+### Streaming deployment (ModelArch.TINY_STREAMING)
+
+The streaming inference path splits the model into five separately-invocable ONNX components.
+`export_streaming.py` traces each component from the fine-tuned HuggingFace weights and
+generates the `streaming_config.json` that the Moonshine C runtime needs.
+
+**1. Export streaming components**
+
+```bash
+python export_streaming.py \
+    --model-dir output/moonshine-it-tiny-streaming/final \
+    --output-dir output/moonshine-it-tiny-streaming/streaming
+```
+
+This runs the ONNX trace, converts to `.ort`, and copies `tokenizer.bin` automatically.
+Expected output:
 
 ```
---model-dir        Path to the ORT model directory  [default: output/moonshine-it-tiny-streaming/onnx]
---device           sounddevice input device index   [default: system default]
---update-interval  Transcription update interval (s) [default: 0.5]
+output/moonshine-it-tiny-streaming/streaming/
+  frontend.ort          audio frontend (conv layers + state)
+  encoder.ort           causal sliding-window transformer body
+  adapter.ort           encoder → decoder projection
+  cross_kv.ort          precomputed cross-attention K/V per decoder layer
+  decoder_kv.ort        one decoder step with KV cache
+  streaming_config.json architecture parameters for the C runtime
+  tokenizer.bin
+```
+
+**2. Run with streaming inference**
+
+```bash
+python mic_transcriber_it.py \
+    --model-dir output/moonshine-it-tiny-streaming/streaming \
+    --streaming
+```
+
+The `--streaming` flag selects `ModelArch.TINY_STREAMING`; omitting it selects
+`ModelArch.TINY`.
+
+**`mic_transcriber_it.py` options**
+
+```
+--model-dir        Path to ORT model directory            [default: output/.../onnx]
+--streaming        Use ModelArch.TINY_STREAMING           [default: TINY]
+--device           sounddevice input device index         [default: system default]
+--update-interval  Transcription update interval (s)      [default: 0.5]
 ```
 
 ---
 
-### Option B — HuggingFace ONNX runtime (no conversion needed)
+### Option B — HuggingFace ONNX runtime (no ORT conversion needed)
 
 Works directly from the `onnx/` directory produced by `--export-onnx`. Slightly slower than
 option A but requires no extra steps.
@@ -527,7 +590,7 @@ print(processor.batch_decode(ids, skip_special_tokens=True)[0])
 
 ---
 
-### Option C — HuggingFace PyTorch (no ONNX conversion, for evaluation / fine-tuning iteration)
+### Option C — HuggingFace PyTorch (for evaluation / fine-tuning iteration)
 
 ```python
 from transformers import AutoProcessor, MoonshineForConditionalGeneration
@@ -579,6 +642,19 @@ WER varies significantly with audio quality, domain, and speaker diversity in yo
 
 **`optimum-cli: command not found`**
 → Install with `pip install optimum[exporters]`.
+
+**`export_streaming.py`: `AttributeError: encoder.conv1 not found`**
+→ The attribute names for the frontend conv layers differ in your version of transformers.
+  Run `python -c "from transformers import MoonshineForConditionalGeneration; m = MoonshineForConditionalGeneration.from_pretrained('<model-dir>'); print(list(m.model.encoder.named_children()))"` to find the correct names, then update `FrontendModule.__init__` in `export_streaming.py`.
+
+**`export_streaming.py`: `AttributeError: cannot find adapter projection`**
+→ For `tiny-streaming` (encoder_dim == decoder_dim == 320), the adapter is an identity and
+  this error should not appear. For `medium-streaming` (768 → 640), the adapter projection
+  attribute name may differ. Inspect `model.named_children()` and update `AdapterModule.__init__`.
+
+**`mic_transcriber_it.py --streaming` crashes with "invalid model arch"**
+→ The streaming `.ort` files may be missing or misnamed. Verify the output of `export_streaming.py`
+  contains all seven files. Re-run without `--streaming` to confirm the non-streaming path works first.
 
 **ROCm: `RuntimeError: HIP error: invalid device function`**
 → The gfx override is missing or wrong. Run `rocminfo | grep gfx` to find your GPU's ISA,
