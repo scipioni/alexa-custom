@@ -3,8 +3,7 @@
 Tests cover:
 - _rms_level: RMS amplitude calculation
 - _match_wake_word: new flat-list wake-word matching helper
-- _approx_wake_match: fuzzy WakeWordGroup-based matching (backward compat)
-- build_intent_map: intent map construction (backward compat)
+- _approx_wake_match: fuzzy WakeWordGroup-based matching (eval harness path)
 - _parse_stt_config / _parse_recognition_config: config field parsing
 - match_trigger_with_score: per-trigger min_word_overlap override
 """
@@ -24,7 +23,6 @@ from alexa_custom.stt_phonetics import (
     _match_wake_word,
     _approx_wake_match,
     _build_alias_map,
-    build_intent_map,
 )
 from alexa_custom.config import (
     WakeWordGroup,
@@ -44,10 +42,6 @@ def _make_pcm(rms_target: float, n_samples: int = 4096) -> bytes:
     amplitude = max(0, min(32767, amplitude))
     samples = np.full(n_samples, amplitude, dtype=np.int16)
     return samples.tobytes()
-
-
-def _make_alias_map(words: list[str]) -> dict:
-    return _build_alias_map([WakeWordGroup(word=w) for w in words])
 
 
 # ---------------------------------------------------------------------------
@@ -146,67 +140,6 @@ class TestMatchWakeWord:
         phrase, _ = _match_wake_word("galile", ["ehi galileo"], threshold=0.5)
         assert phrase == "ehi galileo"
 
-
-# ---------------------------------------------------------------------------
-# build_intent_map (backward compat, WakeWordGroup-based)
-# ---------------------------------------------------------------------------
-
-
-def _make_trigger(phrase: str, aliases: list[str] | None = None) -> Trigger:
-    return Trigger(
-        commands=[phrase] + (aliases or []),
-        phrase=phrase,
-        actions=[],
-        aliases=aliases or [],
-    )
-
-
-def _make_group_with_triggers(
-    word: str, triggers: list[Trigger], aliases: list[str] | None = None
-) -> WakeWordGroup:
-    return WakeWordGroup(word=word, aliases=aliases or [], triggers=triggers)
-
-
-class TestBuildIntentMap:
-    def _alias_map(self, groups):
-        return _build_alias_map(groups)
-
-    def test_basic_combo(self):
-        t = _make_trigger("chiama stefano")
-        group = _make_group_with_triggers("ehi galileo", [t])
-        am = self._alias_map([group])
-        intent_map = build_intent_map(am, [])
-        assert "ehi galileo chiama stefano" in intent_map
-        assert intent_map["ehi galileo chiama stefano"] == (group, t)
-
-    def test_wake_alias_included(self):
-        t = _make_trigger("accendi")
-        group = _make_group_with_triggers("ehi galileo", [t], aliases=["galileo"])
-        am = self._alias_map([group])
-        intent_map = build_intent_map(am, [])
-        assert "galileo accendi" in intent_map
-        assert "ehi galileo accendi" in intent_map
-
-    def test_trigger_alias_included(self):
-        t = _make_trigger("chiama stefano", aliases=["telefona stefano"])
-        group = _make_group_with_triggers("galileo", [t])
-        am = self._alias_map([group])
-        intent_map = build_intent_map(am, [])
-        assert "galileo chiama stefano" in intent_map
-        assert "galileo telefona stefano" in intent_map
-
-    def test_global_triggers_used_when_no_per_group(self):
-        global_t = _make_trigger("chiama")
-        group = WakeWordGroup(word="galileo")
-        am = self._alias_map([group])
-        intent_map = build_intent_map(am, [global_t])
-        assert "galileo chiama" in intent_map
-
-    def test_empty_triggers_returns_empty(self):
-        group = WakeWordGroup(word="galileo")
-        am = self._alias_map([group])
-        intent_map = build_intent_map(am, [])
-        assert intent_map == {}
 
 
 # ---------------------------------------------------------------------------
