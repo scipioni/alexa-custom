@@ -223,12 +223,11 @@ tasks:
       # Remove any stale switch-on-connect drop-ins (module not available on this board)
       - rm -f ~/.config/pipewire/pipewire.conf.d/99-switch-on-connect.conf
       - rm -f ~/.config/pipewire/pipewire-pulse.conf.d/99-switch-on-connect.conf
-      # Remove early-boot udev autosuspend rule — it fired during USB enumeration and caused
-      # the board to reboot when NewPie was connected at power-on. A system service installed
-      # below applies the same setting after multi-user.target instead.
-      - sudo rm -f /etc/udev/rules.d/99-newpie-no-autosuspend.rules
+      # Install udev rule to disable autosuspend on hot-plug (fires when device connects mid-session)
+      - sudo cp setup/99-newpie-no-autosuspend.rules /etc/udev/rules.d/99-newpie-no-autosuspend.rules
       - sudo udevadm control --reload-rules
-      # Install system service to disable autosuspend after boot (runs as root, avoids early-boot power spike)
+      # Install system service to disable autosuspend at boot (udev fires too early during enumeration
+      # and can cause a power spike; the service runs after multi-user.target instead)
       - sudo cp setup/newpie-autosuspend.service /etc/systemd/system/newpie-autosuspend.service
       - sudo systemctl daemon-reload
       - sudo systemctl enable --now newpie-autosuspend.service
