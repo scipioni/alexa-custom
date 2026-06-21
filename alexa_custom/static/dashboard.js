@@ -39,7 +39,7 @@
         slider.onmousedown = () => { slider.classList.add('dragging'); };
         slider.onmouseup = () => {
           slider.classList.remove('dragging');
-          sendVolumeControl('set_volume', {volume: parseFloat(slider.value) / 100});
+          sendCtrl('set_volume', {volume: parseFloat(slider.value) / 100});
           playBeepForVolume(parseFloat(slider.value) / 100);
         };
       }
@@ -48,18 +48,14 @@
     function playBeepForVolume(volume) {
       if (volume <= 0.01) return;
       if (volume < 0.3) {
-        sendVolumeControl('beep', {frequency: 330, duration: 100});
+        sendCtrl('beep', {frequency: 330, duration: 100});
       } else if (volume < 0.7) {
-        sendVolumeControl('beep', {frequency: 440, duration: 100});
+        sendCtrl('beep', {frequency: 440, duration: 100});
       } else {
-        sendVolumeControl('beep', {frequency: 523, duration: 100});
+        sendCtrl('beep', {frequency: 523, duration: 100});
       }
     }
 
-    function sendVolumeControl(type, payload) {
-      if (!ws || ws.readyState !== WebSocket.OPEN) return;
-      ws.send(JSON.stringify({type: 'control', action: type, ...payload}));
-    }
     function connect() {
       clearTimeout(reconnTimer);
       if (ws) { ws.onclose = ws.onerror = null; try { ws.close(); } catch(e) {} }
@@ -75,15 +71,16 @@
       ws.onclose = () => {
         wsInd(false); ws = null;
         if (_restarting) setSt('Waiting for server…', null);
-        reconnTimer = setTimeout(connect, _reconnDelay);
-        _reconnDelay = Math.min(_reconnDelay * 2, 8000);
+        scheduleReconnect();
       };
-      ws.onerror = () => {
-        clearTimeout(reconnTimer);
-        reconnTimer = setTimeout(connect, _reconnDelay);
-        _reconnDelay = Math.min(_reconnDelay * 2, 8000);
-      };
+      ws.onerror = scheduleReconnect;
       ws.onmessage = (e) => { try { handle(JSON.parse(e.data)); } catch(err) { console.error('WS message error:', err); } };
+    }
+
+    function scheduleReconnect() {
+      clearTimeout(reconnTimer);
+      reconnTimer = setTimeout(connect, _reconnDelay);
+      _reconnDelay = Math.min(_reconnDelay * 2, 8000);
     }
 
     function wsInd(up) {
@@ -674,9 +671,9 @@
       }
     }
 
-    function sendCtrl(action) {
+    function sendCtrl(action, payload) {
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
-      ws.send(JSON.stringify({type: 'control', action: action}));
+      ws.send(JSON.stringify({type: 'control', action: action, ...(payload || {})}));
     }
 
     function esc(s) {

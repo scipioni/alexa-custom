@@ -629,39 +629,39 @@ class WebServer:
     async def _handle_index(self, request: web.Request) -> web.Response:
         return web.Response(text=self._html, content_type="text/html")
 
+    async def _snapshot(self) -> dict:
+        """Full state snapshot sent as the `hello` message on every new WS connect."""
+        participants_list = [
+            {"identity": k, "tracks": v} for k, v in self._state["participants"].items()
+        ]
+        return {
+            "type": "hello",
+            "status": self._state["status"],
+            "room": self._state["room"],
+            "participants": participants_list,
+            "audio_connected": self._state["audio_connected"],
+            "audio_conn_type": self._state["audio_conn_type"],
+            "stt_state": self._state["stt_state"],
+            "stt_text": self._state["stt_text"],
+            "actions_config": self._state["actions_config"],
+            "llm_state": self._state["llm_state"],
+            "room_status": self._state["room_status"],
+            "room_answer_timeout": self._state["room_answer_timeout"],
+            "input_gain": self._input_gain,
+            "output_volume": self._output_volume,
+            "cpu_limit": self._cpu_limit,
+            "livekit_configured": self._livekit_ok,
+            "telegram_configured": self._telegram_ok,
+            "gst_profile": self._state["gst_profile"],
+            "history": await self._read_last_history_entries(20),
+        }
+
     async def _handle_ws(self, request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         self._clients.add(ws)
 
-        participants_list = [
-            {"identity": k, "tracks": v} for k, v in self._state["participants"].items()
-        ]
-        await ws.send_str(
-            json.dumps(
-                {
-                    "type": "hello",
-                    "status": self._state["status"],
-                    "room": self._state["room"],
-                    "participants": participants_list,
-                    "audio_connected": self._state["audio_connected"],
-                    "audio_conn_type": self._state["audio_conn_type"],
-                    "stt_state": self._state["stt_state"],
-                    "stt_text": self._state["stt_text"],
-                    "actions_config": self._state["actions_config"],
-                    "llm_state": self._state["llm_state"],
-                    "room_status": self._state["room_status"],
-                    "room_answer_timeout": self._state["room_answer_timeout"],
-                    "input_gain": self._input_gain,
-                    "output_volume": self._output_volume,
-                    "cpu_limit": self._cpu_limit,
-                    "livekit_configured": self._livekit_ok,
-                    "telegram_configured": self._telegram_ok,
-                    "gst_profile": self._state["gst_profile"],
-                    "history": await self._read_last_history_entries(20),
-                }
-            )
-        )
+        await ws.send_str(json.dumps(await self._snapshot()))
 
         try:
             async for msg in ws:
@@ -672,7 +672,7 @@ class WebServer:
                         continue
                     if payload.get("type") == "control":
                         try:
-                            await self._handle_control(payload.get("action", ""))
+                            await self._handle_control(payload)
                         except Exception:
                             logger.exception("Error handling control action")
                 elif msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
@@ -682,7 +682,8 @@ class WebServer:
 
         return ws
 
-    async def _handle_control(self, action: str) -> None:
+    async def _handle_control(self, payload: dict) -> None:
+        action = payload.get("action", "")
         if action == "restart":
             logger.info("Restart requested via web dashboard")
             await self._broadcast({"type": "restarting"})
@@ -700,8 +701,8 @@ class WebServer:
             self._active_session = None
             await self._clear_history_log()
             await self._broadcast({"type": "history_cleared"})
-        elif action.startswith("flag_fp:"):
-            session_id = action.split(":", 1)[1]
+        elif action == "flag_fp":
+            session_id = payload.get("session_id", "")
             logger.info("Flag false positive requested for session: %s", session_id)
             await self._flag_history_log_fp(session_id)
             await self._broadcast({"type": "history_flagged", "session_id": session_id})

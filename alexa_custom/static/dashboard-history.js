@@ -82,7 +82,7 @@
     }
 
     function flagFalsePositive(session_id, btn) {
-      sendCtrl('flag_fp:' + session_id);
+      sendCtrl('flag_fp', {session_id: session_id});
       // Immediate visual feedback — don't wait for a page reload / server echo.
       const item = btn ? btn.closest('.he') : document.querySelector('.he[data-id="' + session_id + '"]');
       if (item) {
