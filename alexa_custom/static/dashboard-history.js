@@ -81,8 +81,17 @@
       sendCtrl('clear_history');
     }
 
-    function flagFalsePositive(session_id) {
+    function flagFalsePositive(session_id, btn) {
       sendCtrl('flag_fp:' + session_id);
+      // Immediate visual feedback — don't wait for a page reload / server echo.
+      const item = btn ? btn.closest('.he') : document.querySelector('.he[data-id="' + session_id + '"]');
+      if (item) {
+        item.classList.add('fp-flagged');
+        const row = item.querySelector('.he-action-row');
+        if (row) {
+          row.innerHTML = '<span class="hflagged" style="font-size:9px;color:var(--nomatch);font-weight:bold;margin-left:auto;">⚠️ Flagged</span>';
+        }
+      }
     }
 
     const MAX_HIST = 60;
@@ -133,7 +142,7 @@
       if (isFp) {
         actionBtnHtml = '<span class="hflagged" style="font-size:9px;color:var(--nomatch);font-weight:bold;margin-left:auto;">⚠️ Flagged</span>';
       } else if (session_id) {
-        actionBtnHtml = '<button class="hflag-btn" onclick="flagFalsePositive(\'' + esc(session_id) + '\')" style="margin-left:auto;font-size:9px;background:rgba(255,255,255,0.06);border:1px solid var(--border);border-radius:4px;color:var(--muted);padding:1px 5px;cursor:pointer;">Flag FP</button>';
+        actionBtnHtml = '<button class="hflag-btn" onclick="flagFalsePositive(\'' + esc(session_id) + '\', this)" style="margin-left:auto;font-size:9px;background:rgba(255,255,255,0.06);border:1px solid var(--border);border-radius:4px;color:var(--muted);padding:1px 5px;cursor:pointer;">Flag FP</button>';
       }
 
       const itemHtml = '<div class="he-top">'
