@@ -42,7 +42,6 @@ from alexa_custom.stt_phonetics import (
     _match_wake_word,
     _wake_token_count,
     _approx_wake_match,
-    _resolve_triggers,
     _build_alias_map,
 )
 from alexa_custom.stt_gating import (
@@ -74,7 +73,6 @@ __all__ = [
     "_vosk_check_result",
     "_loop_grammar",
     "_approx_wake_match",
-    "_resolve_triggers",
     "_build_alias_map",
     "_CHUNK",
     "_rms_level",

@@ -8,10 +8,7 @@ from abc import ABC, abstractmethod
 
 from alexa_custom.config import (
     STTConfig,
-    STTStage1Config,
-    STTStage2Config,
     WakeWordGroup,
-    Trigger,
 )
 
 from alexa_custom.actions import normalize_text
@@ -251,59 +248,15 @@ def _grammar_json(groups: list[WakeWordGroup], label: str = "grammar") -> str:
     return _phrases_to_grammar(phrases, label=label)
 
 
-def _grammar_json_all(
-    wake_words: list[WakeWordGroup],
-    triggers: list["Trigger"],
-    direct_triggers: list["Trigger"] | None = None,
-    include_wake_gated: bool = True,
-    label: str = "grammar",
-) -> str:
-    """Build a grammar string encompassing wake words and action triggers.
-
-    ``include_wake_gated`` controls whether command phrases that only fire
-    *after* a wake word (per-group scoped triggers and global triggers) are
-    injected. These are needed in stage-1 only to support single-breath
-    "wake + command" partial matching; with ``partial_matching`` disabled they
-    serve no purpose in stage-1 and only widen the false-positive surface, so
-    pass ``False`` to keep the grammar to wake words + direct-match triggers.
-    """
-    phrases = []
-    # Add wake words and (only when wake-gated phrases are wanted) their
-    # scoped triggers
-    for g in wake_words:
-        phrases.append(g.word)
-        phrases.extend(g.aliases)
-        if include_wake_gated:
-            for t in g.triggers:
-                phrases.append(t.phrase)
-                phrases.extend(t.aliases)
-
-    # Add global triggers (active after any wake word)
-    if include_wake_gated:
-        for t in triggers:
-            phrases.append(t.phrase)
-            phrases.extend(t.aliases)
-
-    # Add direct-match triggers (wake_words: []) — these fire from stage-1
-    # without a wake word, so they are always required in the grammar.
-    for t in direct_triggers or []:
-        phrases.append(t.phrase)
-        phrases.extend(t.aliases)
-
-    phrases = list(set(phrases))
-    return _phrases_to_grammar(phrases, label=label)
-
-
 def get_stt_backend(
-    cfg: STTConfig | STTStage1Config | STTStage2Config,
+    cfg: STTConfig,
     keywords: list[str] | None = None,
     grammar: str | None = None,
 ) -> STTBackend:
     """Build a free-vocabulary STT backend from the given config.
 
-    Accepts the new flat STTConfig or the legacy stage configs for backward compat.
-    keywords and grammar are accepted but ignored for the single-model design
-    (kept for call-site compatibility).
+    keywords is accepted but ignored for the single-model design (kept for
+    call-site compatibility); grammar restricts the recognizer when set.
     """
     # vosk (default)
     vosk_path = cfg.model_path or _MODEL_PATH

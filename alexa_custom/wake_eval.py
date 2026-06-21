@@ -41,7 +41,7 @@ import numpy as np
 import vosk
 import yaml
 
-from alexa_custom.config import STTStage1Config, WakeWordGroup
+from alexa_custom.config import STTConfig, WakeWordGroup
 from alexa_custom.stt import (
     _CHUNK,
     _build_alias_map,
@@ -356,8 +356,8 @@ class EvalConfig:
     free_text: bool = False
 
 
-def _make_stage1_config(ec: EvalConfig) -> STTStage1Config:
-    return STTStage1Config(
+def _make_stage1_config(ec: EvalConfig) -> STTConfig:
+    return STTConfig(
         backend="vosk",
         confidence=ec.confidence,
         confidence_mode=ec.confidence_mode,
@@ -370,7 +370,7 @@ def _score_clip_vosk(
     pcm: bytes,
     recognizer: "vosk.KaldiRecognizer",
     alias_map: dict,
-    stage1_cfg: STTStage1Config,
+    stage1_cfg: STTConfig,
 ) -> bool:
     """Feed ``pcm`` through ``recognizer`` in production chunk sizes and return True if a wake fires.
 

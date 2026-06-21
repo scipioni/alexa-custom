@@ -104,7 +104,7 @@ class GStreamerCapture:
 
         self.stdout = os.fdopen(read_fd, "rb", buffering=0)
 
-        logger.debug("GStreamer pipeline: %s", pipeline_str)
+        logger.info("GStreamer pipeline: %s", pipeline_str)
         self._pipeline = Gst.parse_launch(pipeline_str)
         self._bus = self._pipeline.get_bus()
 

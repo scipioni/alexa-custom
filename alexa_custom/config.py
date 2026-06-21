@@ -160,44 +160,6 @@ class AudioConfig:
 
 
 @dataclass
-class STTStage1Config:
-    """Deprecated: use the flat STTConfig fields instead."""
-
-    backend: str = "vosk"
-    model_path: str | None = None
-    confidence: float = 0.65
-    confidence_mode: str = "first"
-    vad_silence_ms: int = 500
-    rms_threshold: float = 0.02
-    adaptive_rms: bool = True
-    adaptive_rms_margin: float = 0.01
-    min_speech_ms: int = 200
-    vosk_grammar: bool = True
-    keyword_spotter: bool = False
-    keywords_score: float = 1.0
-    keywords_threshold: float = 0.35
-    hotwords_score: float = 1.5
-    max_partial_words: int = 8
-    wake_match_threshold: float = 0.5
-    num_threads: int = 2
-
-
-@dataclass
-class STTStage2Config:
-    """Deprecated: use the flat STTConfig fields instead."""
-
-    backend: str = "vosk"
-    model_path: str | None = None
-    vosk_grammar: bool = False
-    num_threads: int = 2
-
-
-# ---------------------------------------------------------------------------
-# New flat STTConfig (replaces STTStage1Config + STTStage2Config container)
-# ---------------------------------------------------------------------------
-
-
-@dataclass
 class STTConfig:
     backend: str = "vosk"
     model_path: str | None = None

@@ -210,18 +210,46 @@ def _iter_gated_audio(
     _stall_logged = False
     playback_ended_at = 0.0
     post_playback_s = post_playback_ms / 1000.0
+    # Name the actual capture backend so a stall/exit log points at the right
+    # subsystem (GStreamerCapture is a duck-typed Popen; parec/pw-record are
+    # real subprocesses). Avoids the "parec stall?" message when running gst.
+    backend_label = (
+        "gstreamer" if type(proc).__name__ == "GStreamerCapture" else "parec"
+    )
+    # Stamp when the first PCM buffer actually reaches the recognizer, so a
+    # capture that reaches PLAYING but never emits audio is unambiguous in the
+    # log (vs one that simply has a slow cold start).
+    _capture_started_at = time.monotonic()
+    _first_buffer_logged = False
     assert proc.stdout is not None
     while not stop_event.is_set():
         if restart_event is not None and restart_event.is_set():
             logger.info("restart_event set — stopping capture for profile reload")
             return
         raw_data = _read_with_timeout(proc.stdout, _CHUNK * channels, 2.0)
+        if raw_data and not _first_buffer_logged:
+            logger.info(
+                "%s: first %s audio buffer (%d bytes) after %.0f ms",
+                name,
+                backend_label,
+                len(raw_data),
+                (time.monotonic() - _capture_started_at) * 1000.0,
+            )
+            _first_buffer_logged = True
         if not raw_data:
             if proc.poll() is not None:
-                logger.warning("%s: parec process exited — restarting capture", name)
+                logger.warning(
+                    "%s: %s capture process exited — restarting capture",
+                    name,
+                    backend_label,
+                )
                 return
             if not _stall_logged:
-                logger.debug("%s: read timeout (parec stall?) — waiting", name)
+                logger.debug(
+                    "%s: read timeout (%s stall?) — no audio for 2s, waiting",
+                    name,
+                    backend_label,
+                )
                 _stall_logged = True
             continue
         _stall_logged = False
