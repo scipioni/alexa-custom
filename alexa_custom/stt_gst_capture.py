@@ -80,6 +80,7 @@ def _build_pipeline_string(
         f"{compressor_stage}"
         " ! audioconvert"
         " ! audio/x-raw,format=S16LE,rate=16000,channels=1"
+        " ! queue max-size-buffers=100 leaky=downstream"
         f" ! fdsink fd={write_fd} sync=false"
     )
 
