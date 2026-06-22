@@ -93,7 +93,7 @@ This headless host runs a modern **PipeWire** audio graph managed by **WirePlumb
 - **If the combined profile is unavailable** (e.g. NewPie 32, USB 2757:4010), fall back to `pro-audio` — on that hardware revision nodes still appear under **Sources/Sinks**, not Filters, so PulseAudio clients work correctly.
 - **Do not use `pro-audio` on the original NewPie** (USB 0a12:1260) — it places nodes under **Filters**, not **Sources**. PulseAudio clients connect but the node stays **suspended** and emits no audio. This silently breaks the STT capture pipeline and all `parec`/`pulsesrc`/`pw-record` capture.
 - `task audio:setup` handles profile selection automatically: tries `output:analog-stereo+input:analog-stereo` first, falls back to `pro-audio`.
-- Both `pipewiresrc` and `pulsesrc` work with the `analog-stereo` profile. `pipewiresrc` is native PipeWire (lower latency); `pulsesrc` uses the PulseAudio compat socket. Both are configured in `conf/config.yaml` under `audio.gstreamer.source`.
+- **Use `pulsesrc`** for the GStreamer capture pipeline (`audio.gstreamer.source`). `pipewiresrc` stalls after the first 10 ms buffer when driven from Python — GStreamer's PipeWire source requires a GLib main loop that isn't running in the daemon. `pulsesrc` (PulseAudio compat socket) is the reliable choice. `pipewiresrc` only works from `gst-launch-1.0` which runs its own GLib main loop.
 
 ### 2. The ALSA Hardware Mixer Reset Bug (Crucial)
 - **Problem**: When PipeWire initializes and takes ownership of the ALSA device (on boot or restart), the kernel driver resets the NewPie's `PCM` mixer to `0%`.

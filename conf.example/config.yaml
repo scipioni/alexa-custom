@@ -131,7 +131,7 @@ audio:
     noise_suppression: true
     high_pass_filter: true
   gstreamer:             # GStreamer capture pipeline (used when stt.capture_backend: gstreamer)
-    source: pipewiresrc      # pipewiresrc | pulsesrc — both work on NewPie + PipeWire 1.4.2; pipewiresrc is native PipeWire (lower latency)
+    source: pulsesrc         # pulsesrc | pipewiresrc — pipewiresrc stalls after first buffer when driven from Python (no GLib main loop); pulsesrc is reliable
     noise_suppression: true
     noise_suppression_level: 2    # 0=mild 1=moderate 2=high 3=very-high (2 calibration-verified optimal)
     agc: true
