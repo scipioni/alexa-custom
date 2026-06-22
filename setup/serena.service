@@ -1,6 +1,6 @@
 [Unit]
 Description=alexa-custom LiveKit voice client
-After=pipewire.service pipewire-pulse.service
+After=pipewire.service pipewire-pulse.service alsa-pcm-unmute.service
 Wants=pipewire.service pipewire-pulse.service
 
 [Service]

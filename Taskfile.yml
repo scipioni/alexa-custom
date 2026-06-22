@@ -236,13 +236,16 @@ tasks:
       # suspended and emits no audio.
       # Resolve the ALSA card by product name substring ("NewPie") so this works regardless
       # of the USB vendor ID or exact product string ("NewPie", "NewPie 32", etc.).
-      # Set duplex analog-stereo profile only if available — some hardware revisions only
-      # expose separate output/input profiles and already work correctly with pro-audio.
+      # Set duplex analog-stereo profile — nodes appear under Sources/Sinks so PulseAudio
+      # clients (parec, pulsesrc) can wake them on demand.  pro-audio puts nodes under
+      # Filters; never use it as a fallback.  If the combined duplex profile is unavailable
+      # (some hardware revisions only expose separate profiles), fall back to input:analog-stereo
+      # so the capture side (STT) still works.
       - |
         CARD=$(pactl list cards short | grep -i NewPie | cut -f2 | head -1)
         if [ -n "$CARD" ]; then
           pactl set-card-profile "$CARD" output:analog-stereo+input:analog-stereo 2>/dev/null || \
-          pactl set-card-profile "$CARD" pro-audio
+          pactl set-card-profile "$CARD" input:analog-stereo 2>/dev/null || true
         fi
       # Set WirePlumber persistent default routing dynamically by name (survives reboots)
       # Must use default.configured.audio.* — WirePlumber reads these keys to restore state on restart

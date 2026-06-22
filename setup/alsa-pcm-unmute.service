@@ -13,7 +13,9 @@ Type=oneshot
 # 4. Set output:analog-stereo+input:analog-stereo profile — exposes BOTH a
 #    sink and source under Sources/Sinks so PulseAudio clients (parec, pulsesrc)
 #    can wake the nodes. pro-audio puts nodes under Filters; PulseAudio clients
-#    connect but the node stays suspended and emits no audio.
+#    connect but the node stays suspended and emits no audio. If the combined
+#    duplex profile is unavailable (some hardware revisions), fall back to
+#    input:analog-stereo so the capture side (STT) still works.
 # 5. Set default routing dynamically from pactl, then restore PCM for 20 s to
 #    catch WirePlumber's late ACP profile reset.
 ExecStart=/bin/bash -c '\
@@ -32,7 +34,10 @@ ExecStart=/bin/bash -c '\
     sleep 1; \
   done; \
   CARD=$(pactl list cards short | grep -i NewPie | cut -f2 | head -1); \
-  if [ -n "$CARD" ]; then pactl set-card-profile "$CARD" output:analog-stereo+input:analog-stereo 2>/dev/null || pactl set-card-profile "$CARD" pro-audio; fi; \
+  if [ -n "$CARD" ]; then \
+    pactl set-card-profile "$CARD" output:analog-stereo+input:analog-stereo 2>/dev/null || \
+    pactl set-card-profile "$CARD" input:analog-stereo 2>/dev/null || true; \
+  fi; \
   sleep 2; \
   SINK=$(pactl list sinks short | awk '"'"'/[Nn]ew[Pp]ie/ && !/monitor/{print $2; exit}'"'"'); \
   SOURCE=$(pactl list sources short | awk '"'"'/[Nn]ew[Pp]ie/ && !/monitor/{print $2; exit}'"'"'); \
