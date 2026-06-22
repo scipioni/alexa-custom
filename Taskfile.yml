@@ -234,11 +234,15 @@ tasks:
       # Set duplex profile — nodes appear under Sources/Sinks so PulseAudio clients (parec, pulsesrc)
       # can wake them. pro-audio puts nodes under Filters; clients connect but the node stays
       # suspended and emits no audio.
-      # Resolve the ALSA card name by USB vendor ID (0a12 = Cambridge Silicon Radio) so this
-      # works regardless of whether the device reports itself as "NewPie", "NewPie 32", etc.
+      # Resolve the ALSA card by product name substring ("NewPie") so this works regardless
+      # of the USB vendor ID or exact product string ("NewPie", "NewPie 32", etc.).
+      # Set duplex analog-stereo profile only if available — some hardware revisions only
+      # expose separate output/input profiles and already work correctly with pro-audio.
       - |
-        CARD=$(pactl list cards short | grep 0a12 | cut -f2 | head -1)
-        [ -n "$CARD" ] && pactl set-card-profile "$CARD" output:analog-stereo+input:analog-stereo
+        CARD=$(pactl list cards short | grep -i NewPie | cut -f2 | head -1)
+        if [ -n "$CARD" ]; then
+          pactl set-card-profile "$CARD" output:analog-stereo+input:analog-stereo 2>/dev/null || true
+        fi
       # Set WirePlumber persistent default routing dynamically by name (survives reboots)
       # Must use default.configured.audio.* — WirePlumber reads these keys to restore state on restart
       - |
@@ -246,10 +250,11 @@ tasks:
         SOURCE=$(pactl list sources short | awk '/[Nn]ew[Pp]ie/ && !/monitor/{print $2; exit}')
         [ -n "$SINK" ] && pw-metadata -n default 0 default.configured.audio.sink "{\"name\":\"$SINK\"}" 'Spa:String:JSON'
         [ -n "$SOURCE" ] && pw-metadata -n default 0 default.configured.audio.source "{\"name\":\"$SOURCE\"}" 'Spa:String:JSON'
-      # Unmute hardware PCM volume now (software volume is set from conf/config.yaml at startup)
+      # Unmute hardware volume now (software volume is set from conf/config.yaml at startup).
+      # Try PCM first (older NewPie); fall back to Playback Volume (newer NewPie 32).
       - |
-        CARD_NUM=$(for d in /sys/bus/usb/devices/*/sound/card*/; do [ "$(cat "${d}../../idVendor" 2>/dev/null)" = "0a12" ] && basename "$d" | sed 's/card//' && break; done)
-        amixer -c "${CARD_NUM:-0}" sset PCM 100% || true
+        CARD_NUM=$(grep -m1 "NewPie" /proc/asound/cards | awk '{print $1}')
+        amixer -c "${CARD_NUM:-0}" sset PCM 100% 2>/dev/null || amixer -c "${CARD_NUM:-0}" sset 'Playback Volume' 100% 2>/dev/null || true
       # Install user service to re-apply PCM 100% after PipeWire init on every boot
       - mkdir -p ~/.config/systemd/user
       - cp setup/alsa-pcm-unmute.service ~/.config/systemd/user/alsa-pcm-unmute.service
@@ -269,8 +274,8 @@ tasks:
     cmds:
       - systemctl --user restart wireplumber && sleep 3
       - |
-        CARD_NUM=$(for d in /sys/bus/usb/devices/*/sound/card*/; do [ "$(cat "${d}../../idVendor" 2>/dev/null)" = "0a12" ] && basename "$d" | sed 's/card//' && break; done)
-        amixer -c "${CARD_NUM:-0}" sset PCM 100% || true
+        CARD_NUM=$(grep -m1 "NewPie" /proc/asound/cards | awk '{print $1}')
+        amixer -c "${CARD_NUM:-0}" sset PCM 100% 2>/dev/null || amixer -c "${CARD_NUM:-0}" sset 'Playback Volume' 100% 2>/dev/null || true
       - systemctl --user restart alsa-pcm-unmute.service
       - sudo systemctl restart newpie-autosuspend.service || true
 
