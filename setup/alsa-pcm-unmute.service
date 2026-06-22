@@ -18,7 +18,7 @@ Type=oneshot
 #    catch WirePlumber's late ACP profile reset.
 ExecStart=/bin/bash -c '\
   for i in $(seq 1 30); do \
-    if wpctl status 2>/dev/null | grep -q "NewPie"; then \
+    if pactl list cards short 2>/dev/null | grep -q 0a12; then \
       break; \
     fi; \
     sleep 1; \
@@ -26,12 +26,13 @@ ExecStart=/bin/bash -c '\
   systemctl --user restart wireplumber; \
   sleep 3; \
   for i in $(seq 1 15); do \
-    if pactl list sources short 2>/dev/null | grep -qi "newpie"; then \
+    if pactl list cards short 2>/dev/null | grep -q 0a12; then \
       break; \
     fi; \
     sleep 1; \
   done; \
-  pactl set-card-profile alsa_card.usb-0a12_NewPie_SABINESMICDFU-00 output:analog-stereo+input:analog-stereo; \
+  CARD=$(pactl list cards short | grep 0a12 | cut -f2 | head -1); \
+  [ -n "$CARD" ] && pactl set-card-profile "$CARD" output:analog-stereo+input:analog-stereo; \
   sleep 2; \
   SINK=$(pactl list sinks short | awk '"'"'/[Nn]ew[Pp]ie/ && !/monitor/{print $2; exit}'"'"'); \
   SOURCE=$(pactl list sources short | awk '"'"'/[Nn]ew[Pp]ie/ && !/monitor/{print $2; exit}'"'"'); \
@@ -40,7 +41,8 @@ ExecStart=/bin/bash -c '\
   [ -n "$SOURCE" ] && pw-metadata -n default 0 default.configured.audio.source \
     "{\"name\":\"$SOURCE\"}" "Spa:String:JSON"; \
   for i in $(seq 1 10); do \
-    amixer -c 0 sset PCM 100%%; \
+    CARD_NUM=$(for d in /sys/bus/usb/devices/*/sound/card*/; do [ "$(cat "${d}../../idVendor" 2>/dev/null)" = "0a12" ] && basename "$d" | sed "s/card//" && break; done); \
+    amixer -c "${CARD_NUM:-0}" sset PCM 100%%; \
     sleep 2; \
   done'
 RemainAfterExit=yes

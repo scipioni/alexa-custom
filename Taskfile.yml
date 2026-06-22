@@ -234,7 +234,11 @@ tasks:
       # Set duplex profile — nodes appear under Sources/Sinks so PulseAudio clients (parec, pulsesrc)
       # can wake them. pro-audio puts nodes under Filters; clients connect but the node stays
       # suspended and emits no audio.
-      - pactl set-card-profile alsa_card.usb-0a12_NewPie_SABINESMICDFU-00 output:analog-stereo+input:analog-stereo
+      # Resolve the ALSA card name by USB vendor ID (0a12 = Cambridge Silicon Radio) so this
+      # works regardless of whether the device reports itself as "NewPie", "NewPie 32", etc.
+      - |
+        CARD=$(pactl list cards short | grep 0a12 | cut -f2 | head -1)
+        [ -n "$CARD" ] && pactl set-card-profile "$CARD" output:analog-stereo+input:analog-stereo
       # Set WirePlumber persistent default routing dynamically by name (survives reboots)
       # Must use default.configured.audio.* — WirePlumber reads these keys to restore state on restart
       - |
@@ -243,7 +247,9 @@ tasks:
         [ -n "$SINK" ] && pw-metadata -n default 0 default.configured.audio.sink "{\"name\":\"$SINK\"}" 'Spa:String:JSON'
         [ -n "$SOURCE" ] && pw-metadata -n default 0 default.configured.audio.source "{\"name\":\"$SOURCE\"}" 'Spa:String:JSON'
       # Unmute hardware PCM volume now (software volume is set from conf/config.yaml at startup)
-      - amixer -c 0 sset PCM 100% || amixer -c NewPie sset PCM 100% || true
+      - |
+        CARD_NUM=$(for d in /sys/bus/usb/devices/*/sound/card*/; do [ "$(cat "${d}../../idVendor" 2>/dev/null)" = "0a12" ] && basename "$d" | sed 's/card//' && break; done)
+        amixer -c "${CARD_NUM:-0}" sset PCM 100% || true
       # Install user service to re-apply PCM 100% after PipeWire init on every boot
       - mkdir -p ~/.config/systemd/user
       - cp setup/alsa-pcm-unmute.service ~/.config/systemd/user/alsa-pcm-unmute.service
@@ -262,7 +268,9 @@ tasks:
     desc: Restart WirePlumber and restore NewPie routing, PCM volume, and autosuspend
     cmds:
       - systemctl --user restart wireplumber && sleep 3
-      - amixer -c 0 sset PCM 100% || true
+      - |
+        CARD_NUM=$(for d in /sys/bus/usb/devices/*/sound/card*/; do [ "$(cat "${d}../../idVendor" 2>/dev/null)" = "0a12" ] && basename "$d" | sed 's/card//' && break; done)
+        amixer -c "${CARD_NUM:-0}" sset PCM 100% || true
       - systemctl --user restart alsa-pcm-unmute.service
       - sudo systemctl restart newpie-autosuspend.service || true
 
