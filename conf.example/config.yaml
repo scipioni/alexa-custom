@@ -131,7 +131,7 @@ audio:
     noise_suppression: true
     high_pass_filter: true
   gstreamer:             # GStreamer capture pipeline (used when stt.capture_backend: gstreamer)
-    source: pipewiresrc   # pulsesrc | pipewiresrc — both work; pipewiresrc confirmed on NewPie + PipeWire 1.4.2
+    source: pipewiresrc      # pipewiresrc | pulsesrc — both work on NewPie + PipeWire 1.4.2; pipewiresrc is native PipeWire (lower latency)
     noise_suppression: true
     noise_suppression_level: 2    # 0=mild 1=moderate 2=high 3=very-high (2 calibration-verified optimal)
     agc: true
@@ -152,12 +152,11 @@ audio:
         agc_compression_gain_db: 9  # conservative gain; 18/30 amplify noise floor and hurt speech_ratio
         rms_threshold: 0.02
         vad_silence_ms: 900
-      sensitive:                   # reverberant / distant-mic environments (calibrated on NewPie USB mic)
-        noise_suppression: false    # NS treats quiet distant speech as noise and suppresses it
-        noise_suppression_level: 2  # (irrelevant when noise_suppression: false)
+      sensitive:                   # reverberant / distant-mic environments
+        noise_suppression_level: 1  # mild NS — gentler than 2, avoids suppressing weak distant speech
         agc_target_level_dbfs: -3
-        agc_compression_gain_db: 70 # was 30 — calibration confirmed 70 needed for distant mic
-        rms_threshold: 0.006        # was 0.008 — lower to catch weaker distant signal
+        agc_compression_gain_db: 18 # more makeup gain than normal (9) to lift distant signal; 70 over-amplifies background
+        rms_threshold: 0.012        # lower than normal (0.02) for quieter distant speech; NS keeps background below this
         vad_silence_ms: 1200        # wait longer for reverb to decay before ending utterance
 
 # ---------------------------------------------------------------------------

@@ -231,9 +231,10 @@ tasks:
       - sudo cp setup/newpie-autosuspend.service /etc/systemd/system/newpie-autosuspend.service
       - sudo systemctl daemon-reload
       - sudo systemctl enable --now newpie-autosuspend.service
-      # Set pro-audio profile — the only profile that exposes both a sink and source on the NewPie
-      # (combined output:analog-stereo+input:* profiles are not generated for this hardware)
-      - pactl set-card-profile alsa_card.usb-0a12_NewPie_SABINESMICDFU-00 pro-audio
+      # Set duplex profile — nodes appear under Sources/Sinks so PulseAudio clients (parec, pulsesrc)
+      # can wake them. pro-audio puts nodes under Filters; clients connect but the node stays
+      # suspended and emits no audio.
+      - pactl set-card-profile alsa_card.usb-0a12_NewPie_SABINESMICDFU-00 output:analog-stereo+input:analog-stereo
       # Set WirePlumber persistent default routing dynamically by name (survives reboots)
       # Must use default.configured.audio.* — WirePlumber reads these keys to restore state on restart
       - |
@@ -248,8 +249,8 @@ tasks:
       - cp setup/alsa-pcm-unmute.service ~/.config/systemd/user/alsa-pcm-unmute.service
       - systemctl --user daemon-reload
       - systemctl --user enable alsa-pcm-unmute.service
-      # Install WirePlumber rule to keep NewPie source always active (prevents suspension so
-      # native PipeWire clients such as pipewiresrc can connect and receive data immediately)
+      # Install WirePlumber rule to keep NewPie source always active (prevents brief SUSPENDED
+      # delay when the GStreamer pulsesrc pipeline starts capturing)
       - mkdir -p ~/.config/wireplumber/wireplumber.conf.d
       - cp setup/51-newpie-no-suspend.conf ~/.config/wireplumber/wireplumber.conf.d/51-newpie-no-suspend.conf
       # Restart WirePlumber so it re-evaluates routing with NewPie as the configured default
