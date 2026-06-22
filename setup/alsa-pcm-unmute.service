@@ -32,7 +32,7 @@ ExecStart=/bin/bash -c '\
     sleep 1; \
   done; \
   CARD=$(pactl list cards short | grep -i NewPie | cut -f2 | head -1); \
-  [ -n "$CARD" ] && pactl set-card-profile "$CARD" output:analog-stereo+input:analog-stereo 2>/dev/null || true; \
+  if [ -n "$CARD" ]; then pactl set-card-profile "$CARD" output:analog-stereo+input:analog-stereo 2>/dev/null || pactl set-card-profile "$CARD" pro-audio; fi; \
   sleep 2; \
   SINK=$(pactl list sinks short | awk '"'"'/[Nn]ew[Pp]ie/ && !/monitor/{print $2; exit}'"'"'); \
   SOURCE=$(pactl list sources short | awk '"'"'/[Nn]ew[Pp]ie/ && !/monitor/{print $2; exit}'"'"'); \
