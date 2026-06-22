@@ -197,6 +197,7 @@ tasks:
   setup:
     desc: Install the serena systemd user service and enable it
     cmds:
+      - uv sync --group dev
       - |
         # Generate it_IT.UTF-8 locale only on Arduino board
         if grep -q "Arduino" /sys/firmware/devicetree/base/model 2>/dev/null; then

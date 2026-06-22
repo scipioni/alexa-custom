@@ -22,7 +22,12 @@ on_startup:
 triggers:
   - commands:
       - "che ore sono"
+      - "che ora sono"
+      - "le ore sono"
     with_wake: false
+    patterns:
+      - "* ore son*"
+      - "ore son*"
     actions:
       - type: say
         text: "$(date +'Sono le %H e %M')"
@@ -44,6 +49,8 @@ triggers:
 
   - commands:
       - "riavvia"
+    patterns:
+      - "riavvi*"
     actions:
       - type: say
         text: "riavvio il sistema"
@@ -56,6 +63,9 @@ triggers:
 
   - commands:
       - "impara nuovo comando"
+    patterns:
+      - "impara * comando"
+      - "impara * quando"
     actions:
       - type: llm_learn
 
@@ -71,6 +81,8 @@ triggers:
 
   - commands:
       - "volume medio"
+      - "volume media"
+      - "due media"
     tag: speaker
     actions:
       - type: set_volume
@@ -101,6 +113,8 @@ triggers:
 
   - commands:
       - "abbassa il volume"
+      - "abbasso il volume"
+      - "abbassare il volume"
     tag: speaker
     actions:
       - type: set_volume
@@ -115,6 +129,7 @@ triggers:
     tag: meteo
     patterns:
       - "che tempo * domani"
+      - "* tempo * domani"
     actions:
       - type: meteo
         params:
@@ -128,6 +143,7 @@ triggers:
     tag: meteo
     patterns:
       - "che tempo * oggi"
+      - "* tempo * oggi"
     actions:
       - type: meteo
         params:
@@ -177,6 +193,9 @@ triggers:
       - "registra messaggio"
       - "test audio"
       - "registra audio"
+    patterns:
+      - "registra* * messaggio"
+      - "regis* messaggio"
     actions:
       - type: record_and_playback
         params:
