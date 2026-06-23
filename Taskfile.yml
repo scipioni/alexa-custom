@@ -246,7 +246,7 @@ tasks:
         CARD=$(pactl list cards short | grep -i NewPie | cut -f2 | head -1)
         if [ -n "$CARD" ]; then
           pactl set-card-profile "$CARD" output:analog-stereo+input:analog-stereo 2>/dev/null || \
-          pactl set-card-profile "$CARD" input:analog-stereo 2>/dev/null || true
+          pactl set-card-profile "$CARD" pro-audio 2>/dev/null || true
         fi
       # Set WirePlumber persistent default routing dynamically by name (survives reboots)
       # Must use default.configured.audio.* — WirePlumber reads these keys to restore state on restart
@@ -255,6 +255,7 @@ tasks:
         SOURCE=$(pactl list sources short | awk '/[Nn]ew[Pp]ie/ && !/monitor/{print $2; exit}')
         [ -n "$SINK" ] && pw-metadata -n default 0 default.configured.audio.sink "{\"name\":\"$SINK\"}" 'Spa:String:JSON'
         [ -n "$SOURCE" ] && pw-metadata -n default 0 default.configured.audio.source "{\"name\":\"$SOURCE\"}" 'Spa:String:JSON'
+        true
       # Unmute hardware volume now (software volume is set from conf/config.yaml at startup).
       # Try PCM first (older NewPie); fall back to Playback Volume (newer NewPie 32).
       - |
