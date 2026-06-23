@@ -388,6 +388,7 @@ triggers:
 | [→ Configuration Reference](docs/configuration.md) | Every config field documented |
 | [→ Audio Architecture](docs/audio.md) | Capture and playback paths, known bugs and workarounds |
 | [→ STT Pipeline](docs/stt.md) | Two-stage detection, Italian phonetics, trigger matching |
+| [→ Home Assistant Setup](docs/homeassistant.md) | Install Mosquitto and HA Core as systemd services, connect Serena |
 | [→ MQTT & HA](docs/mqtt_integration.md) | Home Assistant auto-discovery, entities, bidirectional control |
 | [→ Displays](docs/display_setup.md) | LED matrix, I2C OLED, GPIO LED configuration |
 | [→ Troubleshooting](docs/troubleshooting.md) | Common issues: audio, connection, permissions |

@@ -386,6 +386,73 @@ tasks:
     cmds:
       - ./scripts/flash-display-firmware.sh
 
+  mqtt:setup:
+    desc: Install Mosquitto MQTT broker and enable system service
+    cmds:
+      - sudo apt-get install -y mosquitto
+      - sudo cp setup/mosquitto-serena.conf /etc/mosquitto/conf.d/serena.conf
+      - sudo systemctl enable --now mosquitto
+      - |
+        echo ""
+        echo "Mosquitto running on 0.0.0.0:1883 (no auth). Useful commands:"
+        echo "  task mqtt:status              # check service status"
+        echo "  task mqtt:restart             # restart broker"
+        echo "  mosquitto_sub -h localhost -t '#' -v   # watch all topics"
+
+  mqtt:restart:
+    desc: Restart Mosquitto MQTT broker
+    cmds:
+      - sudo systemctl restart mosquitto
+
+  mqtt:status:
+    desc: Show Mosquitto MQTT broker service status
+    cmds:
+      - sudo systemctl status mosquitto
+
+  ha:setup:
+    desc: Install Home Assistant Core venv and enable user service (takes 10–20 min on first install — aarch64 builds native wheels)
+    cmds:
+      - sudo apt-get install -y python3-dev python3-venv libffi-dev libssl-dev libjpeg-dev zlib1g-dev autoconf build-essential libopenjp2-7 libturbojpeg0-dev
+      - |
+        if [ ! -d ~/homeassistant ]; then
+          echo "Creating Home Assistant venv at ~/homeassistant ..."
+          python3 -m venv ~/homeassistant
+        else
+          echo "Venv ~/homeassistant already exists, skipping creation."
+        fi
+      - |
+        echo "Installing homeassistant (this may take 10–20 min on aarch64) ..."
+        ~/homeassistant/bin/pip install homeassistant
+      - mkdir -p ~/.homeassistant
+      - mkdir -p ~/.config/systemd/user
+      - cp setup/homeassistant.service ~/.config/systemd/user/homeassistant.service
+      - systemctl --user daemon-reload
+      - systemctl --user enable --now homeassistant
+      - |
+        echo ""
+        echo "Home Assistant installed and started. Useful commands:"
+        echo "  task ha:status                # check service status"
+        echo "  task ha:restart               # restart service"
+        echo "  task ha:update                # upgrade to latest HA version"
+        echo "  journalctl --user -fu homeassistant   # follow logs"
+        echo "  http://$(hostname):8123       # web UI (onboarding on first run)"
+
+  ha:update:
+    desc: Upgrade Home Assistant Core to latest version and restart
+    cmds:
+      - ~/homeassistant/bin/pip install --upgrade homeassistant
+      - systemctl --user restart homeassistant
+
+  ha:restart:
+    desc: Restart Home Assistant user service
+    cmds:
+      - systemctl --user restart homeassistant
+
+  ha:status:
+    desc: Show Home Assistant user service status
+    cmds:
+      - systemctl --user status homeassistant
+
   clean:
     desc: Clean up temporary files
     cmds:
