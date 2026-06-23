@@ -88,14 +88,25 @@ class TestMatchWakeWord:
         assert phrase is None
         assert residual == ""
 
-    def test_fuzzy_match_partial_word(self):
-        # "galileo" alone scores ≥ 0.5 for the two-word phrase "ehi galileo"
+    def test_fuzzy_requires_all_phrase_words(self):
+        # All significant phrase words must appear in the transcript.
+        # "galileo" alone lacks "ehi" → no match, regardless of threshold.
         phrase, _ = _match_wake_word("galileo", ["ehi galileo"], threshold=0.5)
-        assert phrase == "ehi galileo"
-
-    def test_fuzzy_rejected_at_higher_threshold(self):
-        phrase, _ = _match_wake_word("galileo", ["ehi galileo"], threshold=0.8)
         assert phrase is None
+
+    def test_serena_false_positive_rejected(self):
+        # "serena" alone in a multi-word transcript must NOT fire "ehi serena".
+        # This was the observed false-positive: 6/9 char score passed 0.5 but
+        # "ehi" was never present.
+        phrase, _ = _match_wake_word(
+            "a ogni tanto controlliamo serena standard", ["ehi serena"]
+        )
+        assert phrase is None
+
+    def test_fuzzy_both_words_match(self):
+        # Both words present → match.
+        phrase, _ = _match_wake_word("ehi serena", ["ehi serena"], threshold=0.5)
+        assert phrase == "ehi serena"
 
     def test_prefix_boundary_not_consumed_mid_word(self):
         # "aiuto" prefix of "aiutami" — should NOT match because no word boundary
@@ -135,9 +146,9 @@ class TestMatchWakeWord:
         phrase, _ = _match_wake_word("scartagalileozzo", ["ehi galileo"])
         assert phrase is None
 
-    def test_prefix_truncation_still_matches(self):
-        # Real STT truncation ("galile" for "galileo") still recognised.
-        phrase, _ = _match_wake_word("galile", ["ehi galileo"], threshold=0.5)
+    def test_prefix_truncation_with_all_words(self):
+        # STT truncation ("galile" for "galileo") recognised when "ehi" is also present.
+        phrase, _ = _match_wake_word("ehi galile", ["ehi galileo"], threshold=0.5)
         assert phrase == "ehi galileo"
 
 
@@ -151,16 +162,17 @@ class TestApproxWakeMatchThreshold:
     def _alias_map(self, word: str) -> dict:
         return _build_alias_map([WakeWordGroup(word=word)])
 
-    def test_single_word_of_two_word_phrase_matches_at_default(self):
+    def test_single_word_of_two_word_phrase_no_longer_matches(self):
+        # "galileo" alone is no longer enough — "ehi" must also be present.
         am = self._alias_map("ehi galileo")
-        assert _approx_wake_match("il galileo", am, threshold=0.5) is not None
+        assert _approx_wake_match("il galileo", am, threshold=0.5) is None
 
-    def test_distinctive_word_weighted_by_length(self):
-        # Char-coverage scoring: "galileo" covers 7 of "ehigalileo"'s 10 chars
-        # = 0.7, so it matches up to threshold 0.7 but is rejected above it.
+    def test_both_words_required_for_fuzzy_match(self):
+        # Both "ehi" and "galileo" present → match; missing either → no match.
         am = self._alias_map("ehi galileo")
-        assert _approx_wake_match("il galileo", am, threshold=0.7) is not None
-        assert _approx_wake_match("il galileo", am, threshold=0.8) is None
+        assert _approx_wake_match("ehi galileo accendi", am, threshold=0.5) is not None
+        assert _approx_wake_match("il galileo", am, threshold=0.5) is None
+        assert _approx_wake_match("ehi come stai", am, threshold=0.5) is None
 
     def test_short_component_alone_does_not_wake(self):
         # The short filler "ehi" (3 of 10 chars = 0.3) must not fire the wake on

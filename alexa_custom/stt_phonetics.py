@@ -74,6 +74,12 @@ def _match_wake_word(
         phrase_words = [x for x in norm_w.split() if len(x) >= 3]
         if not phrase_words:
             phrase_words = norm_w.split()
+        # Every significant phrase word must have a phonetic match in the
+        # transcript. Without this gate, a single common word (e.g. "serena")
+        # can score high enough on character coverage to trigger the full
+        # wake phrase "ehi serena".
+        if not all(any(_word_token_match(pw, tw) for tw in text_words) for pw in phrase_words):
+            continue
         score = _word_overlap_score(phrase_words, text_words)
         if score > best_score:
             best_score = score
@@ -112,7 +118,7 @@ def _approx_wake_match(
     transcript.  Returns the best-scoring group if score >= threshold, else None.
 
     Example: phrase "ehi galileo", transcript "e il galileo"
-      key words: ["ehi", "galileo"]  →  "galileo" in transcript → 0.5 → match
+      key words: ["ehi", "galileo"]  →  both present → 0.7 → match
     """
     norm_text = normalize_text(text)
 
@@ -127,6 +133,8 @@ def _approx_wake_match(
         phrase_words = [w for w in norm_phrase.split() if len(w) >= 3]
         if not phrase_words:
             phrase_words = norm_phrase.split()
+        if not all(any(_word_token_match(pw, tw) for tw in text_words) for pw in phrase_words):
+            continue
         score = _word_overlap_score(phrase_words, text_words)
         if score > best_score:
             best_score = score

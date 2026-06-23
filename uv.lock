@@ -138,7 +138,6 @@ source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
     { name = "aiomqtt" },
-    { name = "headroom-ai", extra = ["mcp", "proxy"] },
     { name = "httpx" },
     { name = "livekit" },
     { name = "livekit-api" },
@@ -167,6 +166,7 @@ i2c = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "headroom-ai", extra = ["mcp", "proxy"] },
     { name = "pyright" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -178,7 +178,6 @@ dev = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.9" },
     { name = "aiomqtt", specifier = ">=2.5.1" },
-    { name = "headroom-ai", extras = ["mcp", "proxy"], specifier = ">=0.20.15" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "livekit", specifier = ">=1.1.10" },
     { name = "livekit-api", specifier = ">=1.1.0" },
@@ -200,6 +199,7 @@ provides-extras = ["i2c", "gstreamer", "calibrate"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "headroom-ai", extras = ["mcp", "proxy"], specifier = ">=0.20.15" },
     { name = "pyright", specifier = ">=1.1.390" },
     { name = "pytest", specifier = ">=9.0.3" },
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
