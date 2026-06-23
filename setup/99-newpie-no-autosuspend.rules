@@ -1,4 +1,4 @@
-# Disable USB autosuspend for the NewPie speakerphone (Cambridge Silicon Radio 0a12:1260).
+# Disable USB autosuspend for the NewPie speakerphone (any NewPie variant).
 # Without this, Linux suspends the device after inactivity and PipeWire reinitializes it
 # on wake, resetting the ALSA PCM mixer to 0% and dropping routing mid-session.
-ACTION=="add", SUBSYSTEM=="usb", ATTRS{idVendor}=="0a12", ATTRS{idProduct}=="1260", ATTR{power/autosuspend_delay_ms}="-1"
+ACTION=="add", SUBSYSTEM=="usb", ATTRS{product}=="NewPie*", ATTR{power/autosuspend_delay_ms}="-1"

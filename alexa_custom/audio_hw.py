@@ -578,17 +578,39 @@ def check_newpie_ready(
 
 
 def _find_alsa_card(needle: str) -> tuple[int, str] | None:
-    """Return (card_index, card_id) for first ALSA card whose id contains needle."""
+    """Return (card_index, card_id) for first ALSA card whose id or description contains needle.
+
+    Checks the short card ID first (e.g. "NewPie"), then falls back to the full
+    description in /proc/asound/cards (e.g. "USB-Audio - NewPie 32") so that devices
+    whose ALSA id is truncated/sanitized (e.g. "N32") are still found.
+    """
+    needle_lower = needle.lower()
     for entry in os.listdir("/proc/asound"):
         if not entry.startswith("card"):
             continue
         try:
             with open(f"/proc/asound/{entry}/id") as f:
                 card_id = f.read().strip()
-            if needle.lower() in card_id.lower():
+            if needle_lower in card_id.lower():
                 return int(entry[4:]), card_id
         except OSError:
             pass
+    # Fallback: search full card descriptions in /proc/asound/cards
+    try:
+        with open("/proc/asound/cards") as f:
+            for line in f:
+                if needle_lower not in line.lower():
+                    continue
+                parts = line.split()
+                if parts and parts[0].isdigit():
+                    card_index = int(parts[0])
+                    try:
+                        with open(f"/proc/asound/card{card_index}/id") as fid:
+                            return card_index, fid.read().strip()
+                    except OSError:
+                        pass
+    except OSError:
+        pass
     return None
 
 

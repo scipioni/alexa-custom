@@ -197,6 +197,7 @@ tasks:
   setup:
     desc: Install the serena systemd user service and enable it
     cmds:
+      - uv sync --group dev
       - |
         # Generate it_IT.UTF-8 locale only on Arduino board
         if grep -q "Arduino" /sys/firmware/devicetree/base/model 2>/dev/null; then
@@ -231,9 +232,22 @@ tasks:
       - sudo cp setup/newpie-autosuspend.service /etc/systemd/system/newpie-autosuspend.service
       - sudo systemctl daemon-reload
       - sudo systemctl enable --now newpie-autosuspend.service
-      # Set pro-audio profile — the only profile that exposes both a sink and source on the NewPie
-      # (combined output:analog-stereo+input:* profiles are not generated for this hardware)
-      - pactl set-card-profile alsa_card.usb-0a12_NewPie_SABINESMICDFU-00 pro-audio
+      # Set duplex profile — nodes appear under Sources/Sinks so PulseAudio clients (parec, pulsesrc)
+      # can wake them. pro-audio puts nodes under Filters; clients connect but the node stays
+      # suspended and emits no audio.
+      # Resolve the ALSA card by product name substring ("NewPie") so this works regardless
+      # of the USB vendor ID or exact product string ("NewPie", "NewPie 32", etc.).
+      # Set duplex analog-stereo profile — nodes appear under Sources/Sinks so PulseAudio
+      # clients (parec, pulsesrc) can wake them on demand.  pro-audio puts nodes under
+      # Filters; never use it as a fallback.  If the combined duplex profile is unavailable
+      # (some hardware revisions only expose separate profiles), fall back to input:analog-stereo
+      # so the capture side (STT) still works.
+      - |
+        CARD=$(pactl list cards short | grep -i NewPie | cut -f2 | head -1)
+        if [ -n "$CARD" ]; then
+          pactl set-card-profile "$CARD" output:analog-stereo+input:analog-stereo 2>/dev/null || \
+          pactl set-card-profile "$CARD" input:analog-stereo 2>/dev/null || true
+        fi
       # Set WirePlumber persistent default routing dynamically by name (survives reboots)
       # Must use default.configured.audio.* — WirePlumber reads these keys to restore state on restart
       - |
@@ -241,15 +255,18 @@ tasks:
         SOURCE=$(pactl list sources short | awk '/[Nn]ew[Pp]ie/ && !/monitor/{print $2; exit}')
         [ -n "$SINK" ] && pw-metadata -n default 0 default.configured.audio.sink "{\"name\":\"$SINK\"}" 'Spa:String:JSON'
         [ -n "$SOURCE" ] && pw-metadata -n default 0 default.configured.audio.source "{\"name\":\"$SOURCE\"}" 'Spa:String:JSON'
-      # Unmute hardware PCM volume now (software volume is set from conf/config.yaml at startup)
-      - amixer -c 0 sset PCM 100% || amixer -c NewPie sset PCM 100% || true
+      # Unmute hardware volume now (software volume is set from conf/config.yaml at startup).
+      # Try PCM first (older NewPie); fall back to Playback Volume (newer NewPie 32).
+      - |
+        CARD_NUM=$(grep -m1 "NewPie" /proc/asound/cards | awk '{print $1}')
+        amixer -c "${CARD_NUM:-0}" sset PCM 100% 2>/dev/null || amixer -c "${CARD_NUM:-0}" sset 'Playback Volume' 100% 2>/dev/null || true
       # Install user service to re-apply PCM 100% after PipeWire init on every boot
       - mkdir -p ~/.config/systemd/user
       - cp setup/alsa-pcm-unmute.service ~/.config/systemd/user/alsa-pcm-unmute.service
       - systemctl --user daemon-reload
       - systemctl --user enable alsa-pcm-unmute.service
-      # Install WirePlumber rule to keep NewPie source always active (prevents suspension so
-      # native PipeWire clients such as pipewiresrc can connect and receive data immediately)
+      # Install WirePlumber rule to keep NewPie source always active (prevents brief SUSPENDED
+      # delay when the GStreamer pulsesrc pipeline starts capturing)
       - mkdir -p ~/.config/wireplumber/wireplumber.conf.d
       - cp setup/51-newpie-no-suspend.conf ~/.config/wireplumber/wireplumber.conf.d/51-newpie-no-suspend.conf
       # Restart WirePlumber so it re-evaluates routing with NewPie as the configured default
@@ -261,7 +278,9 @@ tasks:
     desc: Restart WirePlumber and restore NewPie routing, PCM volume, and autosuspend
     cmds:
       - systemctl --user restart wireplumber && sleep 3
-      - amixer -c 0 sset PCM 100% || true
+      - |
+        CARD_NUM=$(grep -m1 "NewPie" /proc/asound/cards | awk '{print $1}')
+        amixer -c "${CARD_NUM:-0}" sset PCM 100% 2>/dev/null || amixer -c "${CARD_NUM:-0}" sset 'Playback Volume' 100% 2>/dev/null || true
       - systemctl --user restart alsa-pcm-unmute.service
       - sudo systemctl restart newpie-autosuspend.service || true
 

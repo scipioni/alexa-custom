@@ -296,18 +296,24 @@ def setup_audio() -> None:
 
 
 def _amixer_pcm_percent(card_index: int) -> int | None:
-    """Return the NewPie hardware PCM level as a percentage, or None if unreadable."""
-    try:
-        result = subprocess.run(
-            ["amixer", "-c", str(card_index), "sget", "PCM"],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-    except FileNotFoundError:
-        return None
-    m = re.search(r"\[(\d+)%\]", result.stdout)
-    return int(m.group(1)) if m else None
+    """Return the NewPie hardware playback level as a percentage, or None if unreadable.
+
+    Tries "PCM" first (original NewPie); falls back to "Playback Volume" (NewPie 32).
+    """
+    for control in ("PCM", "Playback Volume"):
+        try:
+            result = subprocess.run(
+                ["amixer", "-c", str(card_index), "sget", control],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except FileNotFoundError:
+            return None
+        m = re.search(r"\[(\d+)%\]", result.stdout)
+        if m:
+            return int(m.group(1))
+    return None
 
 
 def audio_doctor() -> int:

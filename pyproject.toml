@@ -23,7 +23,6 @@ dependencies = [
     "aiohttp>=3.9",
     "piper-tts>=1.2.0",
     "rapidfuzz>=3.0.0",
-    "headroom-ai[mcp,proxy]>=0.20.15",
     "ruamel.yaml>=0.18",
     "smbus2>=0.6.1",
 ]
@@ -59,6 +58,7 @@ calibrate = [
 
 [dependency-groups]
 dev = [
+    "headroom-ai[mcp,proxy]>=0.20.15",
     "pytest>=9.0.3",
     "pytest-asyncio>=1.4.0",
     "pyright>=1.1.390",
