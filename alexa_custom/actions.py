@@ -112,6 +112,12 @@ def _word_token_match(pw: str, tw: str) -> bool:
         return True
     if len(tp) >= 3 and len(tp) >= len(pp) * 0.7 and pp.startswith(tp):
         return True
+    # Short interjections (≤3 phonetic chars, e.g. "ehi"): Vosk often emits just
+    # the initial vowel ("e"). Accept when tp is a single char that is a phonetic
+    # prefix of pp — e.g. "e" matching "ehi". The 70%-coverage guard above already
+    # blocks longer words so this branch only fires for very short phrase words.
+    if len(pp) <= 3 and len(tp) == 1 and pp.startswith(tp):
+        return True
     return False
 
 

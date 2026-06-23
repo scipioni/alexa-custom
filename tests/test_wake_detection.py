@@ -108,6 +108,13 @@ class TestMatchWakeWord:
         phrase, _ = _match_wake_word("ehi serena", ["ehi serena"], threshold=0.5)
         assert phrase == "ehi serena"
 
+    def test_ehi_transcribed_as_e(self):
+        # Vosk (Italian) commonly emits the single vowel "e" for the interjection
+        # "ehi". The per-word gate must accept this truncation so that "e serena"
+        # still wakes on "ehi serena". Regression for b857c79.
+        phrase, _ = _match_wake_word("e serena", ["ehi serena"], threshold=0.5)
+        assert phrase == "ehi serena"
+
     def test_prefix_boundary_not_consumed_mid_word(self):
         # "aiuto" prefix of "aiutami" — should NOT match because no word boundary
         phrase, cmd = _match_wake_word("aiutami fermati", ["aiuto"])
