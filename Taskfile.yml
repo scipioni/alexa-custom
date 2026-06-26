@@ -243,6 +243,10 @@ tasks:
       #             the sink or the source is active (daemon capture is sufficient).
       #             pro-audio was tried but the Bluetooth SCO link goes idle when nothing plays
       #             through the sink, causing the capture to return only USB clock noise.
+      #             NOTE: pactl set-card-profile cannot set this combined profile by name on
+      #             PipeWire 1.4.x (returns "No such entity"). We write to WirePlumber's
+      #             state file (~/.local/state/wireplumber/default-profile) directly so the
+      #             profile persists across reboots without needing task audio:setup.
       - |
         NEWPIE_CARD=$(pactl list cards short | grep -i NewPie | cut -f2 | head -1)
         YEALINK_CARD=$(pactl list cards short | grep -i Yealink | cut -f2 | head -1)
@@ -250,8 +254,18 @@ tasks:
           pactl set-card-profile "$NEWPIE_CARD" output:analog-stereo+input:analog-stereo 2>/dev/null || \
           pactl set-card-profile "$NEWPIE_CARD" pro-audio 2>/dev/null || true
         elif [ -n "$YEALINK_CARD" ]; then
-          pactl set-card-profile "$YEALINK_CARD" output:analog-stereo+input:mono-fallback 2>/dev/null || \
-          pactl set-card-profile "$YEALINK_CARD" pro-audio 2>/dev/null || true
+          # pactl cannot set output:analog-stereo+input:mono-fallback by name on PipeWire 1.4.x
+          # (returns "No such entity") — edit WirePlumber state file directly so WirePlumber applies
+          # the combined profile on restart and persists it across reboots.
+          STATE_FILE="${HOME}/.local/state/wireplumber/default-profile"
+          mkdir -p "$(dirname "$STATE_FILE")"
+          if grep -q "^${YEALINK_CARD}=" "$STATE_FILE" 2>/dev/null; then
+            sed -i "s|^${YEALINK_CARD}=.*|${YEALINK_CARD}=output:analog-stereo+input:mono-fallback|" "$STATE_FILE"
+          else
+            [ -f "$STATE_FILE" ] || printf '[default-profile]\n' > "$STATE_FILE"
+            echo "${YEALINK_CARD}=output:analog-stereo+input:mono-fallback" >> "$STATE_FILE"
+          fi
+          echo "Yealink: wrote output:analog-stereo+input:mono-fallback to WirePlumber state"
         else
           echo "WARNING: no NewPie or Yealink card found — skipping profile setup"
         fi
@@ -280,19 +294,15 @@ tasks:
       # Restart WirePlumber so it re-evaluates routing with the configured default
       - systemctl --user restart wireplumber && sleep 3
       - systemctl --user restart alsa-pcm-unmute.service
-      # Re-apply profile AFTER WirePlumber restart — WirePlumber restores its persisted state on
-      # startup and overwrites whatever pactl set before the restart. Setting it again here ensures
-      # the correct profile survives the restart. Also re-save the default routing with the new
-      # node names that appear under the new profile.
+      # After WirePlumber restart, re-apply NewPie profile (pactl works for NewPie since the combined
+      # profile is a real named profile). For Yealink, WirePlumber already reads the state file we
+      # edited above and applies output:analog-stereo+input:mono-fallback — no pactl needed.
+      # Re-save the default routing with the node names that appear under the new profile.
       - |
         NEWPIE_CARD=$(pactl list cards short | grep -i NewPie | cut -f2 | head -1)
-        YEALINK_CARD=$(pactl list cards short | grep -i Yealink | cut -f2 | head -1)
         if [ -n "$NEWPIE_CARD" ]; then
           pactl set-card-profile "$NEWPIE_CARD" output:analog-stereo+input:analog-stereo 2>/dev/null || \
           pactl set-card-profile "$NEWPIE_CARD" pro-audio 2>/dev/null || true
-        elif [ -n "$YEALINK_CARD" ]; then
-          pactl set-card-profile "$YEALINK_CARD" output:analog-stereo+input:mono-fallback 2>/dev/null || \
-          pactl set-card-profile "$YEALINK_CARD" pro-audio 2>/dev/null || true
         fi
         SINK=$(pactl list sinks short | awk '/[Nn]ew[Pp]ie|[Yy]ealink/ && !/monitor/{print $2; exit}')
         SOURCE=$(pactl list sources short | awk '/[Nn]ew[Pp]ie|[Yy]ealink/ && !/monitor/{print $2; exit}')
