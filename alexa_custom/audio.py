@@ -137,7 +137,7 @@ def main_devices():
 
 
 def main_doctor():
-    """Entry point for `alexa-audio-doctor`: exit non-zero if any check fails."""
+    """Entry point for `serena-audio-doctor`: exit non-zero if any check fails."""
     sys.exit(audio_doctor())
 
 

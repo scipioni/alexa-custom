@@ -93,7 +93,7 @@ pip install -e .
 pip install smbus2   # optional: I2C OLED display
 
 # 4. Download speech models (Vosk, Piper)
-alexa-setup
+serena-setup
 
 # 5. Configure audio routing (run once)
 sudo apt install task  
@@ -110,7 +110,7 @@ sudo loginctl enable-linger $(whoami)
 systemctl --user start serena
 
 # 7B.  or start the assistant directly
-alexa-client
+serena-client
 ```
 
 Open **http://localhost:8080** for the web dashboard.
@@ -120,9 +120,9 @@ Open **http://localhost:8080** for the web dashboard.
 ### Audio diagnostics
 
 ```bash
-alexa-devices       # list audio input/output devices
-alexa-audio         # microphone → speaker loopback test
-alexa-audio-doctor  # full audio diagnostics
+serena-devices       # list audio input/output devices
+serena-audio         # microphone → speaker loopback test
+serena-audio-doctor  # full audio diagnostics
 task audio:status   # audio device health dashboard
 ```
 
@@ -334,13 +334,13 @@ triggers:
 
 | Command | Description |
 |---|---|
-| `alexa-client --web-port 8080` | Start with dashboard on custom port |
-| `alexa-client --web-host 127.0.0.1` | Restrict dashboard to localhost |
-| `alexa-setup` | Download/update STT and TTS models |
-| `alexa-devices` | List detected audio devices |
-| `alexa-audio` | Microphone → speaker loopback test |
-| `alexa-audio-doctor` | Full audio diagnostics |
-| `alexa-record --duration 5` | Record and transcribe audio |
+| `serena-client --web-port 8080` | Start with dashboard on custom port |
+| `serena-client --web-host 127.0.0.1` | Restrict dashboard to localhost |
+| `serena-setup` | Download/update STT and TTS models |
+| `serena-devices` | List detected audio devices |
+| `serena-audio` | Microphone → speaker loopback test |
+| `serena-audio-doctor` | Full audio diagnostics |
+| `serena-record --duration 5` | Record and transcribe audio |
 
 ---
 
@@ -350,7 +350,7 @@ triggers:
 |---|---|
 | No audio after boot | `amixer -c 0 sset PCM 100%` — PCM mixer resets on PipeWire init |
 | Audio drops mid-session | `task audio:restart` — restores routing and PCM |
-| Microphone not detected | `alexa-devices` to list cards; check `wpctl status` |
+| Microphone not detected | `serena-devices` to list cards; check `wpctl status` |
 | LiveKit join hangs | Verify `wait_for_participant` and `answer_timeout` in config |
 | Service won't start | `journalctl --user -fu serena` — check logs |
 

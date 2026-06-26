@@ -5,7 +5,7 @@ no microphone, no PortAudio, no parec subprocess. Feeds 16 kHz mono
 s16le WAV clips through the same Vosk/KWS decision helpers used in
 production and reports false-positives-per-hour and miss-rate.
 
-CLI: ``alexa-wake-eval --help``
+CLI: ``serena-wake-eval --help``
 
 Corpus layout
 -------------
@@ -756,7 +756,7 @@ def main() -> None:
     corpus_dir = Path(args.corpus_dir)
 
     # --- Resolve effective settings from the live config (unless --no-config) ---
-    # A bare `alexa-wake-eval` then analyzes exactly what the daemon runs: the
+    # A bare `serena-wake-eval` then analyzes exactly what the daemon runs: the
     # wake words from conf/config.yaml + conf/actions/*, and the same recognizer
     # vocabulary (free-text or the full wake+trigger grammar).
     app_config = None

@@ -326,7 +326,7 @@ def resolve_device(name_or_index: str) -> int:
         if needle in d["name"].lower():
             return i
     raise RuntimeError(
-        f"Audio device not found: {name_or_index!r} — run 'alexa-audio --list' to see available devices"
+        f"Audio device not found: {name_or_index!r} — run 'serena-audio --list' to see available devices"
     )
 
 

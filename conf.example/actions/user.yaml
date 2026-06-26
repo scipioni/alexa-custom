@@ -68,7 +68,7 @@ triggers:
   #     - "aggiorna"
   #   actions:
   #     - type: shell
-  #       command: "systemctl --user restart alexa-client"
+  #       command: "systemctl --user restart serena-client"
 
   # - commands:
   #     - "connettiti"

@@ -1,15 +1,15 @@
-"""alexa-stt — standalone STT diagnostic tool.
+"""serena-stt — standalone STT diagnostic tool.
 
-Runs the exact same stage-1 + stage-2 pipeline as alexa-client (same config,
+Runs the exact same stage-1 + stage-2 pipeline as serena-client (same config,
 same backends, same matching logic) and prints every recognition event to
 stdout.  Useful for tuning wake words, thresholds, and trigger phrases without
 starting the full daemon.
 
 Usage:
-    alexa-stt                        # live microphone
-    alexa-stt --record session.wav   # mic + save audio to WAV
-    alexa-stt --play session.wav     # replay saved WAV instead of mic
-    LOG_LEVEL=DEBUG alexa-stt        # show vosk debug traces
+    serena-stt                        # live microphone
+    serena-stt --record session.wav   # mic + save audio to WAV
+    serena-stt --play session.wav     # replay saved WAV instead of mic
+    LOG_LEVEL=DEBUG serena-stt        # show vosk debug traces
 """
 
 from __future__ import annotations
@@ -524,7 +524,7 @@ def _print_dataset(config) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="alexa-stt: STT diagnostic tool (same pipeline as alexa-client)"
+        description="serena-stt: STT diagnostic tool (same pipeline as serena-client)"
     )
     parser.add_argument(
         "--config",

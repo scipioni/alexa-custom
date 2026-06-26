@@ -133,7 +133,7 @@ class VoskSTT(STTBackend):
 def _load_model(model_path: str = _MODEL_PATH) -> vosk.Model:
     if not os.path.isdir(model_path):
         raise RuntimeError(
-            f"Vosk model not found at {model_path!r}. Run 'alexa-setup' to download it."
+            f"Vosk model not found at {model_path!r}. Run 'serena-setup' to download it."
         )
     vosk.SetLogLevel(-1)
     return vosk.Model(model_path)

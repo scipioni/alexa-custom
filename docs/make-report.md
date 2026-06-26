@@ -7,10 +7,10 @@ Use this prompt in Claude Code to capture a new resource snapshot and compare it
 ## Prompt (paste into Claude Code)
 
 ```
-Take a resource snapshot of the running alexa-custom process and compare it with all previous snapshots in reports/.
+Take a resource snapshot of the running serena-custom process and compare it with all previous snapshots in reports/.
 
 Steps:
-1. Find the alexa-client process: `ps aux | grep alexa-client | grep -v grep`
+1. Find the serena-client process: `ps aux | grep serena-client | grep -v grep`
 2. For that PID, collect:
    - CPU% and elapsed uptime: `ps -p <PID> -o %cpu,%mem,rss,vsz,etime,stat`
    - Memory detail: `cat /proc/<PID>/status | grep -E 'VmRSS|VmSize|VmPeak|VmSwap|Threads'`

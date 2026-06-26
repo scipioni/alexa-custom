@@ -76,9 +76,9 @@ Edit `conf/secrets.yaml` with your credentials. See [`docs/configuration.md`](co
 ## 4. STT Models
 
 ```bash
-alexa-setup                 # downloads default small Italian Vosk model
-alexa-setup --large         # high-accuracy model (~1.2 GB)
-alexa-setup --force         # overwrite existing model
+serena-setup                 # downloads default small Italian Vosk model
+serena-setup --large         # high-accuracy model (~1.2 GB)
+serena-setup --force         # overwrite existing model
 ```
 
 ---
@@ -97,16 +97,16 @@ task audio:test              # play test WAV
 
 ```bash
 # Loopback test
-alexa-audio
+serena-audio
 
 # List audio devices
-alexa-devices
+serena-devices
 
 # Audio diagnostics
-alexa-audio-doctor
+serena-audio-doctor
 
 # Run the daemon
-serena --hot-reload          # or: alexa-client
+serena --hot-reload          # or: serena-client
 ```
 
 ---
@@ -115,16 +115,16 @@ serena --hot-reload          # or: alexa-client
 
 | Command | Entry point | Description |
 |---|---|---|
-| `alexa-client [--web-port PORT]` | `client.py:main` | Main daemon |
-| `serena` | `client.py:main` | Alias for alexa-client |
-| `alexa-audio [--list]` | `audio.py:main` | Speakerphone loopback / device list |
-| `alexa-devices` | `audio.py:main_devices` | List all audio devices |
+| `serena-client [--web-port PORT]` | `client.py:main` | Main daemon |
+| `serena` | `client.py:main` | Alias for serena-client |
+| `serena-audio [--list]` | `audio.py:main` | Speakerphone loopback / device list |
+| `serena-devices` | `audio.py:main_devices` | List all audio devices |
 | `serena-test` | `audio.py:main_test` | Audio test utility |
-| `alexa-setup [--large] [--force]` | `setup.py:main` | Download STT/TTS models |
-| `alexa-audio-setup` | `audio.py:setup_audio` | Configure audio routing |
-| `alexa-audio-doctor` | `audio.py:main_doctor` | Audio diagnostics |
-| `alexa-wake-eval` | `wake_eval.py:main` | Wake word evaluation |
-| `alexa-record` | `record.py:main` | Record audio |
+| `serena-setup [--large] [--force]` | `setup.py:main` | Download STT/TTS models |
+| `serena-audio-setup` | `audio.py:setup_audio` | Configure audio routing |
+| `serena-audio-doctor` | `audio.py:main_doctor` | Audio diagnostics |
+| `serena-wake-eval` | `wake_eval.py:main` | Wake word evaluation |
+| `serena-record` | `record.py:main` | Record audio |
 | `serena-stt` | `stt_cli.py:main` | STT CLI utility |
 
 ---

@@ -1,7 +1,7 @@
 """CLI / diagnostic tools for audio hardware.
 
-These functions are only used by interactive entry-points (alexa-devices,
-alexa-audio, alexa-audio-doctor, alexa-setup) and setup scripts.
+These functions are only used by interactive entry-points (serena-devices,
+serena-audio, serena-audio-doctor, serena-setup) and setup scripts.
 Runtime audio state and routing live in audio_hw.py.
 
 Dependency direction: diagnostics → runtime (audio_hw), never the reverse.

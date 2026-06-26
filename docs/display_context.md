@@ -85,7 +85,7 @@ Sostituire `_BridgeClient` per chiamare `sudo ./uart_bridge` come subprocess inv
 
 ### 4. Test finale
 ```bash
-alexa-client
+serena-client
 ```
 La matrice 8×13 dovrebbe mostrare ◎ (idle), poi cambiare con gli eventi.
 

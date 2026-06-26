@@ -180,7 +180,7 @@ class STTConfig:
     vosk_grammar: bool = False
     # Minimum acoustic confidence (0..1) to accept a wake/command match. 0.0
     # disables the gate (free-text default). ~0.65 is a sane starting point for
-    # grammar mode; sweep with `alexa-wake-eval`.
+    # grammar mode; sweep with `serena-wake-eval`.
     confidence: float = 0.0
     confidence_mode: str = "first"     # first | min | mean
 

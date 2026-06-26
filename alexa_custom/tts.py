@@ -165,7 +165,7 @@ class PiperTTS(TTSBackend):
         if not voice_path.is_file():
             raise FileNotFoundError(
                 f"Piper voice not found at {voice_path}. "
-                f"Run 'alexa-setup --piper-voice {voice}' to download it."
+                f"Run 'serena-setup --piper-voice {voice}' to download it."
             )
 
         logger.info(f"Loading Piper voice: {voice_path}")

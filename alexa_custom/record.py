@@ -1,4 +1,4 @@
-"""Alexa-record utility."""
+"""Serena-record utility."""
 
 from __future__ import annotations
 
@@ -150,7 +150,7 @@ def main() -> None:
         # Increment input_gain
         input_gain += 0.1
 
-    print("alexa-record completed successfully.")
+    print("serena-record completed successfully.")
 
 
 if __name__ == "__main__":

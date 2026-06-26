@@ -1,6 +1,6 @@
 # Serena — Technical Reference
 
-> Package name: `alexa-custom` · CLI entry points: `alexa-*` / `serena*` · systemd: `serena.service`
+> Package name: `alexa-custom` · CLI entry points: `serena-*` · systemd: `serena.service`
 
 ---
 
@@ -27,7 +27,7 @@
 
 ```
 ┌────────────────────────────────────────────────────────────────────┐
-│                        alexa-custom daemon                       │
+│                           serena daemon                          │
 │                                                                   │
 │  ┌──────────┐  ┌─────────────────┐  ┌──────────┐  ┌──────────┐ │
 │  │ client.py │─▶│  stt.py         │─▶│ actions  │─▶│  tts.py  │ │
@@ -118,7 +118,7 @@ Optional: `pip install smbus2` for I2C OLED display support.
 ### Model Download
 
 ```bash
-alexa-setup
+serena-setup
 ```
 
 Downloads:
@@ -181,7 +181,7 @@ systemctl --user restart serena         # restart
 ### First Run
 
 ```bash
-alexa-client
+serena-client
 ```
 
 Open http://localhost:8080 for the web dashboard.
@@ -398,17 +398,17 @@ triggers:
 
 | Command | Description |
 |---------|-------------|
-| `alexa-client [--web-port PORT]` | Main daemon with web dashboard and config panel |
-| `alexa-audio` | Microphone → speaker loopback test |
-| `alexa-devices` | List detected audio devices |
-| `alexa-test` | Audio test utility |
-| `alexa-setup` | Download/update STT and TTS models |
-| `alexa-audio-setup` | Configure audio routing |
-| `alexa-audio-doctor` | Audio diagnostic checks |
-| `alexa-wake-eval` | Wake word evaluation tool |
-| `alexa-record` | WAV recording utility |
-| `alexa-stt` | Direct STT testing via CLI |
-| `serena` | Daemon alias (same as `alexa-client`) |
+| `serena-client [--web-port PORT]` | Main daemon with web dashboard and config panel |
+| `serena-audio` | Microphone → speaker loopback test |
+| `serena-devices` | List detected audio devices |
+| `serena-test` | Audio test utility |
+| `serena-setup` | Download/update STT and TTS models |
+| `serena-audio-setup` | Configure audio routing |
+| `serena-audio-doctor` | Audio diagnostic checks |
+| `serena-wake-eval` | Wake word evaluation tool |
+| `serena-record` | WAV recording utility |
+| `serena-stt` | Direct STT testing via CLI |
+| `serena` | Daemon alias (same as `serena-client`) |
 | `serena-stt` | Standalone STT mode (capture + transcribe only) |
 
 ### Task Commands
@@ -419,7 +419,7 @@ triggers:
 | `task lint` | Ruff check + format --check |
 | `task format` | Ruff format |
 | `task fix` | Ruff fix + format + test |
-| `task run` | Run alexa-client directly |
+| `task run` | Run serena-client directly |
 | `task start` | Start with hot-reload enabled |
 | `task setup` | Install systemd user service |
 | `task audio:setup` | Set NewPie as default, install PCM restore service, disable USB autosuspend |
@@ -726,7 +726,7 @@ Use via config: set `display.backend: uart` and `display.uart_bridge_cmd: "sudo 
 
 - Bypasses kernel driver via `/dev/mem` register access
 - Compile: `gcc -o uart_bridge setup/display_firmware/uart_bridge.c`
-- Run: `ALEXA_DISPLAY_CMD="sudo ./uart_bridge" alexa-client`
+- Run: `ALEXA_DISPLAY_CMD="sudo ./uart_bridge" serena-client`
 
 ---
 
@@ -905,7 +905,7 @@ task audio:restart               # restore routing and PCM
 
 **Device not found**
 ```bash
-alexa-devices                    # list available audio devices
+serena-devices                    # list available audio devices
 lsusb | grep NewPie              # check USB detection
 ```
 
@@ -951,7 +951,7 @@ systemctl --user status serena       # check status
 
 **STT not working after setup**
 ```bash
-alexa-setup --force                  # re-download models
+serena-setup --force                  # re-download models
 ls models/                           # verify models directory contents
 ```
 

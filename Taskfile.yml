@@ -45,7 +45,7 @@ tasks:
       - PYTHONPATH={{.PYTHONPATH}} python3 alexa_custom/client.py {{.CLI_ARGS}}
 
   start:
-    desc: Start alexa-client with hot-reload enabled
+    desc: Start serena-client with hot-reload enabled
     cmds:
       - serena --hot-reload
 

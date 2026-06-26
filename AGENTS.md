@@ -33,17 +33,17 @@ task test          # run pytest
 task lint          # ruff check + format --check
 task format        # ruff format
 task fix           # ruff fix + format + test
-task run           # run alexa-client directly
+task run           # run serena-client directly
 task setup         # install systemd user service
 ```
 
 Manual entry points:
 ```bash
-alexa-client [--web-port PORT]             # main daemon (web dashboard with config panel)
-serena                                   # alias for alexa-client
-alexa-audio                              # mic→speaker loopback test
-alexa-devices                            # list audio devices
-alexa-setup                              # download/update STT models
+serena-client [--web-port PORT]            # main daemon (web dashboard with config panel)
+serena                                   # alias for serena-client
+serena-audio                             # mic→speaker loopback test
+serena-devices                           # list audio devices
+serena-setup                             # download/update STT models
 serena-stt                               # STT diagnostic (same pipeline as daemon, live mic)
 serena-stt --record FILE                 # record mic to WAV while listening
 serena-stt --play FILE                   # replay saved WAV through STT pipeline
@@ -81,7 +81,7 @@ PortAudio (used by `sounddevice` and `PyAudio`) has **no native PipeWire backend
 - **Use `pulsectl`** Python library — sets default sink/source, reacts to PipeWire graph events via `AudioWatcher`.
 
 ### `sounddevice` — allowed uses only
-- `sd.query_devices()` for device listing (`alexa-audio --list`, speakerphone diagnostic).
+- `sd.query_devices()` for device listing (`serena-audio --list`, speakerphone diagnostic).
 - `sd.Stream` for the `speakerphone` loopback utility (isolated, no STT gate interaction).
 
 ## Host Audio Management & Workarounds

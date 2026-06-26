@@ -102,7 +102,7 @@ PipeWire implements. It is the only Python library that can:
 `sounddevice` is still imported for two narrow uses:
 
 1. **Device listing** (`sd.query_devices()`) — enumerates all ALSA/PipeWire
-   devices visible to PortAudio, used by `alexa-audio --list` and the
+   devices visible to PortAudio, used by `serena-audio --list` and the
    speakerphone diagnostic.
 2. **`speakerphone` loopback** (`sd.Stream`) — a developer utility that mirrors
    mic input to speaker output in real time; acceptable to use PortAudio here

@@ -45,7 +45,7 @@ Then: `systemctl --user restart wireplumber`
 ### STT stops responding (watchdog restart)
 The STT worker thread has a watchdog that detects if the recognition loop freezes for more than ~15 seconds. If it fires, check:
 - Is CPU pegged at 100%? Vosk uses ~70% on one core; check for other processes.
-- Is the audio capture pipeline stalled? Run `alexa-audio-doctor`.
+- Is the audio capture pipeline stalled? Run `serena-audio-doctor`.
 - Are there Vosk decode errors in the journal? `journalctl --user -u serena -n 50`.
 
 ### Utterances chopped / VAD too aggressive
