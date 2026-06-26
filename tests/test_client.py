@@ -303,7 +303,7 @@ class TestClientCLI(unittest.TestCase):
 
         mock_load_config.return_value = None
 
-        with patch.object(sys, "argv", ["alexa-client"]):
+        with patch.object(sys, "argv", ["serena-client"]):
             main()
             mock_run_web.assert_called_once()
             mock_os_exit.assert_called_once_with(0)

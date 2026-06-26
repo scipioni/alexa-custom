@@ -72,7 +72,7 @@ def test_alexa_record_command(
         test_text = "test_reference_text"
 
         test_args = [
-            "alexa-record",
+            "serena-record",
             "--duration",
             "0.1",
             "--out",
