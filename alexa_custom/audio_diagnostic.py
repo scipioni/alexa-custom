@@ -354,8 +354,8 @@ def audio_doctor() -> int:
         f"no supported USB audio device ({', '.join(_KNOWN_DEVICES)}) found in /proc/asound",
     )
 
-    # 3. Hardware PCM not muted
-    if card is not None:
+    # 3. Hardware PCM not muted (NewPie only — Yealink uses software volume, no reset bug)
+    if card is not None and device_label == "NewPie":
         pct = _amixer_pcm_percent(card[0])
         if pct is None:
             warn("usb-audio:pcm-level", "could not read PCM level")
@@ -415,6 +415,71 @@ def audio_doctor() -> int:
                 warn("service:alsa-pcm-unmute", "installed but not enabled")
         except FileNotFoundError:
             warn("service:alsa-pcm-unmute", "systemctl not available")
+
+    # 8. Yealink BT51: active PipeWire profile must not be pro-audio
+    #    pro-audio leaves the Bluetooth SCO link idle → capture returns USB clock noise.
+    #    The correct profile is output:analog-stereo+input:mono-fallback, applied by
+    #    WirePlumber reading ~/.local/state/wireplumber/default-profile.
+    if device_label == "Yealink":
+        yealink_profile_ok = False
+        yealink_profile_name = "unknown"
+        yealink_source_in_sources = False
+        try:
+            cards_out = subprocess.run(
+                ["pactl", "list", "cards"],
+                capture_output=True, text=True, check=False,
+            ).stdout
+            in_yealink = False
+            for line in cards_out.splitlines():
+                if "Yealink" in line and "Name:" in line:
+                    in_yealink = True
+                if in_yealink and "Active Profile:" in line:
+                    yealink_profile_name = line.split("Active Profile:")[-1].strip()
+                    yealink_profile_ok = yealink_profile_name != "pro-audio"
+                    break
+        except Exception:
+            pass
+        ok(
+            "yealink:profile",
+            yealink_profile_ok,
+            f"active={yealink_profile_name!r} — pro-audio causes idle Bluetooth SCO link; "
+            "run `task audio:setup` to fix",
+        )
+
+        try:
+            sources_out = subprocess.run(
+                ["pactl", "list", "sources", "short"],
+                capture_output=True, text=True, check=False,
+            ).stdout
+            # Source node must appear here (not only under Filters) for pulsesrc to work.
+            # With pro-audio the node is absent from pactl sources when BT link is idle.
+            yealink_source_in_sources = any(
+                "Yealink" in l and "monitor" not in l
+                for l in sources_out.splitlines()
+            )
+        except Exception:
+            pass
+        ok(
+            "yealink:source-visible",
+            yealink_source_in_sources,
+            "Yealink source not in pactl list sources — pulsesrc will fail; "
+            "run `task audio:setup`",
+        )
+
+        # WirePlumber state file must not have pro-audio for the Yealink card
+        state_file = home / ".local/state/wireplumber/default-profile"
+        wp_state_ok = False
+        if state_file.exists():
+            content = state_file.read_text()
+            for line in content.splitlines():
+                if "Yealink" in line and "BT51" in line:
+                    wp_state_ok = "pro-audio" not in line
+                    break
+        ok(
+            "yealink:wireplumber-state",
+            wp_state_ok,
+            f"{state_file} has pro-audio for BT51 — run `task audio:setup` to fix",
+        )
 
     # Report
     print("=" * 60)
