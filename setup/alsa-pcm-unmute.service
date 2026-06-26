@@ -12,7 +12,11 @@ Type=oneshot
 #    - NewPie:  output:analog-stereo+input:analog-stereo (nodes appear under
 #               Sources/Sinks so PulseAudio clients can wake them); fall back
 #               to input:analog-stereo if the combined profile is unavailable.
-#    - Yealink: pro-audio — the only profile that exposes a capture source.
+#    - Yealink: no pactl here — WirePlumber already reads the correct profile
+#               (output:analog-stereo+input:mono-fallback) from its state file
+#               (~/.local/state/wireplumber/default-profile) on restart.
+#               Calling pactl set-card-profile pro-audio would overwrite the
+#               state file and break boot persistence.
 # 5. Set default routing dynamically from pactl, then restore PCM for 20 s to
 #    catch WirePlumber's late ACP profile reset.
 ExecStart=/bin/bash -c '\
@@ -35,8 +39,6 @@ ExecStart=/bin/bash -c '\
   if [ -n "$NEWPIE_CARD" ]; then \
     pactl set-card-profile "$NEWPIE_CARD" output:analog-stereo+input:analog-stereo 2>/dev/null || \
     pactl set-card-profile "$NEWPIE_CARD" input:analog-stereo 2>/dev/null || true; \
-  elif [ -n "$YEALINK_CARD" ]; then \
-    pactl set-card-profile "$YEALINK_CARD" pro-audio 2>/dev/null || true; \
   fi; \
   sleep 2; \
   SINK=$(pactl list sinks short | awk '"'"'/[Nn]ew[Pp]ie|[Yy]ealink/ && !/monitor/{print $2; exit}'"'"'); \
