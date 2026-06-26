@@ -88,6 +88,25 @@ PortAudio (used by `sounddevice` and `PyAudio`) has **no native PipeWire backend
 
 This headless host runs a modern **PipeWire** audio graph managed by **WirePlumber**. To keep audio routing and hardware stable, keep these core behaviors in mind:
 
+### 0. Yealink SP92 / BT51 Device Profile
+
+#### SP92 (direct USB)
+- **Correct profile**: `pro-audio` — the only profile that exposes the built-in microphone array. `output:analog-stereo+input:mono-fallback` maps to the headset jack only (all-zero if nothing plugged in).
+- **pro-audio places nodes under Filters, not Sources** — PulseAudio clients (`parec`, `pulsesrc`) connect but receive all-zero audio because PipeWire never transitions the Filter node out of SUSPENDED for PA clients. **Do not use `parec` or `pulsesrc` to capture from the SP92.**
+- **Correct capture backend**: `pipewiresrc` via `gst-launch-1.0` subprocess. `gst-launch-1.0` runs its own GLib main loop so `pipewiresrc` can target Filter nodes directly. Set `gst_profile: yealink` in `conf/state.yaml`. The daemon dispatches to `_start_capture_gst_subprocess()` when `source: pipewiresrc`.
+- **USB audio topology**: Capture PCM from OutputTerminal 7 ← FeatureUnit 6 ← InputTerminal 5 (Echo-canceling speakerphone, 0x0405). Onboard DSP always active — NS and beamforming applied before USB.
+- **No ALSA capture gain control** for the built-in mic path (`amixer sget Headset` targets the sidetone path, not the main capture stream). Use WebRTC AGC in the yealink GStreamer profile.
+- `task audio:setup` sets `pro-audio` profile when a Yealink card is detected.
+
+#### BT51 (USB Bluetooth dongle paired with SP92)
+- **Device class**: USB Audio class (`bInterfaceClass 1`), NOT a USB Bluetooth adapter. The Bluetooth link between BT51 and SP92 is managed entirely by the BT51 firmware — Linux BlueZ has no visibility into it and cannot control the HFP state.
+- **PipeWire placement**: BT51 input appears under **Audio/Source** (not Filters) — `pulsesrc` works directly. Native format: `s16le 1ch 16000Hz` (HFP wideband).
+- **Correct profile**: `output:analog-stereo+input:mono-fallback` — this activates both the speaker (analog-stereo) and microphone (mono-fallback) paths. The "Headset Microphone" port in this profile is the SP92 Bluetooth mic (not a physical headset jack). **Do NOT use `pro-audio`** for BT51: the Bluetooth SCO audio link goes idle when nothing plays through the sink, causing the capture to return only USB clock noise.
+- **Bluetooth link activation**: The BT51 maintains the Bluetooth audio link as long as either the sink or the source is active. The daemon's continuous capture (always-on STT) is sufficient to keep it alive once opened. `task audio:setup` sets `output:analog-stereo+input:mono-fallback` when a Yealink card is detected.
+- **USB clock artifacts**: When the Bluetooth SCO link is idle at startup, the capture stream briefly contains narrowband interference at 128 Hz, 175 Hz, and 390 Hz (USB superframe harmonics). The `highpass_cutoff_hz: 220` setting in the yealink profile uses `audiocheblimit` (4-pole Chebyshev HPF) to reject the 128/175 Hz artifacts. `audiocheblimit` requires F32LE format — the pipeline converts with surrounding `audioconvert` elements.
+- **AGC must be disabled** (`agc: false` in the yealink profile): WebRTC AGC amplifies the noise floor when no real speech arrives, causing 128/175 Hz artifacts to grow from inaudible to peak 0.49 in 8 seconds. SP92 hardware AGC handles level normalisation.
+- **GStreamer profile: `yealink`** — `source: pulsesrc`, NS disabled, AGC disabled, `highpass_cutoff_hz: 220`. Set in `conf/state.yaml` (`gst_profile: yealink`).
+
 ### 1. NewPie Device Profile
 - **Prefer `output:analog-stereo+input:analog-stereo`** — with this profile, both sink and source appear under **Sources/Sinks** in `wpctl status` and are managed by WirePlumber's session policy — PulseAudio clients (parec, pulsesrc in GStreamer) can wake them on demand.
 - **If the combined profile is unavailable** (e.g. NewPie 32, USB 2757:4010), fall back to `pro-audio` — on that hardware revision nodes still appear under **Sources/Sinks**, not Filters, so PulseAudio clients work correctly.

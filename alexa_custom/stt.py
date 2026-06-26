@@ -458,10 +458,12 @@ def _recognition_loop(
 
         if vad_fire and not endpoint:
             text = backend.finalize().strip()
+            _vad_speech_ms = speech_ms
             _reset_vad()
             _last_partial = ""
         elif endpoint:
             text = backend.text().strip()
+            _vad_speech_ms = speech_ms
             backend.reset()
             _reset_vad()
             _last_partial = ""
@@ -469,6 +471,8 @@ def _recognition_loop(
             continue
 
         if not text:
+            if on_stt_event:
+                on_stt_event("vad_empty", {"speech_ms": round(_vad_speech_ms)})
             continue
 
         # --- Wake word detection ---

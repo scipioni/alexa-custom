@@ -213,8 +213,12 @@ def _iter_gated_audio(
     # Name the actual capture backend so a stall/exit log points at the right
     # subsystem (GStreamerCapture is a duck-typed Popen; parec/pw-record are
     # real subprocesses). Avoids the "parec stall?" message when running gst.
+    _type_name = type(proc).__name__
     backend_label = (
-        "gstreamer" if type(proc).__name__ == "GStreamerCapture" else "parec"
+        "gstreamer" if _type_name == "GStreamerCapture"
+        else "gst-launch" if _type_name == "GstLaunchCapture"
+        else "playback" if _type_name in ("_RealTimePopen", "_WavFilePopen")
+        else "parec"
     )
     # Stamp when the first PCM buffer actually reaches the recognizer, so a
     # capture that reaches PLAYING but never emits audio is unambiguous in the

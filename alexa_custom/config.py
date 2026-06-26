@@ -101,6 +101,7 @@ class GStreamerCaptureConfig:
     compressor: bool = False           # audiodynamic compressor stage
     compressor_threshold: float = 0.1  # normalized 0.0–1.0
     compressor_ratio: float = 3.0
+    highpass_cutoff_hz: int = 0        # audiocheblimit high-pass cutoff in Hz (0 = disabled)
     profiles: dict = field(default_factory=dict)  # name → {field: override_value}
 
 
@@ -709,6 +710,7 @@ def _parse_audio_config(raw: dict) -> AudioConfig:
         compressor=bool(gst_raw.get("compressor", False)),
         compressor_threshold=float(gst_raw.get("compressor_threshold", 0.1)),
         compressor_ratio=float(gst_raw.get("compressor_ratio", 3.0)),
+        highpass_cutoff_hz=int(gst_raw.get("highpass_cutoff_hz", 0)),
         profiles=profiles,
     )
 

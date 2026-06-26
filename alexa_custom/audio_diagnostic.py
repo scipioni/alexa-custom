@@ -339,28 +339,41 @@ def audio_doctor() -> int:
         elif not present:
             warn(f"binary:{tool}", "not found (optional)")
 
-    # 2. NewPie present as an ALSA card
-    card = _find_alsa_card("NewPie")
-    ok("newpie:alsa-card", card is not None, "NewPie not found in /proc/asound")
+    # 2. Supported USB audio device present as an ALSA card (NewPie or Yealink)
+    _KNOWN_DEVICES = ["NewPie", "Yealink"]
+    card = None
+    device_label = None
+    for _dev in _KNOWN_DEVICES:
+        card = _find_alsa_card(_dev)
+        if card is not None:
+            device_label = _dev
+            break
+    ok(
+        "usb-audio:alsa-card",
+        card is not None,
+        f"no supported USB audio device ({', '.join(_KNOWN_DEVICES)}) found in /proc/asound",
+    )
 
     # 3. Hardware PCM not muted
     if card is not None:
         pct = _amixer_pcm_percent(card[0])
         if pct is None:
-            warn("newpie:pcm-level", "could not read PCM level")
+            warn("usb-audio:pcm-level", "could not read PCM level")
         else:
             ok(
-                "newpie:pcm-level",
+                "usb-audio:pcm-level",
                 pct >= 100,
                 f"PCM at {pct}% (expected 100% — run `task audio:restart`)",
             )
 
-    # 4. Default routing points at NewPie
+    # 4. Default routing points at the detected device
     try:
-        routed, conn = check_newpie_ready()
-        ok("newpie:default-routing", routed, f"connection={conn}")
+        routed, conn = check_newpie_ready(
+            input_spec=device_label, output_spec=device_label
+        )
+        ok("usb-audio:default-routing", routed, f"device={device_label} connection={conn}")
     except Exception as e:
-        warn("newpie:default-routing", f"check failed: {e}")
+        warn("usb-audio:default-routing", f"check failed: {e}")
 
     # 5. No stale switch-on-connect drop-ins (crash this board's PipeWire 1.4.2)
     home = Path.home()
@@ -375,10 +388,10 @@ def audio_doctor() -> int:
         f"remove: {', '.join(present_stale)}" if present_stale else "",
     )
 
-    # 6. USB autosuspend disabled for the NewPie
+    # 6. USB autosuspend disabled
     autosuspend_rule = Path("/etc/udev/rules.d/99-newpie-no-autosuspend.rules")
     ok(
-        "newpie:no-autosuspend",
+        "usb-audio:no-autosuspend",
         autosuspend_rule.exists(),
         "udev rule missing — run `task audio:setup`",
     )

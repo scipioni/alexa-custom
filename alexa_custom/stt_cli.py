@@ -226,12 +226,14 @@ def _make_play_capture(play_path: str, stop_event: threading.Event):
 
     def _play_capture(source, channels: int = 1, config=None):
         if _played[0]:
+            print(f"alexa-stt: finished {play_path}", file=sys.stderr)
             stop_event.set()
             proc = subprocess.Popen(
                 ["true"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0
             )
             return proc
         _played[0] = True
+        print(f"alexa-stt: playing {play_path}", file=sys.stderr)
 
         if shutil.which("ffmpeg"):
             cmd = [
@@ -680,6 +682,9 @@ def main() -> None:
             )
         elif event == "no_match":
             print(f"[no_match]   {data.get('text', '')!r}", flush=True)
+        elif event == "vad_empty":
+            ms = data.get("speech_ms", 0)
+            print(f"[vad_empty]  heard {ms}ms above threshold — Vosk produced no text", flush=True)
         elif event == "level":
             pass  # too noisy — suppress mic level events
         else:

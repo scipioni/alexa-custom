@@ -158,6 +158,19 @@ audio:
         agc_compression_gain_db: 18 # more makeup gain than normal (9) to lift distant signal; 70 over-amplifies background
         rms_threshold: 0.012        # lower than normal (0.02) for quieter distant speech; NS keeps background below this
         vad_silence_ms: 1200        # wait longer for reverb to decay before ending utterance
+      yealink:                     # Yealink SP92 / BT51 — hardware-DSP devices
+        source: pulsesrc           # BT51 with output:analog-stereo+input:mono-fallback profile places input
+                                   # under Audio/Source — pulsesrc works. pipewiresrc is not needed here.
+        noise_suppression: false   # SP92 onboard DSP already applies NS; double-NS creates artefacts
+        agc: false                 # AGC amplifies BT51 USB clock noise when the Bluetooth SCO link is idle;
+                                   # SP92 hardware AGC handles level normalisation
+        agc_target_level_dbfs: -3
+        agc_compression_gain_db: 18
+        high_pass_filter: false    # SP92 hardware DSP already applies HPF
+        highpass_cutoff_hz: 220    # audiocheblimit 220 Hz HPF — rejects residual 128/175 Hz USB clock
+                                   # artifacts if the BT51 Bluetooth link was not fully active on capture start
+        rms_threshold: 0.02
+        vad_silence_ms: 900
 
 # ---------------------------------------------------------------------------
 # LLM — OpenAI-compatible backend
