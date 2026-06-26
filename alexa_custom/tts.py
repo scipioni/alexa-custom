@@ -354,3 +354,113 @@ def init_engine(backend_type: str = "piper", **kwargs) -> TTSBackend:
     else:
         raise ValueError(f"Unknown TTS backend: {backend_type}")
     return _engine
+
+
+def main_say(args: list[str] | None = None) -> None:
+    """CLI entry point for serena-say."""
+    import argparse
+    import sys
+    from alexa_custom.config import load_config, load_secrets
+    from alexa_custom import audio_hw as _audio_hw
+
+    def volume_type(value: str) -> float:
+        try:
+            val = float(value.replace("%", "").strip())
+            if not (0.0 <= val <= 200.0):
+                raise argparse.ArgumentTypeError("Volume must be between 0% and 200%")
+            return val / 100.0
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"Invalid volume value: {value}")
+
+    def loop_type(value: str) -> float:
+        try:
+            val = float(value)
+            if val <= 0.0:
+                raise argparse.ArgumentTypeError("Loop seconds must be greater than 0")
+            return val
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"Invalid loop value: {value}")
+
+    parser = argparse.ArgumentParser(
+        description="Speak text using the configured TTS backend and voice."
+    )
+    parser.add_argument(
+        "text",
+        nargs="+",
+        help="Text to say",
+    )
+    parser.add_argument(
+        "--config",
+        metavar="DIR",
+        default="conf",
+        help="Configuration directory (default: conf)",
+    )
+    parser.add_argument(
+        "--volume",
+        "-v",
+        type=volume_type,
+        default=1.0,
+        help="Volume percentage, e.g. 100 or 100%% (default: 100%%)",
+    )
+    parser.add_argument(
+        "--loop",
+        "-l",
+        type=loop_type,
+        metavar="SECONDS",
+        default=None,
+        help="Repeat speech every SECONDS seconds",
+    )
+
+    parsed_args = parser.parse_args(args)
+    text_to_say = " ".join(parsed_args.text)
+
+    conf_dir = Path(parsed_args.config)
+
+    # Set up basic logging (standard for CLI utilities in this project)
+    logging.basicConfig(
+        level=getattr(
+            logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO
+        ),
+        format="%(asctime)s %(levelname)s %(message)s",
+        stream=sys.stderr,
+    )
+
+    secrets_path = conf_dir / "secrets.yaml"
+    secrets = load_secrets(secrets_path)
+
+    config_path = conf_dir / "config.yaml"
+    if not config_path.exists():
+        print(f"ERROR: config file not found at {config_path}", file=sys.stderr)
+        sys.exit(1)
+
+    config = load_config(config_path, secrets=secrets)
+    if config is None:
+        print(f"ERROR: could not load config from {config_path}", file=sys.stderr)
+        sys.exit(1)
+
+    # Configure audio hardware (specifically sets up the volume and output sink)
+    _audio_hw.configure(config)
+
+    # Override with CLI specified volume
+    _audio_hw._state.output_volume = parsed_args.volume
+
+    # Initialize TTS engine
+    init_engine(
+        backend_type=config.tts.backend,
+        voice=config.tts.voice,
+        preroll_ms=config.tts.preroll_ms,
+    )
+
+    # Speak the text
+    engine = get_engine()
+    if parsed_args.loop is not None:
+        print(f"Entering loop mode. Speaking '{text_to_say}' every {parsed_args.loop} seconds. Press Ctrl+C to exit.", file=sys.stderr)
+        try:
+            while True:
+                engine.say(text_to_say)
+                time.sleep(parsed_args.loop)
+        except KeyboardInterrupt:
+            print("\nExiting loop mode.", file=sys.stderr)
+    else:
+        engine.say(text_to_say)
+
