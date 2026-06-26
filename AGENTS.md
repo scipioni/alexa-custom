@@ -96,7 +96,10 @@ This headless host runs a modern **PipeWire** audio graph managed by **WirePlumb
 - **Correct capture backend**: `pipewiresrc` via `gst-launch-1.0` subprocess. `gst-launch-1.0` runs its own GLib main loop so `pipewiresrc` can target Filter nodes directly. Set `gst_profile: yealink` in `conf/state.yaml`. The daemon dispatches to `_start_capture_gst_subprocess()` when `source: pipewiresrc`.
 - **USB audio topology**: Capture PCM from OutputTerminal 7 ← FeatureUnit 6 ← InputTerminal 5 (Echo-canceling speakerphone, 0x0405). Onboard DSP always active — NS and beamforming applied before USB.
 - **No ALSA capture gain control** for the built-in mic path (`amixer sget Headset` targets the sidetone path, not the main capture stream). Use WebRTC AGC in the yealink GStreamer profile.
-- `task audio:setup` sets `pro-audio` profile when a Yealink card is detected.
+- `task audio:setup` assumes BT51 and sets `output:analog-stereo+input:mono-fallback` for any detected Yealink card. For SP92 direct USB, set `pro-audio` manually after `task audio:setup`:
+  ```bash
+  pactl set-card-profile "$(pactl list cards short | grep -i Yealink | cut -f2 | head -1)" pro-audio
+  ```
 
 #### BT51 (USB Bluetooth dongle paired with SP92)
 - **Device class**: USB Audio class (`bInterfaceClass 1`), NOT a USB Bluetooth adapter. The Bluetooth link between BT51 and SP92 is managed entirely by the BT51 firmware — Linux BlueZ has no visibility into it and cannot control the HFP state.
@@ -106,6 +109,55 @@ This headless host runs a modern **PipeWire** audio graph managed by **WirePlumb
 - **USB clock artifacts**: When the Bluetooth SCO link is idle at startup, the capture stream briefly contains narrowband interference at 128 Hz, 175 Hz, and 390 Hz (USB superframe harmonics). The `highpass_cutoff_hz: 220` setting in the yealink profile uses `audiocheblimit` (4-pole Chebyshev HPF) to reject the 128/175 Hz artifacts. `audiocheblimit` requires F32LE format — the pipeline converts with surrounding `audioconvert` elements.
 - **AGC must be disabled** (`agc: false` in the yealink profile): WebRTC AGC amplifies the noise floor when no real speech arrives, causing 128/175 Hz artifacts to grow from inaudible to peak 0.49 in 8 seconds. SP92 hardware AGC handles level normalisation.
 - **GStreamer profile: `yealink`** — `source: pulsesrc`, NS disabled, AGC disabled, `highpass_cutoff_hz: 220`. Set in `conf/state.yaml` (`gst_profile: yealink`).
+
+#### Serena configuration
+
+Both SP92 and BT51 use the same named GStreamer profile (`yealink`) but with different `source` values and PipeWire profiles.
+
+**BT51 (USB Bluetooth dongle) — recommended setup:**
+
+1. Plug in BT51 (pair SP92 first via its own pairing button).
+2. Run `task audio:setup` — detects Yealink, sets `output:analog-stereo+input:mono-fallback`, installs no-suspend rule.
+3. In `conf/state.yaml`, set the active profile:
+   ```yaml
+   gst_profile: yealink
+   ```
+4. In `conf/config.yaml`, confirm the yealink profile uses `pulsesrc` (default):
+   ```yaml
+   audio:
+     gstreamer:
+       profiles:
+         yealink:
+           source: pulsesrc
+           agc: false
+           highpass_cutoff_hz: 220
+   ```
+5. Restart the daemon — BT51 input appears under Sources, `pulsesrc` connects directly, HPF rejects USB clock artifacts on startup.
+
+**SP92 (direct USB, no BT51) — manual steps:**
+
+1. Plug SP92 directly via USB.
+2. Run `task audio:setup` (sets `output:analog-stereo+input:mono-fallback` — wrong for SP92, fix below).
+3. Manually set the correct profile:
+   ```bash
+   pactl set-card-profile "$(pactl list cards short | grep -i Yealink | cut -f2 | head -1)" pro-audio
+   ```
+4. In `conf/state.yaml`:
+   ```yaml
+   gst_profile: yealink
+   ```
+5. In `conf/config.yaml`, override the yealink profile to use `pipewiresrc` (required for Filter nodes):
+   ```yaml
+   audio:
+     gstreamer:
+       profiles:
+         yealink:
+           source: pipewiresrc
+           noise_suppression: false
+           agc: true          # no hardware AGC on SP92 for gain; WebRTC AGC is fine here
+           highpass_cutoff_hz: 0
+   ```
+6. Restart the daemon — SP92 node appears under Filters, `gst-launch-1.0` subprocess with `pipewiresrc` captures real audio.
 
 ### 1. NewPie Device Profile
 - **Prefer `output:analog-stereo+input:analog-stereo`** — with this profile, both sink and source appear under **Sources/Sinks** in `wpctl status` and are managed by WirePlumber's session policy — PulseAudio clients (parec, pulsesrc in GStreamer) can wake them on demand.
