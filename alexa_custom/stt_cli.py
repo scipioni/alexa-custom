@@ -806,8 +806,11 @@ def main() -> None:
     if not args.score:
         _print_dataset(config)
 
-    if args.score:
-        timeout_timer = threading.Timer(args.timeout, lambda: print_score_and_exit(0))
+    if args.timeout is not None and args.timeout > 0:
+        if args.score:
+            timeout_timer = threading.Timer(args.timeout, lambda: print_score_and_exit(0))
+        else:
+            timeout_timer = threading.Timer(args.timeout, lambda: stop_event.set())
         timeout_timer.daemon = True
         timeout_timer.start()
 

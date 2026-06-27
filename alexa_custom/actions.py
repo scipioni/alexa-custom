@@ -1349,6 +1349,61 @@ def _calibration_round2_gains(
     return [max(0.0, winner - half_step), winner + half_step]
 
 
+async def _run_gain_calibration(
+    action: ActionEntry,
+    listen_fn: Callable[[float], Awaitable[str]],
+    announcer: Callable[[str], Awaitable[None]]
+) -> float:
+    """Run Stage 1 gain calibration and return the winning best_gain."""
+    from alexa_custom.audio_hw import set_input_gain
+
+    sentence = action.params.get("sentence", "uno due tre quattro cinque")
+    gain_low = float(action.params.get("gain_low", 0.4))
+    gain_mid = float(action.params.get("gain_mid", 0.7))
+    gain_high = float(action.params.get("gain_high", 1.2))
+    listen_timeout = float(action.params.get("listen_timeout", 6.0))
+    settle_ms = float(action.params.get("settle_ms", 500))
+    settle_s = settle_ms / 1000.0
+
+    scores: dict[float, float] = {}
+    probe_num = 0
+
+    async def _probe(gain: float) -> None:
+        nonlocal probe_num
+        probe_num += 1
+        label = f"prova {probe_num} di 5: {sentence}"
+        logger.info("calibrate_input_gain: probe %d gain=%.2f", probe_num, gain)
+        await asyncio.to_thread(set_input_gain, None, None, gain)
+        await asyncio.sleep(settle_s)
+        await announcer(label)
+        transcript = await listen_fn(listen_timeout)
+        score = get_similarity_score(
+            normalize_text(transcript or ""),
+            normalize_text(sentence),
+            "levenshtein",
+        )
+        logger.info(
+            "calibrate_input_gain: gain=%.2f score=%.1f transcript=%r",
+            gain,
+            score,
+            transcript,
+        )
+        scores[gain] = score
+
+    # Round 1 — bracket
+    for g in [gain_low, gain_mid, gain_high]:
+        await _probe(g)
+
+    r1_winner = _calibration_winner(scores)
+
+    # Round 2 — zoom
+    for g in _calibration_round2_gains(r1_winner, gain_low, gain_high):
+        await _probe(g)
+
+    best_gain = _calibration_winner(scores)
+    return best_gain
+
+
 @registry.register("calibrate_input_gain")
 async def handle_calibrate_input_gain(
     action: ActionEntry,
@@ -1377,64 +1432,19 @@ async def handle_calibrate_input_gain(
         logger.warning("calibrate_input_gain: no listen_fn available — skipping")
         return
 
-    sentence = action.params.get("sentence", "uno due tre quattro cinque")
-    gain_low = float(action.params.get("gain_low", 0.4))
-    gain_mid = float(action.params.get("gain_mid", 0.7))
-    gain_high = float(action.params.get("gain_high", 1.2))
-    listen_timeout = float(action.params.get("listen_timeout", 6.0))
-    settle_ms = float(action.params.get("settle_ms", 500))
-    settle_s = settle_ms / 1000.0
-
-    scores: dict[float, float] = {}
-    probe_num = 0
-
-    logger.info("calibrate_input_gain: starting calibration (sentence=%r)", sentence)
+    logger.info("calibrate_input_gain: starting calibration")
     await asyncio.to_thread(
         get_engine().say,
         "Iniziamo la calibrazione. Ripeti ogni frase che sento.",
         "it-IT",
     )
 
-    async def _probe(gain: float) -> None:
-        nonlocal probe_num
-        probe_num += 1
-        label = f"prova {probe_num} di 5: {sentence}"
-        logger.info("calibrate_input_gain: probe %d gain=%.2f", probe_num, gain)
-        await asyncio.to_thread(set_input_gain, None, None, gain)
-        await asyncio.sleep(settle_s)
-        await asyncio.to_thread(get_engine().say, label, "it-IT")
-        transcript = await listen_fn(listen_timeout)
-        score = get_similarity_score(
-            normalize_text(transcript or ""),
-            normalize_text(sentence),
-            "levenshtein",
-        )
-        logger.info(
-            "calibrate_input_gain: gain=%.2f score=%.1f transcript=%r",
-            gain,
-            score,
-            transcript,
-        )
-        scores[gain] = score
+    async def _announce(text: str) -> None:
+        await asyncio.to_thread(get_engine().say, text, "it-IT")
 
-    # Round 1 — bracket
-    for g in [gain_low, gain_mid, gain_high]:
-        await _probe(g)
+    best_gain = await _run_gain_calibration(action, listen_fn, _announce)
 
-    r1_winner = _calibration_winner(scores)
-
-    # Round 2 — zoom
-    for g in _calibration_round2_gains(r1_winner, gain_low, gain_high):
-        await _probe(g)
-
-    best_gain = _calibration_winner(scores)
-    logger.info(
-        "calibrate_input_gain: best gain=%.2f (score=%.1f), all scores=%s",
-        best_gain,
-        scores[best_gain],
-        {f"{g:.2f}": f"{s:.1f}" for g, s in sorted(scores.items())},
-    )
-
+    logger.info("calibrate_input_gain: best gain=%.2f", best_gain)
     await asyncio.to_thread(set_input_gain, None, None, best_gain)
     save_input_gain_config(best_gain)
 
@@ -1442,6 +1452,155 @@ async def handle_calibrate_input_gain(
     await asyncio.to_thread(
         get_engine().say,
         f"Calibrazione completata. Guadagno impostato a {pct} percento.",
+        "it-IT",
+    )
+
+
+@registry.register("calibrate_microphone_complete")
+async def handle_calibrate_microphone_complete(
+    action: ActionEntry,
+    listen_fn: Callable[[float], Awaitable[str]] | None = None,
+    *,
+    actions_config=None,
+    **_,
+):
+    """Complete hardware gain and GStreamer filter calibration.
+
+    Runs Stage 1 (gain sweep) then Stage 2 (GStreamer filter sweep).
+    """
+    from alexa_custom.audio_hw import (
+        get_active_gst_profile,
+        set_active_gst_profile,
+        save_input_gain_config,
+        set_input_gain,
+        save_gstreamer_overrides,
+    )
+    from alexa_custom.tts import get_engine
+
+    if listen_fn is None:
+        logger.warning("calibrate_microphone_complete: no listen_fn available — skipping")
+        return
+
+    if actions_config is None:
+        logger.warning("calibrate_microphone_complete: no actions_config available — skipping")
+        return
+
+    orig_profile = get_active_gst_profile() or "normal"
+    sentence = action.params.get("sentence", "uno due tre quattro cinque")
+    listen_timeout = float(action.params.get("listen_timeout", 6.0))
+    settle_ms = float(action.params.get("settle_ms", 500))
+    settle_s = settle_ms / 1000.0
+
+    # Ensure calibration profile slot exists
+    if not hasattr(actions_config.audio.gstreamer, "profiles"):
+        actions_config.audio.gstreamer.profiles = {}
+
+    logger.info("calibrate_microphone_complete: starting Complete Calibration")
+
+    # --- STAGE 1: Gain Calibration ---
+    await asyncio.to_thread(
+        get_engine().say,
+        "Iniziamo la prima fase della calibrazione: regolazione del guadagno hardware. Ripeti ogni frase che sento.",
+        "it-IT",
+    )
+
+    async def _announce(text: str) -> None:
+        await asyncio.to_thread(get_engine().say, text, "it-IT")
+
+    best_gain = await _run_gain_calibration(action, listen_fn, _announce)
+    logger.info("calibrate_microphone_complete: Stage 1 winning gain=%.2f", best_gain)
+
+    # Save/apply the winning gain temporarily
+    await asyncio.to_thread(set_input_gain, None, None, best_gain)
+
+    # --- STAGE 2: GStreamer Filter Calibration ---
+    await asyncio.to_thread(
+        get_engine().say,
+        "Seconda fase: ottimizzazione dei filtri audio digitali. Continua a ripetere.",
+        "it-IT",
+    )
+
+    # Candidate GStreamer profiles to test
+    candidates = [
+        # Probe 1: Standard
+        {
+            "noise_suppression": True,
+            "noise_suppression_level": 2,
+            "agc": True,
+        },
+        # Probe 2: Sensitive
+        {
+            "noise_suppression": True,
+            "noise_suppression_level": 1,
+            "agc": True,
+        },
+        # Probe 3: DSP Bypass
+        {
+            "noise_suppression": False,
+            "noise_suppression_level": 1,
+            "agc": True,
+        },
+    ]
+
+    best_idx = 0
+    best_score = -1.0
+    scores: list[float] = []
+
+    for i, params in enumerate(candidates):
+        probe_idx = i + 1
+        logger.info("calibrate_microphone_complete: Stage 2 probe %d params=%s", probe_idx, params)
+
+        # Load params into the in-memory calibration profile
+        actions_config.audio.gstreamer.profiles["calibration"] = params
+
+        # Trigger dynamic GStreamer pipeline restart
+        await asyncio.to_thread(set_active_gst_profile, "calibration")
+        await asyncio.sleep(settle_s + 0.3)  # Extra delay to allow pipeline rebuild
+
+        # Announce and record
+        await _announce(f"prova {probe_idx} di 3: {sentence}")
+        transcript = await listen_fn(listen_timeout)
+        score = get_similarity_score(
+            normalize_text(transcript or ""),
+            normalize_text(sentence),
+            "levenshtein",
+        )
+        logger.info(
+            "calibrate_microphone_complete: probe %d score=%.1f transcript=%r",
+            probe_idx,
+            score,
+            transcript,
+        )
+        scores.append(score)
+        if score > best_score:
+            best_score = score
+            best_idx = i
+
+    # Restore the original profile so GStreamer returns to normal operation
+    await asyncio.to_thread(set_active_gst_profile, orig_profile)
+
+    winning_params = candidates[best_idx]
+    logger.info(
+        "calibrate_microphone_complete: best GStreamer params index=%d %s (score=%.1f)",
+        best_idx,
+        winning_params,
+        best_score,
+    )
+
+    # Persist Stage 1 & Stage 2 winning parameters to conf/state.yaml
+    save_input_gain_config(best_gain)
+    save_gstreamer_overrides(winning_params)
+
+    # Re-apply the winning configuration globally
+    # Force loading of overrides into actions_config
+    for k, v in winning_params.items():
+        if hasattr(actions_config.audio.gstreamer, k):
+            setattr(actions_config.audio.gstreamer, k, v)
+
+    # Signal completion
+    await asyncio.to_thread(
+        get_engine().say,
+        f"Calibrazione completata. Configurazione ottimizzata salvata con successo.",
         "it-IT",
     )
 

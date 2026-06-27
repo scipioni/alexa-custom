@@ -177,11 +177,23 @@ triggers:
     actions:
       - type: system_info
 
+#  - commands:
+#      - "calibra sentibilità microfono"
+#    tag: microfono
+#    actions:
+#      - type: calibrate_input_gain
+#        sentence: "uno due tre quattro cinque"
+#        gain_low: 0.2
+#        gain_mid: 1.5
+#        gain_high: 3.0
+#        listen_timeout: 6.0
+#        settle_ms: 500
+
   - commands:
       - "calibra microfono"
     tag: microfono
     actions:
-      - type: calibrate_input_gain
+      - type: calibrate_microphone_complete
         sentence: "uno due tre quattro cinque"
         gain_low: 0.2
         gain_mid: 1.5

@@ -132,7 +132,7 @@ audio:
     high_pass_filter: true
   gstreamer:             # GStreamer capture pipeline (used when stt.capture_backend: gstreamer)
     source: pulsesrc         # pulsesrc | pipewiresrc — pipewiresrc stalls after first buffer when driven from Python (no GLib main loop); pulsesrc is reliable
-    noise_suppression: true
+    noise_suppression: true       # set to false if the input source has integrated hardware-DSP noise suppression (e.g. Yealink) to prevent first-syllable clipping
     noise_suppression_level: 2    # 0=mild 1=moderate 2=high 3=very-high (2 calibration-verified optimal)
     agc: true
     agc_target_level_dbfs: -3     # AGC target peak level in dBFS (−3 calibration-verified optimal; lower = weaker signal)
@@ -162,17 +162,15 @@ audio:
         rms_threshold: 0.012        # lower than normal (0.02) for quieter distant speech; NS keeps background below this
         vad_silence_ms: 1200        # wait longer for reverb to decay before ending utterance
       yealink:                     # Yealink SP92 / BT51 — hardware-DSP devices
-        source: pulsesrc           # BT51 with output:analog-stereo+input:mono-fallback profile places input
-                                   # under Audio/Source — pulsesrc works. pipewiresrc is not needed here.
-        noise_suppression: true    # Swept optimal setting (changed from false)
-        noise_suppression_level: 1 # Swept optimal setting (changed from default)
-        agc: true                  # Swept optimal setting (changed from false)
-        agc_target_level_dbfs: -3
-        agc_compression_gain_db: 9 # Swept optimal setting (changed from 18)
-        high_pass_filter: true     # Swept optimal setting (changed from false)
-        input_gain: 3.0            # Swept optimal setting (changed from 1.0)
-        highpass_cutoff_hz: 220    # audiocheblimit 220 Hz HPF — rejects residual 128/175 Hz USB clock
-                                   # artifacts if the BT51 Bluetooth link was not fully active on capture start
+        source: pulsesrc           # BT51 with output:analog-stereo+input:mono-fallback profile places input under Audio/Source — pulsesrc works.
+        noise_suppression: false   # Bypassed (false) because Yealink has built-in hardware-DSP NS. Software NS causes aggressive first-syllable clipping!
+        noise_suppression_level: 2 # Default fallback level (active only if noise_suppression is set to true)
+        agc: true                  # Enabled (true) to digitally level incoming whispers/distant commands smoothly
+        agc_target_level_dbfs: -3  # Optimal WebRTC target peak level (-3 dBFS)
+        agc_compression_gain_db: 9 # Conservative makeup gain (9 dB) to prevent amplifying the floor noise
+        high_pass_filter: true     # Removes sub-80Hz low-frequency room rumbles/bumps
+        input_gain: 0.2            # Calibration-verified optimal gain (20%) to prevent over-amplification and clipping
+        highpass_cutoff_hz: 220    # audiocheblimit 220 Hz HPF — rejects residual 128/175 Hz USB clock artifacts on cold-starts
         rms_threshold: 0.02
         vad_silence_ms: 900
 

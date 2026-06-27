@@ -136,6 +136,22 @@ def load_input_gain_state() -> float | None:
     return None
 
 
+def save_gstreamer_overrides(overrides: dict) -> None:
+    """Save GStreamer overrides to state.yaml for persistence across restarts."""
+    state = _load_state_file()
+    state["gstreamer_override"] = overrides
+    _save_state_file(state)
+    logger.info(f"Saved GStreamer overrides to {_STATE_FILE}: {overrides}")
+
+
+def load_gstreamer_overrides() -> dict | None:
+    """Load persisted GStreamer overrides from state.yaml, returns None if absent."""
+    overrides = _load_state_file().get("gstreamer_override")
+    if isinstance(overrides, dict):
+        return overrides
+    return None
+
+
 def get_active_gst_profile() -> str:
     """Return the persisted GStreamer capture profile name (default: 'normal')."""
     return str(_load_state_file().get("gst_profile", "normal"))
@@ -171,6 +187,12 @@ def configure(cfg) -> None:
     state_gain = load_input_gain_state()
     if state_gain is not None:
         _state.input_gain = state_gain
+
+    overrides = load_gstreamer_overrides()
+    if overrides and hasattr(cfg.audio, "gstreamer"):
+        for k, v in overrides.items():
+            if hasattr(cfg.audio.gstreamer, k):
+                setattr(cfg.audio.gstreamer, k, v)
 
     resolve_output_sink(cfg.audio.output_device)
 
