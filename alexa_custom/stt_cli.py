@@ -556,9 +556,9 @@ def main() -> None:
     parser.add_argument(
         "--timeout",
         type=float,
-        default=20.0,
+        default=0.0,
         metavar="N",
-        help="maximum seconds to wait in score mode before exiting with score=0 (default: 20.0)",
+        help="maximum seconds to wait before exiting (default: 0.0, 0 disables)",
     )
     parser.add_argument(
         "--input-gain",
