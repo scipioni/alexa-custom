@@ -282,6 +282,9 @@ tasks:
       - |
         CARD_NUM=$(grep -m1 -E "NewPie|Yealink" /proc/asound/cards | awk '{print $1}')
         amixer -c "${CARD_NUM:-0}" sset PCM 100% 2>/dev/null || amixer -c "${CARD_NUM:-0}" sset 'Playback Volume' 100% 2>/dev/null || true
+        amixer -c "${CARD_NUM:-0}" sset Capture 100% unmute 2>/dev/null || amixer -c "${CARD_NUM:-0}" sset Mic 100% unmute 2>/dev/null || amixer -c "${CARD_NUM:-0}" sset 'Capture Volume' 100% unmute 2>/dev/null || true
+        SOURCE=$(pactl list sources short | awk '/[Nn]ew[Pp]ie|[Yy]ealink/ && !/monitor/{print $2; exit}')
+        [ -n "$SOURCE" ] && pactl set-source-volume "$SOURCE" 100% 2>/dev/null || true
       # Install user service to re-apply PCM 100% after PipeWire init on every boot
       - mkdir -p ~/.config/systemd/user
       - cp setup/alsa-pcm-unmute.service ~/.config/systemd/user/alsa-pcm-unmute.service
@@ -308,6 +311,7 @@ tasks:
         SOURCE=$(pactl list sources short | awk '/[Nn]ew[Pp]ie|[Yy]ealink/ && !/monitor/{print $2; exit}')
         [ -n "$SINK" ] && pw-metadata -n default 0 default.configured.audio.sink "{\"name\":\"$SINK\"}" 'Spa:String:JSON'
         [ -n "$SOURCE" ] && pw-metadata -n default 0 default.configured.audio.source "{\"name\":\"$SOURCE\"}" 'Spa:String:JSON'
+        [ -n "$SOURCE" ] && pactl set-source-volume "$SOURCE" 100% 2>/dev/null || true
         true
       - |
         NEWPIE_CARD=$(pactl list cards short | grep -i NewPie | cut -f2 | head -1)
@@ -322,6 +326,9 @@ tasks:
       - |
         CARD_NUM=$(grep -m1 -E "NewPie|Yealink" /proc/asound/cards | awk '{print $1}')
         amixer -c "${CARD_NUM:-0}" sset PCM 100% 2>/dev/null || amixer -c "${CARD_NUM:-0}" sset 'Playback Volume' 100% 2>/dev/null || true
+        amixer -c "${CARD_NUM:-0}" sset Capture 100% unmute 2>/dev/null || amixer -c "${CARD_NUM:-0}" sset Mic 100% unmute 2>/dev/null || amixer -c "${CARD_NUM:-0}" sset 'Capture Volume' 100% unmute 2>/dev/null || true
+        SOURCE=$(pactl list sources short | awk '/[Nn]ew[Pp]ie|[Yy]ealink/ && !/monitor/{print $2; exit}')
+        [ -n "$SOURCE" ] && pactl set-source-volume "$SOURCE" 100% 2>/dev/null || true
       - systemctl --user restart alsa-pcm-unmute.service
       - sudo systemctl restart newpie-autosuspend.service || true
 
