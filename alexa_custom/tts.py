@@ -161,6 +161,9 @@ class PiperTTS(TTSBackend):
         self._preroll_ms = preroll_ms
         self._voice_name = voice
 
+        # Silence Piper's noisy internal debug logs (e.g. phonemes printing)
+        logging.getLogger("piper").setLevel(logging.INFO)
+
         voice_path = PIPER_VOICES_DIR / f"{voice}.onnx"
         if not voice_path.is_file():
             raise FileNotFoundError(

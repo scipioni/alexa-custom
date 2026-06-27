@@ -424,13 +424,25 @@ async def _render_text(text: str) -> str:
 
     async def _run(cmd: str) -> str:
         try:
+            logger.debug("Executing template command: %r", cmd)
             proc = await asyncio.create_subprocess_shell(
                 cmd,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
             )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
-            return stdout.decode().strip()
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+            code = proc.returncode
+            if code != 0:
+                logger.warning(
+                    "Template command %r exited with code %s. Stderr: %r",
+                    cmd,
+                    code,
+                    stderr.decode().strip(),
+                )
+                return ""
+            out_str = stdout.decode().strip()
+            logger.debug("Template command %r returned: %r", cmd, out_str)
+            return out_str
         except Exception as e:
             logger.warning("say template command failed %r: %s", cmd, e)
             return ""
