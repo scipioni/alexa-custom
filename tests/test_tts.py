@@ -110,7 +110,7 @@ class TestMainSay(unittest.TestCase):
             voice="it_IT-paola-medium",
             preroll_ms=100
         )
-        mock_engine.say.assert_called_once_with("Ciao, come stai?")
+        mock_engine.say.assert_called_once_with("Ciao, come stai")
 
     @patch("alexa_custom.tts.get_engine")
     @patch("alexa_custom.tts.init_engine")
@@ -188,6 +188,37 @@ class TestMainSay(unittest.TestCase):
         mock_engine.say.assert_called_once_with("Ciao")
         mock_sleep.assert_called_once_with(5.0)
 
+    @patch("alexa_custom.tts.time.sleep")
+    @patch("alexa_custom.tts.get_engine")
+    @patch("alexa_custom.tts.init_engine")
+    @patch("alexa_custom.audio_hw.configure")
+    @patch("alexa_custom.config.load_config")
+    @patch("alexa_custom.config.load_secrets")
+    @patch("alexa_custom.tts.Path.exists")
+    def test_main_say_loop_default_to_silence(self, mock_exists, mock_load_secrets, mock_load_config, mock_configure, mock_init_engine, mock_get_engine, mock_sleep):
+        mock_exists.return_value = True
+
+        mock_config = MagicMock()
+        mock_config.tts.backend = "piper"
+        mock_config.tts.voice = "it_IT-paola-medium"
+        mock_config.tts.preroll_ms = 100
+        mock_load_config.return_value = mock_config
+
+        mock_secrets = MagicMock()
+        mock_load_secrets.return_value = mock_secrets
+
+        mock_engine = MagicMock()
+        mock_get_engine.return_value = mock_engine
+
+        mock_sleep.side_effect = KeyboardInterrupt()
+
+        from alexa_custom.tts import main_say
+        with patch("sys.stderr"):
+            main_say(["Ciao", "--loop", "--silence", "3.5"])
+
+        mock_engine.say.assert_called_once_with("Ciao")
+        mock_sleep.assert_called_once_with(3.5)
+
     @patch("alexa_custom.tts.Path.exists")
     def test_main_say_invalid_loop(self, mock_exists):
         mock_exists.return_value = True
@@ -200,6 +231,63 @@ class TestMainSay(unittest.TestCase):
             
             with self.assertRaises(SystemExit) as cm:
                 main_say(["Ciao", "--loop", "-5"])
+            self.assertEqual(cm.exception.code, 2)
+
+    @patch("alexa_custom.tts.time.sleep")
+    @patch("alexa_custom.tts.get_engine")
+    @patch("alexa_custom.tts.init_engine")
+    @patch("alexa_custom.audio_hw.configure")
+    @patch("alexa_custom.config.load_config")
+    @patch("alexa_custom.config.load_secrets")
+    @patch("alexa_custom.tts.Path.exists")
+    def test_main_say_split_sentences_and_silence(self, mock_exists, mock_load_secrets, mock_load_config, mock_configure, mock_init_engine, mock_get_engine, mock_sleep):
+        mock_exists.return_value = True
+
+        mock_config = MagicMock()
+        mock_config.tts.backend = "piper"
+        mock_config.tts.voice = "it_IT-paola-medium"
+        mock_config.tts.preroll_ms = 100
+        mock_load_config.return_value = mock_config
+
+        mock_secrets = MagicMock()
+        mock_load_secrets.return_value = mock_secrets
+
+        mock_engine = MagicMock()
+        mock_get_engine.return_value = mock_engine
+
+        from alexa_custom.tts import main_say
+        
+        # Test with default silence and multi-punctuation (.?!)
+        main_say(["Ciao! Come stai? Tutto bene.", "--config", "conf"])
+        self.assertEqual(mock_engine.say.call_count, 3)
+        mock_engine.say.assert_any_call("Ciao")
+        mock_engine.say.assert_any_call("Come stai")
+        mock_engine.say.assert_any_call("Tutto bene")
+        self.assertEqual(mock_sleep.call_count, 2)
+        mock_sleep.assert_any_call(8.0)
+        
+        mock_engine.say.reset_mock()
+        mock_sleep.reset_mock()
+        
+        # Test with custom silence
+        main_say(["Uno! Due?", "--silence", "3.5"])
+        self.assertEqual(mock_engine.say.call_count, 2)
+        mock_engine.say.assert_any_call("Uno")
+        mock_engine.say.assert_any_call("Due")
+        mock_sleep.assert_called_once_with(3.5)
+
+    @patch("alexa_custom.tts.Path.exists")
+    def test_main_say_invalid_silence(self, mock_exists):
+        mock_exists.return_value = True
+        
+        from alexa_custom.tts import main_say
+        with patch("sys.stderr"):
+            with self.assertRaises(SystemExit) as cm:
+                main_say(["Ciao", "--silence", "invalid"])
+            self.assertEqual(cm.exception.code, 2)
+            
+            with self.assertRaises(SystemExit) as cm:
+                main_say(["Ciao", "--silence", "-2"])
             self.assertEqual(cm.exception.code, 2)
 
     @patch("alexa_custom.tts.Path.exists")

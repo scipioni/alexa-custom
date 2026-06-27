@@ -316,6 +316,45 @@ def _amixer_pcm_percent(card_index: int) -> int | None:
     return None
 
 
+def _amixer_capture_percent(card_index: int) -> int | None:
+    """Return the hardware capture level as a percentage, or None if unreadable.
+
+    Tries "Capture" first, then "Mic", then "Capture Volume".
+    """
+    for control in ("Capture", "Mic", "Capture Volume"):
+        try:
+            result = subprocess.run(
+                ["amixer", "-c", str(card_index), "sget", control],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except FileNotFoundError:
+            return None
+        m = re.search(r"\[(\d+)%\]", result.stdout)
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def _pactl_source_volume_percent(source_name: str) -> int | None:
+    """Return the source volume of source_name as a percentage, or None if unreadable."""
+    try:
+        result = subprocess.run(
+            ["pactl", "get-source-volume", source_name],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            m = re.search(r"/ (\d+)%\s*/", result.stdout)
+            if m:
+                return int(m.group(1))
+    except Exception:
+        pass
+    return None
+
+
 def audio_doctor() -> int:
     """Check each audio invariant from the platform notes and print pass/fail.
 
@@ -365,6 +404,34 @@ def audio_doctor() -> int:
                 pct >= 100,
                 f"PCM at {pct}% (expected 100% — run `task audio:restart`)",
             )
+
+    # 3b. Hardware Mic/Capture volume at 100% (system-level)
+    if card is not None:
+        cap_pct = _amixer_capture_percent(card[0])
+        if cap_pct is None:
+            warn("usb-audio:mic-alsa-level", "could not read ALSA capture/mic volume")
+        else:
+            ok(
+                "usb-audio:mic-alsa-level",
+                cap_pct >= 100,
+                f"ALSA Capture at {cap_pct}% (expected 100% — run `task audio:setup` to fix)",
+            )
+
+    # 3c. PipeWire default source volume at 100% (system-level)
+    if device_label is not None:
+        source_name = _find_pipewire_source(device_label)
+        if source_name is None:
+            warn("usb-audio:mic-pipewire-source", "could not find PipeWire source node")
+        else:
+            pw_pct = _pactl_source_volume_percent(source_name)
+            if pw_pct is None:
+                warn("usb-audio:mic-pipewire-level", f"could not read volume on PipeWire source {source_name}")
+            else:
+                ok(
+                    "usb-audio:mic-pipewire-level",
+                    pw_pct >= 100,
+                    f"PipeWire Source volume at {pw_pct}% (expected 100% — run `task audio:setup` to fix)",
+                )
 
     # 4. Default routing points at the detected device
     try:

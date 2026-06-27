@@ -372,7 +372,9 @@ def main_say(args: list[str] | None = None) -> None:
         except ValueError:
             raise argparse.ArgumentTypeError(f"Invalid volume value: {value}")
 
-    def loop_type(value: str) -> float:
+    def loop_type(value: str) -> float | str:
+        if value == "DEFAULT_SILENCE":
+            return value
         try:
             val = float(value)
             if val <= 0.0:
@@ -380,6 +382,15 @@ def main_say(args: list[str] | None = None) -> None:
             return val
         except ValueError:
             raise argparse.ArgumentTypeError(f"Invalid loop value: {value}")
+
+    def silence_type(value: str) -> float:
+        try:
+            val = float(value)
+            if val < 0.0:
+                raise argparse.ArgumentTypeError("Silence seconds cannot be negative")
+            return val
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"Invalid silence value: {value}")
 
     parser = argparse.ArgumentParser(
         description="Speak text using the configured TTS backend and voice."
@@ -405,14 +416,26 @@ def main_say(args: list[str] | None = None) -> None:
     parser.add_argument(
         "--loop",
         "-l",
+        nargs="?",
+        const="DEFAULT_SILENCE",
         type=loop_type,
         metavar="SECONDS",
         default=None,
-        help="Repeat speech every SECONDS seconds",
+        help="Repeat speech every SECONDS seconds (defaults to silence value if no SECONDS provided)",
+    )
+    parser.add_argument(
+        "--silence",
+        type=silence_type,
+        default=8.0,
+        help="Silence in seconds between sentences split by period (default: 8)",
     )
 
     parsed_args = parser.parse_args(args)
     text_to_say = " ".join(parsed_args.text)
+
+    loop_val = parsed_args.loop
+    if loop_val == "DEFAULT_SILENCE":
+        loop_val = parsed_args.silence
 
     conf_dir = Path(parsed_args.config)
 
@@ -451,16 +474,28 @@ def main_say(args: list[str] | None = None) -> None:
         preroll_ms=config.tts.preroll_ms,
     )
 
+    # Split text into sentences by ".", "?", or "!"
+    sentences = [s.strip() for s in re.split(r"[.?!]", text_to_say) if s.strip()]
+
     # Speak the text
     engine = get_engine()
-    if parsed_args.loop is not None:
-        print(f"Entering loop mode. Speaking '{text_to_say}' every {parsed_args.loop} seconds. Press Ctrl+C to exit.", file=sys.stderr)
+    def _speak_flow() -> None:
+        for idx, sentence in enumerate(sentences):
+            if idx > 0:
+                time.sleep(parsed_args.silence)
+            engine.say(sentence)
+
+    if loop_val is not None:
+        print(f"Entering loop mode. Speaking sentences every {loop_val} seconds. Press Ctrl+C to exit.", file=sys.stderr)
         try:
             while True:
-                engine.say(text_to_say)
-                time.sleep(parsed_args.loop)
+                _speak_flow()
+                time.sleep(loop_val)
         except KeyboardInterrupt:
             print("\nExiting loop mode.", file=sys.stderr)
     else:
-        engine.say(text_to_say)
+        try:
+            _speak_flow()
+        except KeyboardInterrupt:
+            print("\nSpeech interrupted.", file=sys.stderr)
 
