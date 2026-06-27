@@ -466,8 +466,8 @@ def main_say(args: list[str] | None = None) -> None:
         preroll_ms=config.tts.preroll_ms,
     )
 
-    # Split text into sentences by "."
-    sentences = [s.strip() for s in text_to_say.split(".") if s.strip()]
+    # Split text into sentences by ".", "?", or "!"
+    sentences = [s.strip() for s in re.split(r"[.?!]", text_to_say) if s.strip()]
 
     # Speak the text
     engine = get_engine()

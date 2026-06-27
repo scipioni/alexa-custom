@@ -110,7 +110,7 @@ class TestMainSay(unittest.TestCase):
             voice="it_IT-paola-medium",
             preroll_ms=100
         )
-        mock_engine.say.assert_called_once_with("Ciao, come stai?")
+        mock_engine.say.assert_called_once_with("Ciao, come stai")
 
     @patch("alexa_custom.tts.get_engine")
     @patch("alexa_custom.tts.init_engine")
@@ -226,18 +226,20 @@ class TestMainSay(unittest.TestCase):
 
         from alexa_custom.tts import main_say
         
-        # Test with default silence
-        main_say(["Ciao. Come stai?", "--config", "conf"])
-        self.assertEqual(mock_engine.say.call_count, 2)
+        # Test with default silence and multi-punctuation (.?!)
+        main_say(["Ciao! Come stai? Tutto bene.", "--config", "conf"])
+        self.assertEqual(mock_engine.say.call_count, 3)
         mock_engine.say.assert_any_call("Ciao")
-        mock_engine.say.assert_any_call("Come stai?")
-        mock_sleep.assert_called_once_with(8.0)
+        mock_engine.say.assert_any_call("Come stai")
+        mock_engine.say.assert_any_call("Tutto bene")
+        self.assertEqual(mock_sleep.call_count, 2)
+        mock_sleep.assert_any_call(8.0)
         
         mock_engine.say.reset_mock()
         mock_sleep.reset_mock()
         
         # Test with custom silence
-        main_say(["Uno. Due.", "--silence", "3.5"])
+        main_say(["Uno! Due?", "--silence", "3.5"])
         self.assertEqual(mock_engine.say.call_count, 2)
         mock_engine.say.assert_any_call("Uno")
         mock_engine.say.assert_any_call("Due")
