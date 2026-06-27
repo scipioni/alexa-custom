@@ -471,7 +471,7 @@ def _recognition_loop(
             continue
 
         if not text:
-            if on_stt_event:
+            if on_stt_event and _vad_speech_ms >= 50.0:
                 on_stt_event("vad_empty", {"speech_ms": round(_vad_speech_ms)})
             continue
 

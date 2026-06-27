@@ -153,10 +153,8 @@ uv run serena-stt --score --timeout 20.0
 
 This diagnostic mode is utilized by the automated **`tune-microphone`** skill, which runs a coordinate-descent parameter optimizer in a loop over the GStreamer capture settings (`noise_suppression`, `agc`, `high_pass_filter`, etc.) to automatically discover the best acoustic configuration for your room and hardware.
 
-You can execute the auto-tuning script locally using:
-```bash
-uv run scripts/tune_mic.py
-```
+You can trigger the complete voice-guided microphone and GStreamer filter calibration at runtime by saying:
+"calibra microfono completo" (or "calibra microfono")
 
 For fully automated non-interactive runs, you can have an external device (such as another PC in the room) play speech generation continuously. For example, by running the following command on that machine to repeat target wake words and commands in an infinite loop:
 

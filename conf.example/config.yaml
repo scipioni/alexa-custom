@@ -114,11 +114,11 @@ tts:
 # Audio hardware
 # ---------------------------------------------------------------------------
 audio:
-  #card_name: NewPie        # substring to identify audio card in PipeWire/ALSA
-  input_device: NewPie     # PipeWire source name substring, or 'pipewire' for default
-  output_device: NewPie    # PipeWire sink name substring, or 'pipewire' for default
+  card_name: Yealink        # substring to identify audio card in PipeWire/ALSA
+  input_device: Yealink     # PipeWire source name substring, or 'pipewire' for default
+  output_device: Yealink    # PipeWire sink name substring, or 'pipewire' for default
   output_volume: 0.5       # speaker volume 0.0–1.0 (set via wpctl, persisted by WirePlumber)
-  input_gain: 3.0          # microphone gain multiplier (Yealink preamp is quiet; 3.0 = 300% PulseAudio source)
+  Iinput_gain: 3.0          # microphone gain multiplier (Yealink preamp is quiet; 3.0 = 300% PulseAudio source)
   post_playback_ms: 300    # STT gate hold after playback ends (lets echo decay)
   tone_preroll_ms: 50      # silence before tones/beeps (covers PipeWire cold-start)
   sample_rates:
@@ -171,6 +171,9 @@ audio:
         high_pass_filter: true     # Removes sub-80Hz low-frequency room rumbles/bumps
         input_gain: 0.2            # Calibration-verified optimal gain (20%) to prevent over-amplification and clipping
         highpass_cutoff_hz: 220    # audiocheblimit 220 Hz HPF — rejects residual 128/175 Hz USB clock artifacts on cold-starts
+        expander: false             # Enable the downward expander (noise gate) to crush room clicks/taps
+        expander_threshold: 0.05   # Levels below 5% are expanded/crushed to absolute digital silence
+        expander_ratio: 3.0        # Downward expansion ratio
         rms_threshold: 0.02
         vad_silence_ms: 900
 
