@@ -81,6 +81,17 @@ def _build_pipeline_string(
             " characteristics=soft-knee"
         )
 
+    expander_stage = ""
+    if getattr(config, "expander", False):
+        threshold = max(0.0, min(1.0, getattr(config, "expander_threshold", 0.05)))
+        ratio = max(0.0, getattr(config, "expander_ratio", 3.0))
+        expander_stage = (
+            f" ! audiodynamic mode=expander"
+            f" threshold={threshold:.4f}"
+            f" ratio={ratio:.2f}"
+            " characteristics=soft-knee"
+        )
+
     cheblimit_stage = ""
     if getattr(config, "highpass_cutoff_hz", 0) > 0:
         cutoff = int(config.highpass_cutoff_hz)
@@ -106,6 +117,7 @@ def _build_pipeline_string(
         " ! audio/x-raw,format=S16LE,rate=16000,channels=1"
         f"{webrtcdsp_stage}"
         f"{compressor_stage}"
+        f"{expander_stage}"
         " ! audioconvert"
         " ! audio/x-raw,format=S16LE,rate=16000,channels=1"
         " ! queue max-size-buffers=100 leaky=downstream"
@@ -151,6 +163,17 @@ def _build_gst_launch_cmdline(source_name: str | None, config) -> str:
             " characteristics=soft-knee"
         )
 
+    expander_stage = ""
+    if getattr(config, "expander", False):
+        threshold = max(0.0, min(1.0, getattr(config, "expander_threshold", 0.05)))
+        ratio = max(0.0, getattr(config, "expander_ratio", 3.0))
+        expander_stage = (
+            f" ! audiodynamic mode=expander"
+            f" threshold={threshold:.4f}"
+            f" ratio={ratio:.2f}"
+            " characteristics=soft-knee"
+        )
+
     cheblimit_stage = ""
     if getattr(config, "highpass_cutoff_hz", 0) > 0:
         cutoff = int(config.highpass_cutoff_hz)
@@ -167,6 +190,7 @@ def _build_gst_launch_cmdline(source_name: str | None, config) -> str:
         f"{cheblimit_stage}"
         f"{webrtcdsp_stage}"
         f"{compressor_stage}"
+        f"{expander_stage}"
         " ! audioconvert"
         " ! audio/x-raw,format=S16LE,rate=16000,channels=1"
         " ! queue max-size-buffers=100 leaky=downstream"
@@ -333,7 +357,7 @@ def start_capture_gst(source_name: str | None, config):
     """
     logger.info(
         "GStreamer capture: source=%s device=%s"
-        " ns=%s(level=%d) agc=%s(target=%ddBFS gain=%ddB) hpf=%s compressor=%s",
+        " ns=%s(level=%d) agc=%s(target=%ddBFS gain=%ddB) hpf=%s compressor=%s expander=%s",
         config.source,
         source_name or "default",
         config.noise_suppression,
@@ -343,6 +367,7 @@ def start_capture_gst(source_name: str | None, config):
         config.agc_compression_gain_db,
         config.high_pass_filter,
         config.compressor,
+        getattr(config, "expander", False),
     )
 
     if config.source == "pipewiresrc":

@@ -319,9 +319,9 @@ def _amixer_pcm_percent(card_index: int) -> int | None:
 def _amixer_capture_percent(card_index: int) -> int | None:
     """Return the hardware capture level as a percentage, or None if unreadable.
 
-    Tries "Capture" first, then "Mic", then "Capture Volume".
+    Tries "Capture" first, then "Mic", then "Capture Volume", then "Headset".
     """
-    for control in ("Capture", "Mic", "Capture Volume"):
+    for control in ("Capture", "Mic", "Capture Volume", "Headset"):
         try:
             result = subprocess.run(
                 ["amixer", "-c", str(card_index), "sget", control],
@@ -353,6 +353,93 @@ def _pactl_source_volume_percent(source_name: str) -> int | None:
     except Exception:
         pass
     return None
+
+
+def _get_all_alsa_capture_levels() -> list[tuple[str, str, str]]:
+    """Scan all ALSA cards and return a list of (card_id, control_name, level_str) for controls with capture capability."""
+    results = []
+    if not os.path.exists("/proc/asound"):
+        return results
+    for entry in os.listdir("/proc/asound"):
+        if not entry.startswith("card") or not entry[4:].isdigit():
+            continue
+        card_index = int(entry[4:])
+        try:
+            with open(f"/proc/asound/{entry}/id") as f:
+                card_id = f.read().strip()
+        except OSError:
+            card_id = f"card{card_index}"
+
+        if "ArduinoImolaHPH" in card_id:
+            continue
+
+        try:
+            proc = subprocess.run(
+                ["amixer", "-c", str(card_index), "scontents"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if proc.returncode == 0:
+                current_control = None
+                is_capture = False
+                volumes = []
+                for line in proc.stdout.splitlines():
+                    if line.startswith("Simple mixer control"):
+                        if current_control and is_capture and volumes:
+                            results.append((card_id, current_control, "/".join(volumes)))
+                        m = re.search(r"Simple mixer control '([^']+)'", line)
+                        current_control = m.group(1) if m else "Unknown"
+                        is_capture = False
+                        volumes = []
+                    elif "Capture" in line or "cvolume" in line or "cswitch" in line:
+                        is_capture = True
+
+                    v_match = re.findall(r"\[(\d+%)\]", line)
+                    if v_match:
+                        volumes.extend(v_match)
+
+                if current_control and is_capture and volumes:
+                    results.append((card_id, current_control, "/".join(volumes)))
+        except Exception:
+            pass
+    return results
+
+
+def _get_all_pipewire_source_levels() -> list[tuple[str, str, str]]:
+    """Scan all PipeWire sources and return a list of (source_name, description, volume_str)."""
+    results = []
+    try:
+        proc = subprocess.run(
+            ["pactl", "list", "sources"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode == 0:
+            current_name = None
+            current_desc = None
+            current_vol = None
+            for line in proc.stdout.splitlines():
+                if line.startswith("Source #") or line.strip() == "":
+                    if current_name:
+                        results.append((current_name, current_desc or "Unknown", current_vol or "Unknown"))
+                    current_name = None
+                    current_desc = None
+                    current_vol = None
+                elif "Name:" in line:
+                    current_name = line.split("Name:")[-1].strip()
+                elif "Description:" in line:
+                    current_desc = line.split("Description:")[-1].strip()
+                elif "Volume:" in line and "Base Volume:" not in line:
+                    v_match = re.findall(r"(\d+%)", line)
+                    if v_match:
+                        current_vol = "/".join(v_match)
+            if current_name:
+                results.append((current_name, current_desc or "Unknown", current_vol or "Unknown"))
+    except Exception:
+        pass
+    return results
 
 
 def audio_doctor() -> int:
@@ -566,4 +653,28 @@ def audio_doctor() -> int:
         print(f"{failures} check(s) failed. See suggestions above.")
     else:
         print("All critical checks passed.")
+
+    # Print Microphone Source Levels
+    print("\n" + "=" * 60)
+    print(" MICROPHONE SOURCE LEVELS")
+    print("=" * 60)
+    print("  ALSA Hardware Layer:")
+    alsa_mics = _get_all_alsa_capture_levels()
+    if alsa_mics:
+        for card_id, control_name, level_str in alsa_mics:
+            print(f"    - Card: {card_id:<12} Control: {control_name:<15} Level: {level_str}")
+    else:
+        print("    No hardware capture controls found.")
+
+    print("\n  WirePlumber / PipeWire Layer:")
+    pw_mics = _get_all_pipewire_source_levels()
+    if pw_mics:
+        for name, desc, vol_str in pw_mics:
+            src_type = "[Monitor]   " if "monitor" in name.lower() else "[Microphone]"
+            print(f"    - {src_type} {desc:<40} Level: {vol_str}")
+            print(f"                 Name: {name}")
+    else:
+        print("    No PipeWire sources found.")
+    print("=" * 60)
+
     return failures

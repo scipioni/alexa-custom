@@ -41,8 +41,8 @@ ExecStart=/bin/bash -c '\
     pactl set-card-profile "$NEWPIE_CARD" input:analog-stereo 2>/dev/null || true; \
   fi; \
   sleep 2; \
-  SINK=$(pactl list sinks short | awk '"'"'/[Nn]ew[Pp]ie|[Yy]ealink/ && !/monitor/{print $2; exit}'"'"'); \
-  SOURCE=$(pactl list sources short | awk '"'"'/[Nn]ew[Pp]ie|[Yy]ealink/ && !/monitor/{print $2; exit}'"'"'); \
+  SINK=$(pactl list sinks short | grep -iE "NewPie|Yealink" | grep -v "monitor" | cut -f2 | head -1); \
+  SOURCE=$(pactl list sources short | grep -iE "NewPie|Yealink" | grep -v "monitor" | cut -f2 | head -1); \
   [ -n "$SINK" ] && pw-metadata -n default 0 default.configured.audio.sink \
     "{\"name\":\"$SINK\"}" "Spa:String:JSON"; \
   [ -n "$SOURCE" ] && pw-metadata -n default 0 default.configured.audio.source \
@@ -50,7 +50,7 @@ ExecStart=/bin/bash -c '\
   for i in $(seq 1 10); do \
     CARD_NUM=$(grep -m1 -E "NewPie|Yealink" /proc/asound/cards | awk "{print \$1}"); \
     amixer -c "${CARD_NUM:-0}" sset PCM 100%% 2>/dev/null || amixer -c "${CARD_NUM:-0}" sset Playback\ Volume 100%% 2>/dev/null || true; \
-    amixer -c "${CARD_NUM:-0}" sset Capture 100%% unmute 2>/dev/null || amixer -c "${CARD_NUM:-0}" sset Mic 100%% unmute 2>/dev/null || amixer -c "${CARD_NUM:-0}" sset 'Capture Volume' 100%% unmute 2>/dev/null || true; \
+    amixer -c "${CARD_NUM:-0}" sset Capture 100%% unmute 2>/dev/null || amixer -c "${CARD_NUM:-0}" sset Mic 100%% unmute 2>/dev/null || amixer -c "${CARD_NUM:-0}" sset Capture\ Volume 100%% unmute 2>/dev/null || amixer -c "${CARD_NUM:-0}" sset Headset 100%% unmute 2>/dev/null || true; \
     [ -n "$SOURCE" ] && pactl set-source-volume "$SOURCE" 100%% 2>/dev/null || true; \
     sleep 2; \
   done'

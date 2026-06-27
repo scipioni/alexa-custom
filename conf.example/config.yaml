@@ -141,6 +141,9 @@ audio:
     compressor: false             # audiodynamic compressor after webrtcdsp (on reduces speech_ratio, no transcript benefit)
     #compressor_threshold: 0.1     # normalized threshold 0.0–1.0
     #compressor_ratio: 3.0         # compression ratio
+    expander: false               # audiodynamic expander (noise gate) after compressor (reduces idle CPU processing)
+    #expander_threshold: 0.05      # normalized threshold 0.0–1.0
+    #expander_ratio: 3.0           # expansion ratio
     profiles:
       # Named profiles — each overrides any subset of the gstreamer fields above
       # plus rms_threshold and vad_silence_ms (STT-level overrides).

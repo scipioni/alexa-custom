@@ -319,6 +319,12 @@ def _build_gst_config(base, args):
         overrides["compressor_threshold"] = args.gst_compressor_threshold
     if args.gst_compressor_ratio is not None:
         overrides["compressor_ratio"] = args.gst_compressor_ratio
+    if getattr(args, "gst_expander", None) is not None:
+        overrides["expander"] = args.gst_expander
+    if getattr(args, "gst_expander_threshold", None) is not None:
+        overrides["expander_threshold"] = args.gst_expander_threshold
+    if getattr(args, "gst_expander_ratio", None) is not None:
+        overrides["expander_ratio"] = args.gst_expander_ratio
     return dataclasses.replace(base, **overrides) if overrides else base
 
 
@@ -619,6 +625,15 @@ def main() -> None:
     gst.add_argument("--compressor-ratio", dest="gst_compressor_ratio",
                      type=float, metavar="F",
                      help="Compressor ratio (≥1.0)")
+    gst.add_argument("--expander", dest="gst_expander",
+                     action="store_true", default=None)
+    gst.add_argument("--no-expander", dest="gst_expander", action="store_false")
+    gst.add_argument("--expander-threshold", dest="gst_expander_threshold",
+                     type=float, metavar="F",
+                     help="Expander threshold, normalised 0.0-1.0")
+    gst.add_argument("--expander-ratio", dest="gst_expander_ratio",
+                     type=float, metavar="F",
+                     help="Expander ratio (≥1.0)")
 
     args = parser.parse_args()
 
@@ -646,11 +661,21 @@ def main() -> None:
         print(f"ERROR: could not load {conf_dir / 'config.yaml'}", file=sys.stderr)
         sys.exit(1)
 
-    if args.input_gain is not None:
-        config.audio.input_gain = args.input_gain
-
     from alexa_custom import audio_hw as _audio_hw
     _audio_hw.configure(config)
+
+    config.audio.gstreamer = _build_gst_config(config.audio.gstreamer, args)
+
+    if args.input_gain is not None:
+        _audio_hw._state.input_gain = args.input_gain
+
+    # Enforce input gain at hardware/PipeWire layer. Sets _state.hw_gain_applied to True on success.
+    try:
+        from alexa_custom.audio_hw import pulse_session, set_input_gain
+        with pulse_session("serena-stt-init") as pulse:
+            set_input_gain(pulse, config.audio.input_device, _audio_hw.get_input_gain())
+    except Exception as e:
+        print(f"WARNING: Could not set hardware input gain: {e}", file=sys.stderr)
 
     # --calibrate-gstreamer: run one-shot calibration and exit (uses real TTS).
     if args.calibrate_gstreamer:
