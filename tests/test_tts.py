@@ -188,6 +188,37 @@ class TestMainSay(unittest.TestCase):
         mock_engine.say.assert_called_once_with("Ciao")
         mock_sleep.assert_called_once_with(5.0)
 
+    @patch("alexa_custom.tts.time.sleep")
+    @patch("alexa_custom.tts.get_engine")
+    @patch("alexa_custom.tts.init_engine")
+    @patch("alexa_custom.audio_hw.configure")
+    @patch("alexa_custom.config.load_config")
+    @patch("alexa_custom.config.load_secrets")
+    @patch("alexa_custom.tts.Path.exists")
+    def test_main_say_loop_default_to_silence(self, mock_exists, mock_load_secrets, mock_load_config, mock_configure, mock_init_engine, mock_get_engine, mock_sleep):
+        mock_exists.return_value = True
+
+        mock_config = MagicMock()
+        mock_config.tts.backend = "piper"
+        mock_config.tts.voice = "it_IT-paola-medium"
+        mock_config.tts.preroll_ms = 100
+        mock_load_config.return_value = mock_config
+
+        mock_secrets = MagicMock()
+        mock_load_secrets.return_value = mock_secrets
+
+        mock_engine = MagicMock()
+        mock_get_engine.return_value = mock_engine
+
+        mock_sleep.side_effect = KeyboardInterrupt()
+
+        from alexa_custom.tts import main_say
+        with patch("sys.stderr"):
+            main_say(["Ciao", "--loop", "--silence", "3.5"])
+
+        mock_engine.say.assert_called_once_with("Ciao")
+        mock_sleep.assert_called_once_with(3.5)
+
     @patch("alexa_custom.tts.Path.exists")
     def test_main_say_invalid_loop(self, mock_exists):
         mock_exists.return_value = True

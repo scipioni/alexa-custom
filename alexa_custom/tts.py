@@ -372,7 +372,9 @@ def main_say(args: list[str] | None = None) -> None:
         except ValueError:
             raise argparse.ArgumentTypeError(f"Invalid volume value: {value}")
 
-    def loop_type(value: str) -> float:
+    def loop_type(value: str) -> float | str:
+        if value == "DEFAULT_SILENCE":
+            return value
         try:
             val = float(value)
             if val <= 0.0:
@@ -414,10 +416,12 @@ def main_say(args: list[str] | None = None) -> None:
     parser.add_argument(
         "--loop",
         "-l",
+        nargs="?",
+        const="DEFAULT_SILENCE",
         type=loop_type,
         metavar="SECONDS",
         default=None,
-        help="Repeat speech every SECONDS seconds",
+        help="Repeat speech every SECONDS seconds (defaults to silence value if no SECONDS provided)",
     )
     parser.add_argument(
         "--silence",
@@ -428,6 +432,10 @@ def main_say(args: list[str] | None = None) -> None:
 
     parsed_args = parser.parse_args(args)
     text_to_say = " ".join(parsed_args.text)
+
+    loop_val = parsed_args.loop
+    if loop_val == "DEFAULT_SILENCE":
+        loop_val = parsed_args.silence
 
     conf_dir = Path(parsed_args.config)
 
@@ -477,12 +485,12 @@ def main_say(args: list[str] | None = None) -> None:
                 time.sleep(parsed_args.silence)
             engine.say(sentence)
 
-    if parsed_args.loop is not None:
-        print(f"Entering loop mode. Speaking sentences every {parsed_args.loop} seconds. Press Ctrl+C to exit.", file=sys.stderr)
+    if loop_val is not None:
+        print(f"Entering loop mode. Speaking sentences every {loop_val} seconds. Press Ctrl+C to exit.", file=sys.stderr)
         try:
             while True:
                 _speak_flow()
-                time.sleep(parsed_args.loop)
+                time.sleep(loop_val)
         except KeyboardInterrupt:
             print("\nExiting loop mode.", file=sys.stderr)
     else:
