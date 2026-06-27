@@ -142,6 +142,28 @@ calibrate_summary()   ← ranked table + winning YAML
 
 Run the `/calibrate-gstreamer` agent skill in Claude Code to redo the sweep automatically.
 
+### Programmatic Auto-Tuning (--score and --timeout)
+
+For automated or headless environments (e.g., continuous external speech loop setups), `serena-stt` supports a programmatic `--score` flag. This flag listens for a single wake word or command, suppresses standard logging on stdout, silences all diagnostic beeps/tones, and prints a single JSON object containing the final similarity score and the recognized text to stdout before exiting:
+
+```bash
+# Listen with a 20-second timeout, print JSON on recognition or exit with score=0
+uv run serena-stt --score --timeout 20.0
+```
+
+This diagnostic mode is utilized by the automated **`tune-microphone`** skill, which runs a coordinate-descent parameter optimizer in a loop over the GStreamer capture settings (`noise_suppression`, `agc`, `high_pass_filter`, etc.) to automatically discover the best acoustic configuration for your room and hardware.
+
+You can execute the auto-tuning script locally using:
+```bash
+uv run scripts/tune_mic.py
+```
+
+For fully automated non-interactive runs, you can have an external device (such as another PC in the room) play speech generation continuously. For example, by running the following command on that machine to repeat target wake words and commands in an infinite loop:
+
+```bash
+serena-say "che ore sono ? che tempo farà domani ? ascolta assistente dimmi qualcosa. chiama assistenza. che tempo farà oggi. ascolta assistente volume basso. ascolta assistente accendi le luci" --volume 6 --loop
+```
+
 ## Trigger matching
 
 Every transcript passes through a two-phase matcher:

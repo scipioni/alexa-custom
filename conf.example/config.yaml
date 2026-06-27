@@ -118,7 +118,7 @@ audio:
   input_device: NewPie     # PipeWire source name substring, or 'pipewire' for default
   output_device: NewPie    # PipeWire sink name substring, or 'pipewire' for default
   output_volume: 0.5       # speaker volume 0.0–1.0 (set via wpctl, persisted by WirePlumber)
-  input_gain: 1.0          # microphone gain multiplier (1.0 = no change, 2.0 = double)
+  input_gain: 3.0          # microphone gain multiplier (Yealink preamp is quiet; 3.0 = 300% PulseAudio source)
   post_playback_ms: 300    # STT gate hold after playback ends (lets echo decay)
   tone_preroll_ms: 50      # silence before tones/beeps (covers PipeWire cold-start)
   sample_rates:
@@ -161,12 +161,13 @@ audio:
       yealink:                     # Yealink SP92 / BT51 — hardware-DSP devices
         source: pulsesrc           # BT51 with output:analog-stereo+input:mono-fallback profile places input
                                    # under Audio/Source — pulsesrc works. pipewiresrc is not needed here.
-        noise_suppression: false   # SP92 onboard DSP already applies NS; double-NS creates artefacts
-        agc: false                 # AGC amplifies BT51 USB clock noise when the Bluetooth SCO link is idle;
-                                   # SP92 hardware AGC handles level normalisation
+        noise_suppression: true    # Swept optimal setting (changed from false)
+        noise_suppression_level: 1 # Swept optimal setting (changed from default)
+        agc: true                  # Swept optimal setting (changed from false)
         agc_target_level_dbfs: -3
-        agc_compression_gain_db: 18
-        high_pass_filter: false    # SP92 hardware DSP already applies HPF
+        agc_compression_gain_db: 9 # Swept optimal setting (changed from 18)
+        high_pass_filter: true     # Swept optimal setting (changed from false)
+        input_gain: 3.0            # Swept optimal setting (changed from 1.0)
         highpass_cutoff_hz: 220    # audiocheblimit 220 Hz HPF — rejects residual 128/175 Hz USB clock
                                    # artifacts if the BT51 Bluetooth link was not fully active on capture start
         rms_threshold: 0.02

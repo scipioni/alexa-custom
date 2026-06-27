@@ -542,6 +542,25 @@ def main() -> None:
         metavar="FILE",
         help="replay a previously recorded WAV file instead of using the microphone",
     )
+    parser.add_argument(
+        "--score",
+        action="store_true",
+        help="listen for a single wake word or command, print 'score=xx' to stdout, and exit",
+    )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=20.0,
+        metavar="N",
+        help="maximum seconds to wait in score mode before exiting with score=0 (default: 20.0)",
+    )
+    parser.add_argument(
+        "--input-gain",
+        type=float,
+        default=None,
+        metavar="F",
+        help="microphone input gain override (default: from config)",
+    )
 
     # --calibrate-gstreamer mode
     parser.add_argument(
@@ -627,6 +646,9 @@ def main() -> None:
         print(f"ERROR: could not load {conf_dir / 'config.yaml'}", file=sys.stderr)
         sys.exit(1)
 
+    if args.input_gain is not None:
+        config.audio.input_gain = args.input_gain
+
     from alexa_custom import audio_hw as _audio_hw
     _audio_hw.configure(config)
 
@@ -638,7 +660,10 @@ def main() -> None:
     # All other modes: silence TTS — log instead of speaking.
     class _SilentTTS(_tts_module.TTSBackend):
         def say(self, text: str, lang: str = "it-IT") -> None:
-            print(f"[tts]        {text!r}", flush=True)
+            if args.score:
+                print(f"[tts]        {text!r}", file=sys.stderr, flush=True)
+            else:
+                print(f"[tts]        {text!r}", flush=True)
 
     _silent_tts = _SilentTTS()
     _tts_module.get_engine = lambda: _silent_tts
@@ -661,34 +686,89 @@ def main() -> None:
         _stt_module.play_wake_beep = lambda *_a, **_kw: None
         _stt_cap._play_timeout = lambda: None
 
-    def on_stt_event(event: str, data: dict) -> None:
-        if event == "listening":
-            wake_words = data.get("wake_words", [])
-            print(f"[listening]  wake words: {wake_words}", flush=True)
-        elif event in ("transcribing", "partial"):
-            print(f"[partial]    {data.get('text', '')}", flush=True)
-        elif event == "wake":
-            print(f"[wake]       {data.get('word', '')!r}", flush=True)
-        elif event == "direct":
-            print(f"[direct]     {data.get('phrase', '')!r}", flush=True)
-        elif event == "command":
-            print(f"[command]    {data.get('text', '')!r}", flush=True)
-        elif event == "match":
-            print(
-                f"[match]      trigger={data.get('trigger', '')!r}"
-                f"  score={data.get('score', '')}"
-                f"  actions={[a.get('type') for a in data.get('actions', [])]}",
-                flush=True,
-            )
-        elif event == "no_match":
-            print(f"[no_match]   {data.get('text', '')!r}", flush=True)
-        elif event == "vad_empty":
-            ms = data.get("speech_ms", 0)
-            print(f"[vad_empty]  heard {ms}ms above threshold — Vosk produced no text", flush=True)
-        elif event == "level":
-            pass  # too noisy — suppress mic level events
-        else:
-            print(f"[{event}]  {data}", flush=True)
+    if args.score:
+        import alexa_custom.stt_capture as _stt_cap
+        _stt_module.play_wake_beep = lambda *_a, **_kw: None
+        _stt_cap._play_timeout = lambda: None
+
+    score_printed = [False]
+    timeout_timer: threading.Timer | None = None
+
+    def print_score_and_exit(score: float | int, text: str = "") -> None:
+        if not score_printed[0]:
+            score_printed[0] = True
+            import json
+            result = {
+                "score": int(round(score)),
+                "text": text,
+            }
+            print(json.dumps(result), flush=True)
+            if timeout_timer is not None:
+                timeout_timer.cancel()
+            stop_event.set()
+
+    if args.score:
+        def on_stt_event(event: str, data: dict) -> None:
+            if event == "listening":
+                wake_words = data.get("wake_words", [])
+                print(f"[listening]  wake words: {wake_words}", file=sys.stderr, flush=True)
+            elif event in ("transcribing", "partial"):
+                print(f"[partial]    {data.get('text', '')}", file=sys.stderr, flush=True)
+            elif event == "wake":
+                print(f"[wake]       {data.get('word', '')!r}", file=sys.stderr, flush=True)
+                # If timeout is > 0, it means it's a wake-word-only detection (no one-breath)
+                # and we can print score=100 and exit.
+                if data.get("timeout", 0) > 0:
+                    print_score_and_exit(100, data.get("word", ""))
+            elif event == "matched":
+                score = data.get("score", 0.0)
+                text = data.get("transcript", "")
+                print(f"[matched]    score={score}", file=sys.stderr, flush=True)
+                print_score_and_exit(score, text)
+            elif event == "nomatch":
+                score = data.get("score", 0.0)
+                text = data.get("transcript", "")
+                print(f"[nomatch]    score={score}", file=sys.stderr, flush=True)
+                print_score_and_exit(score, text)
+            elif event == "vad_empty":
+                ms = data.get("speech_ms", 0)
+                print(f"[vad_empty]  heard {ms}ms above threshold — Vosk produced no text", file=sys.stderr, flush=True)
+            elif event == "level":
+                pass  # too noisy — suppress mic level events
+            else:
+                print(f"[{event}]  {data}", file=sys.stderr, flush=True)
+    else:
+        def on_stt_event(event: str, data: dict) -> None:
+            if event == "listening":
+                wake_words = data.get("wake_words", [])
+                print(f"[listening]  wake words: {wake_words}", flush=True)
+            elif event in ("transcribing", "partial"):
+                print(f"[partial]    {data.get('text', '')}", flush=True)
+            elif event == "wake":
+                print(f"[wake]       {data.get('word', '')!r}", flush=True)
+            elif event == "direct":
+                print(f"[direct]     {data.get('phrase', '')!r}", flush=True)
+            elif event == "command":
+                print(f"[command]    {data.get('text', '')!r}", flush=True)
+            elif event in ("match", "matched"):
+                score = data.get("score", "")
+                trigger = data.get("trigger", data.get("phrase", ""))
+                actions_list = [a.get("type") for a in data.get("actions", [])]
+                print(
+                    f"[match]      trigger={trigger!r}"
+                    f"  score={score}"
+                    f"  actions={actions_list}",
+                    flush=True,
+                )
+            elif event in ("no_match", "nomatch"):
+                print(f"[no_match]   {data.get('transcript', data.get('text', ''))!r}", flush=True)
+            elif event == "vad_empty":
+                ms = data.get("speech_ms", 0)
+                print(f"[vad_empty]  heard {ms}ms above threshold — Vosk produced no text", flush=True)
+            elif event == "level":
+                pass  # too noisy — suppress mic level events
+            else:
+                print(f"[{event}]  {data}", flush=True)
 
     print("alexa-stt: starting STT pipeline (Ctrl+C to stop)", file=sys.stderr)
     print(
@@ -698,7 +778,13 @@ def main() -> None:
         file=sys.stderr,
     )
 
-    _print_dataset(config)
+    if not args.score:
+        _print_dataset(config)
+
+    if args.score:
+        timeout_timer = threading.Timer(args.timeout, lambda: print_score_and_exit(0))
+        timeout_timer.daemon = True
+        timeout_timer.start()
 
     stt_thread = start_stt_thread(
         config=config,
@@ -715,3 +801,6 @@ def main() -> None:
         print("\nalexa-stt: stopping", file=sys.stderr)
         stop_event.set()
         stt_thread.join(timeout=3)
+    finally:
+        if args.score:
+            print_score_and_exit(0)
