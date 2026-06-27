@@ -59,7 +59,7 @@ stt:
   #   Perceived latency ≈ vad_silence_ms + ~130 ms decode. 700–800 ms is viable
   #   if ~1 s feels slow.
   rms_threshold: 0.02       # minimum RMS energy considered speech
-  adaptive_rms: true        # dynamically adjusts rms_threshold based on noise floor
+  adaptive_rms: false       # dynamically adjusts rms_threshold based on noise floor
   # min_speech_ms: 200      # minimum sustained speech before silence timer starts
   # wake_match_threshold: 0.5  # fraction of wake-phrase tokens that must appear in
   #   the transcript to count as a hit. 0.5 (default) — one of two words is enough
