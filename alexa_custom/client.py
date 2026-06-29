@@ -917,6 +917,23 @@ def main() -> None:
     if config is not None:
         audio_hw.configure(config)
 
+    # Start background silent stream if Yealink output is active to keep Bluetooth SCO link hot
+    if config is not None and "yealink" in (config.audio.output_device or "").lower():
+        import shutil
+        import subprocess
+        paplay_bin = shutil.which("paplay")
+        if paplay_bin:
+            try:
+                logger.info("Yealink output active: starting background silent stream to keep Bluetooth SCO link awake")
+                subprocess.Popen(
+                    f"cat /dev/zero | {paplay_bin} -a --rate 16000 --channels 1 --format s16 -",
+                    shell=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except Exception as e:
+                logger.warning("Failed to start background silent stream: %s", e)
+
     input_spec = config.audio.input_device if config is not None else None
     output_spec = config.audio.output_device if config is not None else None
     output_volume = audio_hw.get_output_volume()
