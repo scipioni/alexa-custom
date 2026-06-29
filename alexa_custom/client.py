@@ -921,12 +921,12 @@ def main() -> None:
     if config is not None and "yealink" in (config.audio.output_device or "").lower():
         import shutil
         import subprocess
-        paplay_bin = shutil.which("paplay")
-        if paplay_bin:
+        pacat_bin = shutil.which("pacat") or shutil.which("paplay")
+        if pacat_bin:
             try:
                 logger.info("Yealink output active: starting background silent stream to keep Bluetooth SCO link awake")
                 subprocess.Popen(
-                    f"cat /dev/zero | {paplay_bin} -a --rate 16000 --channels 1 --format s16 -",
+                    f"cat /dev/zero | {pacat_bin} --rate=16000 --channels=1 --format=s16le",
                     shell=True,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
