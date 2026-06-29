@@ -8,6 +8,10 @@ Type=oneshot
 # 2. Restart WirePlumber so pipewire-pulse re-registers all cards and the
 #    source becomes visible to pulsectl (pactl list sources).
 # 3. Wait for the device to reappear after the WirePlumber restart.
+#    For Yealink: additionally poll pactl list sources until the source node
+#    is visible — this confirms WirePlumber applied output:analog-stereo+
+#    input:mono-fallback from its state file (profile application is async
+#    and was the root cause of boot-time source-invisible failures).
 # 4. Set the correct profile:
 #    - NewPie:  output:analog-stereo+input:analog-stereo (nodes appear under
 #               Sources/Sinks so PulseAudio clients can wake them); fall back
@@ -39,8 +43,16 @@ ExecStart=/bin/bash -c '\
   if [ -n "$NEWPIE_CARD" ]; then \
     pactl set-card-profile "$NEWPIE_CARD" output:analog-stereo+input:analog-stereo 2>/dev/null || \
     pactl set-card-profile "$NEWPIE_CARD" input:analog-stereo 2>/dev/null || true; \
+    sleep 2; \
   fi; \
-  sleep 2; \
+  if [ -n "$YEALINK_CARD" ]; then \
+    for i in $(seq 1 20); do \
+      if pactl list sources short 2>/dev/null | grep -iE "Yealink" | grep -qv "monitor"; then \
+        break; \
+      fi; \
+      sleep 1; \
+    done; \
+  fi; \
   SINK=$(pactl list sinks short | grep -iE "NewPie|Yealink" | grep -v "monitor" | cut -f2 | head -1); \
   SOURCE=$(pactl list sources short | grep -iE "NewPie|Yealink" | grep -v "monitor" | cut -f2 | head -1); \
   [ -n "$SINK" ] && pw-metadata -n default 0 default.configured.audio.sink \
@@ -55,7 +67,7 @@ ExecStart=/bin/bash -c '\
     sleep 2; \
   done'
 RemainAfterExit=yes
-TimeoutStartSec=90
+TimeoutStartSec=120
 
 [Install]
 WantedBy=default.target
