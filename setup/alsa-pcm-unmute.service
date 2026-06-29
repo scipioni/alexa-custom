@@ -4,25 +4,17 @@ After=wireplumber.service
 
 [Service]
 Type=oneshot
-# 1. Wait for a supported USB audio device (NewPie or Yealink) to appear.
-# 2. Restart WirePlumber so pipewire-pulse re-registers all cards and the
-#    source becomes visible to pulsectl (pactl list sources).
-# 3. Wait for the device to reappear after the WirePlumber restart.
-#    For Yealink: additionally poll pactl list sources until the source node
-#    is visible — this confirms WirePlumber applied output:analog-stereo+
-#    input:mono-fallback from its state file (profile application is async
-#    and was the root cause of boot-time source-invisible failures).
-# 4. Set the correct profile:
-#    - NewPie:  output:analog-stereo+input:analog-stereo (nodes appear under
-#               Sources/Sinks so PulseAudio clients can wake them); fall back
-#               to input:analog-stereo if the combined profile is unavailable.
-#    - Yealink: no pactl here — WirePlumber already reads the correct profile
-#               (output:analog-stereo+input:mono-fallback) from its state file
-#               (~/.local/state/wireplumber/default-profile) on restart.
-#               Calling pactl set-card-profile pro-audio would overwrite the
-#               state file and break boot persistence.
-# 5. Set default routing dynamically from pactl, then restore PCM for 20 s to
-#    catch WirePlumber's late ACP profile reset.
+# Strategy:
+# 1. Wait up to 30 s for the USB audio card (NewPie or Yealink) to appear.
+# 2. For NewPie: set the combined analog profile immediately (USB device, no BT delay).
+#    For Yealink BT51: the correct profile (output:analog-stereo+input:mono-fallback) is
+#    already in the WirePlumber state file — no pactl needed here.
+# 3. Poll for the source node (up to 55 s per attempt, 4 attempts max ≈ 4 min total).
+#    The Yealink BT51 Bluetooth SCO link to the SP92 can take 1-4 min to re-establish
+#    after a reboot. WirePlumber only creates the audio nodes once the ALSA device is
+#    ready, so we restart WirePlumber at the start of each retry and wait again.
+# 4. Once the source is visible, set default routing via pw-metadata and restore
+#    hardware PCM levels for 20 s (catches WirePlumber's late ACP profile reset).
 ExecStart=/bin/bash -c '\
   for i in $(seq 1 30); do \
     if pactl list cards short 2>/dev/null | grep -qiE "NewPie|Yealink"; then \
@@ -30,31 +22,26 @@ ExecStart=/bin/bash -c '\
     fi; \
     sleep 1; \
   done; \
-  systemctl --user restart wireplumber; \
-  sleep 3; \
-  for i in $(seq 1 15); do \
-    if pactl list cards short 2>/dev/null | grep -qiE "NewPie|Yealink"; then \
-      break; \
-    fi; \
-    sleep 1; \
-  done; \
-  NEWPIE_CARD=$(pactl list cards short | grep -i NewPie | cut -f2 | head -1); \
-  YEALINK_CARD=$(pactl list cards short | grep -i Yealink | cut -f2 | head -1); \
+  NEWPIE_CARD=$(pactl list cards short 2>/dev/null | grep -i NewPie | cut -f2 | head -1); \
   if [ -n "$NEWPIE_CARD" ]; then \
     pactl set-card-profile "$NEWPIE_CARD" output:analog-stereo+input:analog-stereo 2>/dev/null || \
     pactl set-card-profile "$NEWPIE_CARD" input:analog-stereo 2>/dev/null || true; \
-    sleep 2; \
   fi; \
-  if [ -n "$YEALINK_CARD" ]; then \
-    for i in $(seq 1 20); do \
-      if pactl list sources short 2>/dev/null | grep -iE "Yealink" | grep -qv "monitor"; then \
-        break; \
+  SOURCE=""; \
+  for attempt in $(seq 0 3); do \
+    if [ "$attempt" -gt 0 ]; then \
+      systemctl --user restart wireplumber; \
+      sleep 5; \
+    fi; \
+    for i in $(seq 1 55); do \
+      SOURCE=$(pactl list sources short 2>/dev/null | grep -iE "NewPie|Yealink" | grep -v "monitor" | cut -f2 | head -1); \
+      if [ -n "$SOURCE" ]; then \
+        break 2; \
       fi; \
       sleep 1; \
     done; \
-  fi; \
-  SINK=$(pactl list sinks short | grep -iE "NewPie|Yealink" | grep -v "monitor" | cut -f2 | head -1); \
-  SOURCE=$(pactl list sources short | grep -iE "NewPie|Yealink" | grep -v "monitor" | cut -f2 | head -1); \
+  done; \
+  SINK=$(pactl list sinks short 2>/dev/null | grep -iE "NewPie|Yealink" | grep -v "monitor" | cut -f2 | head -1); \
   [ -n "$SINK" ] && pw-metadata -n default 0 default.configured.audio.sink \
     "{\"name\":\"$SINK\"}" "Spa:String:JSON"; \
   [ -n "$SOURCE" ] && pw-metadata -n default 0 default.configured.audio.source \
@@ -67,7 +54,7 @@ ExecStart=/bin/bash -c '\
     sleep 2; \
   done'
 RemainAfterExit=yes
-TimeoutStartSec=120
+TimeoutStartSec=300
 
 [Install]
 WantedBy=default.target
