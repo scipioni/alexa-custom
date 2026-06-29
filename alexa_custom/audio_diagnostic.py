@@ -337,6 +337,43 @@ def _amixer_capture_percent(card_index: int) -> int | None:
     return None
 
 
+def _measure_source_rms(source_name: str, duration_s: float = 0.5) -> float | None:
+    """Capture audio from source_name via parec and return the RMS level (0.0–1.0).
+
+    Returns None if parec is unavailable, the source cannot be opened, or the
+    read times out.  A near-zero result (< ~0.001) when the source is a Yealink
+    BT51 typically means the Bluetooth SCO link to the SP92 is not established.
+    """
+    if shutil.which("parec") is None:
+        return None
+    n_bytes = int(16000 * duration_s) * 2  # s16le, 1ch, 16 kHz
+    try:
+        proc = subprocess.Popen(
+            [
+                "parec",
+                f"--device={source_name}",
+                "--rate=16000",
+                "--channels=1",
+                "--format=s16le",
+                "--latency-msec=100",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        try:
+            data, _ = proc.communicate(timeout=duration_s + 2.0)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            data, _ = proc.communicate()
+        data = data[:n_bytes]
+        if len(data) < 2:
+            return None
+        arr = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+        return float(np.sqrt(np.mean(arr ** 2)))
+    except Exception:
+        return None
+
+
 def _pactl_source_volume_percent(source_name: str) -> int | None:
     """Return the source volume of source_name as a percentage, or None if unreadable."""
     try:
@@ -619,6 +656,30 @@ def audio_doctor() -> int:
             "Yealink source not in pactl list sources — pulsesrc will fail; "
             "run `task audio:setup`",
         )
+
+        # 8b. Yealink BT51: Bluetooth SCO link must be delivering real audio.
+        #     When the BT51 has no active SCO connection to the SP92 the hardware
+        #     returns pure zeros. Distinguish that from a legitimately quiet room
+        #     by requiring RMS > 0 (any non-zero sample means the codec is running).
+        if yealink_source_in_sources:
+            yealink_source_name = _find_pipewire_source("Yealink")
+            if yealink_source_name is not None:
+                rms = _measure_source_rms(yealink_source_name, duration_s=0.5)
+                if rms is None:
+                    warn(
+                        "yealink:audio-flowing",
+                        "could not read audio from Yealink source (parec unavailable or timed out)",
+                    )
+                else:
+                    # Pure zeros (RMS == 0) → SCO link not established.
+                    # Tiny numerical noise from USB clock (RMS ~ 0.00003) is also
+                    # "not flowing" — use 0.001 as the meaningful-audio threshold.
+                    ok(
+                        "yealink:audio-flowing",
+                        rms > 0.001,
+                        f"mic RMS={rms:.5f} — Bluetooth SCO link may not be established; "
+                        "check SP92 LED and press its connect button, or run `task audio:restart`",
+                    )
 
         # WirePlumber state file must not have pro-audio for the Yealink card
         state_file = home / ".local/state/wireplumber/default-profile"
