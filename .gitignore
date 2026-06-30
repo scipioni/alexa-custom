@@ -19,3 +19,4 @@ conf.vosk/
 
 history.jsonl
 state.yaml
+*.blend1
