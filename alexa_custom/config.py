@@ -91,24 +91,28 @@ class AudioWebRTCConfig:
 
 @dataclass
 class GStreamerCaptureConfig:
-    source: str = "pulsesrc"           # pulsesrc | pipewiresrc
+    source: str = "pulsesrc"  # pulsesrc | pipewiresrc
     noise_suppression: bool = True
-    noise_suppression_level: int = 2   # 0=mild 1=moderate 2=high 3=very-high
+    noise_suppression_level: int = 2  # 0=mild 1=moderate 2=high 3=very-high
     agc: bool = True
-    agc_target_level_dbfs: int = -3    # dBFS target (negative; abs() passed to GStreamer, range 0–31)
-    agc_compression_gain_db: int = 9   # max makeup gain dB
+    agc_target_level_dbfs: int = (
+        -3
+    )  # dBFS target (negative; abs() passed to GStreamer, range 0–31)
+    agc_compression_gain_db: int = 9  # max makeup gain dB
     high_pass_filter: bool = True
-    compressor: bool = False           # audiodynamic compressor stage
+    compressor: bool = False  # audiodynamic compressor stage
     compressor_threshold: float = 0.1  # normalized 0.0–1.0
     compressor_ratio: float = 3.0
-    expander: bool = False             # audiodynamic expander (noise gate) stage
-    expander_threshold: float = 0.05   # normalized 0.0–1.0
+    expander: bool = False  # audiodynamic expander (noise gate) stage
+    expander_threshold: float = 0.05  # normalized 0.0–1.0
     expander_ratio: float = 3.0
-    highpass_cutoff_hz: int = 0        # audiocheblimit high-pass cutoff in Hz (0 = disabled)
+    highpass_cutoff_hz: int = 0  # audiocheblimit high-pass cutoff in Hz (0 = disabled)
     profiles: dict = field(default_factory=dict)  # name → {field: override_value}
 
 
-def resolve_gst_profile(base: "GStreamerCaptureConfig", profile_name: str) -> "GStreamerCaptureConfig":
+def resolve_gst_profile(
+    base: "GStreamerCaptureConfig", profile_name: str
+) -> "GStreamerCaptureConfig":
     """Return a GStreamerCaptureConfig with named profile overrides applied over base.
 
     Unknown profile names silently fall back to base (no crash at runtime).
@@ -121,7 +125,9 @@ def resolve_gst_profile(base: "GStreamerCaptureConfig", profile_name: str) -> "G
     if not overrides:
         return base
     _valid = {f.name for f in _dc.fields(base) if f.name != "profiles"}
-    merged = {f.name: getattr(base, f.name) for f in _dc.fields(base) if f.name != "profiles"}
+    merged = {
+        f.name: getattr(base, f.name) for f in _dc.fields(base) if f.name != "profiles"
+    }
     for k, v in overrides.items():
         if k in _valid:
             merged[k] = v
@@ -131,7 +137,9 @@ def resolve_gst_profile(base: "GStreamerCaptureConfig", profile_name: str) -> "G
 _STT_PROFILE_KEYS = {"rms_threshold", "vad_silence_ms"}
 
 
-def get_gst_profile_stt_overrides(base: "GStreamerCaptureConfig", profile_name: str) -> dict:
+def get_gst_profile_stt_overrides(
+    base: "GStreamerCaptureConfig", profile_name: str
+) -> dict:
     """Return STT-level keys (rms_threshold, vad_silence_ms) from a profile dict.
 
     These keys are not GStreamer params so resolve_gst_profile ignores them.
@@ -146,6 +154,10 @@ class AudioConfig:
     card_name: str | None = None
     input_device: str | None = None
     output_device: str | None = None
+    # Background silent stream that keeps the output sink (and any radio link
+    # behind it, e.g. a Bluetooth dongle) active: true | false | "auto"
+    # (auto = enabled when the output resolves to a USB sink).
+    keep_sink_alive: bool | str = "auto"
     output_volume: float = 0.5
     input_gain: float = 1.0
     sample_rates: dict = field(
@@ -176,7 +188,7 @@ class STTConfig:
     min_speech_ms: int = 200
     wake_match_threshold: float = 0.5
     mono_capture: bool = False
-    capture_backend: str = "parec"     # parec | gstreamer
+    capture_backend: str = "parec"  # parec | gstreamer
     # Constrain the always-on recognizer to a grammar built from the wake words
     # and trigger phrases. Cheaper and snappier, but forces every utterance onto
     # the closest phrase — only safe with confidence gating below.
@@ -185,7 +197,7 @@ class STTConfig:
     # disables the gate (free-text default). ~0.65 is a sane starting point for
     # grammar mode; sweep with `serena-wake-eval`.
     confidence: float = 0.0
-    confidence_mode: str = "first"     # first | min | mean
+    confidence_mode: str = "first"  # first | min | mean
 
 
 @dataclass
@@ -720,10 +732,18 @@ def _parse_audio_config(raw: dict) -> AudioConfig:
         profiles=profiles,
     )
 
+    keep_sink_alive_raw = raw.get("keep_sink_alive", "auto")
+    keep_sink_alive: bool | str = (
+        keep_sink_alive_raw
+        if isinstance(keep_sink_alive_raw, bool)
+        else str(keep_sink_alive_raw)
+    )
+
     return AudioConfig(
         card_name=str(card_name_raw) if card_name_raw else None,
         input_device=str(input_device) if input_device else None,
         output_device=str(output_device) if output_device else None,
+        keep_sink_alive=keep_sink_alive,
         output_volume=output_volume,
         input_gain=input_gain,
         sample_rates=sample_rates,
@@ -752,9 +772,7 @@ def _parse_stt_config(raw: dict) -> STTConfig:
 
     backend = str(raw.get("backend", "vosk"))
     if backend != "vosk":
-        raise ConfigError(
-            f"'stt.backend' must be 'vosk', got {backend!r}"
-        )
+        raise ConfigError(f"'stt.backend' must be 'vosk', got {backend!r}")
     model_path_raw = raw.get("model_path")
     return STTConfig(
         backend=backend,
@@ -1054,7 +1072,9 @@ def load_secrets(path: str | Path = "conf/secrets.yaml") -> SecretsConfig:
     if llm_api_key:
         llm_api_key = str(llm_api_key)
 
-    secrets = SecretsConfig(livekit=lk, telegram=tg, llm_host=llm_host, llm_api_key=llm_api_key, mqtt=mq)
+    secrets = SecretsConfig(
+        livekit=lk, telegram=tg, llm_host=llm_host, llm_api_key=llm_api_key, mqtt=mq
+    )
 
     env_updates: list[str] = []
     if lk.url:

@@ -114,11 +114,12 @@ tts:
 # Audio hardware
 # ---------------------------------------------------------------------------
 audio:
-  card_name: Yealink        # substring to identify audio card in PipeWire/ALSA
-  input_device: Yealink     # PipeWire source name substring, or 'pipewire' for default
-  output_device: Yealink    # PipeWire sink name substring, or 'pipewire' for default
+  card_name: auto           # 'auto' = first USB audio card (NewPie/Yealink/EMEET/...), or a name substring
+  input_device: auto        # 'auto' = first USB source, a name substring, or 'pipewire' for default
+  output_device: auto       # 'auto' = first USB sink, a name substring, or 'pipewire' for default
+  # keep_sink_alive: auto   # silent stream keeping the sink awake: auto (USB output detected) | true | false
   output_volume: 0.5       # speaker volume 0.0–1.0 (set via wpctl, persisted by WirePlumber)
-  Iinput_gain: 3.0          # microphone gain multiplier (Yealink preamp is quiet; 3.0 = 300% PulseAudio source)
+  input_gain: 1.0           # microphone gain multiplier (raise for quiet preamps, e.g. 3.0 = 300% PulseAudio source)
   post_playback_ms: 300    # STT gate hold after playback ends (lets echo decay)
   tone_preroll_ms: 50      # silence before tones/beeps (covers PipeWire cold-start)
   sample_rates:

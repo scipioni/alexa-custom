@@ -95,12 +95,17 @@ def _downmix_to_mono(data: bytes, channels: int) -> bytes:
 
 
 def resolve_capture_source(input_spec: str | None = None) -> tuple[str | None, int]:
-    """Map audio.input_device value to a PipeWire source name and channel count via pactl."""
+    """Map audio.input_device value to a PipeWire source name and channel count via pactl.
+
+    An input_spec of 'auto' matches the first USB audio source (PipeWire names
+    them alsa_input.usb-*), regardless of vendor.
+    """
     if input_spec is None:
         input_spec = os.environ.get("INPUT_DEVICE", "").strip() or None
     channels = 1
     if not input_spec:
         return None, channels
+    auto = input_spec.strip().lower() == "auto"
     try:
         out = subprocess.check_output(
             ["pactl", "list", "sources"], text=True, timeout=5
@@ -111,7 +116,12 @@ def resolve_capture_source(input_spec: str | None = None) -> tuple[str | None, i
         for line in out.splitlines():
             if "Name: " in line:
                 name = line.split(": ", 1)[1].strip()
-                if needle in name.lower() and "monitor" not in name.lower():
+                matches = (
+                    name.startswith("alsa_input.usb-")
+                    if auto
+                    else needle in name.lower()
+                )
+                if matches and "monitor" not in name.lower():
                     source_name = name
                     found = True
                 elif found:
@@ -168,7 +178,9 @@ def _start_capture_parec(source: str | None, channels: int = 1) -> subprocess.Po
     )
 
 
-def start_capture(source: str | None, channels: int = 1, config=None) -> subprocess.Popen:
+def start_capture(
+    source: str | None, channels: int = 1, config=None
+) -> subprocess.Popen:
     """Start audio capture — parec (default) or GStreamer pipeline.
 
     Pass config (ActionsConfig) to allow the gstreamer backend to be selected
@@ -176,10 +188,14 @@ def start_capture(source: str | None, channels: int = 1, config=None) -> subproc
     active named profile (persisted in state.yaml) is resolved and merged with
     the base GStreamerCaptureConfig before the pipeline is built.
     """
-    if config is not None and getattr(config.stt, "capture_backend", "parec") == "gstreamer":
+    if (
+        config is not None
+        and getattr(config.stt, "capture_backend", "parec") == "gstreamer"
+    ):
         from alexa_custom.stt_gst_capture import start_capture_gst
         from alexa_custom.config import resolve_gst_profile
         from alexa_custom.audio_hw import get_active_gst_profile
+
         gst_cfg = resolve_gst_profile(config.audio.gstreamer, get_active_gst_profile())
         return start_capture_gst(source, gst_cfg)
     return _start_capture_parec(source, channels)
@@ -215,9 +231,12 @@ def _iter_gated_audio(
     # real subprocesses). Avoids the "parec stall?" message when running gst.
     _type_name = type(proc).__name__
     backend_label = (
-        "gstreamer" if _type_name == "GStreamerCapture"
-        else "gst-launch" if _type_name == "GstLaunchCapture"
-        else "playback" if _type_name in ("_RealTimePopen", "_WavFilePopen")
+        "gstreamer"
+        if _type_name == "GStreamerCapture"
+        else "gst-launch"
+        if _type_name == "GstLaunchCapture"
+        else "playback"
+        if _type_name in ("_RealTimePopen", "_WavFilePopen")
         else "parec"
     )
     # Stamp when the first PCM buffer actually reaches the recognizer, so a

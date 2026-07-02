@@ -150,13 +150,16 @@ def test_restore_hw_pcm_noop_without_newpie():
 
 
 def test_restore_hw_pcm_calls_amixer_when_newpie_found():
+    mock_ok = MagicMock()
+    mock_ok.returncode = 0
     with (
         patch.object(audio_hw, "get_default_card_name", return_value="NewPie"),
         patch.object(audio_hw, "_find_alsa_card", return_value=(2, "NewPie")),
-        patch("subprocess.run") as mock_run,
+        patch("subprocess.run", return_value=mock_ok) as mock_run,
     ):
         audio_hw._restore_hw_pcm()
 
+        # PCM succeeds (returncode 0) so the Playback Volume fallback is skipped
         amixer_calls = [c for c in mock_run.call_args_list if c[0][0][0] == "amixer"]
         assert len(amixer_calls) == 1
         amixer_cmd = amixer_calls[0][0][0]
@@ -252,7 +255,9 @@ def test_set_input_gain_sets_hw_gain_applied_correctly():
     ):
         audio_hw.set_input_gain(None, "NewPie", 0.75)
         assert audio_hw.get_input_gain() == 0.75
-        assert audio_hw.get_software_input_gain() == 1.0  # Hardware success -> bypass software scaling
+        assert (
+            audio_hw.get_software_input_gain() == 1.0
+        )  # Hardware success -> bypass software scaling
 
     # Failure scenario (subprocess.run returncode = 1)
     mock_res_failure = MagicMock()
@@ -266,4 +271,92 @@ def test_set_input_gain_sets_hw_gain_applied_correctly():
     ):
         audio_hw.set_input_gain(None, "NewPie", 0.75)
         assert audio_hw.get_input_gain() == 0.75
-        assert audio_hw.get_software_input_gain() == 0.75  # Hardware failed -> use software scaling fallback
+        assert (
+            audio_hw.get_software_input_gain() == 0.75
+        )  # Hardware failed -> use software scaling fallback
+
+
+# ---------------------------------------------------------------------------
+# Device-agnostic ("auto") resolution
+# ---------------------------------------------------------------------------
+
+
+def _mock_card(name: str, bus: str):
+    card = MagicMock()
+    card.name = name
+    card.proplist = {"device.bus": bus, "device.description": name}
+    return card
+
+
+def test_find_alexa_card_auto_picks_first_usb_card():
+    pulse = MagicMock()
+    pulse.card_list.return_value = [
+        _mock_card("alsa_card.pci-0000_00_1f.3", "pci"),
+        _mock_card("alsa_card.usb-EMEET_OfficeCore_Luna-00", "usb"),
+        _mock_card("alsa_card.usb-Yealink_BT51-00", "usb"),
+    ]
+    card = audio_hw.find_alexa_card(pulse, "auto")
+    assert card is not None
+    assert card.name == "alsa_card.usb-EMEET_OfficeCore_Luna-00"
+
+
+def test_find_alexa_card_auto_none_without_usb():
+    pulse = MagicMock()
+    pulse.card_list.return_value = [_mock_card("alsa_card.pci-0000_00_1f.3", "pci")]
+    assert audio_hw.find_alexa_card(pulse, "auto") is None
+
+
+def test_spec_matches_auto_and_substring():
+    assert audio_hw._spec_matches(
+        "auto",
+        "alsa_output.usb-EMEET_Luna-00.analog-stereo",
+        "EMEET Luna",
+        audio_hw.USB_SINK_PREFIX,
+    )
+    assert not audio_hw._spec_matches(
+        "auto", "alsa_output.pci-hdmi.stereo", "HDMI", audio_hw.USB_SINK_PREFIX
+    )
+    assert audio_hw._spec_matches(
+        "luna",
+        "alsa_output.usb-EMEET_Luna-00.analog-stereo",
+        "EMEET Luna",
+        audio_hw.USB_SINK_PREFIX,
+    )
+
+
+def test_resolve_capture_source_auto_matches_any_usb_source():
+    from alexa_custom.stt_gating import resolve_capture_source
+
+    pactl_output = "\n".join(
+        [
+            "Source #42",
+            "\tName: alsa_output.usb-EMEET_Luna-00.analog-stereo.monitor",
+            "\tSample Specification: s16le 2ch 48000Hz",
+            "Source #43",
+            "\tName: alsa_input.usb-EMEET_Luna-00.mono-fallback",
+            "\tSample Specification: s16le 1ch 16000Hz",
+        ]
+    )
+    with patch(
+        "alexa_custom.stt_gating.subprocess.check_output", return_value=pactl_output
+    ):
+        name, channels = resolve_capture_source("auto")
+    assert name == "alsa_input.usb-EMEET_Luna-00.mono-fallback"
+    assert channels == 1
+
+
+def test_resolve_capture_source_auto_ignores_non_usb():
+    from alexa_custom.stt_gating import resolve_capture_source
+
+    pactl_output = "\n".join(
+        [
+            "Source #7",
+            "\tName: alsa_input.platform-sound.analog-stereo",
+            "\tSample Specification: s16le 2ch 48000Hz",
+        ]
+    )
+    with patch(
+        "alexa_custom.stt_gating.subprocess.check_output", return_value=pactl_output
+    ):
+        name, _ = resolve_capture_source("auto")
+    assert name is None

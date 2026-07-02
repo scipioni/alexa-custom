@@ -875,6 +875,42 @@ def ensure_setup() -> None:
             logger.error(f"Failed to download Piper voice: {e}")
 
 
+def _keep_sink_alive_enabled(config: ActionsConfig) -> bool:
+    """Decide whether to run the background silent stream.
+
+    audio.keep_sink_alive: true/false force it; "auto" (default) enables it
+    when the configured output resolves to a USB sink (any vendor) — the case
+    where a dongle's radio link can idle out when nothing plays.
+    """
+    setting = getattr(config.audio, "keep_sink_alive", "auto")
+    if isinstance(setting, bool):
+        return setting
+    normalized = str(setting).strip().lower()
+    if normalized in ("true", "on", "yes", "1"):
+        return True
+    if normalized in ("false", "off", "no", "0"):
+        return False
+
+    import alexa_custom.audio_hw as audio_hw
+
+    sink = audio_hw.get_output_sink()
+    if sink is None:
+        # Default routing — ask PipeWire which sink is actually the default.
+        import subprocess
+
+        try:
+            sink = subprocess.run(
+                ["pactl", "get-default-sink"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            ).stdout.strip()
+        except Exception:
+            sink = ""
+    return bool(sink) and ".usb-" in sink
+
+
 def main() -> None:
     import argparse
     import threading
@@ -917,14 +953,21 @@ def main() -> None:
     if config is not None:
         audio_hw.configure(config)
 
-    # Start background silent stream if Yealink output is active to keep Bluetooth SCO link hot
-    if config is not None and "yealink" in (config.audio.output_device or "").lower():
+    # Background silent stream keeps the sink active. Bluetooth-dongle
+    # speakerphones (e.g. Yealink BT51) drop their radio audio link when the
+    # sink idles, so the capture returns only clock noise until something
+    # plays. audio.keep_sink_alive: auto (default) enables it whenever the
+    # output resolves to a USB sink; true/false force it on/off.
+    if config is not None and _keep_sink_alive_enabled(config):
         import shutil
         import subprocess
+
         pacat_bin = shutil.which("pacat") or shutil.which("paplay")
         if pacat_bin:
             try:
-                logger.info("Yealink output active: starting background silent stream to keep Bluetooth SCO link awake")
+                logger.info(
+                    "USB output active: starting background silent stream to keep the sink (and any radio link behind it) awake"
+                )
                 subprocess.Popen(
                     f"cat /dev/zero | {pacat_bin} --rate=16000 --channels=1 --format=s16le",
                     shell=True,

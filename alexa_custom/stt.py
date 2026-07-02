@@ -231,6 +231,7 @@ def _recognition_loop(
     _last_partial: str = ""
 
     from alexa_custom.audio_hw import get_profile_stt_overrides as _get_stt_overrides
+
     _profile_stt = _get_stt_overrides()
     _eff_rms = float(_profile_stt.get("rms_threshold", config.stt.rms_threshold))
     _vad_silence_ms = int(_profile_stt.get("vad_silence_ms", config.stt.vad_silence_ms))
@@ -411,7 +412,9 @@ def _recognition_loop(
                 ) + config.stt.adaptive_rms_margin
                 # Profile rms_threshold acts as a ceiling: the adaptive
                 # mechanism cannot raise sensitivity above the profile value.
-                _eff_rms = min(_adaptive, float(_profile_stt.get("rms_threshold", _adaptive)))
+                _eff_rms = min(
+                    _adaptive, float(_profile_stt.get("rms_threshold", _adaptive))
+                )
 
         if on_stt_event:
             on_stt_event(
@@ -725,7 +728,10 @@ def run_stt_worker(
 
     current_config = _get_config()
     source, channels = resolve_capture_source(current_config.audio.input_device)
-    if current_config.stt.mono_capture or current_config.stt.capture_backend == "gstreamer":
+    if (
+        current_config.stt.mono_capture
+        or current_config.stt.capture_backend == "gstreamer"
+    ):
         channels = 1
 
     logger.info(
@@ -768,6 +774,23 @@ def run_stt_worker(
     try:
         while not stop_event.is_set():
             current_config = _get_config()
+
+            # Re-resolve the capture source on every (re)start: after a device
+            # unplug/replug — or a swap for a different speakerphone — the node
+            # name can change, and capture must reattach to the new node. Keep
+            # the previous name while the device is absent so the retry loop
+            # reconnects as soon as it reappears.
+            new_source, new_channels = resolve_capture_source(
+                current_config.audio.input_device
+            )
+            if new_source is not None and new_source != source:
+                logger.info("Capture source changed: %s -> %s", source, new_source)
+                source, channels = new_source, new_channels
+                if (
+                    current_config.stt.mono_capture
+                    or current_config.stt.capture_backend == "gstreamer"
+                ):
+                    channels = 1
 
             new_key = _get_backend_key(current_config)
             if new_key != backend_key:

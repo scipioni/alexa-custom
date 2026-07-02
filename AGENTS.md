@@ -88,6 +88,19 @@ PortAudio (used by `sounddevice` and `PyAudio`) has **no native PipeWire backend
 
 This headless host runs a modern **PipeWire** audio graph managed by **WirePlumber**. To keep audio routing and hardware stable, keep these core behaviors in mind:
 
+### Device-agnostic USB audio detection
+
+The audio stack does not hardcode product names — everything matches "any USB audio device", so swapping the conference hardware (NewPie → Yealink → EMEET OfficeCore Luna) requires no config edits: plug it in and run `task audio:restart` (or reboot).
+
+- **PipeWire objects**: USB audio cards/nodes are always named `alsa_card.usb-*` / `alsa_input.usb-*` / `alsa_output.usb-*` — the Taskfile, `setup/usb-audio-restore.sh`, and the WirePlumber no-suspend rule match on these prefixes.
+- **ALSA**: USB sound cards expose `/proc/asound/cardN/usbid` — used by `_find_alsa_card("auto")`.
+- **udev/sysfs**: USB audio devices carry an audio-class (`01`) interface — used by `setup/99-usb-audio-no-autosuspend.rules` and `setup/usb-audio-autosuspend.service`.
+- **Daemon config**: `audio.card_name/input_device/output_device: auto` resolves to the first USB card/source/sink. A name substring still works to pin a specific device.
+- **Profile selection** (`setup/usb-audio-restore.sh`, installed to `~/.local/bin/serena-usb-audio-restore` by `task audio:setup`): prefers `output:analog-stereo+input:analog-stereo`, then `output:analog-stereo+input:mono-fallback`, then any other combined `output:*+input:*` profile, then `pro-audio`. The choice is written to WirePlumber's state file (`~/.local/state/wireplumber/default-profile`) so it persists across reboots. At boot the restore service **respects an existing entry** in that state file, so a manual override (e.g. `pro-audio` for a direct-USB SP92) survives; `task audio:setup` re-runs selection and overwrites it.
+- **Keep-alive**: `audio.keep_sink_alive: auto` starts a background silent stream when the output is a USB sink, keeping Bluetooth-dongle radio links (BT51-style) awake.
+
+Device-specific quirks below still apply when that hardware is present.
+
 ### 0. Yealink SP92 / BT51 Device Profile
 
 #### SP92 (direct USB)
@@ -96,7 +109,7 @@ This headless host runs a modern **PipeWire** audio graph managed by **WirePlumb
 - **Correct capture backend**: `pipewiresrc` via `gst-launch-1.0` subprocess. `gst-launch-1.0` runs its own GLib main loop so `pipewiresrc` can target Filter nodes directly. Set `gst_profile: yealink` in `conf/state.yaml`. The daemon dispatches to `_start_capture_gst_subprocess()` when `source: pipewiresrc`.
 - **USB audio topology**: Capture PCM from OutputTerminal 7 ← FeatureUnit 6 ← InputTerminal 5 (Echo-canceling speakerphone, 0x0405). Onboard DSP always active — NS and beamforming applied before USB.
 - **No ALSA capture gain control** for the built-in mic path (`amixer sget Headset` targets the sidetone path, not the main capture stream). Use WebRTC AGC in the yealink GStreamer profile.
-- `task audio:setup` assumes BT51 and writes `output:analog-stereo+input:mono-fallback` directly to `~/.local/state/wireplumber/default-profile` (WirePlumber's state file). `pactl set-card-profile` cannot set this combined profile by name on PipeWire 1.4.x — it returns "No such entity" and would silently fall back to `pro-audio`. For SP92 direct USB, set `pro-audio` manually after `task audio:setup`:
+- `task audio:setup` selects the best combined `output:*+input:*` profile automatically (for BT51 that is `output:analog-stereo+input:mono-fallback`) and writes it to `~/.local/state/wireplumber/default-profile` (WirePlumber's state file). `pactl set-card-profile` cannot set some combined profiles by name on PipeWire 1.4.x — it returns "No such entity" and would silently fall back to `pro-audio`. For SP92 direct USB, set `pro-audio` manually after `task audio:setup` — the boot-time restore service respects the manual choice:
   ```bash
   pactl set-card-profile "$(pactl list cards short | grep -i Yealink | cut -f2 | head -1)" pro-audio
   ```
@@ -117,7 +130,7 @@ Both SP92 and BT51 use the same named GStreamer profile (`yealink`) but with dif
 **BT51 (USB Bluetooth dongle) — recommended setup:**
 
 1. Plug in BT51 (pair SP92 first via its own pairing button).
-2. Run `task audio:setup` — detects Yealink, sets `output:analog-stereo+input:mono-fallback`, installs no-suspend rule.
+2. Run `task audio:setup` — detects the USB audio card, selects `output:analog-stereo+input:mono-fallback` (best available combined profile), installs no-suspend rule.
 3. In `conf/state.yaml`, set the active profile:
    ```yaml
    gst_profile: yealink
@@ -137,8 +150,8 @@ Both SP92 and BT51 use the same named GStreamer profile (`yealink`) but with dif
 **SP92 (direct USB, no BT51) — manual steps:**
 
 1. Plug SP92 directly via USB.
-2. Run `task audio:setup` (sets `output:analog-stereo+input:mono-fallback` — wrong for SP92, fix below).
-3. Manually set the correct profile:
+2. Run `task audio:setup` (auto-selects `output:analog-stereo+input:mono-fallback` — wrong for SP92, fix below).
+3. Manually set the correct profile (persisted by WirePlumber; the boot-time restore service respects it):
    ```bash
    pactl set-card-profile "$(pactl list cards short | grep -i Yealink | cut -f2 | head -1)" pro-audio
    ```
@@ -169,7 +182,7 @@ Both SP92 and BT51 use the same named GStreamer profile (`yealink`) but with dif
 ### 2. The ALSA Hardware Mixer Reset Bug (Crucial)
 - **Problem**: When PipeWire initializes and takes ownership of the ALSA device (on boot or restart), the kernel driver resets the NewPie's `PCM` mixer to `0%`.
 - **Why `alsa-restore.service` is not enough**: it runs before PipeWire starts, so PipeWire's init overwrites it. `sudo alsactl store` alone does not solve the boot-time reset.
-- **The Permanent Fix**: `task audio:setup` installs `~/.config/systemd/user/alsa-pcm-unmute.service`, which polls until NewPie appears in `pactl list cards`, forces NewPie as default routing, then unmutes the hardware volume every 2 seconds for 20 seconds — catching WirePlumber's late ACP profile reset which happens silently a few seconds after the device appears. Run once:
+- **The Permanent Fix**: `task audio:setup` installs `~/.config/systemd/user/alsa-pcm-unmute.service`, which runs `~/.local/bin/serena-usb-audio-restore`: polls until a USB audio card appears in `pactl list cards`, applies the persisted card profile, forces the USB device as default routing, then re-applies 100%/unmute to every volume-capable mixer control every 2 seconds for 20 seconds — catching WirePlumber's late ACP profile reset which happens silently a few seconds after the device appears. Run once:
   ```bash
   task audio:setup
   ```
@@ -182,12 +195,12 @@ Both SP92 and BT51 use the same named GStreamer profile (`yealink`) but with dif
 
 ### 3. Late Boot Routing (USB device discovered after PipeWire starts)
 - **Problem**: NewPie is discovered slightly after PipeWire/WirePlumber start; WirePlumber falls back to HDMI and does not reliably switch when NewPie later appears, even with persistent default-device state saved.
-- **Fix**: The `alsa-pcm-unmute.service` (see section 2) handles this too — it polls until NewPie appears, then calls `pw-metadata` to force it as the active sink/source.
+- **Fix**: The `alsa-pcm-unmute.service` (see section 2) handles this too — it polls until the USB audio device appears (with WirePlumber-restart retries for slow Bluetooth-dongle links), then calls `pw-metadata` to force it as the active sink/source.
 - **`libpipewire-module-switch-on-connect` is NOT available** on this board's PipeWire 1.4.2 build. The `ifexists nofail` conf flag does not work on this build — it still crashes PipeWire and `pipewire-pulse`. `task audio:setup` actively removes any stale `99-switch-on-connect.conf` drop-ins from `~/.config/pipewire/`.
 
 ### 4. Mid-Session Audio Loss (USB Autosuspend)
 - **Problem**: Linux suspends the NewPie USB device after inactivity; PipeWire reinitializes it on wake, resetting PCM to 0% and dropping routing — same symptoms as the boot-time bug but mid-session.
-- **Fix**: `task audio:setup` installs `setup/99-newpie-no-autosuspend.rules` to `/etc/udev/rules.d/`, setting `autosuspend_delay_ms=-1` for any device whose USB product name matches `NewPie*` (covers all hardware revisions).
+- **Fix**: `task audio:setup` installs `setup/99-usb-audio-no-autosuspend.rules` to `/etc/udev/rules.d/`, setting `autosuspend_delay_ms=-1` for any USB device exposing an audio-class interface (device-agnostic — covers NewPie, Yealink, EMEET, ...). A boot-time system service (`usb-audio-autosuspend.service`) applies the same setting after multi-user.target for devices already connected at power-on.
 - **Ad-hoc recovery**: `task audio:restart`.
 
 ### 5. pulsectl Triggers PCM Reset (Critical for Python Code)

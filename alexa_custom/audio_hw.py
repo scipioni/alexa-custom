@@ -15,6 +15,16 @@ logger = logging.getLogger(__name__)
 
 _input_gain_lock = threading.Lock()
 
+# PipeWire names every USB audio object with these prefixes, regardless of
+# vendor — the basis for device-agnostic ("auto") matching.
+USB_SINK_PREFIX = "alsa_output.usb-"
+USB_SOURCE_PREFIX = "alsa_input.usb-"
+
+
+def is_auto_spec(spec: str | None) -> bool:
+    """True when the device spec asks for automatic USB-audio detection."""
+    return spec is not None and spec.strip().lower() == "auto"
+
 
 # Mutable audio parameters, updated by configure()/setters at runtime.
 # Centralised in one object so there is a single source of truth: always read
@@ -219,11 +229,16 @@ def resolve_output_sink(
     if not output_spec or output_spec.lower() in ("pipewire", "default"):
         _state.output_sink = None
         return None
+    auto = is_auto_spec(output_spec)
     needle = output_spec.lower()
     for attempt in range(retries):
         with pulse_session("alexa-sink-lookup") as pulse:
             for s in pulse.sink_list():
-                if needle in s.description.lower() or needle in s.name.lower():
+                if auto:
+                    if s.name.startswith(USB_SINK_PREFIX):
+                        _state.output_sink = s.name
+                        return s.name
+                elif needle in s.description.lower() or needle in s.name.lower():
                     _state.output_sink = s.name
                     return s.name
         if attempt < retries - 1:
@@ -281,11 +296,16 @@ def _restore_hw_pcm(card: int | None = None) -> None:
     else:
         card_index = card
     try:
-        subprocess.run(
-            ["amixer", "-c", str(card_index), "sset", "PCM", "100%"],
-            capture_output=True,
-            check=False,
-        )
+        # Playback control name varies by hardware: PCM (original NewPie),
+        # 'Playback Volume' (NewPie 32) — try in order until one succeeds.
+        for control in ("PCM", "Playback Volume"):
+            result = subprocess.run(
+                ["amixer", "-c", str(card_index), "sset", control, "100%"],
+                capture_output=True,
+                check=False,
+            )
+            if result.returncode == 0:
+                break
     except FileNotFoundError:
         logger.warning("_restore_hw_pcm: amixer not installed; cannot restore PCM")
 
@@ -360,16 +380,27 @@ def device_from_env(key: str) -> int | None:
     return resolve_device(val)
 
 
+def _spec_matches(
+    spec: str | None, name: str, description: str, usb_prefix: str
+) -> bool:
+    """True when a sink/source matches the device spec ('auto' → any USB node)."""
+    if is_auto_spec(spec):
+        return name.startswith(usb_prefix)
+    needle = (spec or "").lower()
+    return needle in description.lower() or needle in name.lower()
+
+
 def set_pipewire_defaults(input_spec: str | None, output_spec: str | None):
     """Set PipeWire default source/sink by matching INPUT_DEVICE/OUTPUT_DEVICE name."""
     with pulse_session("alexa-routing") as pulse:
         if output_spec and output_spec.lower() not in ("pipewire", "default"):
-            needle = output_spec.lower()
             match = next(
                 (
                     s
                     for s in pulse.sink_list()
-                    if needle in s.description.lower() or needle in s.name.lower()
+                    if _spec_matches(
+                        output_spec, s.name, s.description, USB_SINK_PREFIX
+                    )
                 ),
                 None,
             )
@@ -381,13 +412,14 @@ def set_pipewire_defaults(input_spec: str | None, output_spec: str | None):
                 )
 
         if input_spec and input_spec.lower() not in ("pipewire", "default"):
-            needle = input_spec.lower()
             match = next(
                 (
                     s
                     for s in pulse.source_list()
                     if "monitor" not in s.name
-                    and (needle in s.description.lower() or needle in s.name.lower())
+                    and _spec_matches(
+                        input_spec, s.name, s.description, USB_SOURCE_PREFIX
+                    )
                 ),
                 None,
             )
@@ -400,10 +432,19 @@ def set_pipewire_defaults(input_spec: str | None, output_spec: str | None):
 
 
 def find_alexa_card(pulse, spec: str | None = None):
-    """Return the pulsectl card object matching the spec (name, desc, or index)."""
+    """Return the pulsectl card object matching the spec (name, desc, or index).
+
+    A spec of 'auto' matches the first USB audio card, whatever its vendor.
+    """
     if not spec:
         spec = _state.default_card_name
     if not spec:
+        return None
+
+    if is_auto_spec(spec):
+        for card in pulse.card_list():
+            if card.proplist.get("device.bus", "").lower() == "usb":
+                return card
         return None
 
     spec_lower = spec.lower()
@@ -576,20 +617,21 @@ def check_newpie_ready(
         default_sink = sinks.get(info.default_sink_name)
         default_source = sources.get(info.default_source_name)
 
-        target_out = (output_spec or _state.default_card_name).lower()
-        if not default_sink or (
-            target_out not in default_sink.description.lower()
-            and target_out not in default_sink.name.lower()
+        target_out = output_spec or _state.default_card_name
+        if not default_sink or not _spec_matches(
+            target_out, default_sink.name, default_sink.description, USB_SINK_PREFIX
         ):
             print(
                 f"WARNING: Default sink is not the expected device (got: {info.default_sink_name})"
             )
             ok = False
 
-        target_in = (input_spec or _state.default_card_name).lower()
-        if not default_source or (
-            target_in not in default_source.description.lower()
-            and target_in not in default_source.name.lower()
+        target_in = input_spec or _state.default_card_name
+        if not default_source or not _spec_matches(
+            target_in,
+            default_source.name,
+            default_source.description,
+            USB_SOURCE_PREFIX,
         ):
             print(
                 f"WARNING: Default source is not the expected device (got: {info.default_source_name})"
@@ -605,7 +647,22 @@ def _find_alsa_card(needle: str) -> tuple[int, str] | None:
     Checks the short card ID first (e.g. "NewPie"), then falls back to the full
     description in /proc/asound/cards (e.g. "USB-Audio - NewPie 32") so that devices
     whose ALSA id is truncated/sanitized (e.g. "N32") are still found.
+
+    A needle of "auto" returns the first USB sound card (USB cards expose a
+    usbid file in /proc/asound/cardN/), whatever its vendor.
     """
+    if is_auto_spec(needle):
+        for entry in sorted(os.listdir("/proc/asound")):
+            if not entry.startswith("card") or not entry[4:].isdigit():
+                continue
+            if os.path.isfile(f"/proc/asound/{entry}/usbid"):
+                try:
+                    with open(f"/proc/asound/{entry}/id") as f:
+                        return int(entry[4:]), f.read().strip()
+                except OSError:
+                    pass
+        return None
+
     needle_lower = needle.lower()
     for entry in os.listdir("/proc/asound"):
         if not entry.startswith("card"):
@@ -650,11 +707,12 @@ def _find_pipewire_source(input_spec: str | None, retries: int = 3) -> str | Non
                 if info.default_source_name:
                     return info.default_source_name
             else:
-                needle = input_spec.lower()
                 for s in pulse.source_list():
                     if "monitor" in s.name:
                         continue
-                    if needle in s.description.lower() or needle in s.name.lower():
+                    if _spec_matches(
+                        input_spec, s.name, s.description, USB_SOURCE_PREFIX
+                    ):
                         return s.name
         if attempt < retries - 1:
             time.sleep(0.5)

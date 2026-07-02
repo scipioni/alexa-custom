@@ -1,60 +1,20 @@
 [Unit]
-Description=Restore USB audio PCM volume and routing after PipeWire fully initialises
+Description=Restore USB audio profile, routing and mixer levels after PipeWire initialises
 After=wireplumber.service
 
 [Service]
 Type=oneshot
-# Strategy:
-# 1. Wait up to 30 s for the USB audio card (NewPie or Yealink) to appear.
-# 2. For NewPie: set the combined analog profile immediately (USB device, no BT delay).
-#    For Yealink BT51: the correct profile (output:analog-stereo+input:mono-fallback) is
-#    already in the WirePlumber state file — no pactl needed here.
-# 3. Poll for the source node (up to 55 s per attempt, 4 attempts max ≈ 4 min total).
-#    The Yealink BT51 Bluetooth SCO link to the SP92 can take 1-4 min to re-establish
-#    after a reboot. WirePlumber only creates the audio nodes once the ALSA device is
-#    ready, so we restart WirePlumber at the start of each retry and wait again.
-# 4. Once the source is visible, set default routing via pw-metadata and restore
-#    hardware PCM levels for 20 s (catches WirePlumber's late ACP profile reset).
-ExecStart=/bin/bash -c '\
-  for i in $(seq 1 30); do \
-    if pactl list cards short 2>/dev/null | grep -qiE "NewPie|Yealink"; then \
-      break; \
-    fi; \
-    sleep 1; \
-  done; \
-  NEWPIE_CARD=$(pactl list cards short 2>/dev/null | grep -i NewPie | cut -f2 | head -1); \
-  if [ -n "$NEWPIE_CARD" ]; then \
-    pactl set-card-profile "$NEWPIE_CARD" output:analog-stereo+input:analog-stereo 2>/dev/null || \
-    pactl set-card-profile "$NEWPIE_CARD" input:analog-stereo 2>/dev/null || true; \
-  fi; \
-  SOURCE=""; \
-  for attempt in $(seq 0 3); do \
-    if [ "$attempt" -gt 0 ]; then \
-      systemctl --user restart wireplumber; \
-      sleep 5; \
-    fi; \
-    for i in $(seq 1 55); do \
-      SOURCE=$(pactl list sources short 2>/dev/null | grep -iE "NewPie|Yealink" | grep -v "monitor" | cut -f2 | head -1); \
-      if [ -n "$SOURCE" ]; then \
-        break 2; \
-      fi; \
-      sleep 1; \
-    done; \
-  done; \
-  SINK=$(pactl list sinks short 2>/dev/null | grep -iE "NewPie|Yealink" | grep -v "monitor" | cut -f2 | head -1); \
-  [ -n "$SINK" ] && pw-metadata -n default 0 default.configured.audio.sink \
-    "{\"name\":\"$SINK\"}" "Spa:String:JSON"; \
-  [ -n "$SOURCE" ] && pw-metadata -n default 0 default.configured.audio.source \
-    "{\"name\":\"$SOURCE\"}" "Spa:String:JSON"; \
-  for i in $(seq 1 10); do \
-    CARD_NUM=$(grep -m1 -E "NewPie|Yealink" /proc/asound/cards | awk "{print \$1}"); \
-    amixer -c "${CARD_NUM:-0}" sset PCM 100%% 2>/dev/null || amixer -c "${CARD_NUM:-0}" sset Playback\ Volume 100%% 2>/dev/null || true; \
-    amixer -c "${CARD_NUM:-0}" sset Capture 100%% unmute 2>/dev/null || amixer -c "${CARD_NUM:-0}" sset Mic 100%% unmute 2>/dev/null || amixer -c "${CARD_NUM:-0}" sset Capture\ Volume 100%% unmute 2>/dev/null || amixer -c "${CARD_NUM:-0}" sset Headset 100%% unmute 2>/dev/null || true; \
-    [ -n "$SOURCE" ] && pactl set-source-volume "$SOURCE" 100%% 2>/dev/null || true; \
-    sleep 2; \
-  done'
-RemainAfterExit=yes
-TimeoutStartSec=300
+# Device-agnostic restore: waits for any USB audio card (NewPie, Yealink,
+# EMEET, ...), applies the persisted/best card profile, polls for the source
+# node (Bluetooth-dongle devices can take minutes to link after a reboot),
+# forces default routing via pw-metadata, and re-applies 100%/unmute to all
+# volume-capable ALSA mixer controls for 20 s to catch WirePlumber's late ACP
+# profile reset. Full logic lives in the script (installed by `task audio:setup`).
+ExecStart=%h/.local/bin/serena-usb-audio-restore
+# No RemainAfterExit: the unit must return to inactive after each run so the
+# udev SYSTEMD_USER_WANTS trigger (99-usb-audio-no-autosuspend.rules) can
+# start it again when the device is replugged mid-session.
+TimeoutStartSec=360
 
 [Install]
 WantedBy=default.target

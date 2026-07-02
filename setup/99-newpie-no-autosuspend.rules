@@ -1,5 +1,0 @@
-# Disable USB autosuspend for supported USB conference speakerphones.
-# Without this, Linux suspends the device after inactivity and PipeWire reinitializes it
-# on wake, resetting the ALSA PCM mixer to 0% and dropping routing mid-session.
-ACTION=="add", SUBSYSTEM=="usb", ATTRS{product}=="NewPie*", ATTR{power/autosuspend_delay_ms}="-1"
-ACTION=="add", SUBSYSTEM=="usb", ATTRS{product}=="Yealink*", ATTR{power/autosuspend_delay_ms}="-1"

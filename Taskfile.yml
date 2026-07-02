@@ -219,176 +219,127 @@ tasks:
         echo "  journalctl --user -fu    serena   # follow logs"
 
   audio:setup:
-    desc: Set USB audio device (NewPie or Yealink) as default sink/source, unmute hardware, install PCM restore service, disable USB autosuspend
+    desc: Configure any USB conference speakerphone (NewPie, Yealink, EMEET, ...) as default sink/source, unmute hardware, install restore service, disable USB autosuspend
     cmds:
       # Remove any stale switch-on-connect drop-ins (module not available on this board)
       - rm -f ~/.config/pipewire/pipewire.conf.d/99-switch-on-connect.conf
       - rm -f ~/.config/pipewire/pipewire-pulse.conf.d/99-switch-on-connect.conf
+      # Remove device-specific files from previous versions (replaced by generic USB-audio ones)
+      - rm -f ~/.config/wireplumber/wireplumber.conf.d/51-newpie-no-suspend.conf
+      - sudo rm -f /etc/udev/rules.d/99-newpie-no-autosuspend.rules
+      - sudo systemctl disable --now newpie-autosuspend.service 2>/dev/null || true
+      - sudo rm -f /etc/systemd/system/newpie-autosuspend.service
       # Install udev rule to disable autosuspend on hot-plug (fires when device connects mid-session)
-      - sudo cp setup/99-newpie-no-autosuspend.rules /etc/udev/rules.d/99-newpie-no-autosuspend.rules
+      - sudo cp setup/99-usb-audio-no-autosuspend.rules /etc/udev/rules.d/99-usb-audio-no-autosuspend.rules
       - sudo udevadm control --reload-rules
       # Install system service to disable autosuspend at boot (udev fires too early during enumeration
       # and can cause a power spike; the service runs after multi-user.target instead)
-      - sudo cp setup/newpie-autosuspend.service /etc/systemd/system/newpie-autosuspend.service
+      - sudo cp setup/usb-audio-autosuspend.service /etc/systemd/system/usb-audio-autosuspend.service
       - sudo systemctl daemon-reload
-      - sudo systemctl enable --now newpie-autosuspend.service
-      # Set audio profile for whichever USB conference device is present:
-      #   NewPie  → prefer output:analog-stereo+input:analog-stereo (nodes appear under
-      #             Sources/Sinks so PulseAudio clients can wake them); fall back to pro-audio
-      #             only if the combined profile is unavailable (some hardware revisions).
-      #   Yealink BT51 → output:analog-stereo+input:mono-fallback. This profile places the input
-      #             node under Audio/Source (accessible to pulsesrc/parec). The "mono-fallback" input
-      #             carries the SP92's Bluetooth microphone (HFP wideband, 16 kHz mono) — not a
-      #             physical headset jack. The Bluetooth audio link is maintained as long as either
-      #             the sink or the source is active (daemon capture is sufficient).
-      #             pro-audio was tried but the Bluetooth SCO link goes idle when nothing plays
-      #             through the sink, causing the capture to return only USB clock noise.
-      #             NOTE: pactl set-card-profile cannot set this combined profile by name on
-      #             PipeWire 1.4.x (returns "No such entity"). We write to WirePlumber's
-      #             state file (~/.local/state/wireplumber/default-profile) directly so the
-      #             profile persists across reboots without needing task audio:setup.
-      - |
-        NEWPIE_CARD=$(pactl list cards short | grep -i NewPie | cut -f2 | head -1)
-        YEALINK_CARD=$(pactl list cards short | grep -i Yealink | cut -f2 | head -1)
-        if [ -n "$NEWPIE_CARD" ]; then
-          pactl set-card-profile "$NEWPIE_CARD" output:analog-stereo+input:analog-stereo 2>/dev/null || \
-          pactl set-card-profile "$NEWPIE_CARD" pro-audio 2>/dev/null || true
-        elif [ -n "$YEALINK_CARD" ]; then
-          # pactl cannot set output:analog-stereo+input:mono-fallback by name on PipeWire 1.4.x
-          # (returns "No such entity") — edit WirePlumber state file directly so WirePlumber applies
-          # the combined profile on restart and persists it across reboots.
-          STATE_FILE="${HOME}/.local/state/wireplumber/default-profile"
-          mkdir -p "$(dirname "$STATE_FILE")"
-          if grep -q "^${YEALINK_CARD}=" "$STATE_FILE" 2>/dev/null; then
-            sed -i "s|^${YEALINK_CARD}=.*|${YEALINK_CARD}=output:analog-stereo+input:mono-fallback|" "$STATE_FILE"
-          else
-            [ -f "$STATE_FILE" ] || printf '[default-profile]\n' > "$STATE_FILE"
-            echo "${YEALINK_CARD}=output:analog-stereo+input:mono-fallback" >> "$STATE_FILE"
-          fi
-          echo "Yealink: wrote output:analog-stereo+input:mono-fallback to WirePlumber state"
-        else
-          echo "WARNING: no NewPie or Yealink card found — skipping profile setup"
-        fi
-      # Set WirePlumber persistent default routing dynamically by name (survives reboots)
-      # Must use default.configured.audio.* — WirePlumber reads these keys to restore state on restart
-      - |
-        SINK=$(pactl list sinks short | awk '/[Nn]ew[Pp]ie|[Yy]ealink/ && !/monitor/{print $2; exit}')
-        SOURCE=$(pactl list sources short | awk '/[Nn]ew[Pp]ie|[Yy]ealink/ && !/monitor/{print $2; exit}')
-        [ -n "$SINK" ] && pw-metadata -n default 0 default.configured.audio.sink "{\"name\":\"$SINK\"}" 'Spa:String:JSON'
-        [ -n "$SOURCE" ] && pw-metadata -n default 0 default.configured.audio.source "{\"name\":\"$SOURCE\"}" 'Spa:String:JSON'
-        true
-      # Unmute hardware volume now (software volume is set from conf/config.yaml at startup).
-      # Try PCM first; fall back to Playback Volume (some hardware revisions).
-      - |
-        CARD_NUM=$(grep -m1 -E "NewPie|Yealink" /proc/asound/cards | awk '{print $1}')
-        amixer -c "${CARD_NUM:-0}" sset PCM 100% 2>/dev/null || amixer -c "${CARD_NUM:-0}" sset 'Playback Volume' 100% 2>/dev/null || true
-        amixer -c "${CARD_NUM:-0}" sset Capture 100% unmute 2>/dev/null || amixer -c "${CARD_NUM:-0}" sset Mic 100% unmute 2>/dev/null || amixer -c "${CARD_NUM:-0}" sset 'Capture Volume' 100% unmute 2>/dev/null || amixer -c "${CARD_NUM:-0}" sset Headset 100% unmute 2>/dev/null || true
-        SOURCE=$(pactl list sources short | awk '/[Nn]ew[Pp]ie|[Yy]ealink/ && !/monitor/{print $2; exit}')
-        [ -n "$SOURCE" ] && pactl set-source-volume "$SOURCE" 100% 2>/dev/null || true
-      # Install user service to re-apply PCM 100% after PipeWire init on every boot
+      - sudo systemctl enable --now usb-audio-autosuspend.service
+      # Install the device-agnostic restore script + user service. The script handles
+      # profile selection (best output+input profile, written to WirePlumber's state
+      # file so it persists across reboots), default routing via pw-metadata, and
+      # hardware mixer unmute. See setup/usb-audio-restore.sh for the full policy.
+      - mkdir -p ~/.local/bin
+      - install -m 755 setup/usb-audio-restore.sh ~/.local/bin/serena-usb-audio-restore
       - mkdir -p ~/.config/systemd/user
       - cp setup/alsa-pcm-unmute.service ~/.config/systemd/user/alsa-pcm-unmute.service
       - systemctl --user daemon-reload
       - systemctl --user enable alsa-pcm-unmute.service
-      # Install WirePlumber rule to keep USB audio source always active (prevents brief SUSPENDED
-      # delay when the GStreamer pulsesrc pipeline starts capturing)
+      # Install WirePlumber rule to keep USB audio nodes always active (prevents brief
+      # SUSPENDED delay on capture start; keeps Bluetooth-dongle radio links alive)
       - mkdir -p ~/.config/wireplumber/wireplumber.conf.d
-      - cp setup/51-newpie-no-suspend.conf ~/.config/wireplumber/wireplumber.conf.d/51-newpie-no-suspend.conf
-      # Restart WirePlumber so it re-evaluates routing with the configured default
+      - cp setup/51-usb-audio-no-suspend.conf ~/.config/wireplumber/wireplumber.conf.d/51-usb-audio-no-suspend.conf
+      # Select the best card profile now (setup mode overrides any stale persisted choice;
+      # to keep a manual override instead, set it with pactl AFTER running this task —
+      # the boot-time restore service respects whatever is in WirePlumber's state file)
+      - ~/.local/bin/serena-usb-audio-restore --select-profile
+      # Restart WirePlumber so it applies the profile, then run the full restore pass
+      # (routing + mixer unmute; may take minutes if a Bluetooth-dongle link is down)
       - systemctl --user restart wireplumber && sleep 3
       - systemctl --user restart alsa-pcm-unmute.service
-      # After WirePlumber restart, re-apply NewPie profile (pactl works for NewPie since the combined
-      # profile is a real named profile). For Yealink, WirePlumber already reads the state file we
-      # edited above and applies output:analog-stereo+input:mono-fallback — no pactl needed.
-      # Re-save the default routing with the node names that appear under the new profile.
       - |
-        NEWPIE_CARD=$(pactl list cards short | grep -i NewPie | cut -f2 | head -1)
-        if [ -n "$NEWPIE_CARD" ]; then
-          pactl set-card-profile "$NEWPIE_CARD" output:analog-stereo+input:analog-stereo 2>/dev/null || \
-          pactl set-card-profile "$NEWPIE_CARD" pro-audio 2>/dev/null || true
-        fi
-        SINK=$(pactl list sinks short | awk '/[Nn]ew[Pp]ie|[Yy]ealink/ && !/monitor/{print $2; exit}')
-        SOURCE=$(pactl list sources short | awk '/[Nn]ew[Pp]ie|[Yy]ealink/ && !/monitor/{print $2; exit}')
-        [ -n "$SINK" ] && pw-metadata -n default 0 default.configured.audio.sink "{\"name\":\"$SINK\"}" 'Spa:String:JSON'
-        [ -n "$SOURCE" ] && pw-metadata -n default 0 default.configured.audio.source "{\"name\":\"$SOURCE\"}" 'Spa:String:JSON'
-        [ -n "$SOURCE" ] && pactl set-source-volume "$SOURCE" 100% 2>/dev/null || true
-        true
-      - |
-        NEWPIE_CARD=$(pactl list cards short | grep -i NewPie | cut -f2 | head -1)
-        YEALINK_CARD=$(pactl list cards short | grep -i Yealink | cut -f2 | head -1)
-        [ -n "$NEWPIE_CARD" ] && echo "USB Audio (NewPie) configured." || true
-        [ -n "$YEALINK_CARD" ] && echo "USB Audio (Yealink) configured." || true
+        CARD=$(pactl list cards short | awk '$2 ~ /^alsa_card\.usb-/ {print $2; exit}')
+        [ -n "$CARD" ] && echo "USB audio configured: $CARD" || echo "WARNING: no USB audio card detected"
 
   audio:restart:
-    desc: Restart WirePlumber and restore NewPie routing, PCM volume, and autosuspend
+    desc: Restart WirePlumber and restore USB audio routing, mixer levels, and autosuspend
     cmds:
       - systemctl --user restart wireplumber && sleep 3
-      - |
-        CARD_NUM=$(grep -m1 -E "NewPie|Yealink" /proc/asound/cards | awk '{print $1}')
-        amixer -c "${CARD_NUM:-0}" sset PCM 100% 2>/dev/null || amixer -c "${CARD_NUM:-0}" sset 'Playback Volume' 100% 2>/dev/null || true
-        amixer -c "${CARD_NUM:-0}" sset Capture 100% unmute 2>/dev/null || amixer -c "${CARD_NUM:-0}" sset Mic 100% unmute 2>/dev/null || amixer -c "${CARD_NUM:-0}" sset 'Capture Volume' 100% unmute 2>/dev/null || amixer -c "${CARD_NUM:-0}" sset Headset 100% unmute 2>/dev/null || true
-        SOURCE=$(pactl list sources short | awk '/[Nn]ew[Pp]ie|[Yy]ealink/ && !/monitor/{print $2; exit}')
-        [ -n "$SOURCE" ] && pactl set-source-volume "$SOURCE" 100% 2>/dev/null || true
       - systemctl --user restart alsa-pcm-unmute.service
-      - sudo systemctl restart newpie-autosuspend.service || true
+      - sudo systemctl restart usb-audio-autosuspend.service || true
 
   audio:status:
-    desc: Check and display beautifully formatted status about NewPie USB audio device
+    desc: Display status of the connected USB conference speakerphone (device-agnostic)
     silent: true
     cmds:
       - |
         python3 -c '
-        import subprocess, re, json
-        status = subprocess.getoutput("wpctl status")
-        default_sink = subprocess.getoutput("wpctl inspect @DEFAULT_SINK@")
-        metadata = subprocess.getoutput("pw-metadata -n default")
-        lsusb = subprocess.getoutput("lsusb")
+        import subprocess
 
-        usb_match = re.search(r"Bus \d+ Device \d+: ID [0-9a-fA-F:]+ Cambridge Silicon Radio, Ltd NewPie", lsusb)
-        usb_info = usb_match.group(0) if usb_match else "NewPie not found on USB bus"
+        def out(cmd):
+            return subprocess.getoutput(cmd)
 
-        sinks_part = status.split("Sinks:")[1].split("Sources:")[0] if "Sinks:" in status else ""
-        sources_part = status.split("Sources:")[1].split("Filters:")[0] if "Sources:" in status else ""
+        def short_list(kind):
+            rows = []
+            for line in out(f"pactl list {kind} short").splitlines():
+                parts = line.split("\t")
+                if len(parts) >= 2:
+                    rows.append(parts[1])
+            return rows
 
-        sink_info = re.search(r"(\d+)\.\s+NewPie Analog Stereo\s+\[vol:\s+([0-9.]+)\]", sinks_part)
-        source_info = re.search(r"(\d+)\.\s+NewPie Analog Stereo\s+\[vol:\s+([0-9.]+)\]", sources_part)
+        cards = [c for c in short_list("cards") if c.startswith("alsa_card.usb-")]
+        sinks = [s for s in short_list("sinks") if s.startswith("alsa_output.usb-")]
+        sources = [
+            s for s in short_list("sources")
+            if s.startswith("alsa_input.usb-") and not s.endswith(".monitor")
+        ]
 
-        sink_id = sink_info.group(1) if sink_info else "Unknown"
-        sink_vol = sink_info.group(2) if sink_info else "Unknown"
-        source_id = source_info.group(1) if source_info else "Unknown"
-        source_vol = source_info.group(2) if source_info else "Unknown"
+        info = out("pactl info")
+        default_sink = default_source = "Unknown"
+        for line in info.splitlines():
+            if line.startswith("Default Sink:"):
+                default_sink = line.split(":", 1)[1].strip()
+            elif line.startswith("Default Source:"):
+                default_source = line.split(":", 1)[1].strip()
 
-        active_sink_match = re.search(r"node\.name\s+=\s+\"([^\"]+)\"", default_sink)
-        active_sink = active_sink_match.group(1) if active_sink_match else "Unknown"
+        profile = "Unknown"
+        if cards:
+            in_card = False
+            for line in out("pactl list cards").splitlines():
+                if line.strip() == f"Name: {cards[0]}":
+                    in_card = True
+                elif line.startswith("Card #"):
+                    in_card = False
+                elif in_card and "Active Profile:" in line:
+                    profile = line.split("Active Profile:")[-1].strip()
+                    break
 
-        active_source = "Unknown"
-        for line in metadata.splitlines():
-            if "default.audio.source" in line:
-                try:
-                    val_part = line.split("value:")[1].split("type:")[0].strip().strip("\x27")
-                    val_json = re.sub(r"\x27", "\x22", val_part)
-                    active_source = json.loads(val_json)["name"]
-                except Exception as e:
-                    pass
+        GREEN, RED, RESET = "\x1b[32m", "\x1b[31m", "\x1b[0m"
+        sink_ok = default_sink.startswith("alsa_output.usb-")
+        source_ok = default_source.startswith("alsa_input.usb-")
 
-        is_sink_default = "NewPie" in active_sink
-        is_source_default = "NewPie" in active_source
-
-        print("=========================================================")
-        print(" 🔊 NEWPIE USB AUDIO STATUS")
-        print("=========================================================")
-        print(f"🔌 USB Device:   {usb_info}")
-        print(f"🆔 Sinks & Sources:")
-        print(f"   - Playback (Sink) ID:   {sink_id} (Volume: {sink_vol})")
-        print(f"   - Capture (Source) ID:  {source_id} (Volume: {source_vol})")
-        print(f"🎯 Active Default Routing:")
-        print(f"   - Playback Sink:   \x1b[32m✅ ACTIVE DEFAULT\x1b[0m" if is_sink_default else f"\x1b[31m❌ INACTIVE\x1b[0m (Default: {active_sink})")
-        print(f"   - Capture Source:  \x1b[32m✅ ACTIVE DEFAULT\x1b[0m" if is_source_default else f"\x1b[31m❌ INACTIVE\x1b[0m (Default: {active_source})")
-        print("=========================================================")
+        print("=" * 57)
+        print(" 🔊 USB AUDIO STATUS")
+        print("=" * 57)
+        card_txt = cards[0] if cards else RED + "no USB audio card found" + RESET
+        print(f"🔌 USB Card:       {card_txt}")
+        print(f"🎚️  Active Profile: {profile}")
+        sink_txt = sinks[0] if sinks else "none"
+        source_txt = sources[0] if sources else "none"
+        print(f"🆔 Sink:           {sink_txt}")
+        print(f"🆔 Source:         {source_txt}")
+        print("🎯 Default Routing:")
+        mark = GREEN + "✅ USB" + RESET if sink_ok else RED + "❌ NOT USB" + RESET
+        print(f"   - Sink:   {mark} ({default_sink})")
+        mark = GREEN + "✅ USB" + RESET if source_ok else RED + "❌ NOT USB" + RESET
+        print(f"   - Source: {mark} ({default_source})")
+        print("=" * 57)
         '
 
   audio:doctor:
-    desc: Check each NewPie audio invariant (device, PCM level, routing, drop-ins, autosuspend, restore service) and report pass/fail
+    desc: Check each USB audio invariant (device, mixer levels, routing, drop-ins, autosuspend, restore service) and report pass/fail
     cmds:
       - PYTHONPATH={{.PYTHONPATH}} python3 -m alexa_custom.audio doctor
 
