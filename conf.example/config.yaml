@@ -58,6 +58,12 @@ stt:
   #   900 ms confirmed clean on-board (no utterance fragmentation).
   #   Perceived latency ≈ vad_silence_ms + ~130 ms decode. 700–800 ms is viable
   #   if ~1 s feels slow.
+  fast_vad_ms: 400          # fast endpoint: when the PARTIAL transcript already fully
+  #   matches a wake word or a trigger, fire after this many ms of silence instead of
+  #   waiting the full vad_silence_ms (~500 ms lower perceived latency on every wake
+  #   and command). Free-form speech (LLM fallback) never matches a trigger, so it
+  #   keeps the long fragmentation-safe endpoint. 0 disables. Keep above natural
+  #   intra-phrase pauses (~200-300 ms).
   rms_threshold: 0.02       # minimum RMS energy considered speech
   adaptive_rms: false       # dynamically adjusts rms_threshold based on noise floor
   # min_speech_ms: 200      # minimum sustained speech before silence timer starts

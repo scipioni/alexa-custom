@@ -88,10 +88,13 @@ class TestMatchWakeWord:
         assert phrase is None
         assert residual == ""
 
-    def test_fuzzy_requires_all_phrase_words(self):
-        # All significant phrase words must appear in the transcript.
-        # "galileo" alone lacks "ehi" → no match, regardless of threshold.
+    def test_isolated_keyword_wakes_but_embedded_does_not(self):
+        # The distinctive keyword said ALONE is an intentional address → wake
+        # (corpus: truncated-wake recall). The same keyword embedded in longer
+        # speech is conversation → all phrase words are required → no match.
         phrase, _ = _match_wake_word("galileo", ["ehi galileo"], threshold=0.5)
+        assert phrase == "ehi galileo"
+        phrase, _ = _match_wake_word("il galileo", ["ehi galileo"], threshold=0.5)
         assert phrase is None
 
     def test_serena_false_positive_rejected(self):
@@ -157,7 +160,6 @@ class TestMatchWakeWord:
         # STT truncation ("galile" for "galileo") recognised when "ehi" is also present.
         phrase, _ = _match_wake_word("ehi galile", ["ehi galileo"], threshold=0.5)
         assert phrase == "ehi galileo"
-
 
 
 # ---------------------------------------------------------------------------

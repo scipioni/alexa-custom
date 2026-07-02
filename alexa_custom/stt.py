@@ -181,6 +181,44 @@ def _log_activation_phrases(config: ActionsConfig) -> None:
     logger.info("\n".join(lines))
 
 
+def _fast_partial_hit(partial: str, config: ActionsConfig, woken: bool) -> bool:
+    """True when the partial transcript already fully matches a wake word or a
+    dispatchable trigger.
+
+    Used by the fast-VAD path: when the recognizer's partial result is already
+    a complete, matchable utterance, the endpoint fires after
+    ``stt.fast_vad_ms`` of silence instead of the full ``vad_silence_ms`` —
+    cutting ~500 ms off every wake/command. Free-form speech (LLM fallback)
+    never matches here, so it keeps the long, fragmentation-safe endpoint.
+    """
+    wake_phrase, residual = _match_wake_word(
+        partial, config.wake_words, threshold=config.stt.wake_match_threshold
+    )
+    if wake_phrase is not None:
+        if not residual:
+            return True
+        trig, _ = match_trigger_with_score(
+            residual,
+            config.triggers,
+            algorithm=config.recognition.matching_algorithm,
+            threshold=config.recognition.matching_threshold,
+            min_word_overlap=config.recognition.min_word_overlap,
+        )
+        return trig is not None
+
+    candidates = [t for t in config.triggers if not t.with_wake or woken]
+    if not candidates:
+        return False
+    trig, _ = match_trigger_with_score(
+        partial,
+        candidates,
+        algorithm=config.recognition.matching_algorithm,
+        threshold=config.recognition.matching_threshold,
+        min_word_overlap=config.recognition.min_word_overlap,
+    )
+    return trig is not None
+
+
 def _follow_up_active(trigger: "Trigger | None", config: ActionsConfig) -> bool:
     """Return whether a follow-up window should open after dispatching trigger.
 
@@ -235,6 +273,9 @@ def _recognition_loop(
     _profile_stt = _get_stt_overrides()
     _eff_rms = float(_profile_stt.get("rms_threshold", config.stt.rms_threshold))
     _vad_silence_ms = int(_profile_stt.get("vad_silence_ms", config.stt.vad_silence_ms))
+    _fast_vad_ms = int(_profile_stt.get("fast_vad_ms", config.stt.fast_vad_ms))
+    if _fast_vad_ms >= _vad_silence_ms:
+        _fast_vad_ms = 0  # fast path can never fire before the normal endpoint
     if _profile_stt:
         logger.debug(
             "Profile STT overrides active: rms_threshold=%.4f vad_silence_ms=%d",
@@ -453,14 +494,37 @@ def _recognition_loop(
                 on_stt_event("transcribing", {"text": partial})
             _last_partial = partial
 
-        vad_fire = (
-            speech_ms >= config.stt.min_speech_ms
-            and last_speech_t > 0
-            and (now - last_speech_t) * 1000.0 >= config.stt.vad_silence_ms
-        )
+        _silence_ms = (now - last_speech_t) * 1000.0 if last_speech_t > 0 else 0.0
+        _speech_done = speech_ms >= config.stt.min_speech_ms and last_speech_t > 0
+
+        vad_fire = _speech_done and _silence_ms >= _vad_silence_ms
+
+        # Fast endpoint: when the partial transcript is already a complete
+        # wake/trigger match, fire after fast_vad_ms instead of waiting the
+        # full vad_silence_ms. Free-form utterances never match and keep the
+        # long endpoint.
+        if (
+            not vad_fire
+            and not endpoint
+            and _fast_vad_ms > 0
+            and _speech_done
+            and _silence_ms >= _fast_vad_ms
+        ):
+            _p = backend.partial_text()
+            if _p and _fast_partial_hit(_p, config, woken()):
+                logger.debug(
+                    "Fast endpoint: partial %r after %.0f ms silence",
+                    _p,
+                    _silence_ms,
+                )
+                vad_fire = True
 
         if vad_fire and not endpoint:
             text = backend.finalize().strip()
+            # finalize() flushed the decoder (InputFinished); reset so the
+            # next utterance starts on a clean pipeline instead of feeding a
+            # flushed recognizer.
+            backend.reset()
             _vad_speech_ms = speech_ms
             _reset_vad()
             _last_partial = ""

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import abc
+import collections
 import logging
 import os
 import re
@@ -133,7 +134,18 @@ class PicoTTS(TTSBackend):
 
 
 class PiperTTS(TTSBackend):
-    """Neural TTS via piper. Loads the ONNX voice once and reuses it for every say()."""
+    """Neural TTS via piper. Loads the ONNX voice once and reuses it for every say().
+
+    Synthesized PCM for short texts is kept in a small LRU cache: Piper runs
+    slower than real time on this board (~2 s to first audio for a short
+    phrase), so repeated prompts (ready messages, confirmations, error
+    phrases) play instantly on the second occurrence instead of paying the
+    full synthesis cost every time.
+    """
+
+    # LRU bounds: 32 entries of <=200-char texts ≈ a few MB of int16 PCM.
+    _CACHE_MAX_ENTRIES = 32
+    _CACHE_MAX_TEXT_LEN = 200
 
     def __init__(
         self,
@@ -160,6 +172,9 @@ class PiperTTS(TTSBackend):
         self._stt_gated_flag = stt_gated_flag
         self._preroll_ms = preroll_ms
         self._voice_name = voice
+        self._cache: collections.OrderedDict[str, list[tuple[np.ndarray, int]]] = (
+            collections.OrderedDict()
+        )
 
         # Silence Piper's noisy internal debug logs (e.g. phonemes printing)
         logging.getLogger("piper").setLevel(logging.INFO)
@@ -201,13 +216,33 @@ class PiperTTS(TTSBackend):
 
         Splitting into clauses lowers time-to-first-audio (Piper yields one
         chunk per sentence). Audio extraction lives here so both the streaming
-        and WAV-fallback paths share one code path.
+        and WAV-fallback paths share one code path. Short texts are served
+        from / recorded into the LRU cache (unscaled — volume is applied at
+        playback time, so cached audio follows volume changes).
         """
+        cached = self._cache.get(text)
+        if cached is not None:
+            self._cache.move_to_end(text)
+            logger.debug("TTS cache hit: %r", text)
+            yield from cached
+            return
+
+        cacheable = len(text) <= self._CACHE_MAX_TEXT_LEN
+        chunks: list[tuple[np.ndarray, int]] = []
         for clause in _split_clauses(text):
             for chunk in self._voice.synthesize(clause):
                 arr = np.asarray(chunk.audio_int16_array, dtype=np.int16)
                 samplerate = int(getattr(chunk, "sample_rate", self._samplerate))
+                if cacheable:
+                    chunks.append((arr, samplerate))
                 yield arr, samplerate
+
+        # Reached only when the generator is fully consumed — an aborted
+        # playback never caches a truncated utterance.
+        if cacheable and chunks:
+            self._cache[text] = chunks
+            while len(self._cache) > self._CACHE_MAX_ENTRIES:
+                self._cache.popitem(last=False)
 
     def say(self, text: str, lang: str = "it-IT") -> None:
         if not text:
@@ -482,6 +517,7 @@ def main_say(args: list[str] | None = None) -> None:
 
     # Speak the text
     engine = get_engine()
+
     def _speak_flow() -> None:
         for idx, sentence in enumerate(sentences):
             if idx > 0:
@@ -489,7 +525,10 @@ def main_say(args: list[str] | None = None) -> None:
             engine.say(sentence)
 
     if loop_val is not None:
-        print(f"Entering loop mode. Speaking sentences every {loop_val} seconds. Press Ctrl+C to exit.", file=sys.stderr)
+        print(
+            f"Entering loop mode. Speaking sentences every {loop_val} seconds. Press Ctrl+C to exit.",
+            file=sys.stderr,
+        )
         try:
             while True:
                 _speak_flow()
@@ -501,4 +540,3 @@ def main_say(args: list[str] | None = None) -> None:
             _speak_flow()
         except KeyboardInterrupt:
             print("\nSpeech interrupted.", file=sys.stderr)
-

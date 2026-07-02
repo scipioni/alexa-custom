@@ -134,7 +134,7 @@ def resolve_gst_profile(
     return GStreamerCaptureConfig(**merged, profiles=base.profiles)
 
 
-_STT_PROFILE_KEYS = {"rms_threshold", "vad_silence_ms"}
+_STT_PROFILE_KEYS = {"rms_threshold", "vad_silence_ms", "fast_vad_ms"}
 
 
 def get_gst_profile_stt_overrides(
@@ -182,6 +182,11 @@ class STTConfig:
     num_threads: int = 2
     # 900 ms confirmed clean on-board (vosk, no utterance fragmentation)
     vad_silence_ms: int = 900
+    # Fast endpoint: when the partial transcript already fully matches a wake
+    # word or trigger, fire after this many ms of silence instead of the full
+    # vad_silence_ms (~500 ms lower perceived latency). 0 disables. Keep it
+    # above natural intra-phrase pauses (~200-300 ms); 400 is safe.
+    fast_vad_ms: int = 400
     rms_threshold: float = 0.02
     adaptive_rms: bool = True
     adaptive_rms_margin: float = 0.01
@@ -779,6 +784,7 @@ def _parse_stt_config(raw: dict) -> STTConfig:
         model_path=str(model_path_raw) if model_path_raw else None,
         num_threads=_get_int(raw, "num_threads", 2),
         vad_silence_ms=_get_int(raw, "vad_silence_ms", 900),
+        fast_vad_ms=_get_int(raw, "fast_vad_ms", 400),
         rms_threshold=_get_float(raw, "rms_threshold", 0.02),
         adaptive_rms=bool(raw.get("adaptive_rms", True)),
         adaptive_rms_margin=_get_float(raw, "adaptive_rms_margin", 0.01),

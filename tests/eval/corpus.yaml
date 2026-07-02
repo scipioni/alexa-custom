@@ -53,6 +53,8 @@ cases:
 
   # ── negatives: near-misses and unrelated speech ────────────────────────────
   - {text: "gabriele vieni qui", expect: none, note: "near-miss name"}
+  - {text: "il galileo", expect: none, note: "keyword embedded in speech, not an address"}
+  - {text: "abbiamo studiato galileo a scuola", expect: none, note: "keyword mid-conversation"}
   - {text: "ho assistito alla partita", expect: none, note: "shares stem with assistente"}
   - {text: "il gatto dorme sul divano", expect: none}
   - {text: "che bella giornata oggi", expect: none}

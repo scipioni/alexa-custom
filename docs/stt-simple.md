@@ -328,6 +328,7 @@ When `llm.fallback_on_no_match: true`, unmatched commands are routed to the conf
 ### Tuning notes
 
 - `vad_silence_ms` **900** — 500 ms chops utterances; 900 ms gives clean transcripts. Perceived latency ≈ vad_silence_ms + ~130 ms decode.
+- `fast_vad_ms` **400** — fast endpoint: when the *partial* transcript already fully matches a wake word or a complete trigger, the endpoint fires after this much silence instead of the full `vad_silence_ms` (~500 ms lower perceived latency on every wake and command; measured on-board: wake fires 402 ms after speech end). Free-form speech (LLM fallback) never matches a trigger, so it keeps the long fragmentation-safe endpoint. 0 disables. Keep above natural intra-phrase pauses (~200–300 ms). Overridable per GStreamer profile like `vad_silence_ms`.
 - Open-vocabulary wobble (e.g. `figure sono` for "che ore sono") is expected and absorbed by `matching_threshold`.
 - Re-run `scripts/bench_stt.py` after backend or loop changes to catch regressions.
 

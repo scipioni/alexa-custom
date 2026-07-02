@@ -8,6 +8,31 @@ if TYPE_CHECKING:
 from alexa_custom.actions import _word_token_match, normalize_text
 
 
+def _isolated_keyword_match(text_tokens: list[str], phrase_words: list[str]) -> bool:
+    """True when the transcript is NOTHING BUT the phrase's distinctive words.
+
+    Reconciles two labelled behaviours that the all-words gate alone cannot:
+
+    - isolated keyword → wake: "galileo" / "galile" said on its own is an
+      intentional address even though the filler "ehi" was dropped (corpus:
+      truncated-wake recall).
+    - embedded keyword → silent: "a ogni tanto controlliamo serena standard"
+      mentions the keyword mid-conversation and must NOT wake (the observed
+      false-positive class the all-words gate was added for).
+
+    "Distinctive" = phrase words of len >= 4 ("galileo", "serena"); short
+    fillers ("ehi") don't count. Every transcript token must match a
+    distinctive word — one extra surrounding word ("il galileo") makes the
+    utterance conversation, not an address.
+    """
+    distinctive = [w for w in phrase_words if len(w) >= 4]
+    if not distinctive or not text_tokens:
+        return False
+    return all(
+        any(_word_token_match(pw, tw) for pw in distinctive) for tw in text_tokens
+    )
+
+
 def _word_overlap_score(phrase_words: list[str], text_words: set[str]) -> float:
     """Acoustic overlap of ``phrase_words`` with ``text_words``, weighted by length.
 
@@ -74,11 +99,13 @@ def _match_wake_word(
         phrase_words = [x for x in norm_w.split() if len(x) >= 3]
         if not phrase_words:
             phrase_words = norm_w.split()
-        # Every significant phrase word must have a phonetic match in the
-        # transcript. Without this gate, a single common word (e.g. "serena")
-        # can score high enough on character coverage to trigger the full
-        # wake phrase "ehi serena".
-        if not all(any(_word_token_match(pw, tw) for tw in text_words) for pw in phrase_words):
+        # Every phrase word must have a phonetic match in the transcript
+        # (blocks "ehi come stai" and keyword-in-conversation false wakes) —
+        # UNLESS the transcript is the distinctive keyword alone, which is an
+        # intentional address ("galileo" → wake for "ehi galileo").
+        if not all(
+            any(_word_token_match(pw, tw) for tw in text_words) for pw in phrase_words
+        ) and not _isolated_keyword_match(norm_text.split(), phrase_words):
             continue
         score = _word_overlap_score(phrase_words, text_words)
         if score > best_score:
@@ -90,7 +117,8 @@ def _match_wake_word(
         norm_w = normalize_text(best_phrase)
         wake_tokens = set(norm_w.split())
         command = " ".join(
-            t for t in norm_text.split()
+            t
+            for t in norm_text.split()
             if not any(_word_token_match(wt, t) for wt in wake_tokens)
         )
         return best_phrase, command
@@ -133,7 +161,9 @@ def _approx_wake_match(
         phrase_words = [w for w in norm_phrase.split() if len(w) >= 3]
         if not phrase_words:
             phrase_words = norm_phrase.split()
-        if not all(any(_word_token_match(pw, tw) for tw in text_words) for pw in phrase_words):
+        if not all(
+            any(_word_token_match(pw, tw) for tw in text_words) for pw in phrase_words
+        ) and not _isolated_keyword_match(norm_text.split(), phrase_words):
             continue
         score = _word_overlap_score(phrase_words, text_words)
         if score > best_score:
@@ -141,5 +171,3 @@ def _approx_wake_match(
             best_group = group
 
     return best_group if best_score >= threshold else None
-
-
