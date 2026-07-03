@@ -42,6 +42,7 @@
 - [🏗️ Architecture](#%EF%B8%8F-architecture)
 - [🖥️ Web Dashboard](#%EF%B8%8F-web-dashboard)
 - [🔩 Requirements](#-requirements)
+- [🔌 Power-Loss Resilience](#-power-loss-resilience)
 - [⚙️ Configuration](#-configuration)
 - [🔒 Security](#-security)
 - [🛠️ Commands](#%EF%B8%8F-commands)
@@ -253,6 +254,20 @@ Serena includes a real-time browser dashboard at `http://&lt;host&gt;:8080`:
 | Optional: LED matrix or I2C OLED display | Python 3.13+ |
 
 Optimized for the **Arduino Uno Q** (Qualcomm Snapdragon 801), but runs on any Linux system with PipeWire.
+
+---
+
+## 🔌 Power-Loss Resilience
+
+The reference deployment (Arduino Uno Q) survives hard power cuts without corruption or manual intervention — no UPS required for data safety:
+
+- **Journaled filesystems on soldered eMMC** — both the root and data partitions are ext4 with journaling and metadata checksums (`metadata_csum`, `journal_checksum_v3`). A power cut mid-write is repaired automatically by journal replay at the next boot; at worst the last few seconds of writes are lost. The soldered eMMC is also far more tolerant of hard cuts than an SD card.
+- **No swap traffic on flash** — swap lives on zram (compressed RAM), so sudden power loss can never corrupt swap and the eMMC sees no swap wear.
+- **Bounded logging** — journald is capped (`SystemMaxUse=50M`), keeping steady-state flash writes small.
+- **Unattended recovery** — user lingering is enabled and all services (`serena`, `alsa-pcm-unmute`, …) are enabled at `default.target` with `Restart=on-failure`. When power returns the board boots, the restore service re-applies USB audio profile/routing/mixer levels, and the assistant comes back with no one logging in.
+- **Graceful config degradation** — runtime state readers (`conf/state.yaml`) return safe defaults on any read error instead of crashing the daemon.
+
+A small UPS on the USB-C input (mini DC "router" UPS, 5 V ⩾ 3 A to also power the speakerphone) adds continuity through outages, but it is protection against downtime — not a requirement for data integrity.
 
 ---
 
