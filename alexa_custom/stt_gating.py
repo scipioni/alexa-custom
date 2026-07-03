@@ -192,11 +192,30 @@ def start_capture(
         config is not None
         and getattr(config.stt, "capture_backend", "parec") == "gstreamer"
     ):
+        import dataclasses
+
         from alexa_custom.stt_gst_capture import start_capture_gst
         from alexa_custom.config import resolve_gst_profile
-        from alexa_custom.audio_hw import get_active_gst_profile
+        from alexa_custom.audio_hw import (
+            get_active_gst_profile,
+            load_gstreamer_overrides,
+        )
 
-        gst_cfg = resolve_gst_profile(config.audio.gstreamer, get_active_gst_profile())
+        profile = get_active_gst_profile()
+        gst_cfg = resolve_gst_profile(config.audio.gstreamer, profile)
+        # Calibration results (state.yaml gstreamer_override) take precedence
+        # over the named profile: profiles set device-critical defaults, the
+        # calibration sweep refines the NS/AGC keys on top of them. Skipped
+        # while the temporary "calibration" profile is active — each probe
+        # must control its own params, not inherit the previous winner's.
+        if profile != "calibration":
+            overrides = load_gstreamer_overrides() or {}
+            valid = {
+                f.name for f in dataclasses.fields(gst_cfg) if f.name != "profiles"
+            }
+            applied = {k: v for k, v in overrides.items() if k in valid}
+            if applied:
+                gst_cfg = dataclasses.replace(gst_cfg, **applied)
         return start_capture_gst(source, gst_cfg)
     return _start_capture_parec(source, channels)
 

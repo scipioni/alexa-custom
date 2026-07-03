@@ -375,6 +375,11 @@ def _recognition_loop(
                 loop=loop,
             )
 
+        _timeout = (
+            trigger.dispatch_timeout
+            if trigger.dispatch_timeout is not None
+            else config.recognition.dispatch_timeout
+        )
         try:
             _ctx.livekit_connected = livekit_connected_flag.is_set()
             dispatch_loop.run_until_complete(
@@ -385,13 +390,13 @@ def _recognition_loop(
                         wake_word=wake_phrase or "",
                         transcript=transcript,
                     ),
-                    timeout=config.recognition.dispatch_timeout,
+                    timeout=_timeout,
                 )
             )
         except asyncio.TimeoutError:
             logger.warning(
                 "Dispatch timed out after %.0fs — resetting and resuming",
-                config.recognition.dispatch_timeout,
+                _timeout,
             )
         except Exception as e:
             logger.error("Action dispatch failed: %s", e)

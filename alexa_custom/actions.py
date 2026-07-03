@@ -1364,9 +1364,9 @@ def _calibration_round2_gains(
 async def _run_gain_calibration(
     action: ActionEntry,
     listen_fn: Callable[[float], Awaitable[str]],
-    announcer: Callable[[str], Awaitable[None]]
-) -> float:
-    """Run Stage 1 gain calibration and return the winning best_gain."""
+    announcer: Callable[[str], Awaitable[None]],
+) -> tuple[float, dict[float, float]]:
+    """Run Stage 1 gain calibration; return (best_gain, per-gain scores)."""
     from alexa_custom.audio_hw import set_input_gain
 
     sentence = action.params.get("sentence", "uno due tre quattro cinque")
@@ -1413,7 +1413,7 @@ async def _run_gain_calibration(
         await _probe(g)
 
     best_gain = _calibration_winner(scores)
-    return best_gain
+    return best_gain, scores
 
 
 @registry.register("calibrate_input_gain")
@@ -1454,7 +1454,7 @@ async def handle_calibrate_input_gain(
     async def _announce(text: str) -> None:
         await asyncio.to_thread(get_engine().say, text, "it-IT")
 
-    best_gain = await _run_gain_calibration(action, listen_fn, _announce)
+    best_gain, _ = await _run_gain_calibration(action, listen_fn, _announce)
 
     logger.info("calibrate_input_gain: best gain=%.2f", best_gain)
     await asyncio.to_thread(set_input_gain, None, None, best_gain)
@@ -1468,6 +1468,44 @@ async def handle_calibrate_input_gain(
     )
 
 
+# Keys the Stage-2 sweep varies (and the only ones it persists — everything
+# else stays owned by the named device profile).
+_GST_SWEEP_KEYS = ("noise_suppression", "noise_suppression_level", "agc")
+
+_DEFAULT_CONDITION = "parla a voce normale, vicino al dispositivo"
+
+
+def _aggregate_scores(values: list[float], mode: str) -> float:
+    """Combine per-condition scores: 'min' (worst-case, default) or 'mean'."""
+    if not values:
+        return 0.0
+    if mode == "mean":
+        return sum(values) / len(values)
+    return min(values)
+
+
+def _gst_calibration_candidates(base_params: dict, allow_agc: bool) -> list[dict]:
+    """Stage-2 candidate param sets, simplest first.
+
+    Each candidate carries the FULL resolved active-profile params so
+    device-critical settings (source, highpass_cutoff_hz, ...) stay in force
+    while probing — only the sweep keys vary. Simplest-first ordering makes
+    score ties resolve toward trusting the hardware DSP.
+
+    No candidate enables WebRTC AGC unless allow_agc is set: on hardware-DSP
+    speakerphones AGC winds its gain up during idle silence and garbles the
+    first command after idle (see AGENTS.md, verified on Yealink BT51).
+    """
+    variants = [
+        {"noise_suppression": False, "agc": False},  # trust the hardware DSP
+        {"noise_suppression": True, "noise_suppression_level": 1, "agc": False},
+        {"noise_suppression": True, "noise_suppression_level": 2, "agc": False},
+    ]
+    if allow_agc:
+        variants.append({"noise_suppression": False, "agc": True})
+    return [{**base_params, **v} for v in variants]
+
+
 @registry.register("calibrate_microphone_complete")
 async def handle_calibrate_microphone_complete(
     action: ActionEntry,
@@ -1476,144 +1514,243 @@ async def handle_calibrate_microphone_complete(
     actions_config=None,
     **_,
 ):
-    """Complete hardware gain and GStreamer filter calibration.
+    """Complete gain + GStreamer calibration across listening conditions.
 
-    Runs Stage 1 (gain sweep) then Stage 2 (GStreamer filter sweep).
+    Real-world settings are a compromise between near speech, far speech,
+    and room noise (TV, ...), so every winner is scored across ALL configured
+    conditions, not a single quiet near-field probe:
+
+    - Stage 1 sweeps the hardware input gain on the first condition, then
+      validates the two best gains under every additional condition.
+    - Stage 2 sweeps GStreamer NS/AGC variants built ON TOP of the active
+      device profile (device-critical params like highpass_cutoff_hz are
+      preserved) under every condition.
+
+    The winner maximises the worst-case score across conditions (or the mean
+    with aggregate: mean). AGC candidates are excluded unless allow_agc: true
+    (WebRTC AGC garbles the first command after idle on hardware-DSP devices).
+
+    Example YAML:
+        - type: calibrate_microphone_complete
+          sentence: "uno due tre quattro cinque"
+          conditions:
+            - "parla a voce normale, vicino al dispositivo"
+            - "adesso parla da lontano, dall'altra parte della stanza"
+          aggregate: min       # min (worst-case, default) | mean
+          allow_agc: false
+          listen_timeout: 6.0
+          settle_ms: 500
     """
     from alexa_custom.audio_hw import (
         get_active_gst_profile,
+        get_input_gain,
+        set_active_gst_profile,
+        set_input_gain,
+    )
+
+    if listen_fn is None:
+        logger.warning(
+            "calibrate_microphone_complete: no listen_fn available — skipping"
+        )
+        return
+
+    if actions_config is None:
+        logger.warning(
+            "calibrate_microphone_complete: no actions_config available — skipping"
+        )
+        return
+
+    # Snapshot state so an interruption (dispatch timeout, error) restores it
+    # — otherwise the daemon is left with a probe gain or the temporary
+    # "calibration" profile active.
+    orig_profile = get_active_gst_profile() or "normal"
+    orig_gain = get_input_gain()
+    completed = False
+    try:
+        await _run_complete_calibration(action, listen_fn, actions_config, orig_profile)
+        completed = True
+    finally:
+        if not completed:
+            logger.warning(
+                "calibrate_microphone_complete: interrupted — restoring gain=%.2f profile=%s",
+                orig_gain,
+                orig_profile,
+            )
+            # Synchronous calls: an interrupted coroutine may not get another
+            # await, so restoration must not suspend.
+            set_input_gain(None, None, orig_gain)
+            set_active_gst_profile(orig_profile)
+
+
+async def _run_complete_calibration(
+    action: ActionEntry,
+    listen_fn: Callable[[float], Awaitable[str]],
+    actions_config,
+    orig_profile: str,
+) -> None:
+    """Implementation of calibrate_microphone_complete (see the handler)."""
+    import dataclasses
+
+    from alexa_custom.audio_hw import (
         set_active_gst_profile,
         save_input_gain_config,
         set_input_gain,
         save_gstreamer_overrides,
     )
+    from alexa_custom.config import get_gst_profile_stt_overrides, resolve_gst_profile
     from alexa_custom.tts import get_engine
 
-    if listen_fn is None:
-        logger.warning("calibrate_microphone_complete: no listen_fn available — skipping")
-        return
-
-    if actions_config is None:
-        logger.warning("calibrate_microphone_complete: no actions_config available — skipping")
-        return
-
-    orig_profile = get_active_gst_profile() or "normal"
     sentence = action.params.get("sentence", "uno due tre quattro cinque")
     listen_timeout = float(action.params.get("listen_timeout", 6.0))
     settle_ms = float(action.params.get("settle_ms", 500))
     settle_s = settle_ms / 1000.0
+    raw_conditions = action.params.get("conditions")
+    conditions = (
+        [str(c) for c in raw_conditions] if raw_conditions else [_DEFAULT_CONDITION]
+    )
+    aggregate = str(action.params.get("aggregate", "min"))
+    allow_agc = bool(action.params.get("allow_agc", False))
 
     # Ensure calibration profile slot exists
     if not hasattr(actions_config.audio.gstreamer, "profiles"):
         actions_config.audio.gstreamer.profiles = {}
 
-    logger.info("calibrate_microphone_complete: starting Complete Calibration")
-
-    # --- STAGE 1: Gain Calibration ---
-    await asyncio.to_thread(
-        get_engine().say,
-        "Iniziamo la prima fase della calibrazione: regolazione del guadagno hardware. Ripeti ogni frase che sento.",
-        "it-IT",
+    logger.info(
+        "calibrate_microphone_complete: starting (profile=%s conditions=%d aggregate=%s allow_agc=%s)",
+        orig_profile,
+        len(conditions),
+        aggregate,
+        allow_agc,
     )
 
     async def _announce(text: str) -> None:
         await asyncio.to_thread(get_engine().say, text, "it-IT")
 
-    best_gain = await _run_gain_calibration(action, listen_fn, _announce)
-    logger.info("calibrate_microphone_complete: Stage 1 winning gain=%.2f", best_gain)
-
-    # Save/apply the winning gain temporarily
-    await asyncio.to_thread(set_input_gain, None, None, best_gain)
-
-    # --- STAGE 2: GStreamer Filter Calibration ---
-    await asyncio.to_thread(
-        get_engine().say,
-        "Seconda fase: ottimizzazione dei filtri audio digitali. Continua a ripetere.",
-        "it-IT",
-    )
-
-    # Candidate GStreamer profiles to test
-    candidates = [
-        # Probe 1: Standard
-        {
-            "noise_suppression": True,
-            "noise_suppression_level": 2,
-            "agc": True,
-        },
-        # Probe 2: Sensitive
-        {
-            "noise_suppression": True,
-            "noise_suppression_level": 1,
-            "agc": True,
-        },
-        # Probe 3: DSP Bypass
-        {
-            "noise_suppression": False,
-            "noise_suppression_level": 1,
-            "agc": True,
-        },
-    ]
-
-    best_idx = 0
-    best_score = -1.0
-    scores: list[float] = []
-
-    for i, params in enumerate(candidates):
-        probe_idx = i + 1
-        logger.info("calibrate_microphone_complete: Stage 2 probe %d params=%s", probe_idx, params)
-
-        # Load params into the in-memory calibration profile
-        actions_config.audio.gstreamer.profiles["calibration"] = params
-
-        # Trigger dynamic GStreamer pipeline restart
-        await asyncio.to_thread(set_active_gst_profile, "calibration")
-        await asyncio.sleep(settle_s + 0.3)  # Extra delay to allow pipeline rebuild
-
-        # Announce and record
-        await _announce(f"prova {probe_idx} di 3: {sentence}")
-        transcript = await listen_fn(listen_timeout)
-        score = get_similarity_score(
+    def _score(transcript: str | None) -> float:
+        return get_similarity_score(
             normalize_text(transcript or ""),
             normalize_text(sentence),
             "levenshtein",
         )
-        logger.info(
-            "calibrate_microphone_complete: probe %d score=%.1f transcript=%r",
-            probe_idx,
-            score,
-            transcript,
+
+    # --- STAGE 1: Gain Calibration ---
+    await _announce(
+        "Iniziamo la prima fase della calibrazione: regolazione del guadagno. Ripeti ogni frase che sento.",
+    )
+    if len(conditions) > 1:
+        await _announce(f"Prima condizione: {conditions[0]}")
+
+    best_gain, gain_scores = await _run_gain_calibration(action, listen_fn, _announce)
+
+    if len(conditions) > 1:
+        # Validate the two best gains under every remaining condition: the
+        # gain that wins near-field can clip or starve at distance, so the
+        # final pick maximises the aggregated (worst-case) score.
+        finalists = sorted(gain_scores, key=lambda g: gain_scores[g], reverse=True)[:2]
+        combined: dict[float, list[float]] = {g: [gain_scores[g]] for g in finalists}
+        for cond in conditions[1:]:
+            await _announce(f"Adesso: {cond}")
+            for g in finalists:
+                await asyncio.to_thread(set_input_gain, None, None, g)
+                await asyncio.sleep(settle_s)
+                await _announce(f"ripeti: {sentence}")
+                transcript = await listen_fn(listen_timeout)
+                score = _score(transcript)
+                combined[g].append(score)
+                logger.info(
+                    "calibrate_microphone_complete: gain=%.2f condition=%r score=%.1f transcript=%r",
+                    g,
+                    cond,
+                    score,
+                    transcript,
+                )
+        best_gain = max(
+            finalists, key=lambda g: _aggregate_scores(combined[g], aggregate)
         )
-        scores.append(score)
-        if score > best_score:
-            best_score = score
-            best_idx = i
+
+    logger.info("calibrate_microphone_complete: Stage 1 winning gain=%.2f", best_gain)
+    await asyncio.to_thread(set_input_gain, None, None, best_gain)
+
+    # --- STAGE 2: GStreamer Filter Calibration ---
+    await _announce(
+        "Seconda fase: ottimizzazione dei filtri audio digitali. Continua a ripetere."
+    )
+
+    # Build candidates over the RESOLVED active profile so device-critical
+    # params (source, highpass_cutoff_hz, ...) and the profile's STT keys
+    # stay in force during probes.
+    resolved = resolve_gst_profile(actions_config.audio.gstreamer, orig_profile)
+    base_params = {
+        f.name: getattr(resolved, f.name)
+        for f in dataclasses.fields(resolved)
+        if f.name != "profiles"
+    }
+    base_params.update(
+        get_gst_profile_stt_overrides(actions_config.audio.gstreamer, orig_profile)
+    )
+    candidates = _gst_calibration_candidates(base_params, allow_agc)
+
+    cand_scores: list[list[float]] = [[] for _ in candidates]
+    probe_n = 0
+    total = len(candidates) * len(conditions)
+
+    for cond in conditions:
+        if len(conditions) > 1:
+            await _announce(f"Adesso: {cond}")
+        for i, cand in enumerate(candidates):
+            probe_n += 1
+            logger.info(
+                "calibrate_microphone_complete: Stage 2 probe %d/%d condition=%r sweep=%s",
+                probe_n,
+                total,
+                cond,
+                {k: cand[k] for k in _GST_SWEEP_KEYS if k in cand},
+            )
+            actions_config.audio.gstreamer.profiles["calibration"] = dict(cand)
+            await asyncio.to_thread(set_active_gst_profile, "calibration")
+            await asyncio.sleep(settle_s + 0.3)  # allow pipeline rebuild
+
+            await _announce(f"prova {probe_n} di {total}: {sentence}")
+            transcript = await listen_fn(listen_timeout)
+            score = _score(transcript)
+            cand_scores[i].append(score)
+            logger.info(
+                "calibrate_microphone_complete: probe %d score=%.1f transcript=%r",
+                probe_n,
+                score,
+                transcript,
+            )
 
     # Restore the original profile so GStreamer returns to normal operation
     await asyncio.to_thread(set_active_gst_profile, orig_profile)
 
-    winning_params = candidates[best_idx]
+    aggregated = [_aggregate_scores(s, aggregate) for s in cand_scores]
+    # max() keeps the FIRST index on ties — candidates are ordered simplest
+    # first, so ties resolve toward trusting the hardware DSP.
+    best_idx = max(range(len(candidates)), key=lambda i: aggregated[i])
+    winning_params = {k: candidates[best_idx][k] for k in _GST_SWEEP_KEYS}
     logger.info(
-        "calibrate_microphone_complete: best GStreamer params index=%d %s (score=%.1f)",
+        "calibrate_microphone_complete: winner index=%d %s (scores=%s aggregated=%.1f)",
         best_idx,
         winning_params,
-        best_score,
+        [round(a, 1) for a in aggregated],
+        aggregated[best_idx],
     )
 
-    # Persist Stage 1 & Stage 2 winning parameters to conf/state.yaml
+    # Persist Stage 1 & Stage 2 winners to conf/state.yaml. Only the sweep
+    # keys are persisted — start_capture applies them ON TOP of the named
+    # profile, so device-critical profile params remain profile-owned.
     save_input_gain_config(best_gain)
     save_gstreamer_overrides(winning_params)
 
     # Re-apply the winning configuration globally
-    # Force loading of overrides into actions_config
     for k, v in winning_params.items():
         if hasattr(actions_config.audio.gstreamer, k):
             setattr(actions_config.audio.gstreamer, k, v)
 
-    # Signal completion
-    await asyncio.to_thread(
-        get_engine().say,
-        f"Calibrazione completata. Configurazione ottimizzata salvata con successo.",
-        "it-IT",
+    pct = int(round(best_gain * 100))
+    await _announce(
+        f"Calibrazione completata. Guadagno {pct} percento. Configurazione ottimizzata salvata.",
     )
 
 
@@ -1730,6 +1867,7 @@ async def handle_set_audio_profile(
     stt_overrides: dict = {}
     if actions_config is not None:
         from alexa_custom.config import get_gst_profile_stt_overrides
+
         stt_overrides = get_gst_profile_stt_overrides(
             actions_config.audio.gstreamer, profile
         )

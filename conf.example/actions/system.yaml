@@ -192,6 +192,8 @@ triggers:
   - commands:
       - "calibra microfono"
     tag: microfono
+    dispatch_timeout: 600   # multi-condition calibration takes ~3 min — far past
+    #   the 90 s recognition.dispatch_timeout default that would kill it mid-run
     actions:
       - type: calibrate_microphone_complete
         sentence: "uno due tre quattro cinque"
@@ -200,6 +202,16 @@ triggers:
         gain_high: 3.0
         listen_timeout: 6.0
         settle_ms: 500
+        # Every winner is scored across ALL conditions (worst-case by default),
+        # so the saved settings are a real compromise between near speech, far
+        # speech, and room noise — add e.g. "accendi la televisione e ripeti"
+        # to calibrate against your actual noise source.
+        conditions:
+          - "parla a voce normale, vicino al dispositivo"
+          - "adesso parla da lontano, dall'altra parte della stanza"
+        aggregate: min       # min (worst-case, default) | mean
+        # allow_agc: false   # WebRTC AGC candidates are excluded: AGC winds up
+        #   on idle silence and garbles the first command (see AGENTS.md)
 
   - commands:
       - "registra messaggio"
