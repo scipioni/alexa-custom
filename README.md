@@ -383,6 +383,7 @@ triggers:
 |---|---|
 | [→ Technical Reference](details.md) | Full architecture, config reference, CLI, audio pipeline, STT, actions, displays, MQTT, development, troubleshooting |
 | [→ Bill of Materials](docs/BOM.md) | Hardware add-ons with prices, links, and running total |
+| [→ Workflow](docs/workflow.md) | Development procedure (local) and deploy/operate procedure (production board) |
 | [→ Hardware Setup](docs/setup_hardware.md) | PipeWire configuration, Bluetooth, board-specific fixes |
 | [→ Software Installation](docs/setup_software.md) | Dependencies, virtual environment, model downloads |
 | [→ Configuration Reference](docs/configuration.md) | Every config field documented |

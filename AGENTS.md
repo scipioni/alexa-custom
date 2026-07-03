@@ -276,6 +276,7 @@ conf.example/       example config shipped with the repo
 models/             bundled STT/TTS model files
 docs/               extended notes (audio platform, hardware, setup)
   stt-simple.md     STT pipeline, GStreamer calibration, config reference
+  workflow.md       dev procedure (local) + deploy/operate procedure (board)
 kernel/             kernel build scripts/configs for the board
 setup/              systemd units, udev rules, usb-audio-restore.sh
 tests/eval/         corpus.yaml — labelled matching corpus (task eval regression gate)
