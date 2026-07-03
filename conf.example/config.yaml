@@ -172,7 +172,11 @@ audio:
         source: pulsesrc           # BT51 with output:analog-stereo+input:mono-fallback profile places input under Audio/Source — pulsesrc works.
         noise_suppression: false   # Bypassed (false) because Yealink has built-in hardware-DSP NS. Software NS causes aggressive first-syllable clipping!
         noise_suppression_level: 2 # Default fallback level (active only if noise_suppression is set to true)
-        agc: true                  # Enabled (true) to digitally level incoming whispers/distant commands smoothly
+        agc: false                 # MUST stay false on BT51: during idle the SP92 sends digital
+        #   zeros (hardware NS gate), WebRTC AGC winds its gain to max, and the first
+        #   utterance after idle arrives clipped/overshot — Vosk mangles the leading
+        #   word ("che ore sono" → "il ore sono"). Verified via trigger dumps 2026-07-03.
+        #   SP92 hardware AGC already handles level normalisation.
         agc_target_level_dbfs: -3  # Optimal WebRTC target peak level (-3 dBFS)
         agc_compression_gain_db: 9 # Conservative makeup gain (9 dB) to prevent amplifying the floor noise
         high_pass_filter: true     # Removes sub-80Hz low-frequency room rumbles/bumps

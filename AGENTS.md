@@ -120,7 +120,11 @@ Device-specific quirks below still apply when that hardware is present.
 - **Correct profile**: `output:analog-stereo+input:mono-fallback` — this activates both the speaker (analog-stereo) and microphone (mono-fallback) paths. The "Headset Microphone" port in this profile is the SP92 Bluetooth mic (not a physical headset jack). **Do NOT use `pro-audio`** for BT51: the Bluetooth SCO audio link goes idle when nothing plays through the sink, causing the capture to return only USB clock noise.
 - **Bluetooth link activation**: The BT51 maintains the Bluetooth audio link as long as either the sink or the source is active. The daemon's continuous capture (always-on STT) is sufficient to keep it alive once opened. `task audio:setup` writes `output:analog-stereo+input:mono-fallback` to WirePlumber's state file for any detected Yealink card, so the profile persists across reboots.
 - **USB clock artifacts**: When the Bluetooth SCO link is idle at startup, the capture stream briefly contains narrowband interference at 128 Hz, 175 Hz, and 390 Hz (USB superframe harmonics). The `highpass_cutoff_hz: 220` setting in the yealink profile uses `audiocheblimit` (4-pole Chebyshev HPF) to reject the 128/175 Hz artifacts. `audiocheblimit` requires F32LE format — the pipeline converts with surrounding `audioconvert` elements.
-- **AGC must be disabled** (`agc: false` in the yealink profile): WebRTC AGC amplifies the noise floor when no real speech arrives, causing 128/175 Hz artifacts to grow from inaudible to peak 0.49 in 8 seconds. SP92 hardware AGC handles level normalisation.
+- **AGC must be disabled** (`agc: false` in the yealink profile) — two independently verified failure modes:
+  1. WebRTC AGC amplifies the noise floor when no real speech arrives, causing 128/175 Hz artifacts to grow from inaudible to peak 0.49 in 8 seconds.
+  2. **First-command-after-idle garbling** (verified via trigger dumps 2026-07-03): during idle the SP92's hardware noise gate sends *digital zeros*; WebRTC AGC winds its gain to maximum, and the first utterance after minutes of silence arrives overshot/clipped (onset peak 0.99 vs 0.78 normal, RMS decaying 0.36→0.22 while AGC re-adapts) — Vosk mangles the leading word ("che ore sono" → "il ore sono" / "eur solo"). The second attempt always works because AGC has re-adapted. If this symptom reappears, check that `agc: true` hasn't crept back in via `conf/state.yaml`'s `gstreamer_override` (web-UI calibration writes there and it overrides the profile).
+
+  SP92 hardware AGC handles level normalisation; use `audio.input_gain` (PulseAudio source volume) for extra gain, not WebRTC AGC.
 - **GStreamer profile: `yealink`** — `source: pulsesrc`, NS disabled, AGC disabled, `highpass_cutoff_hz: 220`. Set in `conf/state.yaml` (`gst_profile: yealink`).
 
 #### Serena configuration
@@ -167,7 +171,11 @@ Both SP92 and BT51 use the same named GStreamer profile (`yealink`) but with dif
          yealink:
            source: pipewiresrc
            noise_suppression: false
-           agc: true          # no hardware AGC on SP92 for gain; WebRTC AGC is fine here
+           agc: true          # SP92-direct has no usable capture gain control, so WebRTC
+           #   AGC is the only leveling option here. CAUTION (untested on SP92-direct):
+           #   if the first command after idle comes out garbled, this is the same
+           #   AGC-winds-up-on-digital-zeros failure verified on BT51 — prefer
+           #   agc: false + higher audio.input_gain.
            highpass_cutoff_hz: 0
    ```
 6. Restart the daemon — SP92 node appears under Filters, `gst-launch-1.0` subprocess with `pipewiresrc` captures real audio.
@@ -217,10 +225,31 @@ Both SP92 and BT51 use the same named GStreamer profile (`yealink`) but with dif
 - **Fix**: `_play_array()` and `_play_raw()` write a temporary s16le WAV file and call `pw-play <tmp.wav>`. Temp file is deleted after playback. Never pipe raw audio to pw-play stdin.
 
 ### 7. Automated Audio Tasks
-- Run once after first boot: `task audio:setup` — sets default routing, unmutes PCM, installs `alsa-pcm-unmute.service`, disables USB autosuspend.
-- `task audio:restart`: restarts WirePlumber and restores NewPie routing/PCM (use when audio drops mid-session).
-- `task audio:status`: displays a status dashboard for the NewPie.
+- Run once after first boot: `task audio:setup` — sets default routing, unmutes hardware mixers, installs `alsa-pcm-unmute.service`, disables USB autosuspend.
+- `task audio:restart`: restarts WirePlumber and restores USB audio routing/mixer levels (use when audio drops mid-session).
+- `task audio:status`: displays a status dashboard for the connected USB audio device.
+- `task audio:doctor`: checks every audio invariant and reports pass/fail.
 - `task audio:test`: plays a test WAV to verify speaker output.
+
+### 8. Testing hot-plug behaviour (replug ≠ unbind)
+- `echo <dev> > /sys/bus/usb/drivers/usb/unbind` / `bind` removes the ALSA/PipeWire card but does **NOT** emit udev `ACTION=="add"` events and does not reset `power/` attributes — it tests PipeWire recovery only, not the udev rules.
+- To exercise the udev path (autosuspend + the `SYSTEMD_USER_WANTS=alsa-pcm-unmute.service` replug trigger): `sudo udevadm trigger --action=add /sys/bus/usb/devices/<dev>`.
+- On physical replug, WirePlumber can bring the card up with an **output-only profile** (input marked unavailable while a Bluetooth dongle relinks) — the udev-triggered restore service run is what repairs profile + routing.
+
+## STT recognition & latency notes
+
+- **Latency budget**: perceived response ≈ silence-endpoint wait + ~130 ms Vosk decode. `stt.vad_silence_ms: 900` is the fragmentation-safe endpoint for free-form speech.
+- **Fast endpoint** (`stt.fast_vad_ms: 400`, `_fast_partial_hit()` in `stt.py`): when the Vosk *partial* transcript already fully matches a wake word or a complete trigger, the endpoint fires after 400 ms of silence instead of 900 ms (measured on-board: wake at 402 ms after speech end). Free-form utterances (LLM fallback) never match, so they keep the long endpoint. Overridable per GStreamer profile; 0 disables.
+- **Wake-match semantics** (`stt_phonetics.py`): all phrase words must phonetically match the transcript, EXCEPT when the transcript is *nothing but* the phrase's distinctive keyword (len ≥ 4) — an isolated "galileo" wakes "ehi galileo" (truncated-wake recall), but "il galileo" or the keyword inside conversation stays silent (false-wake protection). Both behaviours are pinned by `tests/eval/corpus.yaml`.
+- **The matching regression gate is `task eval`** (`tests/eval/corpus.yaml` + `tests/test_match_eval.py`), asserting 100% precision / 100% recall. Add every new real-world false wake or missed phrase to the corpus — never work around it in code.
+- **Trigger-audio diagnosis**: enable `actions.dump_triggers_dir` in `conf/config.yaml` to dump an 8 s pre-trigger WAV on every match (the rolling buffer is byte-budgeted — do not size it in chunks, capture backends deliver anywhere from ~320 B to 4 KB per read). Analyze with `task stt:analyze-dumps`. A *successful* match's dump usually also contains the failed attempt just before it.
+- **RMS probes of the mic are inconclusive on quiet rooms**: the SP92's hardware NS gates silence to digital zero, so "all zeros" ≠ dead link. Confirm the mic is alive from the daemon's live `DEBUG Transcript:` journal lines instead.
+- **End-to-end pipeline tests without a mic**: `serena-stt --play file.wav` replays a WAV through the REAL recognition loop (`start_stt_thread` → `_recognition_loop`), including fast-endpoint behaviour — synthesize test phrases with Piper, resample to 16 kHz mono, append ≥2 s of silence. Note: `python -m alexa_custom.stt_cli` does nothing (no `__main__` guard) — call `stt_cli.main()` or the `serena-stt` script.
+
+## TTS performance notes
+
+- **Piper is slower than realtime on this board**: ~1.9 s to first audio for a short phrase (RTF 1.3–1.75, medium voice). Mitigations already in place — clause-splitting streams audio to `paplay` per clause, ORT warm-up at load, and an LRU cache in `PiperTTS` (32 entries, texts ≤ 200 chars) that makes repeated prompts instant. Volume is applied at playback time, so cached audio follows volume changes.
+- If uncached synthesis latency matters more than voice quality, an `it_IT-*-low` voice is ~2× faster.
 
 ## Project structure
 
@@ -247,7 +276,8 @@ models/             bundled STT/TTS model files
 docs/               extended notes (audio platform, hardware, setup)
   stt-simple.md     STT pipeline, GStreamer calibration, config reference
 kernel/             kernel build scripts/configs for the board
-setup/              systemd service unit
+setup/              systemd units, udev rules, usb-audio-restore.sh
+tests/eval/         corpus.yaml — labelled matching corpus (task eval regression gate)
 .claude/
   settings.json     MCP server registration (serena-calibrate, headroom)
   skills/           agent skills (calibrate-gstreamer, …)
@@ -266,6 +296,7 @@ recognition:
 stt:
   backend: vosk            # vosk (single always-on model)
   vad_silence_ms: 900
+  fast_vad_ms: 400         # early endpoint when the partial already matches (see STT notes)
 ```
 
 `conf/actions/user.yaml` — triggers (and optional extra wake phrases):

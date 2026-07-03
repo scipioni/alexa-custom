@@ -283,9 +283,20 @@ def _recognition_loop(
             _vad_silence_ms,
         )
 
-    _audio_buf: collections.deque[bytes] = collections.deque(
-        maxlen=int(8 * 16000 * 2 * channels // 4096) + 1
-    )
+    # Rolling pre-trigger buffer for dump_triggers_dir, budgeted in BYTES.
+    # Chunk sizes vary by capture backend (parec ~4 KB reads, GStreamer ~320-byte
+    # 10 ms buffers), so a chunk-count maxlen silently shrinks the window — a
+    # 63-chunk cap held ~1.2 s of gst audio instead of the intended 8 s.
+    _audio_buf: collections.deque[bytes] = collections.deque()
+    _audio_buf_bytes = 0
+    _audio_buf_max = 8 * 16000 * 2 * channels
+
+    def _buffer_dump_audio(chunk: bytes) -> None:
+        nonlocal _audio_buf_bytes
+        _audio_buf.append(chunk)
+        _audio_buf_bytes += len(chunk)
+        while _audio_buf_bytes > _audio_buf_max:
+            _audio_buf_bytes -= len(_audio_buf.popleft())
 
     _listen_fn = _make_listen_fn(
         proc,
@@ -484,7 +495,7 @@ def _recognition_loop(
             speech_ms += (len(data) / 2) / 16000.0 * 1000.0
 
         if config.dump_triggers_dir:
-            _audio_buf.append(data)
+            _buffer_dump_audio(data)
 
         endpoint = backend.accept_waveform(data)
 
