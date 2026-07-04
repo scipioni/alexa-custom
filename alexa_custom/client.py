@@ -875,14 +875,89 @@ def ensure_setup() -> None:
             logger.error(f"Failed to download Piper voice: {e}")
 
 
+# Keep-alive stream level: ~-60 dBFS uniform noise (inaudible on a speakerphone
+# at normal volume). Digital ZEROS are not enough — the SP92's DSP treats an
+# all-zero stream as "nothing playing" and lets its microphone path doze even
+# while the PipeWire sink shows RUNNING, garbling the first utterance after
+# idle. Real (but inaudible) samples keep the device's audio chain engaged.
+_KEEP_ALIVE_AMPLITUDE = 33  # int16 counts ≈ -60 dBFS
+_KEEP_ALIVE_RATE = 16000
+
+
+def _start_keep_alive_stream() -> None:
+    """Feed low-level noise to the default sink from a daemon thread, forever.
+
+    Restarts pacat if it dies (e.g. device replug). Runs detached — failures
+    are logged and retried, never propagated.
+    """
+    import random
+    import shutil
+    import struct
+    import subprocess
+    import threading
+
+    pacat_bin = shutil.which("pacat")
+    if not pacat_bin:
+        logger.warning("keep_sink_alive: pacat not found — keep-alive stream disabled")
+        return
+
+    # One second of pre-generated noise, looped (content repetition is fine —
+    # the point is non-zero PCM, not spectral quality).
+    rng = random.Random(0)
+    second = struct.pack(
+        f"<{_KEEP_ALIVE_RATE}h",
+        *(
+            rng.randint(-_KEEP_ALIVE_AMPLITUDE, _KEEP_ALIVE_AMPLITUDE)
+            for _ in range(_KEEP_ALIVE_RATE)
+        ),
+    )
+    block = second[: _KEEP_ALIVE_RATE // 10 * 2]  # 100 ms per write
+
+    def _run() -> None:
+        while True:
+            try:
+                proc = subprocess.Popen(
+                    [
+                        pacat_bin,
+                        f"--rate={_KEEP_ALIVE_RATE}",
+                        "--channels=1",
+                        "--format=s16le",
+                    ],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                assert proc.stdin is not None
+                pos = 0
+                while True:
+                    # len(second) is a whole multiple of the block size, so
+                    # every slice is a full 100 ms block; pacat's realtime
+                    # consumption paces the writes.
+                    proc.stdin.write(second[pos : pos + len(block)])
+                    proc.stdin.flush()
+                    pos = (pos + len(block)) % len(second)
+            except Exception as e:
+                logger.warning(
+                    "keep_sink_alive: stream died (%s) — restarting in 5s", e
+                )
+                time.sleep(5)
+
+    logger.info(
+        "USB output active: starting keep-alive stream (%d-count noise ≈ -60 dBFS) to keep the sink and any radio link behind it awake",
+        _KEEP_ALIVE_AMPLITUDE,
+    )
+    threading.Thread(target=_run, daemon=True, name="keep-sink-alive").start()
+
+
 def _keep_sink_alive_enabled(config: ActionsConfig) -> bool:
     """Decide whether to run the background silent stream.
 
-    audio.keep_sink_alive: true/false force it; "auto" (default) enables it
-    when the configured output resolves to a USB sink (any vendor) — the case
-    where a dongle's radio link can idle out when nothing plays.
+    audio.keep_sink_alive: false (default) keeps it off; true forces it on;
+    "auto" enables it when the configured output resolves to a USB sink (any
+    vendor) — the case where a dongle's radio link can idle out when nothing
+    plays.
     """
-    setting = getattr(config.audio, "keep_sink_alive", "auto")
+    setting = getattr(config.audio, "keep_sink_alive", False)
     if isinstance(setting, bool):
         return setting
     normalized = str(setting).strip().lower()
@@ -953,29 +1028,13 @@ def main() -> None:
     if config is not None:
         audio_hw.configure(config)
 
-    # Background silent stream keeps the sink active. Bluetooth-dongle
+    # Background keep-alive stream keeps the sink active. Bluetooth-dongle
     # speakerphones (e.g. Yealink BT51) drop their radio audio link when the
     # sink idles, so the capture returns only clock noise until something
-    # plays. audio.keep_sink_alive: auto (default) enables it whenever the
-    # output resolves to a USB sink; true/false force it on/off.
+    # plays. audio.keep_sink_alive: false (default) — opt in with true, or
+    # "auto" to enable whenever the output resolves to a USB sink.
     if config is not None and _keep_sink_alive_enabled(config):
-        import shutil
-        import subprocess
-
-        pacat_bin = shutil.which("pacat") or shutil.which("paplay")
-        if pacat_bin:
-            try:
-                logger.info(
-                    "USB output active: starting background silent stream to keep the sink (and any radio link behind it) awake"
-                )
-                subprocess.Popen(
-                    f"cat /dev/zero | {pacat_bin} --rate=16000 --channels=1 --format=s16le",
-                    shell=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-            except Exception as e:
-                logger.warning("Failed to start background silent stream: %s", e)
+        _start_keep_alive_stream()
 
     input_spec = config.audio.input_device if config is not None else None
     output_spec = config.audio.output_device if config is not None else None

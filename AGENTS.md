@@ -97,7 +97,7 @@ The audio stack does not hardcode product names — everything matches "any USB 
 - **udev/sysfs**: USB audio devices carry an audio-class (`01`) interface — used by `setup/99-usb-audio-no-autosuspend.rules` and `setup/usb-audio-autosuspend.service`.
 - **Daemon config**: `audio.card_name/input_device/output_device: auto` resolves to the first USB card/source/sink. A name substring still works to pin a specific device.
 - **Profile selection** (`setup/usb-audio-restore.sh`, installed to `~/.local/bin/serena-usb-audio-restore` by `task audio:setup`): prefers `output:analog-stereo+input:analog-stereo`, then `output:analog-stereo+input:mono-fallback`, then any other combined `output:*+input:*` profile, then `pro-audio`. The choice is written to WirePlumber's state file (`~/.local/state/wireplumber/default-profile`) so it persists across reboots. At boot the restore service **respects an existing entry** in that state file, so a manual override (e.g. `pro-audio` for a direct-USB SP92) survives; `task audio:setup` re-runs selection and overwrites it.
-- **Keep-alive**: `audio.keep_sink_alive: auto` starts a background silent stream when the output is a USB sink, keeping Bluetooth-dongle radio links (BT51-style) awake.
+- **Keep-alive**: `audio.keep_sink_alive` — **disabled (`false`) by default**; set to `true` (always on) or `"auto"` (on when the output resolves to a USB sink) to enable. When on, it starts a background stream of **inaudible ~-60 dBFS noise** (not digital zeros — the SP92's DSP treats an all-zero stream as "nothing playing" and lets its mic path doze even while the PipeWire sink shows RUNNING), keeping Bluetooth-dongle radio links (BT51-style) and the device DSP awake. Opt in for Yealink BT51-style dongles that idle out their radio link. The recognition loop additionally resets the Vosk decoder after every 30 s of continuous silence so the first utterance after idle decodes from clean state.
 
 Device-specific quirks below still apply when that hardware is present.
 
@@ -235,6 +235,21 @@ Both SP92 and BT51 use the same named GStreamer profile (`yealink`) but with dif
 - `echo <dev> > /sys/bus/usb/drivers/usb/unbind` / `bind` removes the ALSA/PipeWire card but does **NOT** emit udev `ACTION=="add"` events and does not reset `power/` attributes — it tests PipeWire recovery only, not the udev rules.
 - To exercise the udev path (autosuspend + the `SYSTEMD_USER_WANTS=alsa-pcm-unmute.service` replug trigger): `sudo udevadm trigger --action=add /sys/bus/usb/devices/<dev>`.
 - On physical replug, WirePlumber can bring the card up with an **output-only profile** (input marked unavailable while a Bluetooth dongle relinks) — the udev-triggered restore service run is what repairs profile + routing.
+
+## Wi-Fi Stability (ath10k_snoc power-save deauth loop)
+
+- **Problem**: The onboard Qualcomm WCN3990 Wi-Fi chip (`ath10k_snoc` driver) defaults to power-save mode. When the board is idle (its normal state between wake-word triggers), the AP eventually loses track of the association; the next frame the STA sends gets rejected and the kernel logs `wlan0: deauthenticated ... Reason: 7=CLASS3_FRAME_FROM_NONASSOC_STA`, immediately followed by a reauth/reassociate. Each cycle self-heals in ~1s, but it repeats every ~100-160s indefinitely (571 occurrences logged over one 16.5h idle stretch) and can coincide with a real request failing mid-flap (e.g. an outbound API call timing out), which looks like the board "lost Wi-Fi."
+- **Diagnosis**: `journalctl -k | grep "Reason: 7"` — a steady drumbeat of these entries confirms the power-save loop rather than a genuine RF/AP problem. Check live state with `sudo /usr/sbin/iw dev wlan0 get power_save` (note: `iw` is installed at `/usr/sbin/iw`, not on `PATH`).
+- **Fix**: Disable Wi-Fi power-save both persistently and live:
+  ```bash
+  # Persist across reboots/reconnects (per NM connection profile)
+  sudo nmcli connection modify <ssid> 802-11-wireless.powersave 2
+
+  # Apply immediately without dropping the current association
+  # (nmcli device reapply does NOT support live powersave changes)
+  sudo /usr/sbin/iw dev wlan0 set power_save off
+  ```
+- **Rule**: Any board redeployed or re-provisioned should have `802-11-wireless.powersave` explicitly set to `2` (disable) on its Wi-Fi connection profile — do not rely on the driver/NM default, which enables power-save.
 
 ## STT recognition & latency notes
 

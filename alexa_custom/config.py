@@ -160,8 +160,10 @@ class AudioConfig:
     output_device: str | None = None
     # Background silent stream that keeps the output sink (and any radio link
     # behind it, e.g. a Bluetooth dongle) active: true | false | "auto"
-    # (auto = enabled when the output resolves to a USB sink).
-    keep_sink_alive: bool | str = "auto"
+    # (auto = enabled when the output resolves to a USB sink). Disabled by
+    # default — opt in for Yealink BT51-style dongles that idle out their
+    # radio link.
+    keep_sink_alive: bool | str = False
     output_volume: float = 0.5
     input_gain: float = 1.0
     sample_rates: dict = field(
@@ -746,7 +748,7 @@ def _parse_audio_config(raw: dict) -> AudioConfig:
         profiles=profiles,
     )
 
-    keep_sink_alive_raw = raw.get("keep_sink_alive", "auto")
+    keep_sink_alive_raw = raw.get("keep_sink_alive", False)
     keep_sink_alive: bool | str = (
         keep_sink_alive_raw
         if isinstance(keep_sink_alive_raw, bool)
