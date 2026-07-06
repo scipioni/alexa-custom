@@ -82,15 +82,23 @@
 
 ## 🚀 Quick Start
 
+network connection
+```
+nmcli connection modify <name> ipv6.method disable
+nmcli connection modify <name> 802-11-wireless.powersave 2
+```
+
 ```bash
 # 1. System dependencies (Debian 13)
-sudo apt install python3-venv pipewire pulseaudio-utils alsa-utils
+sudo apt install python3-venv pipewire pulseaudio-utils alsa-utils libportaudio2
+sudo apt install -y libgstreamer1.0-dev gstreamer1.0-plugins-bad gstreamer1.0-tools gstreamer1.0-pipewire python3-gst-1.0
 
 # 2. Python environment
 python3 -m venv .venv && source .venv/bin/activate
 
 # 3. Install Serena
 pip install -e .
+pip install -e .[gstreamer]
 pip install smbus2   # optional: I2C OLED display
 
 # 4. Download speech models (Vosk, Piper)
@@ -99,11 +107,12 @@ serena-setup
 # 5. Configure audio routing (run once)
 sudo apt install task  
 task audio:setup
+task setup:gstreamer
 
 # 6. Create configuration
 mkdir -p conf/actions
-cp conf.example/config.yaml conf/config.yaml
-cp conf.example/secrets.yaml conf/secrets.yaml
+cp -a conf.example conf
+
 
 # 7A. Install as a systemd service (recommended for headless use)
 task setup

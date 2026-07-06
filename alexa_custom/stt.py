@@ -267,6 +267,14 @@ def _recognition_loop(
     last_speech_t: float = 0.0
     was_gated = False
     _last_partial: str = ""
+    # Decoder hygiene during idle: hardware-NS speakerphones (SP92) gate a
+    # quiet room to digital zeros, and minutes of pure zeros are pathological
+    # input for Vosk's adaptive decoder state. Reset the recognizer after
+    # every _IDLE_RESET_S of continuous sub-threshold audio so the first real
+    # utterance after idle decodes from a clean slate.
+    _IDLE_RESET_S = 30.0
+    _last_voice_t: float = time.monotonic()
+    _last_idle_reset: float = time.monotonic()
 
     from alexa_custom.audio_hw import get_profile_stt_overrides as _get_stt_overrides
 
@@ -497,7 +505,16 @@ def _recognition_loop(
         now = time.monotonic()
         if rms > _eff_rms:
             last_speech_t = now
+            _last_voice_t = now
             speech_ms += (len(data) / 2) / 16000.0 * 1000.0
+        elif (
+            speech_ms == 0.0
+            and now - max(_last_voice_t, _last_idle_reset) >= _IDLE_RESET_S
+        ):
+            # Long idle, no utterance in progress: clear decoder state built
+            # up from gated silence/zeros before real speech arrives.
+            backend.reset()
+            _last_idle_reset = now
 
         if config.dump_triggers_dir:
             _buffer_dump_audio(data)
