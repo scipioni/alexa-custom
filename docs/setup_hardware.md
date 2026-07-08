@@ -101,3 +101,7 @@ When using `stt.capture_backend: gstreamer`, you can configure named capture pro
 ### 4. Display Feedback (Optional)
 
 The Arduino UNO Q has a built-in LED matrix. See [`docs/display_setup.md`](display_setup.md) for setup instructions.
+
+### 5. Backup / Image Dump (Optional)
+
+To back up or dump the entire system image from an active board (e.g. `2q`) back to your development machine as `1q.img`, see [`docs/image_dump.md`](image_dump.md).
