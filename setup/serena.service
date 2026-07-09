@@ -15,6 +15,12 @@ RestartSec=5s
 Environment=PYTHONUNBUFFERED=1
 Environment=LANG=it
 Environment=LOG_LEVEL=DEBUG
+# Systemd watchdog: enable only after an on-board soak (see
+# openspec/changes/harden-serena-runtime/design.md, decision D4) confirming
+# no false-positive kills during long LLM conversations. Once confirmed,
+# uncomment both lines below and change Type=simple to Type=notify above.
+#Type=notify
+#WatchdogSec=90
 
 [Install]
 WantedBy=default.target

@@ -295,9 +295,13 @@ def _recognition_loop(
     # Chunk sizes vary by capture backend (parec ~4 KB reads, GStreamer ~320-byte
     # 10 ms buffers), so a chunk-count maxlen silently shrinks the window — a
     # 63-chunk cap held ~1.2 s of gst audio instead of the intended 8 s.
+    # The buffer always holds post-downmix MONO s16le chunks (_iter_gated_audio
+    # downmixes before yielding), regardless of the capture's own channel
+    # count — so the budget and dump WAV must always be sized for 1 channel,
+    # not the capture `channels` (which was doubling both for stereo sources).
     _audio_buf: collections.deque[bytes] = collections.deque()
     _audio_buf_bytes = 0
-    _audio_buf_max = 8 * 16000 * 2 * channels
+    _audio_buf_max = 8 * 16000 * 2
 
     def _buffer_dump_audio(chunk: bytes) -> None:
         nonlocal _audio_buf_bytes
@@ -351,9 +355,9 @@ def _recognition_loop(
         nonlocal wake_deadline
 
         if config.dump_triggers_dir:
-            _dump_trigger_wav(
-                _audio_buf, channels, trigger.phrase, config.dump_triggers_dir
-            )
+            # _audio_buf holds post-downmix mono chunks regardless of the
+            # capture's channel count — always dump as 1 channel.
+            _dump_trigger_wav(_audio_buf, 1, trigger.phrase, config.dump_triggers_dir)
 
         metrics.inc("commands_matched")
         if on_stt_event:
@@ -388,18 +392,34 @@ def _recognition_loop(
             if trigger.dispatch_timeout is not None
             else config.recognition.dispatch_timeout
         )
+
+        async def _dispatch_with_heartbeat() -> None:
+            # Keep the watchdog heartbeat fresh for legitimate long dispatches
+            # (e.g. LLM conversations with reply windows) by stamping while
+            # the dispatch coroutine is actually yielding control back to the
+            # loop. A dispatch wedged in a non-yielding call (e.g. a
+            # synchronous subprocess without a timeout) blocks this loop too,
+            # so the stamp correctly stops advancing in that case.
+            async def _stamp_periodically() -> None:
+                while True:
+                    await asyncio.sleep(5.0)
+                    _stt_heartbeat[0] = time.monotonic()
+
+            stamp_task = asyncio.ensure_future(_stamp_periodically())
+            try:
+                await dispatch(
+                    trigger,
+                    _ctx,
+                    wake_word=wake_phrase or "",
+                    transcript=transcript,
+                )
+            finally:
+                stamp_task.cancel()
+
         try:
             _ctx.livekit_connected = livekit_connected_flag.is_set()
             dispatch_loop.run_until_complete(
-                asyncio.wait_for(
-                    dispatch(
-                        trigger,
-                        _ctx,
-                        wake_word=wake_phrase or "",
-                        transcript=transcript,
-                    ),
-                    timeout=_timeout,
-                )
+                asyncio.wait_for(_dispatch_with_heartbeat(), timeout=_timeout)
             )
         except asyncio.TimeoutError:
             logger.warning(
@@ -440,6 +460,7 @@ def _recognition_loop(
         post_playback_ms=config.audio.post_playback_ms,
         dispatch_ended_at=_dispatch_ended_at,
         restart_event=capture_restart_event,
+        capture_stall_secs=config.stt.capture_stall_secs,
     ):
         _stt_heartbeat[0] = time.monotonic()
 
@@ -475,9 +496,11 @@ def _recognition_loop(
                 _adaptive = (
                     sum(_noise_floor) / len(_noise_floor)
                 ) + config.stt.adaptive_rms_margin
-                # Profile rms_threshold acts as a ceiling: the adaptive
-                # mechanism cannot raise sensitivity above the profile value.
-                _eff_rms = min(
+                # Profile rms_threshold acts as a floor: the adaptive
+                # mechanism may raise the threshold in a loud room, but never
+                # drops below the calibrated profile value (which sets the
+                # minimum sensitivity ceiling for a quiet room).
+                _eff_rms = max(
                     _adaptive, float(_profile_stt.get("rms_threshold", _adaptive))
                 )
 
@@ -652,9 +675,10 @@ def _recognition_loop(
                 config.recognition.wake_window,
             )
             if config.dump_triggers_dir:
+                # _audio_buf holds post-downmix mono chunks — always dump 1ch.
                 _dump_trigger_wav(
                     _audio_buf,
-                    channels,
+                    1,
                     f"wake_{wake_phrase}",
                     config.dump_triggers_dir,
                 )
@@ -846,21 +870,34 @@ def run_stt_worker(
             f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "idle", loop=loop
         )
 
-    try:
-        t0 = time.monotonic()
-        backend = get_stt_backend(
-            current_config.stt, grammar=_loop_grammar(current_config)
-        )
-        logger.info(
-            "STT backend (%s) loaded in %.1fs (grammar=%s, confidence=%.2f/%s)",
-            current_config.stt.backend,
-            time.monotonic() - t0,
-            current_config.stt.vosk_grammar,
-            current_config.stt.confidence,
-            current_config.stt.confidence_mode,
-        )
-    except RuntimeError as e:
-        logger.error("STT backend creation failed: %s", e)
+    backend = None
+    _load_backoff = 10.0
+    while backend is None and not stop_event.is_set():
+        try:
+            t0 = time.monotonic()
+            backend = get_stt_backend(
+                current_config.stt, grammar=_loop_grammar(current_config)
+            )
+            logger.info(
+                "STT backend (%s) loaded in %.1fs (grammar=%s, confidence=%.2f/%s)",
+                current_config.stt.backend,
+                time.monotonic() - t0,
+                current_config.stt.vosk_grammar,
+                current_config.stt.confidence,
+                current_config.stt.confidence_mode,
+            )
+        except Exception as e:
+            logger.error(
+                "STT backend creation failed: %s — retrying in %.0fs",
+                e,
+                _load_backoff,
+                exc_info=True,
+            )
+            stop_event.wait(_load_backoff)
+            _load_backoff = min(_load_backoff * 2, 60.0)
+
+    if backend is None:
+        # stop_event was set while waiting on a retry — clean shutdown.
         return
 
     backend_key = _get_backend_key(current_config)
@@ -901,8 +938,8 @@ def run_stt_worker(
                         "STT backend reloaded (%.1fs) after config change",
                         time.monotonic() - t0,
                     )
-                except RuntimeError as e:
-                    logger.error("STT backend reload failed: %s", e)
+                except Exception as e:
+                    logger.error("STT backend reload failed: %s", e, exc_info=True)
                     stop_event.wait(2)
                     continue
 
@@ -943,6 +980,15 @@ def run_stt_worker(
                     try:
                         proc.terminate()
                         proc.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        logger.warning(
+                            "Capture process ignored SIGTERM — sending SIGKILL"
+                        )
+                        proc.kill()
+                        try:
+                            proc.wait(timeout=2)
+                        except Exception:
+                            pass
                     except Exception:
                         pass
     finally:

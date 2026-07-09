@@ -29,116 +29,30 @@ import threading
 logger = logging.getLogger(__name__)
 
 
-def _build_pipeline_string(
-    source_name: str | None,
-    config,  # GStreamerCaptureConfig
-    write_fd: int,
-) -> str:
-    use_pipewire = config.source == "pipewiresrc"
-    src_element = "pipewiresrc" if use_pipewire else "pulsesrc"
+def _build_dsp_stages(config) -> str:
+    """Build the shared highpass/webrtcdsp/compressor/expander stage chain.
 
-    if use_pipewire:
-        device_prop = (
-            f' target-object="{source_name}"' if source_name else ""
-        )
-    else:
-        device_prop = (
-            f' device="{source_name}"' if source_name else ""
-        )
-
-    latency = "" if use_pipewire else " latency-time=10000 buffer-time=20000"
-
-    # pipewiresrc lets GStreamer negotiate caps all the way to PipeWire, which
-    # then can't resample internally on this board. Pin the source to its native
-    # format so GStreamer's audioconvert/audioresample handle the conversion.
-    native_caps = (
-        " ! audio/x-raw,format=S16LE,rate=48000" if use_pipewire else ""
-    )
-
+    Used identically by the in-process pipeline (_build_pipeline_string) and
+    the gst-launch-1.0 subprocess cmdline (_build_gst_launch_cmdline) so the
+    two paths cannot drift apart again. Input and output are both
+    S16LE/16000Hz/mono.
+    """
     ns_level = max(0, min(3, config.noise_suppression_level))
     target_dbfs = max(0, min(31, abs(config.agc_target_level_dbfs)))
     compression_db = max(0, min(90, config.agc_compression_gain_db))
-
-    webrtc_props = (
-        f"noise-suppression={str(config.noise_suppression).lower()}"
-        f" noise-suppression-level={ns_level}"
-        f" gain-control={str(config.agc).lower()}"
-        f" target-level-dbfs={target_dbfs}"
-        f" compression-gain-db={compression_db}"
-        f" high-pass-filter={str(config.high_pass_filter).lower()}"
-        " echo-cancel=false"
-        " voice-detection=false"
-    )
-
-    compressor_stage = ""
-    if config.compressor:
-        threshold = max(0.0, min(1.0, config.compressor_threshold))
-        ratio = max(1.0, config.compressor_ratio)
-        compressor_stage = (
-            f" ! audiodynamic mode=compressor"
-            f" threshold={threshold:.4f}"
-            f" ratio={ratio:.2f}"
-            " characteristics=soft-knee"
-        )
-
-    expander_stage = ""
-    if getattr(config, "expander", False):
-        threshold = max(0.0, min(1.0, getattr(config, "expander_threshold", 0.05)))
-        ratio = max(0.0, getattr(config, "expander_ratio", 3.0))
-        expander_stage = (
-            f" ! audiodynamic mode=expander"
-            f" threshold={threshold:.4f}"
-            f" ratio={ratio:.2f}"
-            " characteristics=soft-knee"
-        )
 
     cheblimit_stage = ""
     if getattr(config, "highpass_cutoff_hz", 0) > 0:
         cutoff = int(config.highpass_cutoff_hz)
-        # audiocheblimit requires F32LE; audioconvert before it converts S16LE→F32LE.
-        # The trailing audioconvert converts back to S16LE before webrtcdsp.
+        # audiocheblimit requires F32LE: audioconvert before it converts
+        # S16LE→F32LE, audioconvert after it converts back to S16LE so the
+        # next stage (webrtcdsp, which wants S16LE interleaved) links.
         cheblimit_stage = (
             f" ! audioconvert ! audiocheblimit mode=high-pass cutoff={cutoff} poles=4"
+            " ! audioconvert ! audio/x-raw,format=S16LE,rate=16000,channels=1"
         )
 
-    use_webrtcdsp = (
-        config.noise_suppression or config.agc or config.high_pass_filter
-    )
-    webrtcdsp_stage = f" ! webrtcdsp {webrtc_props}" if use_webrtcdsp else ""
-
-    return (
-        f"{src_element}{device_prop}{latency}"
-        f"{native_caps}"
-        " ! audioconvert"
-        " ! audioresample"
-        " ! audio/x-raw,format=S16LE,rate=16000,channels=1"
-        f"{cheblimit_stage}"
-        " ! audioconvert"
-        " ! audio/x-raw,format=S16LE,rate=16000,channels=1"
-        f"{webrtcdsp_stage}"
-        f"{compressor_stage}"
-        f"{expander_stage}"
-        " ! audioconvert"
-        " ! audio/x-raw,format=S16LE,rate=16000,channels=1"
-        " ! queue max-size-buffers=100 leaky=downstream"
-        f" ! fdsink fd={write_fd} sync=false"
-    )
-
-
-def _build_gst_launch_cmdline(source_name: str | None, config) -> str:
-    """Build a gst-launch-1.0 command string for the pipewiresrc subprocess path.
-
-    Quotes the target-object value so names with hyphens/dots are not
-    mis-parsed by gst-launch's element-property parser.
-    """
-    target_prop = f' target-object="{source_name}"' if source_name else ""
-
-    ns_level = max(0, min(3, config.noise_suppression_level))
-    target_dbfs = max(0, min(31, abs(config.agc_target_level_dbfs)))
-    compression_db = max(0, min(90, config.agc_compression_gain_db))
-
     use_webrtcdsp = config.noise_suppression or config.agc or config.high_pass_filter
-
     webrtcdsp_stage = ""
     if use_webrtcdsp:
         webrtcdsp_stage = (
@@ -174,23 +88,60 @@ def _build_gst_launch_cmdline(source_name: str | None, config) -> str:
             " characteristics=soft-knee"
         )
 
-    cheblimit_stage = ""
-    if getattr(config, "highpass_cutoff_hz", 0) > 0:
-        cutoff = int(config.highpass_cutoff_hz)
-        # audiocheblimit requires F32LE; audioconvert before it converts S16LE→F32LE.
-        # The main pipeline's trailing audioconvert converts back to S16LE.
-        cheblimit_stage = (
-            f" ! audioconvert ! audiocheblimit mode=high-pass cutoff={cutoff} poles=4"
-        )
+    return f"{cheblimit_stage}{webrtcdsp_stage}{compressor_stage}{expander_stage}"
+
+
+def _build_pipeline_string(
+    source_name: str | None,
+    config,  # GStreamerCaptureConfig
+    write_fd: int,
+) -> str:
+    use_pipewire = config.source == "pipewiresrc"
+    src_element = "pipewiresrc" if use_pipewire else "pulsesrc"
+
+    if use_pipewire:
+        device_prop = f' target-object="{source_name}"' if source_name else ""
+    else:
+        device_prop = f' device="{source_name}"' if source_name else ""
+
+    latency = "" if use_pipewire else " latency-time=10000 buffer-time=20000"
+
+    # pipewiresrc lets GStreamer negotiate caps all the way to PipeWire, which
+    # then can't resample internally on this board. Pin the source to its native
+    # format so GStreamer's audioconvert/audioresample handle the conversion.
+    native_caps = " ! audio/x-raw,format=S16LE,rate=48000" if use_pipewire else ""
+
+    dsp_stages = _build_dsp_stages(config)
+
+    return (
+        f"{src_element}{device_prop}{latency}"
+        f"{native_caps}"
+        " ! audioconvert"
+        " ! audioresample"
+        " ! audio/x-raw,format=S16LE,rate=16000,channels=1"
+        f"{dsp_stages}"
+        " ! audioconvert"
+        " ! audio/x-raw,format=S16LE,rate=16000,channels=1"
+        " ! queue max-size-buffers=100 leaky=downstream"
+        f" ! fdsink fd={write_fd} sync=false"
+    )
+
+
+def _build_gst_launch_cmdline(source_name: str | None, config) -> str:
+    """Build a gst-launch-1.0 command string for the pipewiresrc subprocess path.
+
+    Quotes the target-object value so names with hyphens/dots are not
+    mis-parsed by gst-launch's element-property parser.
+    """
+    target_prop = f' target-object="{source_name}"' if source_name else ""
+
+    dsp_stages = _build_dsp_stages(config)
 
     pipeline = (
         f"pipewiresrc{target_prop}"
         " ! audioconvert ! audioresample"
         " ! audio/x-raw,format=S16LE,rate=16000,channels=1"
-        f"{cheblimit_stage}"
-        f"{webrtcdsp_stage}"
-        f"{compressor_stage}"
-        f"{expander_stage}"
+        f"{dsp_stages}"
         " ! audioconvert"
         " ! audio/x-raw,format=S16LE,rate=16000,channels=1"
         " ! queue max-size-buffers=100 leaky=downstream"
@@ -241,9 +192,7 @@ def _start_capture_gst_subprocess(source_name: str | None, config) -> GstLaunchC
     import shutil
 
     if not shutil.which("gst-launch-1.0"):
-        raise RuntimeError(
-            "gst-launch-1.0 not found — install gstreamer1.0-tools"
-        )
+        raise RuntimeError("gst-launch-1.0 not found — install gstreamer1.0-tools")
 
     cmd = _build_gst_launch_cmdline(source_name, config)
     logger.info("GStreamer subprocess: %s", cmd)

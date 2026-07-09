@@ -258,7 +258,20 @@ def _capture_loop(
 
     final_text = backend.finalize()
     if final_text:
-        transcript_parts.append(final_text)
+        _final_conf = (
+            backend.last_confidence(confidence_mode)
+            if confidence > 0.0 and isinstance(backend, VoskSTT)
+            else None
+        )
+        if _final_conf is not None and _final_conf < confidence:
+            logger.debug(
+                "Capture finalize() confidence gate rejected %r (conf=%.2f < %.2f)",
+                final_text,
+                _final_conf,
+                confidence,
+            )
+        else:
+            transcript_parts.append(final_text)
 
     return " ".join(transcript_parts).strip()
 

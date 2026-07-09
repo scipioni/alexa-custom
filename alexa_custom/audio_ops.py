@@ -41,12 +41,6 @@ def set_playback_level(level: float) -> None:
     _playback_level = level
 
 
-def set_stt_gated_flag(flag: threading.Event):
-    """Link an external event (like the STT gating flag) to our playback state."""
-    global _playback_active
-    _playback_active = flag
-
-
 def is_playback_active() -> bool:
     """Check if any internal audio playback is currently in progress."""
     return _playback_active.is_set()
@@ -111,54 +105,14 @@ def _play_array(audio: np.ndarray, samplerate: int) -> None:
 
 
 def _play_raw(data: bytes, samplerate: int, channels: int) -> None:
-    """Play raw float32 audio via pw-play (native PipeWire) or aplay (ALSA fallback)."""
-    import tempfile
-    import wave as _wave
+    """Play raw float32 PCM bytes via pw-play/aplay.
 
-    frames = len(data) // (channels * 4)
-    duration_s = frames / samplerate
-    # Headroom over the real duration; no upper cap (see _play_array).
-    play_timeout = max(duration_s + 10, 8)
-
-    volume = get_output_volume()
-    samples = np.frombuffer(data, dtype=np.float32)
-    pcm16 = np.clip(samples * volume * 32767, -32768, 32767).astype(np.int16)
-    tmp_fd, tmp_path = tempfile.mkstemp(suffix=".wav")
-    try:
-        os.close(tmp_fd)
-        with _wave.open(tmp_path, "wb") as wf:
-            wf.setnchannels(channels)
-            wf.setsampwidth(2)
-            wf.setframerate(samplerate)
-            wf.writeframes(pcm16.tobytes())
-
-        sink = get_output_sink()
-        if _PW_PLAY:
-            cmd = [_PW_PLAY]
-            if sink:
-                cmd += ["--target", sink]
-            cmd.append(tmp_path)
-        else:
-            cmd = ["aplay", "-D", "pipewire", "-q", tmp_path]
-
-        with _audio_lock:
-            _playback_active.set()
-            try:
-                subprocess.run(
-                    cmd, timeout=play_timeout, check=False, stderr=subprocess.DEVNULL
-                )
-                post_playback_ms = get_post_playback_ms()
-                if post_playback_ms > 0:
-                    time.sleep(post_playback_ms / 1000.0)
-            except Exception as e:
-                logger.error(f"_play_raw failed: {e}")
-            finally:
-                _playback_active.clear()
-    finally:
-        try:
-            os.unlink(tmp_path)
-        except OSError:
-            pass
+    Thin wrapper around _play_array (kept for API compatibility — re-exported
+    from audio.py) so both raw-bytes and ndarray playback share one temp-WAV
+    write path, subprocess invocation, and error-handling policy.
+    """
+    audio = np.frombuffer(data, dtype=np.float32).reshape(-1, channels)
+    _play_array(audio, samplerate)
 
 
 def play_wav_file(file_path: str) -> None:
@@ -195,14 +149,21 @@ def play_wav_file(file_path: str) -> None:
     with _audio_lock:
         _playback_active.set()
         try:
-            subprocess.run(
-                cmd, timeout=play_timeout, check=False, stderr=subprocess.DEVNULL
+            result = subprocess.run(
+                cmd, timeout=play_timeout, check=False, capture_output=True
             )
+            if result.returncode != 0:
+                logger.error(
+                    "play_wav_file: %s exited %d: %s",
+                    cmd[0],
+                    result.returncode,
+                    result.stderr.decode(errors="replace").strip(),
+                )
             post_playback_ms = get_post_playback_ms()
             if post_playback_ms > 0:
                 time.sleep(post_playback_ms / 1000.0)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error("play_wav_file failed: %s", e)
         finally:
             _playback_active.clear()
 
@@ -224,12 +185,19 @@ def _run_capture_tool(
     data = b""
     try:
         if capture_stdout:
-            # Terminate from a side thread so the blocking read() is bounded
-            # regardless of how the tool buffers.
-            threading.Thread(
-                target=lambda: (time.sleep(duration), proc.terminate()),
-                daemon=True,
-            ).start()
+            # Terminate (then escalate to SIGKILL if ignored) from a side
+            # thread so the blocking read() below is bounded regardless of
+            # how the tool buffers or whether it respects SIGTERM.
+            def _stop_after_duration() -> None:
+                time.sleep(duration)
+                proc.terminate()
+                try:
+                    proc.wait(timeout=2.0)
+                except subprocess.TimeoutExpired:
+                    logger.warning("Capture tool ignored SIGTERM — sending SIGKILL")
+                    proc.kill()
+
+            threading.Thread(target=_stop_after_duration, daemon=True).start()
             data = proc.stdout.read() if proc.stdout else b""
             proc.wait()
         else:

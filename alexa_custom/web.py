@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import re
+import signal
 import sys
 import threading
 import time
@@ -118,7 +119,9 @@ class WebServer:
         self._config_manager: Any = None
         _asset_ver = str(int(time.time()))
         _raw_html = _DASHBOARD_PATH.read_text()
-        self._html = re.sub(r'(/static/[^"]+\.(js|css))"', rf'\1?v={_asset_ver}"', _raw_html)
+        self._html = re.sub(
+            r'(/static/[^"]+\.(js|css))"', rf'\1?v={_asset_ver}"', _raw_html
+        )
         self._clients: set[web.WebSocketResponse] = set()
         self._queue: asyncio.Queue = asyncio.Queue(maxsize=200)
         self._pending_vu: dict[str, float] = {}
@@ -130,13 +133,17 @@ class WebServer:
         self._active_session: dict | None = None
         self._last_history_clear: float = 0.0
 
-        if hot_reload:
-            from alexa_custom.config_manager import ConfigManager
-            from alexa_custom.audio_hw import configure as audio_configure
+        # The YAML config hot-reload watcher runs in the production daemon,
+        # not only under --hot-reload (which gates the separate .py
+        # source-file auto-restart watcher started in run()).
+        from alexa_custom.config_manager import ConfigManager
+        from alexa_custom.audio_hw import configure as audio_configure
+        from alexa_custom.audio_hw import signal_capture_restart
 
-            cm = ConfigManager(None)
-            cm.register_reload_callback(audio_configure)
-            self._config_manager = cm
+        cm = ConfigManager(None)
+        cm.register_reload_callback(audio_configure)
+        cm.register_reload_callback(lambda _cfg: signal_capture_restart())
+        self._config_manager = cm
 
         self._livekit_ok = all(
             os.environ.get(k)
@@ -156,7 +163,11 @@ class WebServer:
         )
         self._history_file = Path("conf/history.jsonl")
         # snapshot for hello message on new WS connects
-        from alexa_custom.audio_hw import get_active_gst_profile, register_profile_callback
+        from alexa_custom.audio_hw import (
+            get_active_gst_profile,
+            register_profile_callback,
+        )
+
         self._state: dict[str, Any] = {
             "status": "Starting…",
             "room": "",
@@ -1129,32 +1140,51 @@ class WebServer:
             pass
 
     async def _stt_watchdog_loop(
-        self, stt_thread_holder: list, stt_params: dict
+        self,
+        stt_thread_holder: list,
+        stt_params: dict,
+        on_stt_event: Callable[[str, dict], None] | None = None,
     ) -> None:
         from alexa_custom.stt import start_stt_thread
 
+        _on_stt_event = on_stt_event or self.on_stt_event
+        check_interval = 5.0
+        backoff_base = 2.0
+        backoff = backoff_base
+        backoff_cap = 60.0
+        healthy_since = time.monotonic()
+
         while True:
-            await asyncio.sleep(5)
-            if not stt_thread_holder[0].is_alive():
-                logger.warning("STT thread died unexpectedly — restarting")
-                await self._broadcast({"type": "stt", "state": "stt_dead"})
-                new_stop = threading.Event()
-                stt_params["stop_event"] = new_stop
-                new_thread = start_stt_thread(
-                    config=lambda: (
-                        self._config_manager.config
-                        if self._config_manager
-                        and self._config_manager.config is not None
-                        else stt_params["config"]
-                    ),
-                    stop_event=new_stop,
-                    telegram_client=stt_params["telegram_client"],
-                    livekit_connect_fn=stt_params["connect_fn"],
-                    livekit_connected_flag=stt_params["connected_flag"],
-                    on_stt_event=self.on_stt_event,
-                    stt_ready_event=stt_params.get("stt_ready_event"),
-                )
-                stt_thread_holder[0] = new_thread
+            await asyncio.sleep(check_interval)
+            if stt_thread_holder[0].is_alive():
+                if time.monotonic() - healthy_since >= 600:
+                    backoff = backoff_base
+                continue
+
+            logger.error("STT thread died unexpectedly — restarting in %.0fs", backoff)
+            await self._broadcast({"type": "stt", "state": "stt_dead"})
+            await asyncio.sleep(backoff)
+
+            _mqtt_holder = stt_params.get("mqtt_client_holder")
+            new_stop = threading.Event()
+            stt_params["stop_event"] = new_stop
+            new_thread = start_stt_thread(
+                config=lambda: (
+                    self._config_manager.config
+                    if self._config_manager and self._config_manager.config is not None
+                    else stt_params["config"]
+                ),
+                stop_event=new_stop,
+                telegram_client=stt_params["telegram_client"],
+                livekit_connect_fn=stt_params["connect_fn"],
+                livekit_connected_flag=stt_params["connected_flag"],
+                on_stt_event=_on_stt_event,
+                mqtt_client=_mqtt_holder[0] if _mqtt_holder else None,
+                stt_ready_event=stt_params.get("stt_ready_event"),
+            )
+            stt_thread_holder[0] = new_thread
+            healthy_since = time.monotonic()
+            backoff = min(backoff * 2, backoff_cap)
 
     # ── logging ───────────────────────────────────────────────────────────────
 
@@ -1264,8 +1294,6 @@ class WebServer:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         self._livekit_loop = loop
-        livekit_stop = asyncio.Event()
-        self._livekit_stop_event = livekit_stop
 
         def _exc_handler(lp: asyncio.AbstractEventLoop, context: dict) -> None:
             if isinstance(context.get("exception"), asyncio.QueueFull):
@@ -1273,14 +1301,54 @@ class WebServer:
             lp.default_exception_handler(context)
 
         loop.set_exception_handler(_exc_handler)
-        try:
-            loop.run_until_complete(
-                run_fn(stop_threading, on_event_cb or self.on_event, livekit_stop)
-            )
-        except Exception as e:
-            self._enqueue("error", {"msg": str(e)})
-        finally:
-            loop.close()
+
+        # Supervise run_fn (the LiveKit connect/reconnect loop): an uncaught
+        # exception here previously killed this thread silently, with the
+        # daemon's ability to place/receive calls gone but nothing else
+        # (web dashboard, STT) showing any sign of it. Restart with backoff,
+        # logging to the journal — parity with the STT thread watchdog.
+        backoff_base = 5.0
+        backoff_cap = 60.0
+        backoff = backoff_base
+
+        while not stop_threading.is_set():
+            livekit_stop = asyncio.Event()
+            self._livekit_stop_event = livekit_stop
+            started = time.monotonic()
+            try:
+                loop.run_until_complete(
+                    run_fn(stop_threading, on_event_cb or self.on_event, livekit_stop)
+                )
+                break  # run_fn returned normally (stop_threading was set)
+            except RuntimeError as e:
+                if "is not set" in str(e):
+                    # require_env(): missing LIVEKIT_* configuration is not
+                    # something a retry can fix. Log loudly and give up on
+                    # the LiveKit loop only — web dashboard and STT continue.
+                    logger.critical(
+                        "LiveKit worker: missing required configuration — %s "
+                        "— giving up on LiveKit; web dashboard and STT remain available",
+                        e,
+                    )
+                    self._enqueue("error", {"msg": str(e)})
+                    return
+                logger.exception("LiveKit worker crashed")
+                self._enqueue("error", {"msg": str(e)})
+            except Exception as e:
+                logger.exception("LiveKit worker crashed")
+                self._enqueue("error", {"msg": str(e)})
+
+            if stop_threading.is_set():
+                break
+            if time.monotonic() - started >= 300:
+                backoff = backoff_base
+            logger.warning("LiveKit worker restarting in %.0fs", backoff)
+            deadline = time.monotonic() + backoff
+            while time.monotonic() < deadline and not stop_threading.is_set():
+                time.sleep(0.5)
+            backoff = min(backoff * 2, backoff_cap)
+
+        loop.close()
 
     # ── main coroutine ────────────────────────────────────────────────────────
 
@@ -1312,14 +1380,36 @@ class WebServer:
         ):
             self._history_file = Path(config_obj.web.history_file)
 
+        # Always run the YAML config hot-reload watcher in production (spec:
+        # yaml-config "Hot-reload watcher"). --hot-reload gates only the
+        # separate .py source-file auto-restart watcher below.
+        if self._config_manager is not None:
+            if config_obj is not None:
+                self._config_manager.config = config_obj
+            self._config_manager.start_watcher(self._conf_dir / "config.yaml")
+
+            mqtt_client_holder = (
+                stt_params.get("mqtt_client_holder") if stt_params else None
+            )
+            if mqtt_client_holder is not None:
+                from alexa_custom.client import make_mqtt_reload_callback
+
+                self._config_manager.register_reload_callback(
+                    make_mqtt_reload_callback(
+                        mqtt_client_holder,
+                        lambda: self._livekit_loop,
+                        initial_config=config_obj,
+                    )
+                )
+
         if hot_reload:
-            from alexa_custom.config_manager import ConfigManager
 
             async def _on_source_restart():
                 await self._broadcast({"type": "restarting"})
 
-            cm = ConfigManager(None)
-            cm.start_source_watcher("alexa_custom", on_restart=_on_source_restart)
+            self._config_manager.start_source_watcher(
+                "alexa_custom", on_restart=_on_source_restart
+            )
 
         app = web.Application()
         app.router.add_get("/", self._handle_index)
@@ -1401,6 +1491,7 @@ class WebServer:
         if stt_params is not None:
             from alexa_custom.stt import start_stt_thread
 
+            _mqtt_holder = stt_params.get("mqtt_client_holder")
             stt_thread = start_stt_thread(
                 config=lambda: (
                     self._config_manager.config
@@ -1412,15 +1503,28 @@ class WebServer:
                 livekit_connect_fn=stt_params["connect_fn"],
                 livekit_connected_flag=stt_params["connected_flag"],
                 on_stt_event=_on_stt_event,
+                mqtt_client=_mqtt_holder[0] if _mqtt_holder else None,
                 stt_ready_event=stt_params.get("stt_ready_event"),
             )
             stt_thread_holder = [stt_thread]
             watchdog_task = asyncio.create_task(
-                self._stt_watchdog_loop(stt_thread_holder, stt_params)
+                self._stt_watchdog_loop(stt_thread_holder, stt_params, _on_stt_event)
             )
 
+        # SIGTERM (systemctl stop/restart) otherwise kills the process without
+        # running any of the teardown below; SIGINT already raises
+        # KeyboardInterrupt via Python's default handler, but installing an
+        # explicit handler for both lets a single stop_evt drive one ordered
+        # shutdown path regardless of signal.
+        stop_evt = asyncio.Event()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                self._loop.add_signal_handler(sig, stop_evt.set)
+            except (NotImplementedError, RuntimeError):
+                pass
+
         try:
-            await asyncio.Future()  # blocks until cancelled (Ctrl+C)
+            await stop_evt.wait()
         except asyncio.CancelledError:
             pass
         finally:
@@ -1434,6 +1538,14 @@ class WebServer:
             stop_threading.set()
             if stt_params:
                 stt_params["stop_event"].set()
+                _mqtt_holder = stt_params.get("mqtt_client_holder")
+                if _mqtt_holder and _mqtt_holder[0] is not None:
+                    try:
+                        await asyncio.wait_for(
+                            _mqtt_holder[0].publish_offline(), timeout=0.5
+                        )
+                    except Exception as e:
+                        logger.debug("Shutdown: MQTT offline publish failed: %s", e)
             audio_watcher.stop()
             for ws in list(self._clients):
                 try:
@@ -1495,5 +1607,9 @@ def run_web(
             )
         )
     except KeyboardInterrupt:
+        # Defensive fallback: server.run() installs its own SIGINT/SIGTERM
+        # handlers and returns normally after ordered teardown (see the
+        # graceful-shutdown spec), so this is only hit if handler
+        # installation failed (e.g. running outside the main thread).
         if shutdown_callback is not None:
             shutdown_callback()

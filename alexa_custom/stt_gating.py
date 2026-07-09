@@ -229,6 +229,7 @@ def _iter_gated_audio(
     post_playback_ms: float = 100.0,
     dispatch_ended_at: list[float] | None = None,
     restart_event: threading.Event | None = None,
+    capture_stall_secs: float = 30.0,
 ) -> Iterator[bytes | None]:
     """Yield downmixed mono chunks; yield None once per playback-end drain.
 
@@ -263,6 +264,7 @@ def _iter_gated_audio(
     # log (vs one that simply has a slow cold start).
     _capture_started_at = time.monotonic()
     _first_buffer_logged = False
+    _last_data_at = time.monotonic()
     assert proc.stdout is not None
     while not stop_event.is_set():
         if restart_event is not None and restart_event.is_set():
@@ -293,8 +295,20 @@ def _iter_gated_audio(
                     backend_label,
                 )
                 _stall_logged = True
+            if (
+                capture_stall_secs > 0
+                and time.monotonic() - _last_data_at > capture_stall_secs
+            ):
+                logger.error(
+                    "%s: %s capture alive but silent for %.0fs — restarting capture",
+                    name,
+                    backend_label,
+                    capture_stall_secs,
+                )
+                return
             continue
         _stall_logged = False
+        _last_data_at = time.monotonic()
 
         if is_playback_active():
             was_playing = True

@@ -41,14 +41,14 @@ class _AudioState:
     default_card_name: str | None = None
     output_volume: float = 0.5
     output_sink: str | None = None
+    output_spec: str | None = None
+    output_sink_dirty: bool = False
     input_gain: float = 1.0
     hw_gain_applied: bool = False
 
 
 _state = _AudioState()
 
-_pw_device_resolved = False
-_pw_device_index: int | None = None
 _STATE_FILE = "conf/state.yaml"
 
 # Fired by set_active_gst_profile(); the STT worker clears it and restarts
@@ -167,6 +167,19 @@ def get_active_gst_profile() -> str:
     return str(_load_state_file().get("gst_profile", "normal"))
 
 
+def signal_capture_restart() -> None:
+    """Ask the STT worker to restart its capture subprocess on the next chunk.
+
+    Generalizes the profile-change signal (`gst_profile_change_event`) to any
+    event that should make a long-running capture re-read config or
+    re-resolve its device: a config hot-reload or an audio device
+    reconnect. The recognition loop already re-reads config and re-resolves
+    the capture source at the top of every restart, so reusing this one
+    signal is sufficient — no separate "config changed" event is needed.
+    """
+    gst_profile_change_event.set()
+
+
 def set_active_gst_profile(profile: str) -> None:
     """Persist a new GStreamer capture profile and signal the STT worker to restart."""
     state = _load_state_file()
@@ -204,6 +217,7 @@ def configure(cfg) -> None:
             if hasattr(cfg.audio.gstreamer, k):
                 setattr(cfg.audio.gstreamer, k, v)
 
+    _state.output_spec = cfg.audio.output_device
     resolve_output_sink(cfg.audio.output_device)
 
 
@@ -212,7 +226,23 @@ def get_output_volume() -> float:
 
 
 def get_output_sink() -> str | None:
+    """Return the cached PipeWire sink name, re-resolving first if a device
+    (re)connect invalidated it (see invalidate_output_sink()) — so playback
+    never targets a node name that belonged to a replugged/swapped device."""
+    if _state.output_sink_dirty:
+        resolve_output_sink(_state.output_spec, retries=1)
+        _state.output_sink_dirty = False
     return _state.output_sink
+
+
+def invalidate_output_sink() -> None:
+    """Mark the cached output sink stale; re-resolved lazily on next playback.
+
+    Called on audio device (re)connect. Lazy (not an eager re-resolve here)
+    avoids opening an extra pulsectl session — each one costs a PCM
+    reset/restore round-trip — right in the watcher's hot path.
+    """
+    _state.output_sink_dirty = True
 
 
 def resolve_output_sink(
@@ -226,6 +256,7 @@ def resolve_output_sink(
     to survive the startup race where WirePlumber hasn't finished initializing
     the USB device when the first pulsectl connection is opened.
     """
+    _state.output_spec = output_spec
     if not output_spec or output_spec.lower() in ("pipewire", "default"):
         _state.output_sink = None
         return None
@@ -303,11 +334,17 @@ def _restore_hw_pcm(card: int | None = None) -> None:
                 ["amixer", "-c", str(card_index), "sset", control, "100%"],
                 capture_output=True,
                 check=False,
+                timeout=5,
             )
             if result.returncode == 0:
                 break
     except FileNotFoundError:
         logger.warning("_restore_hw_pcm: amixer not installed; cannot restore PCM")
+    except subprocess.TimeoutExpired:
+        logger.warning(
+            "_restore_hw_pcm: amixer timed out after 5s (card %s) — skipping",
+            card_index,
+        )
 
 
 @contextmanager
@@ -339,22 +376,6 @@ def find_pipewire_device():
         (i for i, d in enumerate(sd.query_devices()) if d["name"] == "pipewire"),
         None,
     )
-
-
-def get_pipewire_device() -> int | None:
-    """Cached lookup of the PortAudio index of the PipeWire ALSA device."""
-    global _pw_device_resolved, _pw_device_index
-    if not _pw_device_resolved:
-        _pw_device_index = find_pipewire_device()
-        _pw_device_resolved = True
-    return _pw_device_index
-
-
-def invalidate_pipewire_device_cache() -> None:
-    """Clear the cached PortAudio device index."""
-    global _pw_device_resolved, _pw_device_index
-    _pw_device_resolved = False
-    _pw_device_index = None
 
 
 def resolve_device(name_or_index: str) -> int:
@@ -503,15 +524,24 @@ def set_input_gain(
         if source_name is not None:
             _restore_hw_pcm()
             pct = int(max(0.0, gain) * 100)
-            result = subprocess.run(
-                ["pactl", "set-source-volume", source_name, f"{pct}%"],
-                capture_output=True,
-                check=False,
-            )
-            if result.returncode == 0:
+            try:
+                result = subprocess.run(
+                    ["pactl", "set-source-volume", source_name, f"{pct}%"],
+                    capture_output=True,
+                    check=False,
+                    timeout=5,
+                )
+            except subprocess.TimeoutExpired:
+                logger.warning(
+                    "pactl set-source-volume timed out after 5s on %s — "
+                    "falling back to software scaling",
+                    source_name,
+                )
+                result = None
+            if result is not None and result.returncode == 0:
                 logger.info(f"Mic gain set to {pct}% on {source_name} (OS level)")
                 hw_ok = True
-            else:
+            elif result is not None:
                 logger.warning(
                     f"pactl set-source-volume failed: "
                     f"{result.stderr.decode(errors='replace').strip()} — "

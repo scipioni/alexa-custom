@@ -209,6 +209,11 @@ class STTConfig:
     # grammar mode; sweep with `serena-wake-eval`.
     confidence: float = 0.0
     confidence_mode: str = "first"  # first | min | mean
+    # Seconds an alive-but-silent capture subprocess is tolerated before the
+    # recognition loop treats it as stalled and restarts capture. Hardware
+    # noise gating still delivers zero-filled frames during quiet rooms, so
+    # this only fires when bytes genuinely stop arriving.
+    capture_stall_secs: float = 30.0
 
 
 @dataclass
@@ -806,6 +811,7 @@ def _parse_stt_config(raw: dict) -> STTConfig:
         vosk_grammar=bool(raw.get("vosk_grammar", False)),
         confidence=_get_float(raw, "confidence", 0.0),
         confidence_mode=str(raw.get("confidence_mode", "first")),
+        capture_stall_secs=_get_float(raw, "capture_stall_secs", 30.0),
     )
 
 

@@ -9,8 +9,6 @@ import sys
 # Sibling imports and re-exports for 100% backward compatibility
 # ---------------------------------------------------------------------------
 from alexa_custom.audio_hw import (
-    _pw_device_resolved,
-    _pw_device_index,
     _STATE_FILE,
     configure,
     get_output_volume,
@@ -23,8 +21,6 @@ from alexa_custom.audio_hw import (
     _restore_hw_pcm,
     pulse_session,
     find_pipewire_device,
-    get_pipewire_device,
-    invalidate_pipewire_device_cache,
     resolve_device,
     device_from_env,
     set_pipewire_defaults,
@@ -52,7 +48,6 @@ from alexa_custom.audio_ops import (
     _playback_level,
     get_playback_level,
     set_playback_level,
-    set_stt_gated_flag,
     is_playback_active,
     _play_array,
     _play_raw,
@@ -68,8 +63,6 @@ from alexa_custom.audio_ops import (
 from alexa_custom.audio_watcher import AudioWatcher
 
 __all__ = [
-    "_pw_device_resolved",
-    "_pw_device_index",
     "_UDEV_PATH",
     "_STATE_FILE",
     "configure",
@@ -83,8 +76,6 @@ __all__ = [
     "_restore_hw_pcm",
     "pulse_session",
     "find_pipewire_device",
-    "get_pipewire_device",
-    "invalidate_pipewire_device_cache",
     "resolve_device",
     "device_from_env",
     "set_pipewire_defaults",
@@ -107,7 +98,6 @@ __all__ = [
     "_playback_level",
     "get_playback_level",
     "set_playback_level",
-    "set_stt_gated_flag",
     "is_playback_active",
     "_play_array",
     "_play_raw",
@@ -192,7 +182,9 @@ def main_test():
     from alexa_custom.stt_gating import resolve_capture_source
 
     capture_source, capture_channels = resolve_capture_source(input_spec)
-    print(f"3. Recording 5 seconds of audio (source={capture_source or 'default'}, ch={capture_channels})...")
+    print(
+        f"3. Recording 5 seconds of audio (source={capture_source or 'default'}, ch={capture_channels})..."
+    )
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
         tmp_wav = f.name
 
