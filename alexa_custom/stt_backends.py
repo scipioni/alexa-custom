@@ -33,7 +33,12 @@ _SHERPA_ONNX_SAMPLE_RATE = 16000
 # of real (or, as a fallback, zero-padded) trailing audio before
 # input_finished(), the last word(s) of an utterance get truncated.
 _SHERPA_ONNX_RIGHT_CONTEXT_SAMPLES = int(0.66 * _SHERPA_ONNX_SAMPLE_RATE)
-_SHERPA_ONNX_PRE_ROLL_CHUNKS = 6  # ~192ms at typical chunk sizes
+# Pre-roll budget in SAMPLES, never chunks: capture backends deliver anywhere
+# from ~320 B to 4 KB per read (same lesson as the byte-budgeted trigger-dump
+# buffer — see CLAUDE.md), so a chunk-count budget would shrink to ~60 ms on
+# GStreamer's small buffers and clip the first phoneme. 200 ms covers Silero's
+# 100 ms onset debounce plus detection latency (docs/asr-plan.md sizing).
+_SHERPA_ONNX_PRE_ROLL_SAMPLES = int(0.2 * _SHERPA_ONNX_SAMPLE_RATE)
 
 
 class STTBackend(ABC):
@@ -203,11 +208,18 @@ class SherpaOnnxSTT(STTBackend):
         )
 
         self._stream = self._recognizer.create_stream()
-        self._pre_roll: deque = deque(maxlen=_SHERPA_ONNX_PRE_ROLL_CHUNKS)
+        self._pre_roll: deque = deque()
+        self._pre_roll_samples = 0
         self._was_speaking = False
-        self._right_context_fed = 0
+        # Countdown of real trailing audio still owed to the encoder after
+        # Silero flips off (Zipformer's right-context lookahead). Refilled on
+        # every speech chunk; finalize() zero-pads whatever remains unfed.
+        self._tail_remaining = 0
 
     def accept_waveform(self, data: bytes) -> bool:
+        data = data[: len(data) & ~1]  # np.int16 needs an even byte count
+        if not data:
+            return False
         samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
 
         self._vad.accept_waveform(samples)
@@ -221,25 +233,30 @@ class SherpaOnnxSTT(STTBackend):
                 for buffered in self._pre_roll:
                     self._stream.accept_waveform(self._sample_rate, buffered)
                 self._pre_roll.clear()
+                self._pre_roll_samples = 0
             self._stream.accept_waveform(self._sample_rate, samples)
             while self._recognizer.is_ready(self._stream):
                 self._recognizer.decode_stream(self._stream)
-            self._right_context_fed = 0
-        elif self._was_speaking:
-            if self._right_context_fed < _SHERPA_ONNX_RIGHT_CONTEXT_SAMPLES:
-                # Just past speech end: still inside the right-context window —
-                # keep feeding real audio to the encoder (needed for Zipformer's
-                # tail lookahead), don't apply the CPU-saving skip yet.
-                self._stream.accept_waveform(self._sample_rate, samples)
-                while self._recognizer.is_ready(self._stream):
-                    self._recognizer.decode_stream(self._stream)
-                self._right_context_fed += len(samples)
-            # else: right-context budget just exhausted this call — drop
-            # through and do nothing; next call goes idle (was_speaking=False).
+            self._tail_remaining = _SHERPA_ONNX_RIGHT_CONTEXT_SAMPLES
+        elif self._tail_remaining > 0:
+            # Just past speech end: still inside the right-context window —
+            # keep feeding real audio to the encoder (a quiet trailing
+            # syllable Silero missed may still be in here; substituting
+            # zeros would discard it).
+            self._stream.accept_waveform(self._sample_rate, samples)
+            while self._recognizer.is_ready(self._stream):
+                self._recognizer.decode_stream(self._stream)
+            self._tail_remaining -= len(samples)
         else:
             # Genuinely idle: skip feeding the encoder (the CPU-saving gate),
-            # keep buffering for pre-roll instead.
+            # keep a sample-budgeted pre-roll for the next onset instead.
             self._pre_roll.append(samples)
+            self._pre_roll_samples += len(samples)
+            while (
+                self._pre_roll_samples > _SHERPA_ONNX_PRE_ROLL_SAMPLES
+                and len(self._pre_roll) > 1
+            ):
+                self._pre_roll_samples -= len(self._pre_roll.popleft())
 
         self._was_speaking = speaking
         return False
@@ -251,21 +268,32 @@ class SherpaOnnxSTT(STTBackend):
         return self._recognizer.get_result(self._stream).strip()
 
     def finalize(self) -> str:
-        shortfall = _SHERPA_ONNX_RIGHT_CONTEXT_SAMPLES - self._right_context_fed
-        if shortfall > 0:
+        if self._tail_remaining > 0:
             self._stream.accept_waveform(
-                self._sample_rate, np.zeros(shortfall, dtype=np.float32)
+                self._sample_rate,
+                np.zeros(self._tail_remaining, dtype=np.float32),
             )
         self._stream.input_finished()
         while self._recognizer.is_ready(self._stream):
             self._recognizer.decode_stream(self._stream)
-        return self._recognizer.get_result(self._stream).strip()
+        text = self._recognizer.get_result(self._stream).strip()
+        # A finished OnlineStream must never be fed again (sherpa-onnx can
+        # abort), and not every caller resets afterwards — stt_capture's
+        # window finalizes and hands the same backend straight back to the
+        # always-on loop. Self-reset so the contract is safe by construction;
+        # stt.py's own reset-after-finalize becomes a harmless no-op repeat.
+        self.reset()
+        return text
 
     def reset(self) -> None:
         self._stream = self._recognizer.create_stream()
+        # Clear Silero's trigger/hangover state too — a reset during TTS-echo
+        # drain must not leave the gate latched open on stale audio.
+        self._vad.reset()
         self._was_speaking = False
-        self._right_context_fed = 0
+        self._tail_remaining = 0
         self._pre_roll.clear()
+        self._pre_roll_samples = 0
 
 
 def _check_sherpa_onnx_files(model_dir: str, vad_model_path: str) -> None:
@@ -420,6 +448,11 @@ def get_stt_backend(
     call-site compatibility); grammar restricts the recognizer when set.
     """
     if cfg.backend == "sherpa-onnx":
+        if grammar is not None:
+            logger.warning(
+                "stt.vosk_grammar has no effect with backend sherpa-onnx — "
+                "the recognizer is always free-vocabulary"
+            )
         model_dir = cfg.model_path or _SHERPA_ONNX_MODEL_PATH
         _check_sherpa_onnx_files(model_dir, _SHERPA_ONNX_VAD_PATH)
         try:

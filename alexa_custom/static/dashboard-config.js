@@ -169,6 +169,7 @@
             <label>Backend</label>
             <select id="input-stt-backend">
               <option value="vosk">vosk</option>
+              <option value="sherpa-onnx">sherpa-onnx</option>
             </select>
           </div>
         </div>

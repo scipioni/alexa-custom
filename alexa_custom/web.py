@@ -904,7 +904,7 @@ class WebServer:
         if "stt" in config:
             stt = config["stt"]
             if "backend" in stt:
-                valid_backends = ["vosk"]
+                valid_backends = ["vosk", "sherpa-onnx"]
                 if stt["backend"] not in valid_backends:
                     return False, f"Invalid STT backend: {stt['backend']}"
             if "rms_threshold" in stt:
