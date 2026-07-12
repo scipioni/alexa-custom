@@ -376,6 +376,49 @@ stt:
         with pytest.raises(ConfigError, match="stt.backend"):
             load_config(cfg_path)
 
+    def test_sherpa_onnx_backend_accepted(self, tmp_path):
+        cfg_path = write_file(
+            tmp_path,
+            "config.yaml",
+            "wake_words:\n  - word: alexa\nstt:\n  backend: sherpa-onnx\n",
+        )
+        from alexa_custom.config import load_config
+
+        result = load_config(cfg_path)
+        assert result is not None
+        assert result.stt.backend == "sherpa-onnx"
+
+    def test_sherpa_vad_fields_default(self, tmp_path):
+        """sherpa_vad_* fields default sensibly and are settable, independent of backend."""
+        cfg_path = write_file(
+            tmp_path,
+            "config.yaml",
+            "wake_words:\n  - word: alexa\n"
+            "stt:\n  backend: sherpa-onnx\n  sherpa_vad_threshold: 0.35\n"
+            "  sherpa_vad_min_speech_ms: 60\n  sherpa_vad_min_silence_ms: 500\n",
+        )
+        from alexa_custom.config import load_config
+
+        result = load_config(cfg_path)
+        assert result is not None
+        assert result.stt.sherpa_vad_threshold == 0.35
+        assert result.stt.sherpa_vad_min_speech_ms == 60
+        assert result.stt.sherpa_vad_min_silence_ms == 500
+
+    def test_sherpa_vad_fields_default_when_unset(self, tmp_path):
+        cfg_path = write_file(
+            tmp_path,
+            "config.yaml",
+            "wake_words:\n  - word: alexa\nstt:\n  backend: vosk\n",
+        )
+        from alexa_custom.config import load_config
+
+        result = load_config(cfg_path)
+        assert result is not None
+        assert result.stt.sherpa_vad_threshold == 0.5
+        assert result.stt.sherpa_vad_min_speech_ms == 100
+        assert result.stt.sherpa_vad_min_silence_ms == 400
+
 
 # ---------------------------------------------------------------------------
 # _load_actions_dir tests (task 10.3)

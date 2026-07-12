@@ -311,7 +311,7 @@ wake_words:
 recognition:
   wake_window: 8.0         # seconds to listen after wake word
 stt:
-  backend: vosk            # vosk (single always-on model)
+  backend: vosk            # vosk (default, single always-on model) | sherpa-onnx (opt-in — see docs/stt-simple.md benchmark)
   vad_silence_ms: 900
   fast_vad_ms: 400         # early endpoint when the partial already matches (see STT notes)
 ```

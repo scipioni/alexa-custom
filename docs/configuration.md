@@ -85,12 +85,13 @@ recognition:
 
 ### Speech-to-Text — `stt`
 
-Single always-on Vosk model. No stage2. No sherpa-onnx.
+Single always-on model. No stage2. `vosk` (default) or `sherpa-onnx` (opt-in — see `docs/stt-simple.md`'s backend benchmark for the load-time/CPU/latency trade-offs before switching).
 
 ```yaml
 stt:
-  backend: "vosk"                      # must be vosk
-  model_path: null                     # override default model path
+  backend: "vosk"                      # vosk (default) | sherpa-onnx
+  model_path: null                     # override default model path (sherpa-onnx: a
+                                        #   Kroko model dir, default models/it/kroko_64l)
   num_threads: 2                       # ONNX threads (vosk ignores)
   vad_silence_ms: 900                  # milliseconds of silence before endpoint
   rms_threshold: 0.02                  # minimum RMS energy for speech
@@ -100,6 +101,9 @@ stt:
   wake_match_threshold: 0.5            # fraction of wake-phrase tokens required
   mono_capture: false                  # force parec mono capture
   capture_backend: "parec"             # parec (default) | gstreamer
+  sherpa_vad_threshold: 0.5            # sherpa-onnx only: internal Silero VAD gate threshold
+  sherpa_vad_min_speech_ms: 100        # sherpa-onnx only: VAD onset debounce
+  sherpa_vad_min_silence_ms: 400       # sherpa-onnx only: VAD gate hangover
 ```
 
 ### Text-to-Speech — `tts`

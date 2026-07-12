@@ -214,6 +214,16 @@ class STTConfig:
     # noise gating still delivers zero-filled frames during quiet rooms, so
     # this only fires when bytes genuinely stop arriving.
     capture_stall_secs: float = 30.0
+    # sherpa_onnx backend only: tune the internal Silero VAD gate that decides
+    # whether to feed audio to the Kroko Zipformer encoder at all (a CPU-saving
+    # optimization — see docs/asr-plan.md). No effect when backend is vosk.
+    # Lower than sherpa-onnx's own 250ms default: evaluation showed the default
+    # misses short commands (words can end before the debounce confirms).
+    sherpa_vad_min_speech_ms: int = 100
+    # Silero's own hangover before the gate closes — independent of the outer
+    # vad_silence_ms/fast_vad_ms above, which decide when stt.py finalizes.
+    sherpa_vad_min_silence_ms: int = 400
+    sherpa_vad_threshold: float = 0.5
 
 
 @dataclass
@@ -792,8 +802,10 @@ def _parse_stt_config(raw: dict) -> STTConfig:
         )
 
     backend = str(raw.get("backend", "vosk"))
-    if backend != "vosk":
-        raise ConfigError(f"'stt.backend' must be 'vosk', got {backend!r}")
+    if backend not in ("vosk", "sherpa-onnx"):
+        raise ConfigError(
+            f"'stt.backend' must be 'vosk' or 'sherpa-onnx', got {backend!r}"
+        )
     model_path_raw = raw.get("model_path")
     return STTConfig(
         backend=backend,
@@ -812,6 +824,9 @@ def _parse_stt_config(raw: dict) -> STTConfig:
         confidence=_get_float(raw, "confidence", 0.0),
         confidence_mode=str(raw.get("confidence_mode", "first")),
         capture_stall_secs=_get_float(raw, "capture_stall_secs", 30.0),
+        sherpa_vad_min_speech_ms=_get_int(raw, "sherpa_vad_min_speech_ms", 100),
+        sherpa_vad_min_silence_ms=_get_int(raw, "sherpa_vad_min_silence_ms", 400),
+        sherpa_vad_threshold=_get_float(raw, "sherpa_vad_threshold", 0.5),
     )
 
 

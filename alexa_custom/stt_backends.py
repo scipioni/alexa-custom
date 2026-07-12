@@ -5,6 +5,9 @@ import logging
 import os
 import vosk
 from abc import ABC, abstractmethod
+from collections import deque
+
+import numpy as np
 
 from alexa_custom.config import (
     STTConfig,
@@ -16,6 +19,21 @@ from alexa_custom.actions import normalize_text
 logger = logging.getLogger(__name__)
 
 _MODEL_PATH = os.environ.get("VOSK_MODEL_PATH", "models/it")
+
+# sherpa-onnx backend (Kroko Zipformer + Silero VAD) — see docs/asr-plan.md.
+_SHERPA_ONNX_MODEL_PATH = os.environ.get(
+    "SHERPA_ONNX_MODEL_PATH", "models/it/kroko_64l"
+)
+_SHERPA_ONNX_VAD_PATH = os.environ.get(
+    "SILERO_VAD_MODEL_PATH", "models/vad/silero_vad.onnx"
+)
+_SHERPA_ONNX_SAMPLE_RATE = 16000
+# Zipformer's own trailing right-context/lookahead requirement — see
+# docs/asr-plan.md "Troncamento dell'ultima parola". Without this many samples
+# of real (or, as a fallback, zero-padded) trailing audio before
+# input_finished(), the last word(s) of an utterance get truncated.
+_SHERPA_ONNX_RIGHT_CONTEXT_SAMPLES = int(0.66 * _SHERPA_ONNX_SAMPLE_RATE)
+_SHERPA_ONNX_PRE_ROLL_CHUNKS = 6  # ~192ms at typical chunk sizes
 
 
 class STTBackend(ABC):
@@ -128,6 +146,149 @@ class VoskSTT(STTBackend):
         ``stt.vosk_grammar`` is enabled) instead of being left free-text.
         """
         self.recreate(self._base_grammar)
+
+
+class SherpaOnnxSTT(STTBackend):
+    """Kroko Zipformer streaming transducer (sherpa-onnx) with an internal
+    Silero VAD gate.
+
+    Endpoint timing is deliberately NOT owned by this backend — accept_waveform()
+    always returns False, so stt.py's existing RMS-based vad_fire/finalize()
+    stays the single, backend-agnostic endpoint mechanism (see design.md
+    "Reuse the existing RMS-based endpoint loop"). Silero VAD here is purely a
+    CPU-saving gate: skip feeding the (expensive) Zipformer encoder while no
+    speech is detected, matching the whole point of the docs/asr-plan.md
+    proposal. A short pre-roll ring buffer prevents losing the onset phoneme
+    when VAD flips from silence to speech.
+    """
+
+    def __init__(
+        self,
+        model_dir: str,
+        vad_model_path: str,
+        num_threads: int = 2,
+        vad_threshold: float = 0.5,
+        vad_min_speech_ms: int = 100,
+        vad_min_silence_ms: int = 400,
+        sample_rate: int = _SHERPA_ONNX_SAMPLE_RATE,
+    ):
+        import sherpa_onnx
+
+        self._sherpa_onnx = sherpa_onnx
+        self._sample_rate = sample_rate
+
+        self._recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
+            tokens=os.path.join(model_dir, "tokens.txt"),
+            encoder=os.path.join(model_dir, "encoder.int8.onnx"),
+            decoder=os.path.join(model_dir, "decoder.int8.onnx"),
+            joiner=os.path.join(model_dir, "joiner.int8.onnx"),
+            num_threads=num_threads,
+            sample_rate=sample_rate,
+            feature_dim=80,
+            decoding_method="greedy_search",
+            provider="cpu",
+        )
+
+        vad_config = sherpa_onnx.VadModelConfig()
+        vad_config.silero_vad.model = vad_model_path
+        vad_config.silero_vad.threshold = vad_threshold
+        # Onset debounce. sherpa-onnx's own default (250ms) misses short
+        # commands — see docs/asr-plan.md "Comandi brevi non rilevati".
+        vad_config.silero_vad.min_speech_duration = vad_min_speech_ms / 1000.0
+        vad_config.silero_vad.min_silence_duration = vad_min_silence_ms / 1000.0
+        vad_config.silero_vad.window_size = 512
+        vad_config.sample_rate = sample_rate
+        self._vad = sherpa_onnx.VoiceActivityDetector(
+            vad_config, buffer_size_in_seconds=10
+        )
+
+        self._stream = self._recognizer.create_stream()
+        self._pre_roll: deque = deque(maxlen=_SHERPA_ONNX_PRE_ROLL_CHUNKS)
+        self._was_speaking = False
+        self._right_context_fed = 0
+
+    def accept_waveform(self, data: bytes) -> bool:
+        samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+
+        self._vad.accept_waveform(samples)
+        while not self._vad.empty():
+            self._vad.pop()
+
+        speaking = self._vad.is_speech_detected()
+
+        if speaking:
+            if not self._was_speaking:
+                for buffered in self._pre_roll:
+                    self._stream.accept_waveform(self._sample_rate, buffered)
+                self._pre_roll.clear()
+            self._stream.accept_waveform(self._sample_rate, samples)
+            while self._recognizer.is_ready(self._stream):
+                self._recognizer.decode_stream(self._stream)
+            self._right_context_fed = 0
+        elif self._was_speaking:
+            if self._right_context_fed < _SHERPA_ONNX_RIGHT_CONTEXT_SAMPLES:
+                # Just past speech end: still inside the right-context window —
+                # keep feeding real audio to the encoder (needed for Zipformer's
+                # tail lookahead), don't apply the CPU-saving skip yet.
+                self._stream.accept_waveform(self._sample_rate, samples)
+                while self._recognizer.is_ready(self._stream):
+                    self._recognizer.decode_stream(self._stream)
+                self._right_context_fed += len(samples)
+            # else: right-context budget just exhausted this call — drop
+            # through and do nothing; next call goes idle (was_speaking=False).
+        else:
+            # Genuinely idle: skip feeding the encoder (the CPU-saving gate),
+            # keep buffering for pre-roll instead.
+            self._pre_roll.append(samples)
+
+        self._was_speaking = speaking
+        return False
+
+    def text(self) -> str:
+        return self._recognizer.get_result(self._stream).strip()
+
+    def partial_text(self) -> str:
+        return self._recognizer.get_result(self._stream).strip()
+
+    def finalize(self) -> str:
+        shortfall = _SHERPA_ONNX_RIGHT_CONTEXT_SAMPLES - self._right_context_fed
+        if shortfall > 0:
+            self._stream.accept_waveform(
+                self._sample_rate, np.zeros(shortfall, dtype=np.float32)
+            )
+        self._stream.input_finished()
+        while self._recognizer.is_ready(self._stream):
+            self._recognizer.decode_stream(self._stream)
+        return self._recognizer.get_result(self._stream).strip()
+
+    def reset(self) -> None:
+        self._stream = self._recognizer.create_stream()
+        self._was_speaking = False
+        self._right_context_fed = 0
+        self._pre_roll.clear()
+
+
+def _check_sherpa_onnx_files(model_dir: str, vad_model_path: str) -> None:
+    required = [
+        os.path.join(model_dir, f)
+        for f in (
+            "tokens.txt",
+            "encoder.int8.onnx",
+            "decoder.int8.onnx",
+            "joiner.int8.onnx",
+        )
+    ]
+    missing = [f for f in required if not os.path.isfile(f)]
+    if missing:
+        raise RuntimeError(
+            f"sherpa-onnx model files missing: {missing}. "
+            f"Run 'serena-setup --sherpa-onnx-model 64l' to download them."
+        )
+    if not os.path.isfile(vad_model_path):
+        raise RuntimeError(
+            f"Silero VAD model not found at {vad_model_path!r}. "
+            f"Run 'serena-setup --sherpa-onnx-model 64l' to download it."
+        )
 
 
 def _load_model(model_path: str = _MODEL_PATH) -> vosk.Model:
@@ -258,6 +419,23 @@ def get_stt_backend(
     keywords is accepted but ignored for the single-model design (kept for
     call-site compatibility); grammar restricts the recognizer when set.
     """
+    if cfg.backend == "sherpa-onnx":
+        model_dir = cfg.model_path or _SHERPA_ONNX_MODEL_PATH
+        _check_sherpa_onnx_files(model_dir, _SHERPA_ONNX_VAD_PATH)
+        try:
+            return SherpaOnnxSTT(
+                model_dir=model_dir,
+                vad_model_path=_SHERPA_ONNX_VAD_PATH,
+                num_threads=cfg.num_threads,
+                vad_threshold=cfg.sherpa_vad_threshold,
+                vad_min_speech_ms=cfg.sherpa_vad_min_speech_ms,
+                vad_min_silence_ms=cfg.sherpa_vad_min_silence_ms,
+            )
+        except ModuleNotFoundError as e:
+            raise RuntimeError(
+                "sherpa-onnx is not installed. Run: uv sync --extra asr-eval"
+            ) from e
+
     # vosk (default)
     vosk_path = cfg.model_path or _MODEL_PATH
     return VoskSTT(_load_model(vosk_path), grammar=grammar)

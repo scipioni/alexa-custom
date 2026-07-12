@@ -255,8 +255,11 @@ class TestSttConfigParsing:
         with pytest.raises(ConfigError, match="stt.backend"):
             _parse_stt_config({"backend": "unknown"})
 
-        with pytest.raises(ConfigError, match="stt.backend"):
-            _parse_stt_config({"backend": "sherpa-onnx"})
+    def test_sherpa_onnx_backend_accepted(self):
+        # sherpa-onnx became a valid stt.backend value in
+        # openspec/changes/archive/2026-07-12-add-sherpa-onnx-stt-backend
+        cfg = _parse_stt_config({"backend": "sherpa-onnx"})
+        assert cfg.backend == "sherpa-onnx"
 
 
 class TestRecognitionConfigParsing:

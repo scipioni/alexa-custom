@@ -312,18 +312,21 @@ Reply matching uses `reply_matching_algorithm` (**levenshtein**) and `reply_matc
 
 When `llm.fallback_on_no_match: true`, unmatched commands are routed to the configured LLM (ollama or openai) instead of playing the error tone.
 
-## Vosk backend benchmark
+## Backend benchmark
 
-| Metric (live mic, always-on) | vosk | sherpa-onnx (removed) |
-|---|---|---|
-| Model load time | **2.8 s** | 40 s |
-| CPU (continuous decode) | **66–70 %** | 103 % |
-| RTF p95 (decode/audio) | 0.39–0.75 | 0.31 |
-| Endpoint latency p95 | **1059 ms** | 1806 ms |
-| Live transcripts | **clean, full** | **fragmented** |
-| Idle false fires | 0 | 0 |
+sherpa-onnx (Kroko Zipformer + Silero VAD) was removed once already (see git history `657f57c`/`b5a2412`) for the numbers in the first two columns below. It was reintroduced as an **opt-in, non-default** backend (`stt.backend: sherpa-onnx`) after a second attempt added an internal Silero VAD gate that skips feeding the (expensive) encoder while no speech is detected — see `docs/asr-plan.md` and `openspec/changes/add-sherpa-onnx-stt-backend/`. Re-measured with `scripts/bench_stt.py` on the same board:
 
-`vosk` is the only supported backend. sherpa-onnx was removed due to 40 s load time, fragmented utterances, and high CPU usage.
+| Metric | vosk | sherpa-onnx (removed, no VAD gate) | sherpa-onnx (current, VAD-gated) |
+|---|---|---|---|
+| Model load time | **2.8–3.3 s** | 40 s | 44–49 s (unchanged — VAD gating doesn't touch model load) |
+| CPU (idle/silence) | 99 % | 103 % | **93 %** |
+| CPU (active speech) | **92 %** | n/a | 172 % |
+| RTF avg/p95 (idle) | 0.24/0.90 | n/a | **0.07/0.09** |
+| Endpoint latency | **808 ms** | 1806 ms | 1114 ms |
+| Live transcripts | **clean, full** | fragmented | clean (single-phrase test; not exhaustively verified) |
+| Idle false fires | 0 | 0 | 0 |
+
+`vosk` remains the **default** backend — it's still faster to load/reload and cheaper during active speech. `sherpa-onnx` is a real option now for deployments that value the improved idle-CPU/endpoint-latency trade-off and can tolerate a ~45s reload whenever `stt.backend`/`stt.model_path`/`stt.num_threads` changes (this does NOT happen on unrelated config changes — see `_get_backend_key` in `stt.py`). Known limitation carried over from `docs/asr-plan.md`: very quiet trailing syllables can be lost regardless of VAD tuning once hardware capture gain is already maxed — this is a mic/SNR limitation, not backend-specific, and applies to any VAD-gated pipeline on this hardware.
 
 ### Tuning notes
 
@@ -346,8 +349,10 @@ The system gates recognized audio through:
 
 ```yaml
 stt:
-  backend: vosk                     # must be vosk (sherpa-onnx removed)
-  model_path: null                  # override default model path
+  backend: vosk                     # vosk (default) | sherpa-onnx (opt-in, see benchmark above)
+  model_path: null                  # override default model path — for sherpa-onnx,
+  #   a Kroko model directory (default models/it/kroko_64l); run
+  #   `serena-setup --sherpa-onnx-model 64l` to download it
   num_threads: 2                    # ONNX threads (vosk ignores this)
   vad_silence_ms: 900               # ms of silence before endpoint
   rms_threshold: 0.02               # minimum RMS energy for speech
@@ -357,6 +362,13 @@ stt:
   wake_match_threshold: 0.5         # fraction of wake-phrase tokens required
   mono_capture: false               # force parec mono capture
   capture_backend: parec            # parec (default) | gstreamer
+  # --- sherpa-onnx only (ignored by vosk) — tunes the internal Silero VAD gate,
+  #     NOT the endpoint mechanism (still vad_silence_ms above). Not part of the
+  #     backend-reload key — changing these needs a model_path/num_threads change
+  #     or daemon restart to take effect, not just a config hot-reload.
+  sherpa_vad_threshold: 0.5         # Silero speech-probability threshold
+  sherpa_vad_min_speech_ms: 100     # onset debounce (sherpa-onnx's own 250ms default misses short commands)
+  sherpa_vad_min_silence_ms: 400    # internal VAD-gate hangover before the CPU-saving gate closes
 
 recognition:
   wake_window: 8.0                  # command window duration (seconds)

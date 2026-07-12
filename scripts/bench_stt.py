@@ -53,7 +53,7 @@ import wave
 # Make the package importable when run as `python scripts/bench_stt.py`.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from alexa_custom.config import STTStage2Config  # noqa: E402
+from alexa_custom.config import STTConfig  # noqa: E402
 from alexa_custom.stt_backends import get_stt_backend  # noqa: E402
 from alexa_custom.stt_gating import (  # noqa: E402
     _CHUNK,
@@ -131,7 +131,7 @@ class AudioSource:
 
 def _make_backend(backend: str, model_path: str | None, num_threads: int):
     """Build a single full-transcription model (free-vocab — no grammar)."""
-    cfg = STTStage2Config(
+    cfg = STTConfig(
         backend=backend,
         model_path=model_path,
         vosk_grammar=False,  # always-on free vocab, the single-model design
@@ -292,7 +292,7 @@ def main():
         "--backend",
         action="append",
         default=[],
-        choices=["vosk"],
+        choices=["vosk", "sherpa-onnx"],
         help="backend(s) to test; repeat to compare (default: vosk)",
     )
     ap.add_argument(

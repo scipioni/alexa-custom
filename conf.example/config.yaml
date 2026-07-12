@@ -52,8 +52,12 @@ recognition:
 # Single always-on model: continuously transcribes and matches wake words +
 # commands in one pass (no two-stage pipeline).
 stt:
-  backend: vosk             # vosk | sherpa-onnx
+  backend: sherpa-onnx      # vosk | sherpa-onnx
   # model_path: models/it
+  #   For backend: sherpa-onnx, this points at a Kroko Zipformer model
+  #   directory instead (default models/it/kroko_64l; models/it/kroko_128l
+  #   is a higher-accuracy/higher-CPU alternative). Run
+  #   `serena-setup --sherpa-onnx-model 64l` to download it.
   vad_silence_ms: 900       # ms of silence after last speech before endpoint fires
   #   900 ms confirmed clean on-board (no utterance fragmentation).
   #   Perceived latency ≈ vad_silence_ms + ~130 ms decode. 700–800 ms is viable
@@ -97,6 +101,17 @@ stt:
   #   (strictest) | mean. Scored identically online and in `alexa-wake-eval`, so
   #   the sweep predicts runtime. Only relevant when confidence > 0.
   # num_threads: 2           # ONNX threads (sherpa-onnx only; ignored by vosk)
+  # --- sherpa-onnx backend only (ignored by vosk) -----------------------------
+  # Tunes the internal Silero VAD gate that decides whether to feed audio to
+  # the Kroko encoder at all (a CPU-saving optimization, not the endpoint
+  # mechanism — that's still vad_silence_ms/fast_vad_ms above). NOT part of
+  # the backend-reload key: changing these takes effect on the next
+  # model_path/num_threads change or daemon restart, not immediately.
+  # sherpa_vad_threshold: 0.5       # Silero speech-probability threshold
+  # sherpa_vad_min_speech_ms: 100   # onset debounce (sherpa-onnx's own 250ms
+  #   default misses short commands like "accendi le luci" — see docs/asr-plan.md)
+  # sherpa_vad_min_silence_ms: 400  # internal VAD-gate hangover before the
+  #   CPU-saving gate closes
   # flush_ms: 300            # audio discarded after wake beep (absorbs speaker echo)
   # mono_capture: false      # force parec to capture mono (--channels=1) so PipeWire
   #   handles stereo→mono in the driver. Eliminates the Python-side max-abs downmix.
