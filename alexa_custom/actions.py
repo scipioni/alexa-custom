@@ -177,6 +177,20 @@ def get_similarity_score(a: str, b: str, algorithm: str) -> float:
         return _fuzz.token_set_ratio(a, b)
 
 
+# Two pattern tokens with no explicit '*' between them are meant to be read
+# together (e.g. "chiam* assistenza" as one short phrase) — the walk below
+# tolerates a couple of filler words ("chiama pure assistenza") but must NOT
+# let them match arbitrarily far apart. Without this cap, a single word
+# starting with "chiam" anywhere in a long free-vocabulary transcript
+# followed, at any distance, by anything phonetically near "assistenza"
+# satisfies the pattern — confirmed 2026-07-13 in conf/history.jsonl: a
+# ~250-word ambient-TV/radio transcript spuriously matched the `sos`-tagged,
+# with_wake:false "chiama assistenza" trigger this way and dispatched a real
+# action. An explicit standalone '*' still grants an unbounded gap — that is
+# an intentional, author-opted-in wildcard (see "accend* * luci").
+_MAX_IMPLICIT_GAP_WORDS = 3
+
+
 def _match_glob_pattern(
     pattern: str,
     transcript: str,
@@ -191,6 +205,10 @@ def _match_glob_pattern(
                           with the phonetic prefix of ``foo``
     - literal token     : matches a transcript word above the phonetic similarity
                           threshold (via italian_phonetic + get_similarity_score)
+
+    Adjacent tokens with no explicit ``*`` between them may only match within
+    ``_MAX_IMPLICIT_GAP_WORDS`` transcript words of each other — see
+    ``_MAX_IMPLICIT_GAP_WORDS`` docstring for why this cap exists.
     """
     p_tokens = pattern.split()
     t_tokens = [italian_phonetic(w) for w in transcript.split()]
@@ -223,8 +241,16 @@ def _match_glob_pattern(
                 if _walk(pi + 1, skip):
                     return True
             return False
-        # literal or glob token: find the next transcript word that satisfies it
-        for ti2 in range(ti, len(t_tokens)):
+        # literal or glob token: find the next transcript word that satisfies
+        # it. Only an explicit '*' just consumed grants an unbounded search —
+        # otherwise cap how far ahead we're willing to look.
+        preceded_by_star = pi > 0 and p_tokens[pi - 1] == "*"
+        search_end = (
+            len(t_tokens)
+            if preceded_by_star
+            else min(len(t_tokens), ti + 1 + _MAX_IMPLICIT_GAP_WORDS)
+        )
+        for ti2 in range(ti, search_end):
             if _token_matches(tok, t_tokens[ti2]):
                 if _walk(pi + 1, ti2 + 1):
                     return True

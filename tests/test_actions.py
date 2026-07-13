@@ -645,6 +645,35 @@ class TestGlobPatternMatching:
         t = _pattern_trigger("luci", ["accend* * luci"])
         assert not _trigger_matches_patterns(t, "luci accendi")
 
+    # 4.7 implicit gap cap — regression for conf/history.jsonl 2026-07-13
+    # (a ~250-word ambient-broadcast transcript spuriously matched "chiam*
+    # assistenza" via unbounded adjacent-token distance, dispatching a real
+    # sos action). See _MAX_IMPLICIT_GAP_WORDS in actions.py.
+    def test_sos_pattern_matches_real_command(self):
+        assert _match_glob_pattern("chiam* assistenza", "chiama assistenza")
+
+    def test_sos_pattern_tolerates_small_insertion(self):
+        assert _match_glob_pattern("chiam* assistenza", "chiama pure assistenza")
+
+    def test_sos_pattern_rejects_distant_words_in_long_transcript(self):
+        # Reproduces the false positive verbatim: "chiamava" (matches "chiam*")
+        # and "assistenza"-adjacent content far apart in an unrelated transcript.
+        transcript = (
+            "la piazzetta chiamava tanto a cui batterta da un approccio elega "
+            "anche la storia rimane nelle nostre vite di giorno quindi e una "
+            "questione che non poteva male a chiuso il ferro ci sono quindi "
+            "dario edoardo igor a entrare subito in chiesa la prima morte "
+            "roperta la quale ha dedicato una delle can della musica italiana "
+            "e che oggi ricorda cosi il loro grande amore assistenza"
+        )
+        assert not _match_glob_pattern("chiam* assistenza", transcript)
+
+    def test_explicit_wildcard_still_unbounded(self):
+        # An author-opted-in '*' must keep its full-transcript reach —
+        # only the implicit (no-'*') adjacency case is capped.
+        far_apart = "accendi " + "per favore " * 10 + "le luci"
+        assert _match_glob_pattern("accend* * luci", far_apart)
+
     def test_trigger_no_patterns_false(self):
         t = _trigger("chiama")
         assert not _trigger_matches_patterns(t, "chiama")
