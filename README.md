@@ -90,7 +90,7 @@ nmcli connection modify <name> 802-11-wireless.powersave 2
 
 ```bash
 # 1. System dependencies (Debian 13)
-sudo apt install python3-venv pipewire pulseaudio-utils alsa-utils libportaudio2
+sudo apt install -y python3-venv pipewire pulseaudio-utils alsa-utils libportaudio2
 sudo apt install -y libgstreamer1.0-dev gstreamer1.0-plugins-bad gstreamer1.0-tools gstreamer1.0-pipewire python3-gst-1.0
 
 # 2. Python environment

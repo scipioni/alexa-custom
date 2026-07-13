@@ -192,12 +192,25 @@ tasks:
           echo "Unsupported package manager. Please install GStreamer and development headers manually."
           exit 1
         fi
-      - uv pip install PyGObject
+      - uv sync --group dev --extra gstreamer
 
   setup:
     desc: Install the serena systemd user service and enable it
     cmds:
-      - uv sync --group dev
+      # A plain `uv sync` reconciles the venv to exactly the extras passed on
+      # the command line, so it silently uninstalls PyGObject/pycairo unless
+      # --extra gstreamer is re-requested every time — even though `task
+      # setup:gstreamer` (which README has you run before this) already
+      # installed them. Detect and preserve rather than always requesting it:
+      # unconditionally requiring it here would break `task setup` on boards
+      # that don't use the gstreamer capture backend and never ran `task
+      # setup:gstreamer` to get PyGObject's system build headers installed.
+      - |
+        EXTRA_FLAGS=""
+        if uv pip show pygobject &>/dev/null; then
+          EXTRA_FLAGS="--extra gstreamer"
+        fi
+        uv sync --group dev $EXTRA_FLAGS
       - ./setup/fix-sherpa-onnx-runtime.sh
       - |
         # Generate it_IT.UTF-8 locale only on Arduino board

@@ -223,7 +223,7 @@ L'architettura proposta in questo documento è stata implementata e testata su u
 - Modello usato: `models/it/kroko_64l` (encoder/decoder/joiner INT8 + tokens.txt, già presenti nel repository) — il Kroko Zipformer 64-layer raccomandato dal documento.
 - `sherpa-onnx==1.13.4` ha una wheel aarch64 rotta (`ImportError: version 'VERS_1.27.0' not found` — mismatch tra `_sherpa_onnx.so` e `libonnxruntime.so` bundlati). **Pinnato a `1.13.3`**, verificato funzionante.
 - `silero_vad.onnx` non era presente nel repository (solo Vosk e i modelli Kroko lo erano): il tool lo scarica automaticamente al primo avvio da `k2-fsa/sherpa-onnx` release assets in `models/vad/`.
-- **Attenzione**: `uv sync --extra asr-eval` da solo disinstalla silenziosamente `PyGObject`/`pycairo`, da cui dipende il backend di cattura `gstreamer` già in uso in produzione su questa board (`conf/config.yaml: stt.capture_backend: gstreamer`, profilo `yealink`). Usare sempre `uv sync --extra asr-eval --extra gstreamer`.
+- `sherpa-onnx`/`onnxruntime` sono ora dipendenze di base (non più dietro l'extra `asr-eval`, rimosso), quindi un `uv sync` semplice li installa sempre. **Attenzione**: `uv sync` da solo disinstalla comunque silenziosamente `PyGObject`/`pycairo` (da cui dipende il backend di cattura `gstreamer` già in uso in produzione su questa board — `conf/config.yaml: stt.capture_backend: gstreamer`, profilo `yealink`) a meno di richiedere esplicitamente `--extra gstreamer`. `task setup` rileva automaticamente se `PyGObject` è già installato e in tal caso ri-richiede l'extra; un `uv sync` manuale va invece lanciato con `uv sync --extra gstreamer`.
 
 ### Bug corretti durante la validazione
 
