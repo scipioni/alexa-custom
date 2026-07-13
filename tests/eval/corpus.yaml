@@ -38,6 +38,8 @@ cases:
   - {text: "galileo", expect: wake, note: "truncated wake — distinctive word"}
   - {text: "galile", expect: wake, note: "STT truncation of galileo"}
   - {text: "assistent", expect: wake, note: "STT truncation of assistente"}
+  - {text: "ei galileo", expect: wake, note: "STT drops silent 'h' in 'ehi' -> 'ei' (real 2026-07-13 log)"}
+  - {text: "assiste", expect: wake, note: "STT truncation cutting off '-nte' of assistente (real 2026-07-13 log)"}
 
   # ── positives: command matching ────────────────────────────────────────────
   - {text: "chiama stefano", expect: "chiama stefano", note: "direct trigger, no wake"}

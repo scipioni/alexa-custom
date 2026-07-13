@@ -84,6 +84,9 @@ def italian_phonetic(text: str) -> str:
     t = t.replace("qu", "k")
     # 9. esist -> asist (align 'esistente' / 'assistente' etc. acoustically)
     t = t.replace("esist", "asist")
+    # 10. silent 'h' (ch/gh already consumed above) — "ehi" and "ei" must compare
+    # equal since Italian h is never pronounced (ho, hai, ehi, ohi, ...).
+    t = t.replace("h", "")
     return t
 
 
@@ -95,9 +98,9 @@ def _word_token_match(pw: str, tw: str) -> bool:
     mangles words:
     - exact phonetic equality
     - ``pw`` is a phonetic prefix of ``tw``  → inflection ("accendi" → "accendimi")
-    - ``tw`` is a phonetic prefix of ``pw``  → truncation ("galile" → "galileo"),
-      but only when ``tw`` covers ≥70% of ``pw`` so short fragments ("gali") do
-      not match a longer word.
+    - ``tw`` is a phonetic prefix of ``pw``  → truncation ("galile" → "galileo",
+      "assiste" → "assistente"), but only when ``tw`` covers ≥60% of ``pw`` so
+      short fragments ("gali", 4/7=57%) do not match a longer word.
 
     This is deliberately stricter than substring-anywhere matching: a fragment
     buried mid-word or in a suffix ("casa" inside "scocciacasa") does not match.
@@ -110,7 +113,7 @@ def _word_token_match(pw: str, tw: str) -> bool:
         return True
     if len(pp) >= 3 and tp.startswith(pp):
         return True
-    if len(tp) >= 3 and len(tp) >= len(pp) * 0.7 and pp.startswith(tp):
+    if len(tp) >= 3 and len(tp) >= len(pp) * 0.6 and pp.startswith(tp):
         return True
     # Short interjections (≤3 phonetic chars, e.g. "ehi"): Vosk often emits just
     # the initial vowel ("e"). Accept when tp is a single char that is a phonetic
