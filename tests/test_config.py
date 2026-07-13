@@ -195,6 +195,25 @@ class TestLoadConfig:
         assert result.stt.backend == "vosk"
         assert result.stt.vad_silence_ms == 700
 
+    def test_nested_web_block(self, tmp_path):
+        cfg_path = self._make_config(
+            tmp_path,
+            MINIMAL_CONFIG + "web:\n  history_max_entries: 50\n",
+        )
+        from alexa_custom.config import load_config
+
+        result = load_config(cfg_path)
+        assert result is not None
+        assert result.web.history_max_entries == 50
+
+    def test_web_history_max_entries_defaults_to_100(self, tmp_path):
+        cfg_path = self._make_config(tmp_path)
+        from alexa_custom.config import load_config
+
+        result = load_config(cfg_path)
+        assert result is not None
+        assert result.web.history_max_entries == 100
+
     def test_wake_word_parsed_as_string(self, tmp_path):
         cfg_path = self._make_config(tmp_path)
         from alexa_custom.config import load_config

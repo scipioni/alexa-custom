@@ -47,6 +47,29 @@ class TestHistoryFileHelpers:
         assert temp_history_file.exists()
         assert temp_history_file.stat().st_size == 0
 
+    async def test_append_trims_to_max_entries(self, server, temp_history_file):
+        """Appending past history_max_entries drops the oldest lines, keeps the newest."""
+        server._loop = asyncio.get_running_loop()
+        server._history_max_entries = 3
+        for i in range(5):
+            await server._append_history_log({"session_id": f"s{i}"})
+
+        lines = temp_history_file.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 3
+        assert [json.loads(line)["session_id"] for line in lines] == ["s2", "s3", "s4"]
+
+    async def test_append_trim_disabled_keeps_everything(
+        self, server, temp_history_file
+    ):
+        """history_max_entries: 0 disables trimming."""
+        server._loop = asyncio.get_running_loop()
+        server._history_max_entries = 0
+        for i in range(5):
+            await server._append_history_log({"session_id": f"s{i}"})
+
+        lines = temp_history_file.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 5
+
     async def test_flag_history_log_fp(self, server, temp_history_file):
         """Flag FP helper must update the targeted session ID in-place in the file."""
         server._loop = asyncio.get_running_loop()
@@ -210,9 +233,7 @@ class TestSessionAggregation:
         assert record["transcript"]["is_matched"] is False
         assert record["diagnostics"]["gated"] is True
 
-    async def test_one_breath_partial_session_dropped(
-        self, server, temp_history_file
-    ):
+    async def test_one_breath_partial_session_dropped(self, server, temp_history_file):
         """A wake session that only captured a transcribing partial, then was
         superseded by a one-breath re-finalization, must not be persisted as a
         phantom nomatch. Regression for the 'ehi serena volume basso' session
@@ -294,4 +315,3 @@ class TestSessionAggregation:
         assert record["transcript"]["text"] == "che ore sono"
         assert record["transcript"]["is_matched"] is True
         assert record["action"]["type"] == "tts_say"
-

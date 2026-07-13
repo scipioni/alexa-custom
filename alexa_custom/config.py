@@ -270,6 +270,10 @@ class WebConfig:
     port: int = 8080
     cpu_limit: int = 4
     history_file: str = "conf/history.jsonl"
+    # Most recent interactions kept in history_file — older entries are
+    # trimmed off on each append so the file doesn't grow unbounded over a
+    # long-running deployment. 0 disables trimming (keep everything).
+    history_max_entries: int = 100
 
 
 @dataclass
@@ -1225,6 +1229,7 @@ def _parse_actions_config(
         port=int(web_raw.get("port", 8080)),
         cpu_limit=int(web_raw.get("cpu_limit", 4)),
         history_file=str(web_raw.get("history_file", "conf/history.jsonl")),
+        history_max_entries=_get_int(web_raw, "history_max_entries", 100),
     )
 
     system_raw = raw.get("system") or {}

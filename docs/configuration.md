@@ -219,6 +219,8 @@ web:
   port: 8080
   cpu_limit: 4                         # CPU cores for dashboard display
   history_file: "conf/history.jsonl"   # persistent interaction history
+  history_max_entries: 100             # trim to this many most-recent entries
+                                        # on every append (0 = keep everything)
 ```
 
 ### Display — `display`

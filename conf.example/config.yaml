@@ -235,9 +235,11 @@ llm:
 # ---------------------------------------------------------------------------
 # Web dashboard
 # ---------------------------------------------------------------------------
-# web:
-#   port: 8080
-#   history_file: conf/history.jsonl
+web:
+  port: 8080
+  history_file: /tmp/history.jsonl
+  # history_max_entries: 100   # trim history_file to this many most-recent
+  #   entries on every append (0 disables trimming, keep everything)
 
 # ---------------------------------------------------------------------------
 # Action files

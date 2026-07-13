@@ -162,6 +162,7 @@ class WebServer:
             )
         )
         self._history_file = Path("conf/history.jsonl")
+        self._history_max_entries = 100
         # snapshot for hello message on new WS connects
         from alexa_custom.audio_hw import (
             get_active_gst_profile,
@@ -187,7 +188,12 @@ class WebServer:
     # ── persistent history helpers ────────────────────────────────────────────
 
     async def _append_history_log(self, session_data: dict) -> None:
-        """Appends a single JSON line to the configured history file asynchronously."""
+        """Appends a single JSON line to the configured history file asynchronously.
+
+        Trims the file to the last web.history_max_entries lines afterwards
+        (0 disables trimming) so a long-running deployment doesn't grow the
+        file unbounded.
+        """
 
         def _write():
             try:
@@ -195,6 +201,13 @@ class WebServer:
                 with _file_lock(self._history_file, exclusive=True):
                     with self._history_file.open("a", encoding="utf-8") as f:
                         f.write(json.dumps(session_data, ensure_ascii=False) + "\n")
+                    max_entries = self._history_max_entries
+                    if max_entries > 0:
+                        with self._history_file.open("r", encoding="utf-8") as f:
+                            lines = f.readlines()
+                        if len(lines) > max_entries:
+                            with self._history_file.open("w", encoding="utf-8") as f:
+                                f.writelines(lines[-max_entries:])
             except Exception as e:
                 logger.error(
                     "Failed to append history to file %s: %s", self._history_file, e
@@ -1379,6 +1392,12 @@ class WebServer:
             and hasattr(config_obj.web, "history_file")
         ):
             self._history_file = Path(config_obj.web.history_file)
+        if (
+            config_obj
+            and hasattr(config_obj, "web")
+            and hasattr(config_obj.web, "history_max_entries")
+        ):
+            self._history_max_entries = config_obj.web.history_max_entries
 
         # Always run the YAML config hot-reload watcher in production (spec:
         # yaml-config "Hot-reload watcher"). --hot-reload gates only the
