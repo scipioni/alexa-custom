@@ -465,9 +465,7 @@ def get_stt_backend(
                 vad_min_silence_ms=cfg.sherpa_vad_min_silence_ms,
             )
         except ModuleNotFoundError as e:
-            raise RuntimeError(
-                "sherpa-onnx is not installed. Run: uv sync --extra asr-eval"
-            ) from e
+            raise RuntimeError("sherpa-onnx is not installed. Run: uv sync") from e
 
     # vosk (default)
     vosk_path = cfg.model_path or _MODEL_PATH

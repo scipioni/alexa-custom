@@ -25,6 +25,24 @@ dependencies = [
     "rapidfuzz>=3.0.0",
     "ruamel.yaml>=0.18",
     "smbus2>=0.6.1",
+    # stt.backend: sherpa-onnx (alexa_custom.stt_backends.SherpaOnnxSTT) — also
+    # used standalone by docs/asr-plan.md's eval tool (serena-vad). Both share
+    # one pinned dependency pair rather than two.
+    # Pinned: sherpa-onnx 1.13.4's aarch64 wheel bundles a libonnxruntime.so
+    # that doesn't satisfy _sherpa_onnx.so's symbol-version requirement
+    # (ImportError: version `VERS_1.27.0' not found) — verified broken on this
+    # board 2026-07-12. 1.13.3's aarch64 wheel doesn't bundle onnxruntime at
+    # all — it dlopens an unversioned libonnxruntime.so and needs the exact
+    # release whose .so defines symbol-version node `VERS_1.24.4` (onnxruntime
+    # tags each release's exported symbols with its own version string).
+    # Neither the apt libonnxruntime1.21 package nor newer pip onnxruntime
+    # releases satisfy that version node, so onnxruntime must be pinned to the
+    # matching 1.24.4 release here too — verified broken with mismatched
+    # versions on this board 2026-07-13. After `uv sync`, run
+    # `setup/fix-sherpa-onnx-runtime.sh` (or `task setup`) once to symlink the
+    # unversioned libonnxruntime.so sherpa-onnx expects.
+    "sherpa-onnx==1.13.3",
+    "onnxruntime==1.24.4",
 ]
 
 [project.scripts]
@@ -54,14 +72,6 @@ i2c = ["smbus2>=0.4.0"]
 #   gstreamer1.0-pulseaudio (pulsesrc), gstreamer1.0-pipewire (pipewiresrc),
 #   python3-gst-1.0 (gi bindings — prefer system package over pip on Debian).
 gstreamer = ["PyGObject>=3.46"]
-# Dual purpose: (1) docs/asr-plan.md's standalone eval tool (serena-vad), and
-# (2) the alternative stt.backend: sherpa-onnx production backend
-# (alexa_custom.stt_backends.SherpaOnnxSTT) — both use the same Kroko Zipformer
-# + Silero VAD stack, so they share one pinned dependency instead of two.
-# Pinned: sherpa-onnx 1.13.4's aarch64 wheel bundles a libonnxruntime.so that
-# doesn't satisfy _sherpa_onnx.so's symbol-version requirement (ImportError:
-# version `VERS_1.27.0' not found) — verified broken on this board 2026-07-12.
-asr-eval = ["sherpa-onnx==1.13.3"]
 calibrate = [
     "mcp>=1.28.0",
 ]

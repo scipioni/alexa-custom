@@ -198,6 +198,7 @@ tasks:
     desc: Install the serena systemd user service and enable it
     cmds:
       - uv sync --group dev
+      - ./setup/fix-sherpa-onnx-runtime.sh
       - |
         # Generate it_IT.UTF-8 locale only on Arduino board
         if grep -q "Arduino" /sys/firmware/devicetree/base/model 2>/dev/null; then

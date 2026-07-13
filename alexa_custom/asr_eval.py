@@ -330,7 +330,9 @@ def _synthesize_bench_wav(phrase: str, voice: str) -> Path:
 def _print_bench_table(rows: list[dict], label: str) -> None:
     print()
     print(f"=== serena-vad --bench: {label!r} ===")
-    print(f"{'threads':>7}  {'min ms':>8}  {'mean ms':>8}  {'max ms':>8}  runs  transcript")
+    print(
+        f"{'threads':>7}  {'min ms':>8}  {'mean ms':>8}  {'max ms':>8}  runs  transcript"
+    )
     for row in rows:
         timings = row["timings"]
         if not timings:
@@ -378,10 +380,16 @@ def run_bench(args: argparse.Namespace) -> None:
         thread_counts = [int(t) for t in args.bench_threads.split(",") if t.strip()]
         rows = []
         for n_threads in thread_counts:
-            print(f"[bench] num_threads={n_threads}: loading recognizer...", file=sys.stderr)
+            print(
+                f"[bench] num_threads={n_threads}: loading recognizer...",
+                file=sys.stderr,
+            )
             t0 = time.monotonic()
             recognizer = _build_recognizer(model_dir, n_threads)
-            print(f"[bench]   recognizer loaded in {time.monotonic() - t0:.1f}s", file=sys.stderr)
+            print(
+                f"[bench]   recognizer loaded in {time.monotonic() - t0:.1f}s",
+                file=sys.stderr,
+            )
 
             timings: list[float] = []
             texts: list[str] = []
@@ -461,7 +469,9 @@ def main() -> None:
         "capture on this board rather than help quiet trailing speech.",
     )
     parser.add_argument("--num-threads", type=int, default=2, dest="num_threads")
-    parser.add_argument("--vad-threshold", type=float, default=0.5, dest="vad_threshold")
+    parser.add_argument(
+        "--vad-threshold", type=float, default=0.5, dest="vad_threshold"
+    )
     parser.add_argument(
         "--vad-silence-ms", type=int, default=400, dest="vad_silence_ms"
     )
@@ -525,9 +535,7 @@ def main() -> None:
             run(args)
     except ModuleNotFoundError as e:
         if "sherpa_onnx" in str(e):
-            raise SystemExit(
-                "sherpa-onnx is not installed. Run: uv sync --extra asr-eval"
-            ) from e
+            raise SystemExit("sherpa-onnx is not installed. Run: uv sync") from e
         raise
 
 
