@@ -123,12 +123,17 @@ def run_pipeline(
     script: list[str],
     config: ActionsConfig,
     timeout: float = 5.0,
+    silence_beep: bool = True,
 ) -> list[tuple[str, dict]]:
     """Drive the full recognition pipeline with scripted transcripts.
 
-    Monkeypatches start_capture, get_stt_backend, and TTS engine so no real
-    hardware, model, or network is needed. Returns all on_stt_event calls in
-    order.
+    Monkeypatches start_capture, get_stt_backend, TTS engine and the wake beep
+    so no real hardware, model, or network is needed. Returns all on_stt_event
+    calls in order.
+
+    silence_beep=True replaces play_wake_beep_async with a no-op: a real tone
+    would set the _playback_active gate and make the loop drop FakeProc chunks,
+    starving the ScriptedBackend. Pass False only to test the beep path itself.
     """
     events: list[tuple[str, dict]] = []
     stop_event = threading.Event()
@@ -140,6 +145,7 @@ def run_pipeline(
     # --- monkeypatches ---
     orig_start_capture = _stt_module.start_capture
     orig_get_backend = _stt_module.get_stt_backend
+    orig_beep = _stt_module.play_wake_beep_async
 
     def _fake_start_capture(source: Any, channels: int = 1, config: Any = None):
         return fake_proc
@@ -149,6 +155,8 @@ def run_pipeline(
 
     _stt_module.start_capture = _fake_start_capture
     _stt_module.get_stt_backend = _fake_get_backend
+    if silence_beep:
+        _stt_module.play_wake_beep_async = lambda name: None
 
     # Silence TTS: handle_ask does `from alexa_custom.tts import get_engine`
     # at call time, so patch the source module directly.
@@ -175,6 +183,7 @@ def run_pipeline(
     finally:
         _stt_module.start_capture = orig_start_capture
         _stt_module.get_stt_backend = orig_get_backend
+        _stt_module.play_wake_beep_async = orig_beep
         _tts_module.get_engine = _orig_get_engine
 
     return events
@@ -543,3 +552,34 @@ class TestUserActiveTriggers:
         names = _event_names(events)
         assert "wake" in names
         assert "matched" in names
+
+
+class TestAsyncWakeBeep:
+    def test_dispatch_not_blocked_by_tone(self):
+        """The confirmation tone must not delay dispatch (async beep).
+
+        The tone blocks on an event the test releases only AFTER the pipeline
+        run: with the old synchronous beep the recognition thread would hang
+        inside the tone before dispatching and no 'matched' event would arrive
+        within the harness timeout.
+        """
+        from unittest.mock import patch
+
+        tone_started = threading.Event()
+        release_tone = threading.Event()
+
+        def blocking_tone(name):
+            tone_started.set()
+            release_tone.wait(timeout=15)
+
+        config = _make_config([_direct(["chiama stefano"])])
+        try:
+            with patch("alexa_custom.audio_ops.play_tone", side_effect=blocking_tone):
+                events = run_pipeline(["chiama stefano"], config, silence_beep=False)
+        finally:
+            release_tone.set()
+        names = _event_names(events)
+        assert "matched" in names, (
+            f"no matched event while tone still playing; got {names}"
+        )
+        assert tone_started.is_set(), "tone playback was never started"

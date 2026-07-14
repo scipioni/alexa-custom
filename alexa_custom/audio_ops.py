@@ -407,6 +407,20 @@ def play_wake_beep(name: str = "wake") -> None:
     play_tone(name)
 
 
+def play_wake_beep_async(name: str = "wake") -> None:
+    """Start the wake/command tone without waiting for playback to finish.
+
+    The tone still runs through the synchronous playback path in a background
+    thread, so _audio_lock serialization, the _playback_active echo gate and
+    temp-file cleanup all behave exactly as in play_wake_beep.
+    """
+    if name.lower() == "none":
+        return
+    threading.Thread(
+        target=play_wake_beep, args=(name,), daemon=True, name="wake-beep"
+    ).start()
+
+
 def play_timeout_beep() -> None:
     play_beep(400, 150)
 

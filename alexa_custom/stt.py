@@ -20,7 +20,7 @@ from alexa_custom.actions import (
     dispatch,
     match_trigger_with_score,
 )
-from alexa_custom.audio import play_wake_beep
+from alexa_custom.audio import play_wake_beep_async
 from alexa_custom.config import (
     ActionEntry,
     ActionsConfig,
@@ -437,7 +437,7 @@ def _recognition_loop(
         if _follow_up_active(trigger, config) and not livekit_connected_flag.is_set():
             wake_deadline = time.monotonic() + config.recognition.follow_up_timeout
             try:
-                play_wake_beep(config.recognition.follow_up_tone)
+                play_wake_beep_async(config.recognition.follow_up_tone)
             except Exception:
                 pass
         else:
@@ -658,7 +658,7 @@ def _recognition_loop(
                             time.monotonic() + config.recognition.wake_window
                         )
                         try:
-                            play_wake_beep(config.recognition.wake_tone)
+                            play_wake_beep_async(config.recognition.wake_tone)
                         except Exception:
                             pass
                         _dispatch_trigger(trig, wake_phrase, residual, score)
@@ -694,7 +694,7 @@ def _recognition_loop(
                         },
                     )
                 try:
-                    play_wake_beep(config.recognition.wake_tone)
+                    play_wake_beep_async(config.recognition.wake_tone)
                 except Exception as e:
                     logger.debug("Wake beep failed: %s", e)
                 continue
@@ -714,7 +714,7 @@ def _recognition_loop(
                 if on_stt_event:
                     on_stt_event("wake", {"word": wake_phrase, "timeout": 0})
                 try:
-                    play_wake_beep(config.recognition.wake_tone)
+                    play_wake_beep_async(config.recognition.wake_tone)
                 except Exception as e:
                     logger.debug("Wake beep failed: %s", e)
                 _dispatch_trigger(trig, wake_phrase, residual, score)
@@ -729,7 +729,7 @@ def _recognition_loop(
                         },
                     )
                 try:
-                    play_wake_beep(config.recognition.wake_tone)
+                    play_wake_beep_async(config.recognition.wake_tone)
                 except Exception as e:
                     logger.debug("Wake beep failed: %s", e)
             continue
@@ -819,7 +819,7 @@ def _recognition_loop(
             logger.info("Direct: %r → %r (score=%.0f)", text, trig.phrase, score)
 
         try:
-            play_wake_beep(config.recognition.wake_tone)
+            play_wake_beep_async(config.recognition.wake_tone)
         except Exception as e:
             logger.debug("Command beep failed: %s", e)
 
