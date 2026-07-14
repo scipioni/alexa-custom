@@ -18,6 +18,7 @@
 10. [Web Dashboard](#10-web-dashboard)
 11. [Development](#11-development)
 12. [Troubleshooting](#12-troubleshooting)
+13. [Headroom — Context Compression for AI Agents](#13-headroom--context-compression-for-ai-agents)
 
 ---
 
@@ -954,6 +955,55 @@ systemctl --user status serena       # check status
 serena-setup --force                  # re-download models
 ls models/                           # verify models directory contents
 ```
+
+---
+
+## 13. Headroom — Context Compression for AI Agents
+
+[Headroom](https://github.com/chopratejas/headroom) is installed as an MCP server so Claude Code and Gemini CLI can compress tool outputs, logs, and conversation history before they reach the model — reducing token usage by 60–95% on large contexts.
+
+### MCP server
+
+The server is registered in `.claude/settings.json` (Claude Code) and `~/.gemini/settings.json` (Gemini CLI):
+
+```json
+{
+  "mcpServers": {
+    "headroom": {
+      "command": "headroom",
+      "args": ["mcp", "serve"]
+    }
+  }
+}
+```
+
+Both tools expose three MCP tools automatically: `headroom_compress`, `headroom_retrieve`, and `headroom_stats`.
+
+### Using headroom in Python
+
+```python
+from headroom import compress
+
+# Compress a large log or tool output before sending to a model
+compressed = compress(log_text)
+```
+
+### CLI proxy (zero-code integration)
+
+Run headroom as a drop-in proxy in front of any OpenAI-compatible endpoint:
+
+```bash
+headroom proxy --port 8787
+# Then point your LLM_HOST to http://localhost:8787
+```
+
+### Installation
+
+```bash
+pip install "headroom-ai[mcp,proxy]"
+```
+
+> Requires Python ≤ 3.13 for source builds. On Python 3.14+ use `--only-binary headroom-ai`.
 
 ---
 
