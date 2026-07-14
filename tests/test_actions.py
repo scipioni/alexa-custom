@@ -229,8 +229,14 @@ class TestConfigurableMatching:
             assert match_trigger("si", triggers, algorithm=algo) is not None
             # Inflected or different words must fail
             assert match_trigger("se", triggers, algorithm=algo) is None
-            # Extra words must fail even for token_set_ratio!
-            assert match_trigger("si grazie", triggers, algorithm=algo) is None
+            # An extra word alongside an exact word-level hit must still
+            # match: free-vocabulary backends (sherpa-onnx) have no grammar
+            # constraint on ask replies, so a short "sì"/"no" answer often
+            # picks up a trailing captured word before the transcript is
+            # matched. No fuzzy/prefix leniency though — only a whole-word
+            # phonetic hit counts, "sissignore" (one word) still must not.
+            assert match_trigger("si grazie", triggers, algorithm=algo) is not None
+            assert match_trigger("sissignore", triggers, algorithm=algo) is None
 
     def test_trigger_phrases_uses_commands(self):
         from alexa_custom.actions import _trigger_phrases

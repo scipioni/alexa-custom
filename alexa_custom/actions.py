@@ -295,6 +295,7 @@ def match_trigger_with_score(
     best_score = 0.0
     t_phon = italian_phonetic(transcript)
     _t_words: list[str] | None = None
+    _t_word_phons: list[str] | None = None
     for trigger in triggers:
         phrases = _trigger_phrases(trigger)
         # Word-overlap guard. Each phrase's *content* words (phonetic length ≥ 3,
@@ -335,7 +336,21 @@ def match_trigger_with_score(
         for p in phrases:
             p_phon = italian_phonetic(p)
             if len(p_phon) < 4:
-                score = 100.0 if t_phon == p_phon else 0.0
+                # Word-level exact match, not whole-transcript: with free-
+                # vocabulary backends (sherpa-onnx has no grammar constraint —
+                # see stt_capture.capture_transcript), a short reply like
+                # "sì"/"no" often picks up an extra captured word (noise,
+                # trailing filler) before the vad-silence endpoint fires,
+                # which used to zero out the whole-transcript comparison and
+                # drop an otherwise-clear answer. Matching if ANY transcript
+                # word is an exact phonetic hit keeps the "no partial credit"
+                # guard (still no fuzzy/prefix leniency) while tolerating
+                # surrounding words.
+                if _t_word_phons is None:
+                    if _t_words is None:
+                        _t_words = transcript.split()
+                    _t_word_phons = [italian_phonetic(w) for w in _t_words]
+                score = 100.0 if p_phon in _t_word_phons else 0.0
             else:
                 score = get_similarity_score(t_phon, p_phon, algorithm)
             scores.append(score)
