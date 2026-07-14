@@ -158,7 +158,7 @@ If you have `task` installed, run setup once (after first boot):
 ```bash
 task audio:setup
 ```
-This sets default routing, unmutes PCM, and installs `alsa-pcm-unmute.service` — a user systemd service that handles boot-time PCM restoration and routing on every subsequent boot. See section 8 for details.
+This sets default routing, unmutes PCM, and installs `alsa-pcm-unmute.service` — a user systemd service that handles boot-time PCM restoration and routing on every subsequent boot. See section 11 for details.
 
 ### The Manual Way
 To configure the USB audio card (`NewPie`) as the default playback and capture device manually:
@@ -177,7 +177,50 @@ WirePlumber stores these names in its persistent state (`~/.local/state/wireplum
 
 ---
 
-## 8. Persisting PCM Volume and Routing Across Reboots
+## 8. AudioWatcher Background Thread
+
+The system runs an `AudioWatcher` background thread that monitors PipeWire events via `pulsectl` and proactively manages audio routing.
+
+**Responsibilities**:
+1. On every PulseAudio event (device connect/disconnect), calls `_check_and_enforce()` which re-applies NewPie as the default sink/source.
+2. Opens a `pulsectl.Pulse()` connection on startup and immediately calls `_restore_hw_pcm()`.
+3. Reacts to `sink_changed`, `source_changed`, and `card_changed` events — catches mid-session routing changes caused by USB reconnection or HDMI hotplug.
+
+**Rule**: Never open a `pulsectl.Pulse()` connection without calling `_restore_hw_pcm()` right after. The `AudioWatcher` enforces this automatically.
+
+## 9. GStreamer Capture Profiles
+
+When `stt.capture_backend: gstreamer`, capture can use named profiles defined under `audio.gstreamer.profiles`. Each profile overrides:
+
+- **GStreamer params**: noise_suppression_level, agc_target_level_dbfs, agc_compression_gain_db, etc.
+- **STT params**: rms_threshold, vad_silence_ms (applied to the recognition loop after capture restart)
+
+Profiles are switched at runtime via the `set_audio_profile` action type:
+
+```yaml
+triggers:
+  - commands: ["microfono sensibile"]
+    actions:
+      - type: set_audio_profile
+        profile: sensitive
+        say: "Microfono impostato su sensibile"
+```
+
+The active profile name is stored in `conf/state.yaml` and restored on daemon start. The GStreamer capture pipeline restarts automatically when the profile changes, applying the new parameters.
+
+## 10. Software vs Hardware Gain
+
+`audio.input_gain` (**1.0**) is applied **in software** — a numpy multiplication on the captured int16 buffer before VAD/Vosk processing. It does NOT modify the ALSA hardware PCM mixer, the PipeWire source volume, or the PulseAudio source volume.
+
+This is intentional:
+- Software gain is instant (no ALSA/PulseAudio round-trip).
+- It survives `pulsectl.Pulse()` context opens (hardware PCM gets reset to 0%).
+- It can be changed at runtime without audio pipeline restarts.
+- Negative values invert the signal (useful for diagnosing phase issues).
+
+Hardware PCM volume is always set to 100% by `_restore_hw_pcm()` and left there. All volume/gain control is done digitally.
+
+## 11. Persisting PCM Volume and Routing Across Reboots
 
 On this board, the USB audio driver resets the NewPie's hardware `PCM` mixer to `0%` every time PipeWire initializes and takes ownership of the ALSA device. Additionally, WirePlumber may route to HDMI on boot if NewPie isn't ready when routing decisions are made.
 
@@ -201,11 +244,11 @@ wpctl status | grep -E '\* .*NewPie'
 
 ---
 
-## 9. Auto-Switching to NewPie on Boot (Fixing Late Discovery Silence)
+## 14. Auto-Switching to NewPie on Boot (Fixing Late Discovery Silence)
 
 On headless systems, the USB audio interface is often discovered by the kernel **slightly after** PipeWire and WirePlumber have already started up. Because the USB card didn't exist at the exact millisecond WirePlumber booted, WirePlumber falls back to the built-in HDMI sink. When the USB device is registered a second later, WirePlumber retains HDMI as the default active sink.
 
-**The fix**: the `alsa-pcm-unmute.service` (installed by `task audio:setup`) handles routing too — it polls until NewPie appears, then calls `pw-metadata` to force it as the active sink/source. See section 8.
+**The fix**: the `alsa-pcm-unmute.service` (installed by `task audio:setup`) handles routing too — it polls until NewPie appears, then calls `pw-metadata` to force it as the active sink/source. See section 11.
 
 **`libpipewire-module-switch-on-connect` — not available on this board**: This PipeWire module would force an immediate switch to any newly connected device, but it is not compiled into the PipeWire 1.4.2 build on this board. The `ifexists nofail` conf flags do **not** work on this build — PipeWire and `pipewire-pulse` crash if the drop-in is present. `task audio:setup` actively removes any stale copies of `99-switch-on-connect.conf` from both `pipewire.conf.d/` and `pipewire-pulse.conf.d/` to prevent this.
 
@@ -216,7 +259,7 @@ wpctl status | grep -E '\* .*NewPie'
 
 ---
 
-## 10. Mid-Session Audio Loss (USB Autosuspend)
+## 15. Mid-Session Audio Loss (USB Autosuspend)
 
 Linux may suspend the NewPie USB device after a period of inactivity. When PipeWire reinitializes it on wake, the ALSA PCM mixer resets to `0%` and routing may revert to HDMI — identical to the boot-time problem but happening mid-session.
 
@@ -228,9 +271,14 @@ journalctl --user -u wireplumber -n 50 --no-pager
 ```
 Look for WirePlumber re-discovering or re-initializing the NewPie around the time audio dropped.
 
-**The fix**: `task audio:setup` installs `/etc/udev/rules.d/99-newpie-no-autosuspend.rules`, which sets `autosuspend_delay_ms=-1` for the NewPie USB device — disabling autosuspend permanently for that device.
+**The fix** (two parts):
 
-To verify autosuspend is disabled after running `task audio:setup`:
+1. **Systemd system service** (`newpie-autosuspend.service` installed by `task audio:setup`): disables autosuspend after `multi-user.target`, avoiding the boot crash that occurred when the old udev rule fired during USB enumeration at power-on.
+2. **WirePlumber no-suspend config** (`51-newpie-no-suspend.conf` in `~/.config/wireplumber/wireplumber.conf.d/`): keeps the NewPie source always active so native PipeWire clients (e.g. `pipewiresrc`) can connect and receive data immediately.
+
+`task audio:setup` removes any stale udev rules (`99-newpie-no-autosuspend.rules`) to prevent the boot crash.
+
+To verify autosuspend is disabled:
 ```bash
 cat /sys/bus/usb/devices/*/power/autosuspend_delay_ms
 ```
@@ -238,7 +286,7 @@ The NewPie's entry should show `-1`.
 
 ---
 
-## 11. pulsectl Mid-Session PCM Reset
+## 16. pulsectl Mid-Session PCM Reset
 
 **Any** `pulsectl.Pulse()` connection (volume set, routing query, etc.) causes pipewire-pulse to open a PulseAudio client, which triggers PipeWire to re-open the ALSA device. This resets the NewPie's hardware PCM mixer to `0%` — the same reset that happens at boot — making all subsequent audio silent until PCM is restored.
 
@@ -250,7 +298,7 @@ The NewPie's entry should show `-1`.
 
 ---
 
-## 12. pw-play Raw Stdin Piping (Unreliable on This Board)
+## 17. pw-play Raw Stdin Piping (Unreliable on This Board)
 
 `pw-play --raw --rate N --format f32 -` (reading raw PCM from stdin) is **not reliably supported** on PipeWire 1.4.2 on this board. `pw-play` returns exit code 0 but produces no audio. The only reliable path is `pw-play <wav_file>`.
 

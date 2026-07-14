@@ -2,18 +2,16 @@
 
 ## Purpose
 Provide a browser-based dashboard for monitoring and controlling the Alexa Custom client, featuring real-time event streaming, live logs, VU meters, and remote restart capabilities.
-
 ## Requirements
-
 ### Requirement: HTTP server with embedded dashboard
-The system SHALL serve a single-page HTML dashboard over HTTP when started with `--web`. The HTML, CSS, and JavaScript SHALL be stored in `alexa_custom/dashboard.html` and loaded into memory at module import time via `(Path(__file__).parent / "dashboard.html").read_text()`. The loaded content SHALL be served at `GET /`. The server SHALL bind to `0.0.0.0` on the configured port (default `8080`) to allow LAN access.
+The system SHALL serve a single-page HTML dashboard over HTTP. The HTML, CSS, and JavaScript SHALL be stored in `alexa_custom/dashboard.html` and loaded into memory at module import time via `(Path(__file__).parent / "dashboard.html").read_text()`. The loaded content SHALL be served at `GET /`. The server SHALL bind to `0.0.0.0` on the configured port (default `8080`) to allow LAN access.
 
 #### Scenario: Dashboard served on startup
-- **WHEN** `alexa-client --web` is started
+- **WHEN** `alexa-client` is started
 - **THEN** `GET http://<host>:8080/` returns HTTP 200 with `Content-Type: text/html`
 
 #### Scenario: Custom port via flag
-- **WHEN** `alexa-client --web --web-port 9090` is started
+- **WHEN** `alexa-client --web-port 9090` is started
 - **THEN** the server listens on port 9090
 
 ### Requirement: WebSocket real-time event stream
@@ -39,7 +37,7 @@ The system SHALL throttle `volume_update` WebSocket messages to a maximum of 4 p
 - **THEN** the WebSocket stream carries no more than 4 `volume_update` messages per second per client
 
 ### Requirement: Live log stream
-The system SHALL capture Python `logging` records at DEBUG level and above and broadcast them to all connected WebSocket clients as `{"type": "log", "level": "...", "ts": "HH:MM:SS", "msg": "..."}` messages. Log records SHALL NOT be written to stdout when `--web` is active (to avoid polluting a redirected log file with terminal escape codes).
+The system SHALL capture Python `logging` records at DEBUG level and above and broadcast them to all connected WebSocket clients as `{"type": "log", "level": "...", "ts": "HH:MM:SS", "msg": "..."}` messages. Log records SHALL NOT be written to stdout (to avoid polluting a redirected log file with terminal escape codes).
 
 #### Scenario: Log record broadcast to browser
 - **WHEN** any module calls `logging.info("connected")`
@@ -53,18 +51,25 @@ The system SHALL accept a WebSocket control message `{"type": "control", "action
 - **THEN** clients receive `{"type": "restarting"}` and the process restarts with the same arguments
 
 ### Requirement: Clean shutdown on Ctrl+C
-The system SHALL exit cleanly when `SIGINT` (Ctrl+C) is received. The aiohttp server SHALL stop accepting new connections, open WebSocket clients SHALL be closed, and the process SHALL exit with code 0. The LiveKit FFI thread SHALL be force-exited via `os._exit(0)` after a short grace period (same pattern as `--tui`).
+The system SHALL exit cleanly when `SIGINT` (Ctrl+C) is received. The aiohttp server SHALL stop accepting new connections, open WebSocket clients SHALL be closed, and the process SHALL exit with code 0. The LiveKit FFI thread SHALL be force-exited via `os._exit(0)` after a short grace period.
 
 #### Scenario: Ctrl+C exits without traceback
-- **WHEN** the user presses Ctrl+C while `--web` is running
+- **WHEN** the user presses Ctrl+C while the client is running
 - **THEN** the process exits cleanly with no unhandled exception printed to stderr
 
 ### Requirement: Auto-reconnecting browser client
-The browser JavaScript client SHALL automatically attempt to reconnect to `/ws` after a 2-second delay when the WebSocket connection closes unexpectedly.
+The browser JavaScript client SHALL automatically attempt to reconnect to `/ws` after a 2-second delay when the WebSocket connection closes unexpectedly. The browser SHALL NOT reload the page under any normal operation; reconnection SHALL happen transparently.
 
 #### Scenario: Server restarts and browser reconnects
 - **WHEN** the process restarts and the server becomes available again
 - **THEN** the browser reconnects within 3 seconds without a page refresh
+
+### Requirement: No full-page reload on file changes
+The WebSocket server SHALL NOT broadcast a `{"type": "reload"}` message when monitored files change. Configuration reloads (triggered by the `ConfigManager`) SHALL update state internally without instructing the browser to perform a full page reload. The browser JavaScript SHALL also not contain a `location.reload()` handler for any incoming WebSocket message type except `restarting`.
+
+#### Scenario: Config file changed during runtime
+- **WHEN** a monitored config file changes on disk (e.g., volume persisted to config.yaml)
+- **THEN** the server processes the change internally and the web dashboard continues running without a page reload
 
 ### Requirement: Glassmorphism visual style
 The dashboard SHALL use a glassmorphism visual design: panels with `backdrop-filter: blur(12px)`, semi-transparent backgrounds (`rgba(255,255,255,0.04)`), `1px` borders at `rgba(255,255,255,0.08)`, and `12px` border-radius. The colour palette SHALL be defined as CSS custom properties on `:root` including `--wake` (orange), `--match` (green), `--nomatch` (red), `--bg` (near-black), `--surface`, `--border`, `--text`, and `--muted`. The font SHALL be the system font stack (`system-ui, -apple-system, sans-serif`) with no external font dependency.
@@ -125,3 +130,103 @@ Animations SHALL be implemented as CSS `@keyframes` classes added/removed via Ja
 #### Scenario: History row slides in
 - **WHEN** a new entry is prepended to the history panel
 - **THEN** the row slides in from above via a CSS transform transition
+
+### Requirement: Room panel shows configuration status
+The room panel (`#room-panel`) SHALL display the configuration status of LiveKit and Telegram in addition to the normal room status.
+
+When both LiveKit and Telegram are configured (all required env vars non-empty), the room panel SHALL behave exactly as before — showing room connection state (`closed`, `waiting`, `in_call`).
+
+When at least one service is missing configuration, the room panel SHALL override its display:
+- Icon becomes `⚠️`
+- Label becomes `Calls disabled`
+- Subtitle becomes `Missing: LiveKit` / `Missing: Telegram` / `Missing: LiveKit, Telegram`
+
+The configuration check SHALL happen once on WebSocket `hello` and SHALL NOT change during the session (secrets require a full restart).
+
+#### Scenario: Both services configured
+- **GIVEN** `LIVEKIT_URL`, `LIVEKIT_API_KEY`, `LIVEKIT_API_SECRET`, `LIVEKIT_ROOM`, `TELEGRAM_BOT_TOKEN`, and `TELEGRAM_CHAT_ID` are all set
+- **WHEN** the WebSocket `hello` message has `livekit_configured: true` and `telegram_configured: true`
+- **THEN** the room panel shows normal status (`closed`/`waiting`/`in_call`) unchanged
+
+#### Scenario: LiveKit not configured
+- **GIVEN** only `LIVEKIT_URL` is missing from env
+- **WHEN** the WebSocket `hello` message has `livekit_configured: false`
+- **THEN** the room panel displays `⚠️ Calls disabled — Missing: LiveKit`
+
+#### Scenario: Telegram not configured
+- **GIVEN** only `TELEGRAM_BOT_TOKEN` is missing from env
+- **WHEN** the WebSocket `hello` message has `telegram_configured: false`
+- **THEN** the room panel displays `⚠️ Calls disabled — Missing: Telegram`
+
+#### Scenario: Neither configured
+- **GIVEN** all LiveKit and Telegram env vars are empty
+- **WHEN** the WebSocket `hello` message has both flags `false`
+- **THEN** the room panel displays `⚠️ Calls disabled — Missing: LiveKit, Telegram`
+
+### Requirement: Interactive persistent history cards
+The web dashboard interface SHALL display unified interaction history cards populated with data loaded from the persistent backend history upon connection.
+
+#### Scenario: Load history on handshake
+- **WHEN** the dashboard page loads and connects to the WebSocket server
+- **THEN** it receives the last N persistent interaction sessions as a list inside the "hello" handshake payload and immediately renders them in the HISTORY panel
+
+#### Scenario: Receive real-time session update
+- **WHEN** a new completed interaction session is broadcast by the server via a "history_item" message
+- **THEN** the client UI prepends a new history card to the top of the history list, keeping up to MAX_HIST entries
+
+### Requirement: Front-end false positive flagging
+The web dashboard interface SHALL display a "Flag FP" interactive element on each history card, allowing users to mark noise or false activations.
+
+#### Scenario: Click flag FP button
+- **WHEN** the user clicks the "Flag FP" button next to a history item
+- **THEN** the client sends a control WebSocket message requesting to flag that specific session ID and visually updates the card to a "Flagged" state (e.g., dimming the text, highlighting with a warning border, and disabling the button)
+
+#### Scenario: Synchronize flagging across clients
+- **WHEN** a client receives a "history_flagged" websocket message from the server
+- **THEN** it locates the corresponding card in the DOM and updates its visual representation to the "Flagged" state
+
+### Requirement: Front-end clear history request
+The web dashboard interface SHALL bind the existing "clear" button in the history header to empty both the local DOM and the backend's persistent storage.
+
+#### Scenario: Click clear history button
+- **WHEN** the user clicks the "clear" button in the HISTORY section header
+- **THEN** the client clears all cards from the local list and sends a "clear_history" control WebSocket command to the server
+
+### Requirement: Trigger canvas two-node layout
+
+The dashboard trigger canvas (`ww-graph-canvas`) SHALL render the flat trigger model as exactly two nodes: a **wake-words node** that lists all configured wake phrases, and a single **rectangular triggers node** that lays out every trigger in a grid. The canvas SHALL NOT render per-wake-group node trees or a separate globals container.
+
+#### Scenario: Two nodes rendered
+
+- **WHEN** the dashboard loads the current config
+- **THEN** the canvas shows one wake-words node and one rectangular triggers node
+- **AND** the triggers node arranges all triggers in a grid layout
+
+#### Scenario: Wake-words node lists all phrases
+
+- **WHEN** `wake_words` contains multiple phrases
+- **THEN** the wake-words node lists each phrase
+
+### Requirement: No-wake triggers highlighted
+
+Triggers that fire without a wake word (`with_wake: false`) SHALL be visually highlighted in the triggers grid to distinguish them from wake-gated (`with_wake: true`) triggers.
+
+#### Scenario: Direct trigger highlighted
+
+- **WHEN** a trigger has `with_wake: false`
+- **THEN** its grid cell is rendered with the highlight style
+
+#### Scenario: Wake-gated trigger not highlighted
+
+- **WHEN** a trigger has `with_wake: true` (or default)
+- **THEN** its grid cell uses the normal (non-highlighted) style
+
+### Requirement: Runtime match flash preserved
+
+The canvas SHALL preserve runtime match-flash highlighting: when a trigger fires at runtime, its grid cell flashes, driven by the existing match event (`_graphFlashByPhrase` keyed on the matched phrase/command).
+
+#### Scenario: Cell flashes on match
+
+- **WHEN** a `matched` STT event arrives for a trigger
+- **THEN** that trigger's grid cell flashes briefly
+

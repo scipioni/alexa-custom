@@ -3,926 +3,199 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>alexa-custom</title>
-  <style>
-    :root {
-      --bg:      #0f0f13;
-      --surface: rgba(255,255,255,0.04);
-      --border:  rgba(255,255,255,0.08);
-      --wake:    #fb923c;
-      --match:   #4ade80;
-      --nomatch: #f87171;
-      --info:    #60a5fa;
-      --text:    #e2e8f0;
-      --muted:   #64748b;
-      --amber:   #facc15;
-      --llm:     #a78bfa;
-      --llm-dim: rgba(167,139,250,0.15);
-      --llm-border: rgba(167,139,250,0.3);
-    }
-
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-
-    body {
-      background: var(--bg);
-      color: var(--text);
-      font-family: system-ui, -apple-system, sans-serif;
-      font-size: 13px;
-      height: 100vh;
-      display: grid;
-      grid-template-rows: auto auto 1fr auto;
-      overflow: hidden;
-    }
-
-    /* ── status bar ─────────────────────────────────────────────────────── */
-    #status-bar {
-      padding: 8px 16px;
-      border-bottom: 1px solid var(--border);
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      background: rgba(0,0,0,0.3);
-      backdrop-filter: blur(8px);
-    }
-    .sdot {
-      width: 8px; height: 8px; border-radius: 50%;
-      background: var(--muted); flex-shrink: 0;
-      transition: background 0.3s, box-shadow 0.3s;
-    }
-    .sdot.ok   { background: var(--match); box-shadow: 0 0 6px var(--match); }
-    .sdot.warn { background: var(--wake); }
-    #st   { flex: 1; font-size: 12px; }
-    #room { color: var(--muted); font-size: 12px; }
-    #ws-ind { font-size: 11px; color: var(--muted); }
-    #ws-ind.ok { color: var(--match); }
-
-    /* LLM badge */
-    #llm-badge {
-      display: none;
-      margin-left: auto;
-      padding: 2px 9px;
-      border-radius: 10px;
-      font-size: 10px;
-      font-weight: 600;
-      letter-spacing: 0.05em;
-      background: var(--llm-dim);
-      border: 1px solid var(--llm-border);
-      color: var(--llm);
-      transition: background 0.3s, box-shadow 0.3s;
-    }
-    #llm-badge.active   { display: flex; align-items: center; gap: 5px; }
-    #llm-badge.thinking { background: rgba(167,139,250,0.22); box-shadow: 0 0 8px rgba(167,139,250,0.25); }
-
-    .llm-dot {
-      display: inline-block;
-      width: 5px; height: 5px; border-radius: 50%;
-      background: var(--llm);
-      animation: llm-dot-pulse 1.4s ease-in-out infinite;
-      opacity: 0;
-    }
-    .llm-dot:nth-child(1) { animation-delay: 0s; }
-    .llm-dot:nth-child(2) { animation-delay: 0.2s; }
-    .llm-dot:nth-child(3) { animation-delay: 0.4s; }
-
-    /* ── hero STT card ──────────────────────────────────────────────────── */
-    #hero {
-      margin: 10px 12px 0;
-      padding: 14px 18px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      backdrop-filter: blur(12px);
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      min-height: 54px;
-      transition: border-color 0.4s;
-    }
-    .hero-icon { font-size: 20px; flex-shrink: 0; }
-    .hero-text { font-size: 15px; flex: 1; }
-    .hero-wake    { color: var(--wake); font-weight: 600; margin-right: 6px; }
-    .hero-trigger { color: var(--match); font-weight: 600; font-size: 14px; margin-left: 6px; }
-    .hero-muted   { color: var(--muted); }
-    .cursor { display: inline-block; animation: blink 1s step-end infinite; }
-
-    /* thinking dots row inside hero */
-    .hero-think-dots {
-      display: inline-flex;
-      align-items: center;
-      gap: 5px;
-      margin-left: 8px;
-    }
-    .hero-think-dots .td {
-      width: 7px; height: 7px; border-radius: 50%;
-      background: var(--llm);
-      animation: llm-dot-pulse 1.4s ease-in-out infinite;
-      opacity: 0;
-    }
-    .hero-think-dots .td:nth-child(1) { animation-delay: 0s; }
-    .hero-think-dots .td:nth-child(2) { animation-delay: 0.22s; }
-    .hero-think-dots .td:nth-child(3) { animation-delay: 0.44s; }
-
-    /* LLM orbit ring on hero icon */
-    .llm-orb {
-      position: relative; display: inline-block; flex-shrink: 0;
-    }
-    .llm-orb-ring {
-      position: absolute; inset: -5px;
-      border-radius: 50%;
-      border: 2px solid transparent;
-      border-top-color: var(--llm);
-      animation: orbit-spin 1.1s linear infinite;
-    }
-
-    /* ── three-column main grid ─────────────────────────────────────────── */
-    #main {
-      display: grid;
-      grid-template-columns: 240px 1fr 240px;
-      gap: 8px;
-      min-height: 0;
-      margin: 8px 12px 0;
-    }
-
-    .panel {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      backdrop-filter: blur(12px);
-      display: flex;
-      flex-direction: column;
-      min-height: 0;
-      overflow: hidden;
-    }
-
-    .panel-hdr {
-      padding: 8px 12px;
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: 0.08em;
-      color: var(--info);
-      border-bottom: 1px solid var(--border);
-      flex-shrink: 0;
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-    }
-    .panel-hdr button {
-      background: none;
-      border: 1px solid var(--border);
-      color: var(--muted);
-      padding: 1px 8px;
-      cursor: pointer;
-      font-family: inherit;
-      font-size: 10px;
-      border-radius: 4px;
-    }
-    .panel-hdr button:hover { border-color: var(--info); color: var(--text); }
-
-    /* ── wake words panel (left) ────────────────────────────────────────── */
-    #al { flex: 1; overflow-y: auto; padding: 8px 12px; }
-    .awk-group {
-      margin-bottom: 10px;
-      border-radius: 8px;
-      padding: 6px 8px;
-      transition: background 0.2s, box-shadow 0.2s;
-    }
-    .awk-group.ww-active {
-      background: rgba(251,146,60,0.08);
-      box-shadow: inset 2px 0 0 var(--wake);
-      animation: glow-pulse 1.2s ease-out;
-    }
-    .awk { color: var(--wake); font-weight: 700; font-size: 12px; }
-    .aalias { color: var(--muted); font-size: 11px; }
-    .atrig { margin-top: 3px; color: var(--text); font-size: 12px; transition: opacity 0.2s; }
-    .atrig.trig-hit {
-      color: var(--match);
-      background: rgba(74,222,128,0.12);
-      border-radius: 4px;
-      padding: 1px 5px;
-      margin-left: -5px;
-      animation: trig-flash 0.35s ease-out;
-    }
-    .atrig.trig-reply-hit {
-      color: var(--match);
-      background: rgba(74,222,128,0.15);
-      border-radius: 4px;
-      padding: 1px 5px;
-      margin-left: -5px;
-      font-weight: 600;
-      animation: trig-reply-flash 0.5s ease-out;
-    }
-    .atrig.trig-dim { opacity: 0.25; }
-    .aact { color: var(--muted); font-size: 11px; margin-left: 10px; display: block; }
-    .agt-header {
-      color: var(--muted); font-size: 10px; margin-top: 6px; letter-spacing: 0.06em;
-      border-bottom: 1px solid var(--border); padding-bottom: 3px; margin-bottom: 4px;
-    }
-    .ainteract {
-      color: var(--info); font-size: 12px; margin-top: 4px;
-      padding: 2px 6px; background: rgba(96,165,250,0.08);
-      border-radius: 4px; min-height: 1.4em;
-    }
-    .ainteract:empty { display: none; }
-
-    /* AI fallback section */
-    .llm-section {
-      margin-top: 8px;
-      border-top: 1px solid var(--border);
-      padding-top: 8px;
-    }
-    .llm-section-hdr {
-      font-size: 10px; font-weight: 700; letter-spacing: 0.08em;
-      color: var(--llm); margin-bottom: 5px;
-      display: flex; align-items: center; gap: 5px;
-    }
-    .llm-model-tag {
-      font-size: 10px; color: var(--muted);
-      background: rgba(167,139,250,0.08);
-      border: 1px solid var(--llm-border);
-      border-radius: 4px; padding: 1px 6px; font-weight: 400;
-    }
-    .llm-attr { font-size: 11px; color: var(--muted); margin-left: 2px; }
-    #llm-status-dot {
-      width: 6px; height: 6px; border-radius: 50%;
-      background: var(--llm); flex-shrink: 0;
-      transition: box-shadow 0.3s;
-    }
-    #llm-status-dot.thinking { box-shadow: 0 0 0 3px rgba(167,139,250,0.25); animation: llm-dot-pulse 1s ease-in-out infinite; opacity: 1; }
-
-    /* ── log panel (center) ─────────────────────────────────────────────── */
-    #le { flex: 1; overflow-y: auto; padding: 6px 12px; }
-    .le {
-      padding: 2px 0; white-space: pre-wrap; word-break: break-all;
-      font-size: 12px; font-family: 'SF Mono', 'Cascadia Code', ui-monospace, monospace;
-    }
-    .ts       { color: var(--muted); }
-    .DEBUG    { color: var(--muted); }
-    .INFO     { color: var(--info); }
-    .WARNING  { color: var(--amber); }
-    .ERROR    { color: var(--nomatch); }
-    .CRITICAL { color: var(--nomatch); font-weight: bold; }
-
-    /* ── history + participants panel (right) ───────────────────────────── */
-    #right-panel { }
-    #hist-wrap { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: hidden; }
-    #hl { flex: 1; overflow-y: auto; padding: 6px 10px; }
-    .he {
-      padding: 5px 0;
-      border-bottom: 1px solid var(--border);
-      animation: slide-in 0.2s ease-out;
-    }
-    .he:last-child { border-bottom: none; }
-    .hts  { color: var(--muted); font-size: 11px; }
-    .hwk  { color: var(--wake); font-size: 11px; margin-left: 4px; font-weight: 600; }
-    .hcmd { color: var(--text); font-size: 12px; margin-top: 2px; }
-    .htrig{ color: var(--match); font-size: 11px; margin-top: 2px; }
-    .hllm-reply { color: var(--llm); font-size: 11px; margin-top: 2px; opacity: 0.9; }
-
-    #part-section {
-      flex-shrink: 0;
-      border-top: 1px solid var(--border);
-      max-height: 36%;
-      display: flex;
-      flex-direction: column;
-    }
-    #ph {
-      padding: 7px 12px;
-      color: var(--info); font-weight: 700; font-size: 10px;
-      letter-spacing: 0.08em; flex-shrink: 0;
-    }
-    #pl { flex: 1; overflow-y: auto; padding: 4px 12px 8px; }
-    .pt { padding: 2px 0; font-size: 12px; }
-    .pdot  { color: var(--match); }
-    .pdot0 { color: var(--muted); }
-
-    /* ── footer: VU meters + controls ──────────────────────────────────── */
-    #footer {
-      margin: 8px 12px 10px;
-      padding: 10px 16px;
-      background: var(--surface);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      backdrop-filter: blur(12px);
-      display: flex;
-      align-items: center;
-      gap: 20px;
-    }
-    .vu-row { display: flex; align-items: center; gap: 8px; flex: 1; }
-    .vu-lbl { width: 30px; color: var(--muted); font-weight: 700; font-size: 11px; flex-shrink: 0; }
-    .vu-dev { width: 70px; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 0; }
-    .vu-segs { display: flex; gap: 2px; align-items: center; }
-    .seg {
-      width: 6px; height: 12px; border-radius: 2px;
-      opacity: 0.12; transition: opacity 0.06s linear;
-    }
-    .seg.on { opacity: 1; }
-    .seg:nth-child(-n+14)                        { background: var(--match); }
-    .seg:nth-child(n+15):nth-child(-n+17)        { background: var(--amber); }
-    .seg:nth-child(n+18)                         { background: var(--nomatch); }
-    .vu-db { width: 56px; text-align: right; color: var(--muted); font-size: 11px; flex-shrink: 0; }
-    .footer-divider { width: 1px; height: 28px; background: var(--border); flex-shrink: 0; }
-    #btn-restart {
-      background: var(--surface);
-      border: 1px solid var(--border);
-      color: var(--text);
-      padding: 5px 14px;
-      cursor: pointer;
-      font-family: inherit; font-size: 12px;
-      border-radius: 6px;
-      transition: border-color 0.2s, color 0.2s;
-    }
-    #btn-restart:hover    { border-color: var(--nomatch); color: var(--nomatch); }
-    #btn-restart:disabled { opacity: 0.4; cursor: not-allowed; }
-
-    /* ── animations ─────────────────────────────────────────────────────── */
-    @keyframes glow-pulse {
-      0%   { box-shadow: inset 2px 0 0 var(--wake), 0 0 0 0   rgba(251,146,60,0.5); }
-      40%  { box-shadow: inset 2px 0 0 var(--wake), 0 0 0 8px rgba(251,146,60,0.15); }
-      100% { box-shadow: inset 2px 0 0 var(--wake), 0 0 0 0   rgba(251,146,60,0); }
-    }
-    @keyframes flash-green {
-      0%   { background: var(--surface); border-color: var(--border); }
-      20%  { background: rgba(74,222,128,0.12); border-color: var(--match); }
-      100% { background: var(--surface); border-color: var(--border); }
-    }
-    @keyframes shake {
-      0%, 100% { transform: translateX(0); }
-      20%      { transform: translateX(-7px); }
-      40%      { transform: translateX(7px); }
-      60%      { transform: translateX(-4px); }
-      80%      { transform: translateX(4px); }
-    }
-    @keyframes blink {
-      0%, 100% { opacity: 1; }
-      50%      { opacity: 0; }
-    }
-    @keyframes slide-in {
-      from { transform: translateY(-10px); opacity: 0; }
-      to   { transform: translateY(0);     opacity: 1; }
-    }
-    @keyframes trig-flash {
-      0%   { background: rgba(74,222,128,0.45); }
-      100% { background: rgba(74,222,128,0.12); }
-    }
-    @keyframes trig-reply-flash {
-      0%   { background: rgba(251,146,60,0.5); color: var(--wake); }
-      40%  { background: rgba(74,222,128,0.3);  color: var(--match); }
-      100% { background: rgba(74,222,128,0.15); color: var(--match); }
-    }
-
-    /* LLM specific */
-    @keyframes llm-dot-pulse {
-      0%, 100% { opacity: 0.15; transform: scale(0.75); }
-      50%      { opacity: 1;    transform: scale(1); }
-    }
-    @keyframes orbit-spin {
-      from { transform: rotate(0deg); }
-      to   { transform: rotate(360deg); }
-    }
-    @keyframes llm-think-glow {
-      0%, 100% { box-shadow: 0 0 0 0   rgba(167,139,250,0.35), inset 0 0 0 0 rgba(167,139,250,0); }
-      50%      { box-shadow: 0 0 12px 2px rgba(167,139,250,0.15), inset 0 0 20px 0 rgba(167,139,250,0.04); }
-    }
-    @keyframes llm-reply-flash {
-      0%   { background: rgba(167,139,250,0.18); border-color: var(--llm); }
-      100% { background: var(--surface);         border-color: var(--border); }
-    }
-
-    #hero.anim-match    { animation: flash-green 0.7s ease-out forwards; }
-    #hero.anim-nomatch  { animation: shake 0.5s ease-out; }
-    #hero.llm-thinking  { animation: llm-think-glow 1.6s ease-in-out infinite; border-color: var(--llm-border); }
-    #hero.anim-llm-reply { animation: llm-reply-flash 1.2s ease-out forwards; }
-
-    /* ── scrollbars ─────────────────────────────────────────────────────── */
-    ::-webkit-scrollbar { width: 4px; }
-    ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
-  </style>
+  <title>serena</title>
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet" media="print" onload="this.media='all'" />
+    <link rel="icon" type="image/png" href="data:image/png;base64,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">
+  <script>
+    (function() {
+      var stored = localStorage.getItem('theme');
+      var theme = stored || (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+      if (theme === 'light') document.documentElement.setAttribute('data-theme', 'light');
+    })();
+  </script>
+  <link rel="stylesheet" href="/static/dashboard.css">
 </head>
 <body>
 
-  <div id="status-bar">
-    <div class="sdot" id="cdot"></div>
-    <span id="st">Connecting…</span>
-    <span id="room"></span>
-    <span id="ws-ind">WS disconnected</span>
-    <div id="llm-badge">
-      <span id="llm-badge-dots" style="display:none">
-        <span class="llm-dot"></span><span class="llm-dot"></span><span class="llm-dot"></span>
-      </span>
-      <span id="llm-badge-text">AI</span>
-    </div>
-  </div>
-
-  <div id="hero">
-    <span class="hero-icon hero-muted">○</span>
-    <span class="hero-text hero-muted">STT inactive</span>
-  </div>
-
   <div id="main">
 
-    <div class="panel" id="actions-section">
-      <div class="panel-hdr">WAKE WORDS &amp; ACTIONS</div>
-      <div id="al"><span style="color:var(--muted)">Loading…</span></div>
-    </div>
-
-    <div class="panel" id="log-panel">
-      <div class="panel-hdr">LOGS <button onclick="clearLogs()">clear</button></div>
-      <div id="le"></div>
-    </div>
-
-    <div class="panel" id="right-panel">
-      <div id="hist-wrap">
-        <div class="panel-hdr">HISTORY <button onclick="clearHistory()">clear</button></div>
-        <div id="hl"></div>
+    <div class="center-col">
+      <div id="hero">
+        <span class="hero-inner">
+          <span class="stt-wave wv-idle"><span class="sw"></span><span class="sw"></span><span class="sw"></span><span class="sw"></span><span class="sw"></span></span>
+          <span class="hero-text hero-muted">STT inactive</span>
+        </span>
       </div>
-      <div id="part-section">
-        <div id="ph">PARTICIPANTS (0)</div>
-        <div id="pl"><span style="color:var(--muted)">Waiting…</span></div>
+
+      <div class="panel" id="ww-tree-panel">
+        <div class="panel-hdr">TRIGGERS</div>
+        <div id="ww-graph-wrap"><canvas id="ww-graph-canvas"></canvas></div>
+      </div>
+
+      <div class="panel" id="log-panel">
+        <div class="panel-hdr clickable" onclick="toggleLog()">LOGS <span style="margin-right:auto"></span><button onclick="event.stopPropagation();clearLogs()">clear</button><span id="log-toggle-icon">▾</span></div>
+        <div id="log-content">
+          <div id="le"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="hist-col">
+      <div class="panel" id="history-section">
+        <div class="panel-hdr">HISTORY <span style="margin-right:auto"></span><button onclick="event.stopPropagation();clearHistory()">clear</button></div>
+        <div id="hist-content">
+          <div id="hist-empty" style="padding: 16px 12px; font-size: 11px; color: var(--muted); text-align: center; font-style: italic;">No events</div>
+          <div id="hl"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="right-col">
+      <div class="panel" id="toggles-panel">
+        <div id="ws-status">
+          <div class="sdot" id="cdot"></div>
+          <span id="ws-ind">WS connecting…</span>
+        </div>
+        <div id="toggles-body">
+          <button id="btn-mode" class="material-symbols-outlined" aria-label="Toggle mode" onclick="toggleMode()">code</button>
+          <button id="btn-theme" class="material-symbols-outlined" aria-label="Toggle theme" onclick="toggleTheme()">light_mode</button>
+          <button id="btn-restart" aria-label="Restart" onclick="sendCtrl('restart')"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>
+          <button id="btn-config" class="material-symbols-outlined" aria-label="Edit configuration" onclick="openConfigModal()">settings</button>
+        </div>
+      </div>
+      <div id="morph-overlay"></div>
+
+      <div class="panel" id="room-panel">
+        <div class="panel-hdr">ROOM<span id="room"></span></div>
+        <div id="room-body">
+          <div id="room-status-body">
+            <span class="rs-icon material-symbols-outlined" id="rs-icon">phone_disabled</span>
+            <div>
+              <div class="rs-label" id="rs-label">Closed</div>
+              <div class="rs-sub" id="rs-sub">No active call</div>
+              <div id="room-participants-list" style="display:none;margin-top:4px;font-size:11px"></div>
+            </div>
+            <div id="donut-wrap">
+              <svg id="donut-svg" viewBox="0 0 36 36">
+                <circle id="donut-track" cx="18" cy="18" r="15"/>
+                <circle id="donut-fill" cx="18" cy="18" r="15" stroke-dasharray="94.25" stroke-dashoffset="0"/>
+              </svg>
+              <span id="donut-label"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel" id="monitoring-section">
+        <div class="panel-hdr clickable" onclick="toggleMonitor()">MONITOR<span id="mon-toggle-icon">▾</span></div>
+        <div id="mon-content">
+          <div id="cpu-widget">
+            <div id="cpu-header">
+              <span id="cpu-title">CPU Load Avg</span>
+              <span id="cpu-cores-badge"></span>
+            </div>
+            <div id="cpu-chart-wrap">
+              <svg id="sparkline" viewBox="0 0 200 76" preserveAspectRatio="none"></svg>
+              <div id="cpu-overlay">
+                <span id="cpu-load">0.00</span>
+                <span id="cpu-load-label">1 min avg</span>
+              </div>
+            </div>
+            <div id="cpu-secondary">
+              <div class="cpu-stat-chip">
+                <div class="cpu-stat-top">
+                  <span class="cpu-sec-lbl">5m</span>
+                  <span class="cpu-sec-val" id="cpu-load5">—</span>
+                </div>
+                <div class="cpu-stat-bar-track"><div class="cpu-stat-bar-fill" id="cpu-bar5"></div></div>
+              </div>
+              <div class="cpu-stat-chip">
+                <div class="cpu-stat-top">
+                  <span class="cpu-sec-lbl">15m</span>
+                  <span class="cpu-sec-val" id="cpu-load15">—</span>
+                </div>
+                <div class="cpu-stat-bar-track"><div class="cpu-stat-bar-fill" id="cpu-bar15"></div></div>
+              </div>
+              <div class="cpu-stat-chip">
+                <div class="cpu-stat-top">
+                  <span class="cpu-sec-lbl">RAM</span>
+                  <span class="cpu-sec-val" id="ram-free-pct">—</span>
+                </div>
+                <div class="cpu-stat-bar-track"><div class="cpu-stat-bar-fill" id="ram-free-bar"></div></div>
+              </div>
+            </div>
+          </div>
+<div id="vu-bottom">
+              <div class="vu-block">
+                <div class="vu-row-v">
+                  <span class="vu-lbl-v">MIC</span>
+                  <div class="vu-segs-v" id="mic-segs-v"><div class="rms-line" id="mic-rms-line"></div></div>
+                  <span class="vu-db" id="mic-db">-∞ dB</span>
+                  <span class="vu-gain" id="mic-gain"></span>
+                  <span class="mic-profile-badge" id="mic-profile-badge"></span>
+                </div>
+                <div class="vu-row-v">
+                  <span class="vu-lbl-v">SPK</span>
+                  <div class="vu-segs-v" id="spk-segs-v"></div>
+                  <span class="vu-db" id="spk-db">-∞ dB</span>
+                </div>
+                <div class="vu-vol-col">
+                  <span class="vu-lbl-v">VOL</span>
+                  <div class="vol-slider-wrap">
+                    <input type="range" id="volume-slider" min="0" max="100" value="50">
+                  </div>
+                  <span class="vu-db" id="volume-percent">50%</span>
+                </div>
+              </div>
+           </div>
+        </div>
+      </div>
+
+
+      <div class="panel" id="ai-panel">
+        <div id="ai-section" style="display:none">
+          <div class="panel-hdr">AI FALLBACK<span id="llm-model-name"></span></div>
+          <div id="ai-content" style="padding:8px 12px;font-size:12px"></div>
+        </div>
       </div>
     </div>
 
   </div>
 
-  <div id="footer">
-    <div class="vu-row">
-      <span class="vu-lbl">MIC</span>
-      <span class="vu-dev" id="mic-dev"></span>
-      <div class="vu-segs" id="mic-segs"></div>
-      <span class="vu-db" id="mic-db">-∞ dB</span>
+<script src="/static/dashboard-graph.js" defer></script>
+<script src="/static/dashboard-config.js" defer></script>
+<script src="/static/dashboard-monitor.js" defer></script>
+<script src="/static/dashboard-history.js" defer></script>
+<script src="/static/dashboard.js" defer></script>
+
+  <div id="reconnect-popup" class="hidden">
+    <div class="popup-overlay"></div>
+    <div class="popup-content">
+      <div class="popup-icon-container">
+        <span class="material-symbols-outlined popup-icon-wifi">wifi_off</span>
+        <span class="material-symbols-outlined popup-icon-spin">sync</span>
+      </div>
+      <h3>Connection Lost</h3>
+      <p>Attempting to reconnect to the server...</p>
     </div>
-    <div class="footer-divider"></div>
-    <div class="vu-row">
-      <span class="vu-lbl">SPK</span>
-      <span class="vu-dev" id="spk-dev"></span>
-      <div class="vu-segs" id="spk-segs"></div>
-      <span class="vu-db" id="spk-db">-∞ dB</span>
-    </div>
-    <div class="footer-divider"></div>
-    <button id="btn-restart" onclick="sendCtrl('restart')">Restart</button>
   </div>
 
-  <script>
-    // build segmented VU meters
-    ['mic-segs', 'spk-segs'].forEach(id => {
-      const c = document.getElementById(id);
-      for (let i = 0; i < 20; i++) {
-        const s = document.createElement('span');
-        s.className = 'seg';
-        c.appendChild(s);
-      }
-    });
-
-    let ws = null, reconnTimer = null, _restarting = false, _reconnDelay = 1000;
-    let _lastWakeWord = '', _cfg = null;
-    const parts = {};
-    const _heroTimers = {};
-
-    function connect() {
-      clearTimeout(reconnTimer);
-      if (ws) { ws.onclose = ws.onerror = null; try { ws.close(); } catch(e) {} }
-      ws = new WebSocket('ws://' + location.host + '/ws');
-      ws.onopen = () => {
-        _reconnDelay = 1000;
-        wsInd(true);
-        if (_restarting) {
-          setSt('Restarting UI…', null);
-          setTimeout(() => location.reload(), 200);
-        }
-      };
-      ws.onclose = () => {
-        wsInd(false); ws = null;
-        if (_restarting) setSt('Waiting for server…', null);
-        reconnTimer = setTimeout(connect, _reconnDelay);
-        _reconnDelay = Math.min(_reconnDelay * 2, 8000);
-      };
-      ws.onerror = () => {
-        clearTimeout(reconnTimer);
-        reconnTimer = setTimeout(connect, _reconnDelay);
-        _reconnDelay = Math.min(_reconnDelay * 2, 8000);
-      };
-      ws.onmessage = (e) => { try { handle(JSON.parse(e.data)); } catch(_) {} };
-    }
-
-    function wsInd(up) {
-      const el = document.getElementById('ws-ind');
-      el.textContent = up ? 'WS connected' : 'WS reconnecting…';
-      el.className   = up ? 'ok' : '';
-    }
-
-    function handle(m) {
-      switch (m.type) {
-        case 'hello': {
-          _restarting = false;
-          const rb = document.getElementById('btn-restart');
-          rb.disabled = false; rb.textContent = 'Restart';
-          setSt(m.status, m.room);
-          (m.participants || []).forEach(p => parts[p.identity] = p.tracks);
-          renderParts();
-          setAudio(m.audio_connected, m.audio_conn_type);
-          setStt(m.stt_state, m.stt_text, m);
-          if (m.actions_config) { _cfg = m.actions_config; renderActions(_cfg); }
-          break;
-        }
-        case 'starting':           setSt('Starting…', null); break;
-        case 'idle':               setSt('Ready', null); break;
-        case 'connecting':         setSt('Connecting…', null); break;
-        case 'connected':          setSt('Connected', m.room); break;
-        case 'disconnected':       setSt('Disconnected — reconnecting…', null); break;
-        case 'reconnecting':       setSt('Reconnecting…', null); break;
-        case 'empty_room_timeout': setSt('Disconnected — empty room', null); break;
-        case 'participant_joined':
-          parts[m.identity] = parts[m.identity] || 0; renderParts(); break;
-        case 'participant_left':
-          delete parts[m.identity]; renderParts(); break;
-        case 'track_subscribed':
-          parts[m.identity] = (parts[m.identity] || 0) + 1; renderParts(); break;
-        case 'track_unsubscribed':
-          if (m.identity in parts) parts[m.identity] = Math.max(0, (parts[m.identity]||1)-1);
-          renderParts(); break;
-        case 'volume_update': setVU('mic', m.mic||0); setVU('spk', m.spk||0); break;
-        case 'audio_status':  setAudio(m.connected, m.conn_type); break;
-        case 'stt': {
-          const s = m.state;
-          if (s === 'wake' && m.word && m.word !== '(reply)') {
-            _lastWakeWord = m.word;
-            updateInteraction(m.word, '');
-          }
-          if (s === 'partial') {
-            updateInteraction(_lastWakeWord, m.text);
-            if (!_lastWakeWord) dimNonMatchingReplies(m.text || '');
-          }
-          if (s === 'matched') {
-            const isReply = !_lastWakeWord;
-            addHistory(_lastWakeWord, m.transcript||'', m.trigger||'');
-            updateInteraction(_lastWakeWord, (m.transcript||'') + ' → ' + (m.trigger||''), true);
-            highlightTrigger(m.trigger||'', isReply);
-            clearReplyDim();
-            _lastWakeWord = '';
-          }
-          if (s === 'nomatch') {
-            clearReplyDim();
-            if (_lastWakeWord) {
-              addHistoryWake(_lastWakeWord);
-              updateInteraction(_lastWakeWord, (m.text ? '"'+m.text+'" ' : '') + '✗ no match', true);
-              _lastWakeWord = '';
-            }
-          }
-          if (s === 'llm_thinking') {
-            setLlmBadgeThinking(true);
-            setLlmStatusDot(true);
-          }
-          if (s === 'llm_reply') {
-            setLlmBadgeThinking(false);
-            setLlmStatusDot(false);
-            addHistoryLLM(m.transcript||'', m.reply||'');
-          }
-          if (s === 'llm_unreachable') {
-            setLlmBadgeThinking(false);
-            setLlmStatusDot(false);
-          }
-          setStt(s, m.text||m.word||m.transcript||m.reply||'', m);
-          break;
-        }
-        case 'log':       addLog(m); break;
-        case 'restarting': {
-          _restarting = true;
-          const b = document.getElementById('btn-restart');
-          b.disabled = true; b.textContent = 'Restarting…';
-          setSt('Restarting…', null);
-          break;
-        }
-        case 'error': setSt('Error: ' + (m.msg||'unknown'), null); break;
-      }
-    }
-
-    function setLlmBadgeThinking(on) {
-      const badge = document.getElementById('llm-badge');
-      const dots  = document.getElementById('llm-badge-dots');
-      if (!badge.classList.contains('active')) return;
-      if (on) {
-        badge.classList.add('thinking');
-        dots.style.display = 'inline-flex';
-      } else {
-        badge.classList.remove('thinking');
-        dots.style.display = 'none';
-      }
-    }
-
-    function setLlmStatusDot(thinking) {
-      const dot = document.getElementById('llm-status-dot');
-      if (!dot) return;
-      dot.classList.toggle('thinking', thinking);
-    }
-
-    function heroAnim(cls, duration) {
-      const h = document.getElementById('hero');
-      clearTimeout(_heroTimers[cls]);
-      h.classList.remove(cls);
-      void h.offsetWidth;
-      h.classList.add(cls);
-      _heroTimers[cls] = setTimeout(() => h.classList.remove(cls), duration);
-    }
-
-    const _trigTimers = {};
-    function highlightTrigger(phrase, isReply) {
-      if (!phrase) return;
-      const norm = phrase.toLowerCase().trim();
-      document.querySelectorAll('.atrig').forEach(el => {
-        const elText = el.textContent.replace(/^[›⮑\s]+/, '').trim().toLowerCase();
-        if (elText === norm) {
-          const cls = isReply ? 'trig-reply-hit' : 'trig-hit';
-          clearTimeout(_trigTimers[norm]);
-          el.classList.remove('trig-hit', 'trig-reply-hit');
-          void el.offsetWidth;
-          el.classList.add(cls);
-          _trigTimers[norm] = setTimeout(() => el.classList.remove(cls), 3000);
-        }
-      });
-    }
-
-    function dimNonMatchingReplies(partial) {
-      const norm = partial.toLowerCase().trim();
-      document.querySelectorAll('.atrig').forEach(el => {
-        if (!el.textContent.startsWith('⮑')) return;
-        const phrase = el.textContent.replace(/^[⮑\s]+/, '').trim().toLowerCase();
-        if (norm && !phrase.includes(norm) && !norm.includes(phrase)) {
-          el.classList.add('trig-dim');
-        } else {
-          el.classList.remove('trig-dim');
-        }
-      });
-    }
-
-    function clearReplyDim() {
-      document.querySelectorAll('.atrig.trig-dim').forEach(el => el.classList.remove('trig-dim'));
-    }
-
-    function updateInteraction(word, text, finish) {
-      if (!word) return;
-      const norm = word.toLowerCase().trim();
-      document.querySelectorAll('.awk-group').forEach(g => {
-        const ww = g.getAttribute('data-word').toLowerCase();
-        const aa = (g.getAttribute('data-aliases')||'').toLowerCase().split(',');
-        if (ww === norm || aa.includes(norm)) {
-          g.classList.add('ww-active');
-          const i = g.querySelector('.ainteract');
-          if (i) {
-            i.textContent = text;
-            if (finish) setTimeout(() => {
-              if (_lastWakeWord === '') { g.classList.remove('ww-active'); i.textContent = ''; }
-            }, 3000);
-          }
-        } else {
-          g.classList.remove('ww-active');
-          const i = g.querySelector('.ainteract');
-          if (i) i.textContent = '';
-        }
-      });
-    }
-
-    function setSt(text, room) {
-      document.getElementById('st').textContent = text;
-      const d = document.getElementById('cdot');
-      d.className = (text.includes('Connected') || text === 'Ready') && !text.includes('Dis') ? 'sdot ok'
-                  : (text.includes('Reconnect') || text.includes('Disconnect')) ? 'sdot warn'
-                  : 'sdot';
-      if (room !== null)
-        document.getElementById('room').textContent = room ? '│ ' + room : '';
-    }
-
-    function renderParts() {
-      const keys = Object.keys(parts);
-      document.getElementById('ph').textContent = 'PARTICIPANTS (' + keys.length + ')';
-      const pl = document.getElementById('pl');
-      if (!keys.length) { pl.innerHTML = '<span style="color:var(--muted)">Waiting…</span>'; return; }
-      pl.innerHTML = keys.map(id => {
-        const t = parts[id]||0;
-        return '<div class="pt"><span class="' + (t?'pdot':'pdot0') + '">' + (t?'●':'○') + '</span> '
-          + esc(id) + (t ? ' <span style="color:var(--muted)">'+t+'t</span>' : '') + '</div>';
-      }).join('');
-    }
-
-    function renderActions(cfg) {
-      const al = document.getElementById('al');
-      if (!cfg) { al.innerHTML = '<span style="color:var(--muted)">No config</span>'; return; }
-      let h = '';
-
-      function renderList(actions, indent) {
-        indent = indent || 0;
-        let res = '';
-        (actions || []).forEach(a => {
-          res += '<div style="margin-left:' + (indent * 12) + 'px" class="aact">' + esc(a.label) + '</div>';
-          if (a.type === 'ask' && a.on_reply) {
-            a.on_reply.forEach(r => {
-              res += '<div style="margin-left:' + ((indent+1)*12) + 'px;color:#86efac" class="atrig">⮑ ' + esc(r.phrase) + '</div>';
-              res += renderList(r.actions, indent + 2);
-            });
-            if (a.on_else && a.on_else.length) {
-              res += '<div style="margin-left:' + ((indent+1)*12) + 'px;color:var(--nomatch)" class="atrig">⮑ else</div>';
-              res += renderList(a.on_else, indent + 2);
-            }
-          }
-        });
-        return res;
-      }
-
-      (cfg.wake_words || []).forEach(w => {
-        h += '<div class="awk-group" data-word="' + esc(w.word) + '" data-aliases="' + esc((w.aliases||[]).join(',')) + '">'
-          + '<div class="awk">◉ ' + esc(w.word) + '</div>';
-        if (w.aliases && w.aliases.length) h += '<div class="aalias">aka: ' + esc(w.aliases.join(', ')) + '</div>';
-        h += '<div class="ainteract"></div>';
-        (w.triggers || []).forEach(t => {
-          h += '<div class="atrig">› ' + esc(t.phrase) + '</div>';
-          h += renderList(t.actions);
-        });
-        h += '</div>';
-      });
-      if (cfg.global_triggers && cfg.global_triggers.length) {
-        h += '<div class="agt-header">GLOBAL FALLBACKS</div>';
-        cfg.global_triggers.forEach(t => {
-          h += '<div class="atrig">› ' + esc(t.phrase) + '</div>';
-          h += renderList(t.actions);
-        });
-      }
-
-      // LLM section
-      if (cfg.llm) {
-        const llm = cfg.llm;
-        h += '<div class="llm-section">'
-          + '<div class="llm-section-hdr">'
-          + '<span id="llm-status-dot"></span>'
-          + ' ◈ AI FALLBACK'
-          + '</div>'
-          + '<div class="llm-model-tag">' + esc(llm.model) + '</div>'
-          + '<div class="llm-attr">@ ' + esc(llm.host) + '</div>';
-        if (llm.fallback) {
-          h += '<div class="llm-attr" style="color:var(--llm);opacity:0.7">⮑ on no match</div>';
-        }
-        h += '</div>';
-
-        // Show LLM badge in status bar
-        const badge = document.getElementById('llm-badge');
-        document.getElementById('llm-badge-text').textContent = llm.model.split('/').pop();
-        badge.classList.add('active');
-      }
-
-      al.innerHTML = h || '<span style="color:var(--muted)">Empty</span>';
-    }
-
-    function setVU(ch, lvl) {
-      const count = Math.round(Math.sqrt(Math.max(0, Math.min(1, lvl))) * 20);
-      const dv    = lvl > 1e-9 ? (20 * Math.log10(Math.max(lvl, 1e-9))).toFixed(1) : null;
-      const segs  = document.getElementById(ch + '-segs').children;
-      for (let i = 0; i < segs.length; i++) segs[i].classList.toggle('on', i < count);
-      document.getElementById(ch + '-db').textContent = dv ? dv + ' dB' : '-∞ dB';
-    }
-
-    function setAudio(connected, connType) {
-      const lbl = connected ? '[' + (connType||'').toUpperCase() + ']' : '[offline]';
-      document.getElementById('mic-dev').textContent = lbl;
-      document.getElementById('spk-dev').textContent = lbl;
-    }
-
-    function setStt(state, text, m) {
-      const h = document.getElementById('hero');
-      h.classList.remove('llm-thinking');
-      switch (state) {
-        case 'listening':
-          h.innerHTML = '<span class="hero-icon hero-muted">○</span>'
-            + '<span class="hero-text hero-muted">wake: <em>' + esc(text) + '</em></span>';
-          break;
-        case 'transcribing':
-          h.innerHTML = '<span class="hero-icon" style="color:var(--muted)">◌</span>'
-            + '<span class="hero-text" style="color:#94a3b8">' + esc(text) + ' …</span>';
-          break;
-        case 'wake':
-          h.innerHTML = '<span class="hero-icon" style="color:var(--wake)">◉</span>'
-            + '<span class="hero-text"><span class="hero-wake">"' + esc(text) + '"</span>'
-            + '<span class="hero-muted">listening…</span></span>';
-          break;
-        case 'partial':
-          h.innerHTML = '<span class="hero-icon" style="color:var(--wake)">◉</span>'
-            + '<span class="hero-text"><span class="hero-wake">' + esc(text) + '</span>'
-            + '<span class="cursor">▋</span></span>';
-          break;
-        case 'matched':
-          h.innerHTML = '<span class="hero-icon" style="color:var(--match)">✓</span>'
-            + '<span class="hero-text"><span style="color:var(--match)">"' + esc(m.transcript||text) + '"</span>'
-            + '<span class="hero-muted"> → </span>'
-            + '<span class="hero-trigger">' + esc(m.trigger||'') + '</span></span>';
-          heroAnim('anim-match', 700);
-          break;
-        case 'nomatch':
-          h.innerHTML = '<span class="hero-icon" style="color:var(--nomatch)">✗</span>'
-            + '<span class="hero-text" style="color:var(--nomatch)">'
-            + (text ? '"' + esc(text) + '" ' : '') + 'no match</span>';
-          heroAnim('anim-nomatch', 500);
-          break;
-        case 'gated':
-          h.innerHTML = '<span class="hero-icon hero-muted">⏸</span>'
-            + '<span class="hero-text hero-muted">STT paused during call</span>';
-          break;
-        case 'llm_thinking': {
-          h.classList.add('llm-thinking');
-          const transcript = m.transcript || text;
-          h.innerHTML = '<div class="llm-orb"><span class="hero-icon" style="color:var(--llm)">◈</span>'
-            + '<div class="llm-orb-ring"></div></div>'
-            + '<span class="hero-text">'
-            + (transcript ? '<span style="color:#94a3b8;font-style:italic">"' + esc(transcript) + '"</span>' : '')
-            + '<span class="hero-think-dots">'
-            + '<span class="td"></span><span class="td"></span><span class="td"></span>'
-            + '</span></span>';
-          break;
-        }
-        case 'llm_reply': {
-          heroAnim('anim-llm-reply', 1200);
-          const reply = m.reply || text;
-          h.innerHTML = '<span class="hero-icon" style="color:var(--llm)">◈</span>'
-            + '<span class="hero-text" style="color:var(--llm)">' + esc(reply) + '</span>';
-          break;
-        }
-        case 'llm_unreachable':
-          h.innerHTML = '<span class="hero-icon" style="color:var(--nomatch)">✗</span>'
-            + '<span class="hero-text" style="color:var(--nomatch)">remote agent unreachable</span>';
-          heroAnim('anim-nomatch', 500);
-          break;
-        default:
-          h.innerHTML = '<span class="hero-icon hero-muted">○</span>'
-            + '<span class="hero-text hero-muted">STT inactive</span>';
-      }
-    }
-
-    const MAX_LOG = 300;
-    function addLog(m) {
-      const el = document.getElementById('le');
-      const d  = document.createElement('div');
-      d.className = 'le';
-      d.innerHTML = '<span class="ts">' + esc(m.ts) + ' </span>'
-                  + '<span class="' + m.level + '">' + m.level.padEnd(8) + '</span> '
-                  + esc(m.msg);
-      el.appendChild(d);
-      while (el.children.length > MAX_LOG) el.removeChild(el.firstChild);
-      el.scrollTop = el.scrollHeight;
-    }
-
-    function clearLogs()    { document.getElementById('le').innerHTML = ''; }
-    function clearHistory() { document.getElementById('hl').innerHTML = ''; }
-
-    const MAX_HIST = 60;
-    function addHistoryWake(word) {
-      const el = document.getElementById('hl');
-      if (!el) return;
-      const ts = new Date().toTimeString().slice(0, 8);
-      const d = document.createElement('div');
-      d.className = 'he';
-      d.innerHTML = '<span class="hts">' + ts + '</span>'
-        + ' <span style="color:var(--wake)">◉ ' + esc(word) + '</span>';
-      el.insertBefore(d, el.firstChild);
-      while (el.children.length > MAX_HIST) el.removeChild(el.lastChild);
-    }
-
-    function addHistory(wake, transcript, trigger) {
-      const el = document.getElementById('hl');
-      if (!el) return;
-      const ts = new Date().toTimeString().slice(0, 8);
-      const d = document.createElement('div');
-      d.className = 'he';
-      d.innerHTML = '<div><span class="hts">' + ts + '</span>'
-        + (wake ? '<span class="hwk">' + esc(wake) + '</span>' : '') + '</div>'
-        + '<div class="hcmd">"' + esc(transcript) + '"</div>'
-        + (trigger && trigger !== transcript
-            ? '<div class="htrig">→ ' + esc(trigger) + '</div>' : '');
-      el.insertBefore(d, el.firstChild);
-      while (el.children.length > MAX_HIST) el.removeChild(el.lastChild);
-    }
-
-    function addHistoryLLM(transcript, reply) {
-      const el = document.getElementById('hl');
-      if (!el) return;
-      const ts = new Date().toTimeString().slice(0, 8);
-      const d = document.createElement('div');
-      d.className = 'he';
-      d.innerHTML = '<div><span class="hts">' + ts + '</span>'
-        + ' <span style="color:var(--llm);font-weight:600">◈ AI</span></div>'
-        + (transcript ? '<div class="hcmd">"' + esc(transcript) + '"</div>' : '')
-        + (reply ? '<div class="hllm-reply">' + esc(reply.length > 80 ? reply.slice(0,77)+'…' : reply) + '</div>' : '');
-      el.insertBefore(d, el.firstChild);
-      while (el.children.length > MAX_HIST) el.removeChild(el.lastChild);
-    }
-
-    function sendCtrl(action) {
-      if (!ws || ws.readyState !== WebSocket.OPEN) return;
-      ws.send(JSON.stringify({type: 'control', action}));
-    }
-
-    function esc(s) {
-      return String(s)
-        .replace(/&/g,'&amp;').replace(/</g,'&lt;')
-        .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-    }
-
-    connect();
-  </script>
+      <div id="config-modal" class="hidden">
+        <div class="modal-overlay" onclick="closeConfigModal()"></div>
+        <div class="modal-content">
+          <div class="modal-header">
+            <h2>⚙️ Configuration</h2>
+            <button onclick="closeConfigModal()" style="background:none;border:none;color:var(--text);font-size:18px;cursor:pointer;">✕</button>
+          </div>
+          <div class="modal-body" id="config-form">
+            <!-- Form fields will be rendered here -->
+          </div>
+<div class="modal-footer">
+          <button onclick="resetConfigForm()" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:8px 16px;border-radius:6px;cursor:pointer;">Reset</button>
+          <button onclick="closeConfigModal()" style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:8px 16px;border-radius:6px;cursor:pointer;">Cancel</button>
+          <button onclick="saveConfig()" style="background:var(--info);border:none;color:#000;padding:8px 16px;border-radius:6px;cursor:pointer;">Save Changes</button>
+        </div>
+        </div>
+      </div>
 </body>
 </html>

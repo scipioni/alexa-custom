@@ -1,0 +1,15 @@
+[Unit]
+Description=Home Assistant
+After=network-online.target mosquitto.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h
+ExecStart=%h/homeassistant/bin/hass -c %h/.homeassistant
+Restart=on-failure
+RestartSec=10s
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=default.target

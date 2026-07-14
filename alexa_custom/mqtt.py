@@ -6,6 +6,8 @@ from typing import Any, Awaitable, Callable
 
 import aiomqtt
 
+from alexa_custom import metrics
+
 logger = logging.getLogger(__name__)
 
 
@@ -30,6 +32,8 @@ class MQTTClient:
         self._on_command_callback: (
             Callable[[dict[str, Any]], Awaitable[None]] | None
         ) = None
+        self._run_task: asyncio.Task | None = None
+        self._stopping = False
 
     def set_on_command(
         self, callback: Callable[[dict[str, Any]], Awaitable[None]]
@@ -38,7 +42,8 @@ class MQTTClient:
 
     async def run(self) -> None:
         """Background loop for MQTT connection and message processing."""
-        while True:
+        self._run_task = asyncio.current_task()
+        while not self._stopping:
             try:
                 async with aiomqtt.Client(hostname=self.host, port=self.port) as client:
                     self.client = client
@@ -55,18 +60,28 @@ class MQTTClient:
                         f"{self.topic_prefix}/{self.node_id}/action/run"
                     )
 
-                    # 3. Start publisher and subscriber tasks
-                    await asyncio.gather(
-                        self._publisher_loop(),
-                        self._subscriber_loop(),
-                    )
+                    # 3. Start publisher and subscriber tasks.
+                    # Track both so that when one fails (e.g. subscriber raises
+                    # MqttError on disconnect) the sibling is cancelled — otherwise
+                    # each reconnect orphans another publisher draining the same
+                    # queue, causing duplicate publishes and unbounded task growth.
+                    pub = asyncio.create_task(self._publisher_loop())
+                    sub = asyncio.create_task(self._subscriber_loop())
+                    try:
+                        await asyncio.gather(pub, sub)
+                    finally:
+                        for t in (pub, sub):
+                            t.cancel()
+                        await asyncio.gather(pub, sub, return_exceptions=True)
             except aiomqtt.MqttError as e:
                 logger.error(f"MQTT connection error: {e}. Retrying in 5 seconds...")
                 self.client = None
+                metrics.inc("mqtt_reconnects")
                 await asyncio.sleep(5)
             except Exception as e:
                 logger.error(f"Unexpected MQTT error: {e}")
                 self.client = None
+                metrics.inc("mqtt_reconnects")
                 await asyncio.sleep(5)
 
     async def _publish_discovery(self) -> None:
@@ -186,6 +201,17 @@ class MQTTClient:
                 logger.debug("publish_offline: %s", e)
         else:
             logger.debug("publish_offline: no active client")
+
+    async def stop(self) -> None:
+        """Publish offline state and stop the background run loop (used on
+        graceful shutdown and when MQTT settings change on config reload)."""
+        self._stopping = True
+        try:
+            await self.publish_offline()
+        except Exception as e:
+            logger.debug("stop: publish_offline failed: %s", e)
+        if self._run_task is not None and not self._run_task.done():
+            self._run_task.cancel()
 
     def publish_threadsafe(
         self,

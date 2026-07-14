@@ -16,6 +16,11 @@ tasks:
     cmds:
       - PYTHONPATH={{.PYTHONPATH}} {{.PYTEST}} tests/test_stt_e2e.py -v -s
 
+  eval:
+    desc: "Score wake+command matching precision/recall vs tests/eval/corpus.yaml (pass -- --sweep for a threshold table)"
+    cmds:
+      - PYTHONPATH={{.PYTHONPATH}} python3 -m alexa_custom.match_eval {{.CLI_ARGS}}
+
   lint:
     desc: Run ruff for linting and formatting
     cmds:
@@ -35,9 +40,14 @@ tasks:
       - PYTHONPATH={{.PYTHONPATH}} {{.PYTEST}} tests/
 
   run:
-    desc: Run the alexa-client (loads from conf/config.yaml)
+    desc: Run the serena (loads from conf/config.yaml)
     cmds:
       - PYTHONPATH={{.PYTHONPATH}} python3 alexa_custom/client.py {{.CLI_ARGS}}
+
+  start:
+    desc: Start serena-client with hot-reload enabled
+    cmds:
+      - serena --hot-reload
 
   release:patch:
     desc: Bump patch version (x.y.Z+1), commit and tag
@@ -90,6 +100,57 @@ tasks:
           *) echo "Unknown bump type: {{.BUMP}}"; exit 1 ;;
         esac
         sed -i "s/^version = \".*\"/version = \"${NEW}\"/" pyproject.toml
+
+        PREV=$(git describe --tags --abbrev=0 2>/dev/null || true)
+        if [ -n "$PREV" ]; then
+          TODAY=$(date +%Y-%m-%d)
+          FEATS=$(git log --oneline --no-merges "${PREV}..HEAD" | sed -n 's/^[0-9a-f]* feat\(([^)]*)\)\?: //p' || true)
+          FIXES=$(git log --oneline --no-merges "${PREV}..HEAD" | sed -n 's/^[0-9a-f]* fix\(([^)]*)\)\?: //p' || true)
+          {
+            echo ""
+            echo "## [${NEW}] - ${TODAY}"
+            echo ""
+            if [ -n "$FEATS" ]; then
+              echo "### Added"
+              echo "$FEATS" | sed 's/^/- /'
+              echo ""
+            fi
+            if [ -n "$FIXES" ]; then
+              echo "### Fixed"
+              echo "$FIXES" | sed 's/^/- /'
+              echo ""
+            fi
+          } > /tmp/changelog_entry.tmp
+          UNREL_LINE=$(grep -n -m1 -iE '^## .*\(unreleased\)' CHANGELOG.md 2>/dev/null | cut -d: -f1 || true)
+          if [ -n "$UNREL_LINE" ]; then
+            # Curated "## X.Y.Z (unreleased)" section: close it as this release
+            # (hand-written content wins over the generated commit list).
+            sed -i "${UNREL_LINE}s/.*/## ${NEW} - ${TODAY}/" CHANGELOG.md
+            echo "CHANGELOG.md: closed curated unreleased section as ${NEW}"
+          elif grep -q '^## \[Unreleased\]' CHANGELOG.md 2>/dev/null; then
+            sed -i "/^## \[Unreleased\]/r /tmp/changelog_entry.tmp" CHANGELOG.md
+          elif [ -f CHANGELOG.md ]; then
+            # No unreleased marker at all: insert the generated entry right
+            # after the title line instead of silently skipping the changelog.
+            sed -i "1r /tmp/changelog_entry.tmp" CHANGELOG.md
+            echo "CHANGELOG.md: no unreleased section found, inserted generated entry at top"
+          else
+            {
+              echo "# Changelog"
+              echo ""
+              echo "All notable changes to this project will be documented in this file."
+              echo ""
+              echo "## [Unreleased]"
+              echo ""
+              echo "*No unreleased changes.*"
+              echo ""
+              cat /tmp/changelog_entry.tmp
+            } > CHANGELOG.md
+          fi
+          rm -f /tmp/changelog_entry.tmp
+          git add CHANGELOG.md
+        fi
+
         git add pyproject.toml
         git commit -m "chore: release v${NEW}"
         git tag -a "v${NEW}" -m "Release v${NEW}"
@@ -97,114 +158,327 @@ tasks:
         echo "Released v${NEW}"
         echo "Push with: git push && git push --tags"
 
-  setup:
-    desc: Install the alexa-custom systemd user service and enable it
+  init:
+    desc: Full board init — install service, configure audio, restart audio (Arduino board only, aborts on Arch Linux)
     cmds:
-      - mkdir -p ~/.config/systemd/user
-      - cp setup/alexa-custom.service ~/.config/systemd/user/alexa-custom.service
-      - systemctl --user daemon-reload
-      - systemctl --user enable alexa-custom
+      - |
+        if [ -f /etc/arch-release ] || grep -qi '^ID=arch' /etc/os-release 2>/dev/null; then
+          echo "Error: 'task init' targets the Arduino board — cannot run on Arch Linux."
+          exit 1
+        fi
+      - task: setup
+      - task: audio:setup
+      - task: audio:restart
+
+  setup:gstreamer:
+    desc: Install GStreamer PipeWire plugin, GI typelibs, dev headers, and PyGObject into the venv
+    cmds:
+      - |
+        if command -v pacman &>/dev/null; then
+          echo "Arch Linux detected. Installing dependencies via pacman..."
+          sudo pacman -S --needed --noconfirm \
+            gstreamer \
+            gst-plugin-pipewire \
+            gst-plugins-base \
+            gst-plugins-good \
+            gst-plugins-bad \
+            gobject-introspection \
+            cairo \
+            python-gobject \
+            pkgconf
+        elif command -v apt-get &>/dev/null; then
+          echo "Debian/Ubuntu detected. Installing dependencies via apt-get..."
+          sudo apt-get update && sudo apt-get install -y \
+            gstreamer1.0-pipewire \
+            gstreamer1.0-tools \
+            gir1.2-gstreamer-1.0 \
+            gir1.2-gst-plugins-base-1.0 \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            libgirepository-2.0-dev \
+            libgirepository1.0-dev \
+            libcairo2-dev \
+            python3.13-dev \
+            pkg-config
+        else
+          echo "Unsupported package manager. Please install GStreamer and development headers manually."
+          exit 1
+        fi
+      - uv sync --group dev --extra gstreamer
+
+  setup:
+    desc: Install the serena systemd user service and enable it
+    cmds:
+      # A plain `uv sync` reconciles the venv to exactly the extras passed on
+      # the command line, so it silently uninstalls PyGObject/pycairo unless
+      # --extra gstreamer is re-requested every time — even though `task
+      # setup:gstreamer` (which README has you run before this) already
+      # installed them. Detect and preserve rather than always requesting it:
+      # unconditionally requiring it here would break `task setup` on boards
+      # that don't use the gstreamer capture backend and never ran `task
+      # setup:gstreamer` to get PyGObject's system build headers installed.
+      - |
+        EXTRA_FLAGS=""
+        if uv pip show pygobject &>/dev/null; then
+          EXTRA_FLAGS="--extra gstreamer"
+        fi
+        uv sync --group dev $EXTRA_FLAGS
+      - ./setup/fix-sherpa-onnx-runtime.sh
+      - |
+        # Generate it_IT.UTF-8 locale only on Arduino board
+        if grep -q "Arduino" /sys/firmware/devicetree/base/model 2>/dev/null; then
+          sudo sed -i '/^# *it_IT.UTF-8/s/^# *//' /etc/locale.gen
+          sudo locale-gen it_IT.UTF-8
+          sudo timedatectl set-timezone Europe/Rome
+          mkdir -p ~/.config/systemd/user
+          cp setup/serena.service ~/.config/systemd/user/serena.service
+          systemctl --user daemon-reload
+          systemctl --user enable serena
+        fi
       - |
         echo ""
         echo "Service installed. Useful commands:"
-        echo "  systemctl --user start   alexa-custom   # start now"
-        echo "  systemctl --user stop    alexa-custom   # stop"
-        echo "  systemctl --user restart alexa-custom   # restart"
-        echo "  systemctl --user status  alexa-custom   # check status"
-        echo "  journalctl --user -fu    alexa-custom   # follow logs"
+        echo "  systemctl --user start   serena   # start now"
+        echo "  systemctl --user stop    serena   # stop"
+        echo "  systemctl --user restart serena   # restart"
+        echo "  systemctl --user status  serena   # check status"
+        echo "  journalctl --user -fu    serena   # follow logs"
 
   audio:setup:
-    desc: Set NewPie USB default sink/source persistently, unmute hardware, install PCM restore service, and disable USB autosuspend
+    desc: Configure any USB conference speakerphone (NewPie, Yealink, EMEET, ...) as default sink/source, unmute hardware, install restore service, disable USB autosuspend
     cmds:
       # Remove any stale switch-on-connect drop-ins (module not available on this board)
       - rm -f ~/.config/pipewire/pipewire.conf.d/99-switch-on-connect.conf
       - rm -f ~/.config/pipewire/pipewire-pulse.conf.d/99-switch-on-connect.conf
-      # Disable USB autosuspend for NewPie (prevents mid-session PCM/routing resets on USB wake)
-      - sudo cp setup/99-newpie-no-autosuspend.rules /etc/udev/rules.d/99-newpie-no-autosuspend.rules
+      # Remove device-specific files from previous versions (replaced by generic USB-audio ones)
+      - rm -f ~/.config/wireplumber/wireplumber.conf.d/51-newpie-no-suspend.conf
+      - sudo rm -f /etc/udev/rules.d/99-newpie-no-autosuspend.rules
+      - sudo systemctl disable --now newpie-autosuspend.service 2>/dev/null || true
+      - sudo rm -f /etc/systemd/system/newpie-autosuspend.service
+      # Install udev rule to disable autosuspend on hot-plug (fires when device connects mid-session)
+      - sudo cp setup/99-usb-audio-no-autosuspend.rules /etc/udev/rules.d/99-usb-audio-no-autosuspend.rules
       - sudo udevadm control --reload-rules
-      - sudo udevadm trigger --subsystem-match=usb --attr-match=idVendor=0a12
-      # Set WirePlumber persistent default routing by name (survives reboots)
-      - pw-metadata -n default 0 default.audio.sink '{"name":"alsa_output.usb-0a12_NewPie_SABINESMICDFU-00.analog-stereo"}' 'Spa:String:JSON'
-      - pw-metadata -n default 0 default.audio.source '{"name":"alsa_input.usb-0a12_NewPie_SABINESMICDFU-00.analog-stereo"}' 'Spa:String:JSON'
-      # Unmute hardware PCM volume now (software volume is set from conf/config.yaml at startup)
-      - amixer -c 0 sset PCM 100% || amixer -c NewPie sset PCM 100% || true
-      # Install user service to re-apply PCM 100% after PipeWire init on every boot
+      # Install system service to disable autosuspend at boot (udev fires too early during enumeration
+      # and can cause a power spike; the service runs after multi-user.target instead)
+      - sudo cp setup/usb-audio-autosuspend.service /etc/systemd/system/usb-audio-autosuspend.service
+      - sudo systemctl daemon-reload
+      - sudo systemctl enable --now usb-audio-autosuspend.service
+      # Install the device-agnostic restore script + user service. The script handles
+      # profile selection (best output+input profile, written to WirePlumber's state
+      # file so it persists across reboots), default routing via pw-metadata, and
+      # hardware mixer unmute. See setup/usb-audio-restore.sh for the full policy.
+      - mkdir -p ~/.local/bin
+      - install -m 755 setup/usb-audio-restore.sh ~/.local/bin/serena-usb-audio-restore
       - mkdir -p ~/.config/systemd/user
       - cp setup/alsa-pcm-unmute.service ~/.config/systemd/user/alsa-pcm-unmute.service
       - systemctl --user daemon-reload
       - systemctl --user enable alsa-pcm-unmute.service
-      # Restart WirePlumber so it re-evaluates routing with NewPie as the configured default
+      # Install WirePlumber rule to keep USB audio nodes always active (prevents brief
+      # SUSPENDED delay on capture start; keeps Bluetooth-dongle radio links alive)
+      - mkdir -p ~/.config/wireplumber/wireplumber.conf.d
+      - cp setup/51-usb-audio-no-suspend.conf ~/.config/wireplumber/wireplumber.conf.d/51-usb-audio-no-suspend.conf
+      # Select the best card profile now (setup mode overrides any stale persisted choice;
+      # to keep a manual override instead, set it with pactl AFTER running this task —
+      # the boot-time restore service respects whatever is in WirePlumber's state file)
+      - ~/.local/bin/serena-usb-audio-restore --select-profile
+      # Restart WirePlumber so it applies the profile, then run the full restore pass
+      # (routing + mixer unmute; may take minutes if a Bluetooth-dongle link is down)
       - systemctl --user restart wireplumber && sleep 3
       - systemctl --user restart alsa-pcm-unmute.service
-      - echo "USB Audio (NewPie) configured."
+      - |
+        CARD=$(pactl list cards short | awk '$2 ~ /^alsa_card\.usb-/ {print $2; exit}')
+        [ -n "$CARD" ] && echo "USB audio configured: $CARD" || echo "WARNING: no USB audio card detected"
 
   audio:restart:
-    desc: Restart WirePlumber and restore NewPie routing and PCM volume
+    desc: Restart WirePlumber and restore USB audio routing, mixer levels, and autosuspend
     cmds:
       - systemctl --user restart wireplumber && sleep 3
-      - amixer -c 0 sset PCM 100% || true
       - systemctl --user restart alsa-pcm-unmute.service
+      - sudo systemctl restart usb-audio-autosuspend.service || true
 
   audio:status:
-    desc: Check and display beautifully formatted status about NewPie USB audio device
+    desc: Display status of the connected USB conference speakerphone (device-agnostic)
     silent: true
     cmds:
       - |
         python3 -c '
-        import subprocess, re, json
-        status = subprocess.getoutput("wpctl status")
-        default_sink = subprocess.getoutput("wpctl inspect @DEFAULT_SINK@")
-        metadata = subprocess.getoutput("pw-metadata -n default")
-        lsusb = subprocess.getoutput("lsusb")
+        import subprocess
 
-        usb_match = re.search(r"Bus \d+ Device \d+: ID [0-9a-fA-F:]+ Cambridge Silicon Radio, Ltd NewPie", lsusb)
-        usb_info = usb_match.group(0) if usb_match else "NewPie not found on USB bus"
+        def out(cmd):
+            return subprocess.getoutput(cmd)
 
-        sinks_part = status.split("Sinks:")[1].split("Sources:")[0] if "Sinks:" in status else ""
-        sources_part = status.split("Sources:")[1].split("Filters:")[0] if "Sources:" in status else ""
+        def short_list(kind):
+            rows = []
+            for line in out(f"pactl list {kind} short").splitlines():
+                parts = line.split("\t")
+                if len(parts) >= 2:
+                    rows.append(parts[1])
+            return rows
 
-        sink_info = re.search(r"(\d+)\.\s+NewPie Analog Stereo\s+\[vol:\s+([0-9.]+)\]", sinks_part)
-        source_info = re.search(r"(\d+)\.\s+NewPie Analog Stereo\s+\[vol:\s+([0-9.]+)\]", sources_part)
+        cards = [c for c in short_list("cards") if c.startswith("alsa_card.usb-")]
+        sinks = [s for s in short_list("sinks") if s.startswith("alsa_output.usb-")]
+        sources = [
+            s for s in short_list("sources")
+            if s.startswith("alsa_input.usb-") and not s.endswith(".monitor")
+        ]
 
-        sink_id = sink_info.group(1) if sink_info else "Unknown"
-        sink_vol = sink_info.group(2) if sink_info else "Unknown"
-        source_id = source_info.group(1) if source_info else "Unknown"
-        source_vol = source_info.group(2) if source_info else "Unknown"
+        info = out("pactl info")
+        default_sink = default_source = "Unknown"
+        for line in info.splitlines():
+            if line.startswith("Default Sink:"):
+                default_sink = line.split(":", 1)[1].strip()
+            elif line.startswith("Default Source:"):
+                default_source = line.split(":", 1)[1].strip()
 
-        active_sink_match = re.search(r"node\.name\s+=\s+\"([^\"]+)\"", default_sink)
-        active_sink = active_sink_match.group(1) if active_sink_match else "Unknown"
+        profile = "Unknown"
+        if cards:
+            in_card = False
+            for line in out("pactl list cards").splitlines():
+                if line.strip() == f"Name: {cards[0]}":
+                    in_card = True
+                elif line.startswith("Card #"):
+                    in_card = False
+                elif in_card and "Active Profile:" in line:
+                    profile = line.split("Active Profile:")[-1].strip()
+                    break
 
-        active_source = "Unknown"
-        for line in metadata.splitlines():
-            if "default.audio.source" in line:
-                try:
-                    val_part = line.split("value:")[1].split("type:")[0].strip().strip("\x27")
-                    val_json = re.sub(r"\x27", "\x22", val_part)
-                    active_source = json.loads(val_json)["name"]
-                except Exception as e:
-                    pass
+        GREEN, RED, RESET = "\x1b[32m", "\x1b[31m", "\x1b[0m"
+        sink_ok = default_sink.startswith("alsa_output.usb-")
+        source_ok = default_source.startswith("alsa_input.usb-")
 
-        is_sink_default = "NewPie" in active_sink
-        is_source_default = "NewPie" in active_source
-
-        print("=========================================================")
-        print(" 🔊 NEWPIE USB AUDIO STATUS")
-        print("=========================================================")
-        print(f"🔌 USB Device:   {usb_info}")
-        print(f"🆔 Sinks & Sources:")
-        print(f"   - Playback (Sink) ID:   {sink_id} (Volume: {sink_vol})")
-        print(f"   - Capture (Source) ID:  {source_id} (Volume: {source_vol})")
-        print(f"🎯 Active Default Routing:")
-        print(f"   - Playback Sink:   \x1b[32m✅ ACTIVE DEFAULT\x1b[0m" if is_sink_default else f"\x1b[31m❌ INACTIVE\x1b[0m (Default: {active_sink})")
-        print(f"   - Capture Source:  \x1b[32m✅ ACTIVE DEFAULT\x1b[0m" if is_source_default else f"\x1b[31m❌ INACTIVE\x1b[0m (Default: {active_source})")
-        print("=========================================================")
+        print("=" * 57)
+        print(" 🔊 USB AUDIO STATUS")
+        print("=" * 57)
+        card_txt = cards[0] if cards else RED + "no USB audio card found" + RESET
+        print(f"🔌 USB Card:       {card_txt}")
+        print(f"🎚️  Active Profile: {profile}")
+        sink_txt = sinks[0] if sinks else "none"
+        source_txt = sources[0] if sources else "none"
+        print(f"🆔 Sink:           {sink_txt}")
+        print(f"🆔 Source:         {source_txt}")
+        print("🎯 Default Routing:")
+        mark = GREEN + "✅ USB" + RESET if sink_ok else RED + "❌ NOT USB" + RESET
+        print(f"   - Sink:   {mark} ({default_sink})")
+        mark = GREEN + "✅ USB" + RESET if source_ok else RED + "❌ NOT USB" + RESET
+        print(f"   - Source: {mark} ({default_source})")
+        print("=" * 57)
         '
+
+  audio:doctor:
+    desc: Check each USB audio invariant (device, mixer levels, routing, drop-ins, autosuspend, restore service) and report pass/fail
+    cmds:
+      - PYTHONPATH={{.PYTHONPATH}} python3 -m alexa_custom.audio doctor
 
   audio:test:
     desc: Play a test audio file (/usr/share/sounds/alsa/Front_Center.wav) to verify speaker output
     cmds:
       - echo "Playing test sound ('Front_Center.wav')..."
       - pw-play /usr/share/sounds/alsa/Front_Center.wav || aplay /usr/share/sounds/alsa/Front_Center.wav
+
+  stt:analyze-dumps:
+    desc: Analyze trigger-dump WAV files to identify false positives
+    cmds:
+      - uv run scripts/analyze_dumps.py {{.CLI_ARGS}}
+
+  display:compile:
+    desc: Compile uart_bridge for direct UART access (bypasses kernel driver)
+    cmds:
+      - gcc -o setup/display_firmware/uart_bridge setup/uart_bridge.c
+
+  display:test:
+    desc: Test UART communication with STM32 (requires sudo for /dev/mem)
+    cmds:
+      - |
+        CMD="sudo setup/display_firmware/uart_bridge"
+        # ping via MsgPack: [0, 0, "ping", []]
+        printf '\x94\x00\x00\xa4ping\x90' | timeout 3 $CMD | xxd
+        echo ""
+        echo "Expected response starts with: 94 01 00..."
+
+  display:setup:
+    desc: Compile uart_bridge and add sudoers entry for alexa user
+    cmds:
+      - task: display:compile
+      - |
+        echo "Adding sudoers entry for uart_bridge..."
+        echo "arduino ALL=(ALL) NOPASSWD: $(pwd)/setup/display_firmware/uart_bridge" | sudo tee /etc/sudoers.d/alexa-uart-bridge
+        sudo chmod 440 /etc/sudoers.d/alexa-uart-bridge
+        echo "Done. The display backend will auto-detect uart_bridge."
+
+  display:flash:
+    desc: Compile and flash the STM32 display firmware to the Arduino UNO Q board
+    cmds:
+      - ./scripts/flash-display-firmware.sh
+
+  mqtt:setup:
+    desc: Install Mosquitto MQTT broker and enable system service
+    cmds:
+      - sudo apt-get install -y mosquitto
+      - sudo cp setup/mosquitto-serena.conf /etc/mosquitto/conf.d/serena.conf
+      - sudo systemctl enable --now mosquitto
+      - |
+        echo ""
+        echo "Mosquitto running on 0.0.0.0:1883 (no auth). Useful commands:"
+        echo "  task mqtt:status              # check service status"
+        echo "  task mqtt:restart             # restart broker"
+        echo "  mosquitto_sub -h localhost -t '#' -v   # watch all topics"
+
+  mqtt:restart:
+    desc: Restart Mosquitto MQTT broker
+    cmds:
+      - sudo systemctl restart mosquitto
+
+  mqtt:status:
+    desc: Show Mosquitto MQTT broker service status
+    cmds:
+      - sudo systemctl status mosquitto
+
+  ha:setup:
+    desc: Install Home Assistant Core venv and enable user service (takes 10–20 min on first install — aarch64 builds native wheels)
+    cmds:
+      - sudo systemctl stop bluetooth.service 2>/dev/null || true
+      - sudo systemctl disable bluetooth.service 2>/dev/null || true
+      - sudo systemctl mask bluetooth.service
+      - sudo apt-get install -y python3-dev python3-venv libffi-dev libssl-dev libjpeg-dev zlib1g-dev autoconf build-essential libopenjp2-7 libturbojpeg0-dev
+      - |
+        if [ ! -d ~/homeassistant ]; then
+          echo "Creating Home Assistant venv at ~/homeassistant ..."
+          python3 -m venv ~/homeassistant
+        else
+          echo "Venv ~/homeassistant already exists, skipping creation."
+        fi
+      - |
+        echo "Installing homeassistant (this may take 10–20 min on aarch64) ..."
+        ~/homeassistant/bin/pip install homeassistant
+      - mkdir -p ~/.homeassistant
+      - mkdir -p ~/.config/systemd/user
+      - cp setup/homeassistant.service ~/.config/systemd/user/homeassistant.service
+      - systemctl --user daemon-reload
+      - systemctl --user enable --now homeassistant
+      - |
+        echo ""
+        echo "Home Assistant installed and started. Useful commands:"
+        echo "  task ha:status                # check service status"
+        echo "  task ha:restart               # restart service"
+        echo "  task ha:update                # upgrade to latest HA version"
+        echo "  journalctl --user -fu homeassistant   # follow logs"
+        echo "  http://$(hostname):8123       # web UI (onboarding on first run)"
+
+  ha:update:
+    desc: Upgrade Home Assistant Core to latest version and restart
+    cmds:
+      - ~/homeassistant/bin/pip install --upgrade homeassistant
+      - systemctl --user restart homeassistant
+
+  ha:restart:
+    desc: Restart Home Assistant user service
+    cmds:
+      - systemctl --user restart homeassistant
+
+  ha:status:
+    desc: Show Home Assistant user service status
+    cmds:
+      - systemctl --user status homeassistant
 
   clean:
     desc: Clean up temporary files

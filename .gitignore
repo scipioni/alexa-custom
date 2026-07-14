@@ -1,8 +1,22 @@
 config.yaml
 __pycache__/
 *.pyc
+.DS_Store
 
 .venv/
 *.egg-info/
 models/
 /conf
+corpus
+
+# Build artifacts
+setup/uart_bridge
+setup/display_firmware/uart_bridge
+
+*.wav
+conf.sherpa/
+conf.vosk/
+
+history.jsonl
+state.yaml
+*.blend1

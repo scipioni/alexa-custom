@@ -30,11 +30,23 @@ No flat legacy aliases are supported. The `env:` section is not accepted.
 - **THEN** a `ConfigError` is raised with a message directing the user to `conf/secrets.yaml`
 
 ### Requirement: Hot-reload watcher
-The system SHALL monitor `config.yaml` for modifications using an asyncio-based polling watcher with a configurable interval (default 2 seconds, overridable via `config_poll_interval` in config.yaml). When a file modification is detected, the system SHALL reload the config. If the reload succeeds, all registered reload callbacks SHALL be invoked with the new config. If the reload fails due to a YAML parse error or `ConfigError`, the previous config SHALL remain active; the registered `on_config_error` callback SHALL be invoked with the error message if one is registered; no reload callbacks are invoked on failure.
+The system SHALL monitor `config.yaml` for modifications using an asyncio-based polling watcher with a configurable interval (default 2 seconds, overridable via `config_poll_interval` in config.yaml). The watcher SHALL run in the default production daemon (the plain `serena` entry point as launched by `serena.service`), not only when a development flag such as `--hot-reload` is passed; the `--hot-reload` flag SHALL govern only the development-time source-file (`.py`) auto-restart watcher. When a file modification is detected, the system SHALL reload the config. Reloads SHALL preserve the secrets overrides (`conf/secrets.yaml` values such as `llm_host` and `llm_api_key`) captured at startup, so a reload never silently disables a subsystem that depends on secrets. Web-UI configuration saves SHALL trigger the same reload path unconditionally. If the reload succeeds, all registered reload callbacks SHALL be invoked with the new config. If the reload fails due to a YAML parse error or `ConfigError`, the previous config SHALL remain active; the registered `on_config_error` callback SHALL be invoked with the error message if one is registered; no reload callbacks are invoked on failure.
 
 #### Scenario: Config file edited and saved
 - **WHEN** `config.yaml` is written to disk with a new trigger phrase
 - **THEN** within two poll intervals the system's active trigger list includes the new phrase
+
+#### Scenario: Config edited under the production systemd service
+- **WHEN** the daemon runs via `serena.service` (no `--hot-reload` flag) and `config.yaml` is edited on disk
+- **THEN** the change takes effect within two poll intervals without a daemon restart
+
+#### Scenario: Secrets preserved across reload
+- **WHEN** the LLM is configured via `conf/secrets.yaml` (`llm_host`) and a config reload occurs (file edit or web-UI save)
+- **THEN** the reloaded config retains the secrets-provided values and the LLM keeps working
+
+#### Scenario: Web-UI save triggers reload
+- **WHEN** a configuration change is saved from the web dashboard config panel
+- **THEN** the running daemon applies the new configuration via the reload path without requiring `--hot-reload`
 
 #### Scenario: Malformed YAML on save
 - **WHEN** `config.yaml` is overwritten with invalid YAML
@@ -68,15 +80,15 @@ The system SHALL provide a `ConfigManager` class that holds the current `Actions
 - **THEN** log lines reference only the key names, not the values
 
 ### Requirement: Optional web section in config.yaml
-The system SHALL support an optional top-level `web:` key in `config.yaml`. When present, it SHALL accept the following fields: `port` (integer, default `8080`) and `enabled` (boolean, default `false`). These values SHALL be accessible to the web interface module but SHALL NOT affect startup unless the `--web` CLI flag is explicitly passed.
+The system SHALL support an optional top-level `web:` key in `config.yaml`. When present, it SHALL accept the following fields: `port` (integer, default `8080`). These values SHALL be accessible to the web interface module and used by default.
 
 #### Scenario: web.port read from config
-- **WHEN** `config.yaml` contains `web: { port: 9090 }` and `--web` is passed
+- **WHEN** `config.yaml` contains `web: { port: 9090 }`
 - **THEN** the HTTP server binds to port 9090 (CLI flag `--web-port` takes precedence if also provided)
 
 #### Scenario: Missing web section uses defaults
 - **WHEN** `config.yaml` has no `web:` key
-- **THEN** the web interface uses port 8080 when started with `--web`
+- **THEN** the web interface uses port 8080 by default
 
 ### Requirement: audio: block schema
 The `audio:` block SHALL accept:

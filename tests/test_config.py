@@ -35,7 +35,7 @@ MINIMAL_CONFIG_WITH_RECOGNITION = """\
 wake_words:
   - word: alexa
 recognition:
-  command_timeout: 3.0
+  wake_window: 5.0
 """
 
 
@@ -161,7 +161,7 @@ class TestLoadConfig:
 
         result = load_config(cfg_path)
         assert result is not None
-        assert [g.word for g in result.wake_words] == ["alexa"]
+        assert result.wake_words == ["alexa"]
 
     def test_nested_recognition_block(self, tmp_path):
         cfg_path = self._make_config(tmp_path, MINIMAL_CONFIG_WITH_RECOGNITION)
@@ -169,7 +169,7 @@ class TestLoadConfig:
 
         result = load_config(cfg_path)
         assert result is not None
-        assert result.recognition.command_timeout == 3.0
+        assert result.recognition.wake_window == pytest.approx(5.0)
 
     def test_nested_audio_block(self, tmp_path):
         cfg_path = self._make_config(
@@ -186,32 +186,125 @@ class TestLoadConfig:
     def test_nested_stt_block(self, tmp_path):
         cfg_path = self._make_config(
             tmp_path,
-            MINIMAL_CONFIG
-            + "stt:\n  stage1:\n    backend: vosk\n    confidence: 0.7\n  stage2:\n    backend: vosk\n",
+            MINIMAL_CONFIG + "stt:\n  backend: vosk\n  vad_silence_ms: 700\n",
         )
         from alexa_custom.config import load_config
 
         result = load_config(cfg_path)
         assert result is not None
-        assert result.stt.stage1.backend == "vosk"
-        assert result.stt.stage1.confidence == pytest.approx(0.7)
-        assert result.stt.stage2.backend == "vosk"
+        assert result.stt.backend == "vosk"
+        assert result.stt.vad_silence_ms == 700
 
-    def test_wake_word_lang_default(self, tmp_path):
-        cfg_path = self._make_config(tmp_path)
-        from alexa_custom.config import load_config
-
-        result = load_config(cfg_path)
-        assert result.wake_words[0].lang == "it-IT"
-
-    def test_wake_word_lang_field(self, tmp_path):
+    def test_nested_web_block(self, tmp_path):
         cfg_path = self._make_config(
-            tmp_path, "wake_words:\n  - word: alexa\n    lang: en-US\n"
+            tmp_path,
+            MINIMAL_CONFIG + "web:\n  history_max_entries: 50\n",
         )
         from alexa_custom.config import load_config
 
         result = load_config(cfg_path)
-        assert result.wake_words[0].lang == "en-US"
+        assert result is not None
+        assert result.web.history_max_entries == 50
+
+    def test_web_history_max_entries_defaults_to_100(self, tmp_path):
+        cfg_path = self._make_config(tmp_path)
+        from alexa_custom.config import load_config
+
+        result = load_config(cfg_path)
+        assert result is not None
+        assert result.web.history_max_entries == 100
+
+    def test_wake_word_parsed_as_string(self, tmp_path):
+        cfg_path = self._make_config(tmp_path)
+        from alexa_custom.config import load_config
+
+        result = load_config(cfg_path)
+        assert result.wake_words == ["alexa"]
+
+    def test_wake_word_legacy_format_accepted(self, tmp_path):
+        """Legacy {word: ...} format is accepted with a warning and downgrades to string."""
+        cfg_path = self._make_config(tmp_path, "wake_words:\n  - word: alexa\n")
+        from alexa_custom.config import load_config
+
+        result = load_config(cfg_path)
+        assert "alexa" in result.wake_words
+
+    def test_null_numeric_fields_fall_back_to_defaults(self, tmp_path):
+        """The web config editor can write `key: null` for a cleared field.
+
+        float(None)/int(None) would raise and break cold start, so the parsers
+        must treat an explicit null as 'use the default'.
+        """
+        cfg_path = self._make_config(
+            tmp_path,
+            "wake_words:\n"
+            "  - word: alexa\n"
+            "recognition:\n"
+            "  matching_threshold: null\n"
+            "  wake_window: null\n"
+            "stt:\n"
+            "  rms_threshold: null\n"
+            "audio:\n"
+            "  input_gain: null\n",
+        )
+        from alexa_custom.config import load_config
+
+        result = load_config(cfg_path)  # must not raise
+        assert result is not None
+        assert result.recognition.matching_threshold == 75.0
+        assert result.recognition.wake_window == pytest.approx(8.0)
+        assert result.stt.rms_threshold == pytest.approx(0.02)
+        assert result.audio.input_gain == pytest.approx(1.0)
+
+
+class TestExampleConfig:
+    def test_example_config_loads(self):
+        """conf.example/config.yaml must always be loadable — the web dashboard
+        serves it as the 'factory defaults'."""
+        from alexa_custom.config import load_config
+
+        result = load_config("conf.example/config.yaml")
+        assert result is not None
+        assert result.wake_words, "example config should define at least one wake word"
+
+    def test_example_config_uses_documented_defaults(self, tmp_path):
+        """conf.example/config.yaml should use the documented default values for
+        all settings, so it can serve as the true source of defaults and doesn't
+        silently drift from the code."""
+        from alexa_custom.config import load_config
+
+        # Load the example config to see what it specifies
+        example = load_config("conf.example/config.yaml")
+        assert example is not None
+
+        # Load a minimal config with only required fields to get dataclass defaults
+        minimal_path = write_file(
+            tmp_path,
+            "minimal.yaml",
+            """\
+wake_words:
+  - word: test
+""",
+        )
+        minimal = load_config(str(minimal_path))
+        assert minimal is not None
+
+        # Check that documented numeric and boolean fields match defaults.
+        # These are the fields most likely to drift in a copy-paste edit.
+        checks = [
+            (
+                "wake_window",
+                example.recognition.wake_window,
+                minimal.recognition.wake_window,
+            ),
+            ("output_volume", example.audio.output_volume, minimal.audio.output_volume),
+            ("input_gain", example.audio.input_gain, minimal.audio.input_gain),
+        ]
+        for field_name, example_val, default_val in checks:
+            assert example_val == default_val, (
+                f"Example {field_name}={example_val} should match default {default_val}. "
+                f"Update conf.example/config.yaml to match the code."
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -220,7 +313,7 @@ class TestLoadConfig:
 
 
 class TestParseSttConfig:
-    def test_stage1_stage2_independence(self, tmp_path):
+    def test_flat_stt_fields(self, tmp_path):
         cfg_path = write_file(
             tmp_path,
             "config.yaml",
@@ -228,36 +321,31 @@ class TestParseSttConfig:
 wake_words:
   - word: alexa
 stt:
-  stage1:
-    backend: vosk
-    confidence: 0.8
-    vad_silence_ms: 600
-    rms_threshold: 0.03
-    min_speech_ms: 400
-  stage2:
-    backend: sherpa-onnx
-    model_path: models/sherpa
+  backend: vosk
+  vad_silence_ms: 600
+  rms_threshold: 0.03
+  adaptive_rms: false
+  wake_match_threshold: 0.6
 """,
         )
         from alexa_custom.config import load_config
 
         result = load_config(cfg_path)
-        assert result.stt.stage1.backend == "vosk"
-        assert result.stt.stage1.confidence == pytest.approx(0.8)
-        assert result.stt.stage1.vad_silence_ms == 600
-        assert result.stt.stage1.rms_threshold == pytest.approx(0.03)
-        assert result.stt.stage1.min_speech_ms == 400
-        assert result.stt.stage2.backend == "sherpa-onnx"
-        assert result.stt.stage2.model_path == "models/sherpa"
+        assert result.stt.backend == "vosk"
+        assert result.stt.vad_silence_ms == 600
+        assert result.stt.rms_threshold == pytest.approx(0.03)
+        assert result.stt.adaptive_rms is False
+        assert result.stt.wake_match_threshold == pytest.approx(0.6)
 
     def test_stt_defaults(self, tmp_path):
         cfg_path = write_file(tmp_path, "config.yaml", "wake_words:\n  - word: alexa\n")
         from alexa_custom.config import load_config
 
         result = load_config(cfg_path)
-        assert result.stt.stage1.backend == "vosk"
-        assert result.stt.stage1.confidence == pytest.approx(0.65)
-        assert result.stt.stage2.backend == "vosk"
+        assert result.stt.backend == "vosk"
+        assert result.stt.rms_threshold == pytest.approx(0.02)
+        assert result.stt.vad_silence_ms == 900
+        assert result.stt.adaptive_rms is True
 
     def test_vad_silence_ms_at_stt_level(self, tmp_path):
         cfg_path = write_file(
@@ -270,16 +358,85 @@ stt:
         result = load_config(cfg_path)
         assert result.stt.vad_silence_ms == 800
 
-    def test_invalid_stage1_backend_raises(self, tmp_path):
+    def test_stage1_key_ignored_with_warning(self, tmp_path):
+        """Old stage1 key is silently dropped (warning logged) and defaults are used."""
         cfg_path = write_file(
             tmp_path,
             "config.yaml",
-            "wake_words:\n  - word: alexa\nstt:\n  stage1:\n    backend: whisper\n",
+            "wake_words:\n  - word: alexa\nstt:\n  stage1:\n    backend: vosk\n",
+        )
+        from alexa_custom.config import load_config
+
+        result = load_config(cfg_path)
+        assert result is not None
+        assert result.stt.backend == "vosk"  # default
+
+    def test_stage2_key_ignored_with_warning(self, tmp_path):
+        """Old stage2 key is silently dropped (warning logged) and defaults are used."""
+        cfg_path = write_file(
+            tmp_path,
+            "config.yaml",
+            "wake_words:\n  - word: alexa\nstt:\n  stage2:\n    backend: vosk\n",
+        )
+        from alexa_custom.config import load_config
+
+        result = load_config(cfg_path)
+        assert result is not None
+        assert result.stt.backend == "vosk"  # default
+
+    def test_invalid_backend_raises(self, tmp_path):
+        cfg_path = write_file(
+            tmp_path,
+            "config.yaml",
+            "wake_words:\n  - word: alexa\nstt:\n  backend: whisper\n",
         )
         from alexa_custom.config import load_config, ConfigError
 
-        with pytest.raises(ConfigError, match="stage1.backend"):
+        with pytest.raises(ConfigError, match="stt.backend"):
             load_config(cfg_path)
+
+    def test_sherpa_onnx_backend_accepted(self, tmp_path):
+        cfg_path = write_file(
+            tmp_path,
+            "config.yaml",
+            "wake_words:\n  - word: alexa\nstt:\n  backend: sherpa-onnx\n",
+        )
+        from alexa_custom.config import load_config
+
+        result = load_config(cfg_path)
+        assert result is not None
+        assert result.stt.backend == "sherpa-onnx"
+
+    def test_sherpa_vad_fields_default(self, tmp_path):
+        """sherpa_vad_* fields default sensibly and are settable, independent of backend."""
+        cfg_path = write_file(
+            tmp_path,
+            "config.yaml",
+            "wake_words:\n  - word: alexa\n"
+            "stt:\n  backend: sherpa-onnx\n  sherpa_vad_threshold: 0.35\n"
+            "  sherpa_vad_min_speech_ms: 60\n  sherpa_vad_min_silence_ms: 500\n",
+        )
+        from alexa_custom.config import load_config
+
+        result = load_config(cfg_path)
+        assert result is not None
+        assert result.stt.sherpa_vad_threshold == 0.35
+        assert result.stt.sherpa_vad_min_speech_ms == 60
+        assert result.stt.sherpa_vad_min_silence_ms == 500
+
+    def test_sherpa_vad_fields_default_when_unset(self, tmp_path):
+        cfg_path = write_file(
+            tmp_path,
+            "config.yaml",
+            "wake_words:\n  - word: alexa\nstt:\n  backend: vosk\n",
+        )
+        from alexa_custom.config import load_config
+
+        result = load_config(cfg_path)
+        assert result is not None
+        assert result.stt.sherpa_vad_threshold == 0.5
+        assert result.stt.sherpa_vad_min_speech_ms == 100
+        assert result.stt.sherpa_vad_min_silence_ms == 400
 
 
 # ---------------------------------------------------------------------------
@@ -288,9 +445,7 @@ stt:
 
 
 def make_wake_words():
-    from alexa_custom.config import WakeWordGroup
-
-    return [WakeWordGroup(word="galileo"), WakeWordGroup(word="alexa")]
+    return ["galileo", "alexa"]
 
 
 class TestLoadActionsDir:
@@ -314,7 +469,7 @@ class TestLoadActionsDir:
         )
         from alexa_custom.config import _load_actions_dir
 
-        _, data = _load_actions_dir(actions_dir, make_wake_words())
+        _, data, _ = _load_actions_dir(actions_dir, make_wake_words())
         phrases = [t.phrase for t in data.triggers]
         assert phrases.index("system_cmd") < phrases.index("user_cmd")
 
@@ -332,31 +487,32 @@ class TestLoadActionsDir:
         )
         from alexa_custom.config import _load_actions_dir
 
-        on_startup, _ = _load_actions_dir(actions_dir, make_wake_words())
+        on_startup, _, _ = _load_actions_dir(actions_dir, make_wake_words())
         assert len(on_startup) == 1
         assert on_startup[0].params.get("text") == "Sistema pronto"
 
-    def test_wake_triggers_merged(self, tmp_path):
+    def test_wake_words_scoped_triggers_merged(self, tmp_path):
         actions_dir = tmp_path / "actions"
         actions_dir.mkdir()
         self._write_system(
             actions_dir,
-            "wake_triggers:\n  galileo:\n    - phrase: from_system\n      actions:\n        - type: log\n          message: s\n",
+            "triggers:\n  - phrase: from_system\n    wake_words: [galileo]\n    actions:\n      - type: log\n        message: s\n",
         )
         self._write_file(
             actions_dir,
             "user.yaml",
-            "wake_triggers:\n  galileo:\n    - phrase: from_user\n      actions:\n        - type: log\n          message: u\n",
+            "triggers:\n  - phrase: from_user\n    wake_words: [galileo]\n    actions:\n      - type: log\n        message: u\n",
         )
         from alexa_custom.config import _load_actions_dir
 
-        _, data = _load_actions_dir(actions_dir, make_wake_words())
-        phrases = [t.phrase for t in data.wake_triggers.get("galileo", [])]
+        _, data, _ = _load_actions_dir(actions_dir, make_wake_words())
+        galileo_triggers = [t for t in data.triggers if t.wake_words == ["galileo"]]
+        phrases = [t.phrase for t in galileo_triggers]
         assert "from_system" in phrases
         assert "from_user" in phrases
         assert phrases.index("from_system") < phrases.index("from_user")
 
-    def test_unknown_wake_word_ignored(self, tmp_path):
+    def test_deprecated_wake_triggers_key_ignored(self, tmp_path):
         actions_dir = tmp_path / "actions"
         actions_dir.mkdir()
         self._write_system(
@@ -365,8 +521,8 @@ class TestLoadActionsDir:
         )
         from alexa_custom.config import _load_actions_dir
 
-        _, data = _load_actions_dir(actions_dir, make_wake_words())
-        assert "nonexistent" not in data.wake_triggers
+        _, data, _ = _load_actions_dir(actions_dir, make_wake_words())
+        assert not any(t.phrase == "xyz" for t in data.triggers)
 
     def test_multiple_files_alphabetical_after_system(self, tmp_path):
         actions_dir = tmp_path / "actions"
@@ -392,7 +548,7 @@ class TestLoadActionsDir:
         )
         from alexa_custom.config import _load_actions_dir
 
-        _, data = _load_actions_dir(actions_dir, make_wake_words())
+        _, data, _ = _load_actions_dir(actions_dir, make_wake_words())
         phrases = [t.phrase for t in data.triggers]
         assert phrases == ["s", "h", "l", "u"]
 
@@ -406,7 +562,7 @@ class TestLoadActionsDir:
         )
         from alexa_custom.config import _load_actions_dir
 
-        _, data = _load_actions_dir(actions_dir, make_wake_words())
+        _, data, _ = _load_actions_dir(actions_dir, make_wake_words())
         assert data.triggers[0].phrase == "sys"
         assert len(data.triggers) == 1
 
@@ -415,9 +571,23 @@ class TestLoadActionsDir:
         actions_dir.mkdir()
         from alexa_custom.config import _load_actions_dir
 
-        on_startup, data = _load_actions_dir(actions_dir, make_wake_words())
+        on_startup, data, _ = _load_actions_dir(actions_dir, make_wake_words())
         assert on_startup == []
         assert data.triggers == []
+
+    def test_trigger_tag_parsing(self, tmp_path):
+        actions_dir = tmp_path / "actions"
+        actions_dir.mkdir()
+        self._write_system(
+            actions_dir,
+            "triggers:\n  - phrase: untagged\n    actions:\n      - type: log\n        message: x\n  - phrase: tagged\n    tag: test-tag\n    actions:\n      - type: log\n        message: y\n",
+        )
+        from alexa_custom.config import _load_actions_dir
+
+        _, data, _ = _load_actions_dir(actions_dir, make_wake_words())
+        assert len(data.triggers) == 2
+        assert data.triggers[0].tag == ""
+        assert data.triggers[1].tag == "test-tag"
 
 
 # ---------------------------------------------------------------------------
@@ -534,7 +704,7 @@ class TestConfigManager:
         mgr._reload(cfg_path)
 
         assert len(received) == 1
-        assert [g.word for g in received[0].wake_words] == ["computer"]
+        assert received[0].wake_words == ["computer"]
 
     def test_malformed_yaml_keeps_previous_config(self, tmp_path):
         cfg_path = self._make_config(tmp_path)
@@ -578,9 +748,7 @@ class TestConfigManager:
         mgr = ConfigManager(config)
 
         received = []
-        mgr.register_reload_callback(
-            lambda c: received.append([g.word for g in c.wake_words])
-        )
+        mgr.register_reload_callback(lambda c: received.append(list(c.wake_words)))
 
         mgr.start_watcher(cfg_path, interval=0.05)
         await asyncio.sleep(0.05)
@@ -620,7 +788,7 @@ class TestEnvKeyRejected:
 
         result = load_config(cfg)
         assert result is not None
-        assert [g.word for g in result.wake_words] == ["alexa"]
+        assert result.wake_words == ["alexa"]
 
 
 # ---------------------------------------------------------------------------
@@ -662,7 +830,7 @@ class TestActionsDirectoryIntegration:
         assert len(cfg.on_startup) == 1
         assert cfg.on_startup[0].params.get("text") == "Ciao"
 
-    def test_wake_triggers_merged_into_wake_words(self, tmp_path):
+    def test_wake_words_scoped_triggers_merged_into_wake_words(self, tmp_path):
         conf_dir = tmp_path / "conf"
         actions_dir = conf_dir / "actions"
         actions_dir.mkdir(parents=True)
@@ -670,13 +838,14 @@ class TestActionsDirectoryIntegration:
             "wake_words:\n  - word: galileo\nactions:\n  dir: conf/actions\n"
         )
         (actions_dir / "system.yaml").write_text(
-            "wake_triggers:\n  galileo:\n    - phrase: che ora è\n      actions:\n        - type: log\n          message: time\n"
+            "triggers:\n  - phrase: che ora è\n    wake_words: [galileo]\n    actions:\n      - type: log\n        message: time\n"
         )
         from alexa_custom.config import load_config
 
         cfg = load_config(conf_dir / "config.yaml")
-        galileo_group = cfg.wake_words[0]
-        assert any(t.phrase == "che ora è" for t in galileo_group.triggers)
+        # In the new design wake_words is a flat string list; scoped triggers become with_wake=True.
+        assert "galileo" in cfg.wake_words
+        assert any(t.phrase == "che ora è" and t.with_wake for t in cfg.triggers)
 
     @pytest.mark.asyncio
     async def test_action_file_change_triggers_reload(self, tmp_path):
@@ -717,3 +886,191 @@ class TestActionsDirectoryIntegration:
         await asyncio.sleep(0.05)
 
         assert received and "new_cmd" in received[-1]
+
+    def test_action_file_wake_words_group_and_scoped_trigger(self, tmp_path):
+        conf_dir = tmp_path / "conf"
+        actions_dir = conf_dir / "actions"
+        actions_dir.mkdir(parents=True)
+        (conf_dir / "config.yaml").write_text(
+            "wake_words:\n  - word: alexa\nactions:\n  dir: conf/actions\n"
+        )
+        (actions_dir / "user.yaml").write_text(
+            "wake_words:\n  - aiuto\n"
+            "triggers:\n  - phrase: chiama assistenza\n    wake_words: [aiuto]\n    actions:\n      - type: log\n        message: calling\n"
+        )
+        from alexa_custom.config import load_config
+
+        cfg = load_config(conf_dir / "config.yaml")
+        # In the new design wake_words is a flat string list.
+        assert "aiuto" in cfg.wake_words
+        # Scoped trigger becomes with_wake=True in the flat trigger list.
+        assert any(
+            t.phrase == "chiama assistenza" and t.with_wake for t in cfg.triggers
+        )
+
+    def test_direct_trigger_in_direct_triggers_not_global(self, tmp_path):
+        conf_dir = tmp_path / "conf"
+        actions_dir = conf_dir / "actions"
+        actions_dir.mkdir(parents=True)
+        (conf_dir / "config.yaml").write_text(
+            "wake_words:\n  - word: galileo\nactions:\n  dir: conf/actions\n"
+        )
+        (actions_dir / "user.yaml").write_text(
+            "triggers:\n  - phrase: chiama Stefano\n    wake_words: []\n    actions:\n      - type: log\n        message: x\n"
+        )
+        from alexa_custom.config import load_config
+
+        cfg = load_config(conf_dir / "config.yaml")
+        # In the new design, all triggers are in cfg.triggers; direct_triggers is a subset.
+        assert any(t.phrase == "chiama Stefano" for t in cfg.direct_triggers)
+        assert any(
+            t.phrase == "chiama Stefano" and not t.with_wake for t in cfg.triggers
+        )
+
+    def test_global_explicit_identical_to_absent(self, tmp_path):
+        conf_dir = tmp_path / "conf"
+        actions_dir = conf_dir / "actions"
+        actions_dir.mkdir(parents=True)
+        (conf_dir / "config.yaml").write_text(
+            "wake_words:\n  - word: galileo\nactions:\n  dir: conf/actions\n"
+        )
+        (actions_dir / "user.yaml").write_text(
+            "triggers:\n"
+            "  - phrase: implicit_global\n    actions:\n      - type: log\n        message: x\n"
+            "  - phrase: explicit_global\n    wake_words: [global]\n    actions:\n      - type: log\n        message: x\n"
+        )
+        from alexa_custom.config import load_config
+
+        cfg = load_config(conf_dir / "config.yaml")
+        global_phrases = [t.phrase for t in cfg.triggers]
+        assert "implicit_global" in global_phrases
+        assert "explicit_global" in global_phrases
+        assert not any(
+            t.phrase in ("implicit_global", "explicit_global")
+            for t in cfg.direct_triggers
+        )
+
+    def test_multi_wake_word_trigger_appears_in_both_groups(self, tmp_path):
+        conf_dir = tmp_path / "conf"
+        actions_dir = conf_dir / "actions"
+        actions_dir.mkdir(parents=True)
+        (conf_dir / "config.yaml").write_text(
+            "wake_words:\n  - word: galileo\n  - word: aiuto\nactions:\n  dir: conf/actions\n"
+        )
+        (actions_dir / "user.yaml").write_text(
+            "triggers:\n  - phrase: accendi la luce\n    wake_words: [galileo, help]\n    actions:\n      - type: log\n        message: x\n"
+        )
+        from alexa_custom.config import load_config
+
+        cfg = load_config(conf_dir / "config.yaml")
+        # In the new design, group scoping is dropped — trigger fires after any wake word.
+        assert any(t.phrase == "accendi la luce" and t.with_wake for t in cfg.triggers)
+        assert "galileo" in cfg.wake_words
+        assert "aiuto" in cfg.wake_words
+
+
+# ---------------------------------------------------------------------------
+# Concurrent file locking tests (web-config-panel task 4.13)
+# ---------------------------------------------------------------------------
+
+
+class TestConcurrentFileLocking:
+    def test_exclusive_lock_prevents_simultaneous_writes(self, tmp_path):
+        from alexa_custom.web import _file_lock
+        import threading
+
+        f = tmp_path / "test.yaml"
+        f.write_text("initial\n")
+
+        results = []
+        errors = []
+
+        def writer(name: str, content: str):
+            try:
+                with _file_lock(f, exclusive=True):
+                    data = f.read_text()
+                    import time
+
+                    time.sleep(0.05)
+                    f.write_text(data + content)
+                results.append(name)
+            except Exception as e:
+                errors.append((name, e))
+
+        t1 = threading.Thread(target=writer, args=("A", "write_a\n"))
+        t2 = threading.Thread(target=writer, args=("B", "write_b\n"))
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+
+        assert not errors, f"Unexpected errors: {errors}"
+        content = f.read_text()
+        assert content.count("write_a") == 1
+        assert content.count("write_b") == 1
+        assert "write_a" in content
+        assert "write_b" in content
+
+    def test_shared_lock_allows_concurrent_reads(self, tmp_path):
+        from alexa_custom.web import _file_lock
+        import threading
+
+        f = tmp_path / "test.yaml"
+        f.write_text("data\n")
+
+        results = []
+
+        def reader(name: str):
+            try:
+                with _file_lock(f, exclusive=False):
+                    _ = f.read_text()
+                results.append(name)
+            except Exception:
+                pass
+
+        threads = [threading.Thread(target=reader, args=(str(i),)) for i in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert len(results) == 5
+        assert all(r in results for r in ("0", "1", "2", "3", "4"))
+
+    def test_exclusive_lock_blocks_shared_lock(self, tmp_path):
+        from alexa_custom.web import _file_lock
+        import threading
+
+        f = tmp_path / "test.yaml"
+        f.write_text("data\n")
+        started = threading.Event()
+        proceed = threading.Event()
+
+        exclusive_acquired = threading.Event()
+        shared_acquired = threading.Event()
+        shared_timed_out = threading.Event()
+
+        def exclusive_holder():
+            with _file_lock(f, exclusive=True):
+                exclusive_acquired.set()
+                proceed.wait(timeout=2)
+                started.set()
+
+        def shared_attempt():
+            started.wait(timeout=2)
+            try:
+                with _file_lock(f, exclusive=False):
+                    shared_acquired.set()
+            except Exception:
+                shared_timed_out.set()
+
+        t_ex = threading.Thread(target=exclusive_holder)
+        t_sh = threading.Thread(target=shared_attempt)
+        t_ex.start()
+        exclusive_acquired.wait(timeout=2)
+        proceed.set()
+        t_sh.start()
+        t_sh.join(timeout=1.5)
+        t_ex.join()
+
+        assert shared_acquired.is_set()

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "alexa-custom"
-version = "0.3.0"
+version = "0.4.0"
 description = "LiveKit headless audio client for Bluetooth conference speakerphones"
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -18,22 +18,88 @@ dependencies = [
     "vosk>=0.3.45",
     "pyyaml>=6.0",
     "httpx>=0.27",
+    "openai>=1.0",
     "aiomqtt>=2.5.1",
     "aiohttp>=3.9",
     "piper-tts>=1.2.0",
-    "sherpa-onnx>=1.0.0",
     "rapidfuzz>=3.0.0",
     "ruamel.yaml>=0.18",
+    "smbus2>=0.6.1",
+    # stt.backend: sherpa-onnx (alexa_custom.stt_backends.SherpaOnnxSTT) — also
+    # used standalone by docs/asr-plan.md's eval tool (serena-vad). Both share
+    # one pinned dependency pair rather than two.
+    # Pinned: sherpa-onnx 1.13.4's aarch64 wheel bundles a libonnxruntime.so
+    # that doesn't satisfy _sherpa_onnx.so's symbol-version requirement
+    # (ImportError: version `VERS_1.27.0' not found) — verified broken on this
+    # board 2026-07-12. 1.13.3's aarch64 wheel doesn't bundle onnxruntime at
+    # all — it dlopens an unversioned libonnxruntime.so and needs the exact
+    # release whose .so defines symbol-version node `VERS_1.24.4` (onnxruntime
+    # tags each release's exported symbols with its own version string).
+    # Neither the apt libonnxruntime1.21 package nor newer pip onnxruntime
+    # releases satisfy that version node, so onnxruntime must be pinned to the
+    # matching 1.24.4 release here too — verified broken with mismatched
+    # versions on this board 2026-07-13. After `uv sync`, run
+    # `setup/fix-sherpa-onnx-runtime.sh` (or `task setup`) once to symlink the
+    # unversioned libonnxruntime.so sherpa-onnx expects.
+    "sherpa-onnx==1.13.3",
+    "onnxruntime==1.24.4",
 ]
 
 [project.scripts]
-alexa-client = "alexa_custom.client:main"
-alexa-audio = "alexa_custom.audio:main"
-alexa-devices = "alexa_custom.audio:main_devices"
-alexa-test = "alexa_custom.audio:main_test"
-alexa-setup = "alexa_custom.setup:main"
-alexa-audio-setup = "alexa_custom.audio:setup_audio"
+serena-client = "alexa_custom.client:main"
+serena = "alexa_custom.client:main"
+serena-audio = "alexa_custom.audio:main"
+serena-devices = "alexa_custom.audio:main_devices"
+serena-test = "alexa_custom.audio:main_test"
+serena-setup = "alexa_custom.setup:main"
+serena-audio-setup = "alexa_custom.audio:setup_audio"
+serena-audio-doctor = "alexa_custom.audio:main_doctor"
+serena-wake-eval = "alexa_custom.wake_eval:main"
+serena-record = "alexa_custom.record:main"
+serena-stt = "alexa_custom.stt_cli:main"
+serena-calibrate-mcp = "alexa_custom.mcp_calibrate:main"
+serena-say = "alexa_custom.tts:main_say"
+serena-vad = "alexa_custom.asr_eval:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["alexa_custom*"]
+
+[project.optional-dependencies]
+i2c = ["smbus2>=0.4.0"]
+# GStreamer capture backend (stt.capture_backend: gstreamer).
+# System packages also required (apt): gstreamer1.0-plugins-bad (webrtcdsp),
+#   gstreamer1.0-pulseaudio (pulsesrc), gstreamer1.0-pipewire (pipewiresrc),
+#   python3-gst-1.0 (gi bindings — prefer system package over pip on Debian).
+gstreamer = ["PyGObject>=3.46"]
+calibrate = [
+    "mcp>=1.28.0",
+]
+
+[dependency-groups]
+dev = [
+    "headroom-ai[mcp,proxy]>=0.20.15",
+    "pytest>=9.0.3",
+    "pytest-asyncio>=1.4.0",
+    "pyright>=1.1.390",
+    "ruff>=0.8.0",
+    "smbus2>=0.4.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Markers are declared explicitly; keep strict mode so a forgotten
+# @pytest.mark.asyncio surfaces instead of silently passing.
+asyncio_mode = "strict"
+
+[tool.ruff]
+target-version = "py313"
+
+[tool.pyright]
+# Introduced on an existing codebase: run in basic mode and surface findings
+# without blocking CI yet (the type-check job is non-blocking). Drive the
+# error count to zero over time, then flip the job to required.
+include = ["alexa_custom"]
+pythonVersion = "3.13"
+typeCheckingMode = "basic"
+reportMissingImports = false

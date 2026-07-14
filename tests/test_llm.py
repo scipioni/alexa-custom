@@ -417,6 +417,17 @@ class TestNormalizeConfirm:
         assert normalize_confirm("") == "no"
         assert normalize_confirm("boh") == "no"
 
+    def test_substring_does_not_false_positive(self):
+        # "si" is a substring of "sicuro" and "no" of "non" — a substring match
+        # would read this as "yes"; token matching must not.
+        assert normalize_confirm("non sicuro") == "no"
+
+    def test_multiword_no_phrase(self):
+        assert normalize_confirm("no grazie") == "no"
+
+    def test_yes_with_extra_words(self):
+        assert normalize_confirm("sì certo") == "yes"
+
 
 # ---------------------------------------------------------------------------
 # LearnWizard integration test

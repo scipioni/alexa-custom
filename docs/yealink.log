@@ -1,0 +1,384 @@
+this is log from PC with running yealink
+
++ pactl list cards
++ grep -A80 'Yealink\|BT51'
+	Name: alsa_card.usb-Yealink_Yealink_BT51_3H81001125-00
+	Driver: alsa
+	Owner Module: n/a
+	Properties:
+		device.enum.api = "udev"
+		device.api = "alsa"
+		media.class = "Audio/Device"
+		api.alsa.path = "hw:2"
+		api.alsa.card = "2"
+		api.alsa.card.name = "Yealink BT51"
+		api.alsa.card.longname = "Yealink Yealink BT51 at usb-0000:00:14.0-6.4.4.1, full speed"
+		device.plugged.usec = "59203626984"
+		device.bus_path = "pci-0000:00:14.0-usb-0:6.4.4.1:1.0"
+		sysfs.path = "/devices/pci0000:00/0000:00:14.0/usb1/1-6/1-6.4/1-6.4.4/1-6.4.4.1/1-6.4.4.1:1.0/sound/card2"
+		device.bus-id = "usb-Yealink_Yealink_BT51_3H81001125-00"
+		device.bus = "usb"
+		device.subsystem = "sound"
+		device.vendor.id = "0x6993"
+		device.vendor.name = "Yealink Network Technology Co., Ltd."
+		device.product.id = "0xb204"
+		device.product.name = "Yealink BT51"
+		device.serial = "Yealink_Yealink_BT51_3H81001125"
+		device.name = "alsa_card.usb-Yealink_Yealink_BT51_3H81001125-00"
+		device.description = "Yealink BT51"
+		device.nick = "Yealink BT51"
+		device.icon_name = "audio-card-analog-usb"
+		api.alsa.use-acp = "true"
+		api.acp.auto-profile = "false"
+		api.acp.auto-port = "false"
+		api.dbus.ReserveDevice1.Priority = "-20"
+		api.alsa.split-enable = "true"
+		api.dbus.ReserveDevice1 = "Audio2"
+		spa.object.id = "6"
+		factory.id = "15"
+		client.id = "47"
+		object.id = "113"
+		object.serial = "804"
+		object.path = "alsa:acp:BT51"
+		alsa.card = "2"
+		alsa.card_name = "Yealink BT51"
+		alsa.long_card_name = "Yealink Yealink BT51 at usb-0000:00:14.0-6.4.4.1, full speed"
+		alsa.driver_name = "snd_usb_audio"
+		alsa.mixer_name = "USB Mixer"
+		alsa.components = "USB6993:b204"
+		alsa.id = "BT51"
+		device.string = "2"
+	Profiles:
+		off: Off (sinks: 0, sources: 0, priority: 0, available: yes)
+		output:analog-stereo+input:mono-fallback: Analog Stereo Output + Mono Input (sinks: 1, sources: 1, priority: 6501, available: yes)
+		output:analog-stereo: Analog Stereo Output (sinks: 1, sources: 0, priority: 6500, available: yes)
+		output:iec958-stereo+input:mono-fallback: Digital Stereo (IEC958) Output + Mono Input (sinks: 1, sources: 1, priority: 5501, available: yes)
+		output:iec958-stereo: Digital Stereo (IEC958) Output (sinks: 1, sources: 0, priority: 5500, available: yes)
+		output:iec958-ac3-surround-51+input:mono-fallback: Digital Surround 5.1 (IEC958/AC3) Output + Mono Input (sinks: 1, sources: 1, priority: 301, available: yes)
+		output:iec958-ac3-surround-51: Digital Surround 5.1 (IEC958/AC3) Output (sinks: 1, sources: 0, priority: 300, available: yes)
+		pro-audio: Pro Audio (sinks: 1, sources: 1, priority: 1, available: yes)
+		input:mono-fallback: Mono Input (sinks: 0, sources: 1, priority: 1, available: yes)
+	Active Profile: output:analog-stereo+input:mono-fallback
+	Ports:
+		analog-input-headset-mic: Headset Microphone (type: Headset, priority: 8800, latency offset: 0 usec, availability unknown)
+			Properties:
+				port.type = "headset"
+				device.icon_name = "audio-input-microphone"
+				card.profile.port = "0"
+			Part of profile(s): input:mono-fallback, output:analog-stereo+input:mono-fallback, output:iec958-stereo+input:mono-fallback, output:iec958-ac3-surround-51+input:mono-fallback
+		analog-output: Analog Output (type: Analog, priority: 9900, latency offset: 0 usec, availability unknown)
+			Properties:
+				port.type = "analog"
+				card.profile.port = "1"
+			Part of profile(s): output:analog-stereo, output:analog-stereo+input:mono-fallback
+		iec958-stereo-output: Digital Output (S/PDIF) (type: SPDIF, priority: 0, latency offset: 0 usec, availability unknown)
+			Properties:
+				port.type = "spdif"
+				card.profile.port = "2"
+			Part of profile(s): output:iec958-stereo, output:iec958-stereo+input:mono-fallback
++ pactl list sources
++ grep -A30 'Yealink\|BT51'
+	Name: alsa_output.usb-Yealink_Yealink_BT51_3H81001125-00.analog-stereo.monitor
+	Description: Monitor of Yealink BT51 Analog Stereo
+	Driver: PipeWire
+	Sample Specification: s16le 2ch 48000Hz
+	Channel Map: front-left,front-right
+	Owner Module: 4294967295
+	Mute: no
+	Volume: front-left: 65536 / 100% / 0.00 dB,   front-right: 65536 / 100% / 0.00 dB
+	        balance 0.00
+	Base Volume: 65536 / 100% / 0.00 dB
+	Monitor of Sink: alsa_output.usb-Yealink_Yealink_BT51_3H81001125-00.analog-stereo
+	Latency: 0 usec, configured 0 usec
+	Flags: HARDWARE DECIBEL_VOLUME LATENCY 
+	Properties:
+		object.path = "alsa:acp:BT51:3:playback"
+		api.alsa.path = "front:2"
+		api.alsa.pcm.card = "2"
+		api.alsa.pcm.stream = "playback"
+		port.group = "playback"
+		device.icon_name = "audio-card-analog"
+		device.bus = "usb"
+		audio.channels = "2"
+		audio.position = "[ FL, FR ]"
+		device.routes = "1"
+		alsa.resolution_bits = "16"
+		alsa.card = "2"
+		alsa.card_name = "Yealink BT51"
+		alsa.long_card_name = "Yealink Yealink BT51 at usb-0000:00:14.0-6.4.4.1, full speed"
+		alsa.driver_name = "snd_usb_audio"
+		alsa.mixer_name = "USB Mixer"
+		alsa.components = "USB6993:b204"
+		alsa.id = "BT51"
+		device.api = "alsa"
+		device.class = "monitor"
+		alsa.class = "generic"
+		alsa.subclass = "generic-mix"
+		alsa.name = "USB Audio"
+		alsa.subdevice = "0"
+		alsa.subdevice_name = "subdevice #0"
+		alsa.device = "0"
+		alsa.sync.id = "00000000:00000000:00000000:00000000"
+		device.profile.name = "analog-stereo"
+		device.profile.description = "Analog Stereo"
+		card.profile.device = "3"
+		device.id = "113"
+		factory.name = "api.alsa.pcm.sink"
+		node.pause-on-idle = "false"
+		priority.driver = "1109"
+		priority.session = "1109"
+		media.class = "Audio/Sink"
+		node.name = "alsa_output.usb-Yealink_Yealink_BT51_3H81001125-00.analog-stereo"
+		node.nick = "Yealink BT51"
+		device.description = "Yealink BT51"
+		api.alsa.card.name = "Yealink BT51"
+		api.alsa.card.longname = "Yealink Yealink BT51 at usb-0000:00:14.0-6.4.4.1, full speed"
+		factory.id = "19"
+		clock.quantum-limit = "8192"
+		client.id = "47"
+		node.driver = "true"
+		node.loop.name = "data-loop.0"
+		library.name = "audioconvert/libspa-audioconvert"
+		object.id = "118"
+		object.serial = "911"
+		node.max-latency = "16384/48000"
+		api.alsa.period-size = "256"
+		api.alsa.period-num = "128"
+		api.alsa.headroom = "256"
+		device.enum.api = "udev"
+		api.alsa.card = "2"
+		device.plugged.usec = "59203626984"
+		device.bus_path = "pci-0000:00:14.0-usb-0:6.4.4.1:1.0"
+		sysfs.path = "/devices/pci0000:00/0000:00:14.0/usb1/1-6/1-6.4/1-6.4.4/1-6.4.4.1/1-6.4.4.1:1.0/sound/card2"
+		device.bus-id = "usb-Yealink_Yealink_BT51_3H81001125-00"
+		device.subsystem = "sound"
+		device.vendor.id = "0x6993"
+		device.vendor.name = "Yealink Network Technology Co., Ltd."
+		device.product.id = "0xb204"
+		device.product.name = "Yealink BT51"
+		device.serial = "Yealink_Yealink_BT51_3H81001125"
+		device.name = "alsa_card.usb-Yealink_Yealink_BT51_3H81001125-00"
+		device.nick = "Yealink BT51"
+		api.alsa.use-acp = "true"
+		api.acp.auto-profile = "false"
+		api.acp.auto-port = "false"
+		api.dbus.ReserveDevice1.Priority = "-20"
+		api.alsa.split-enable = "true"
+		api.dbus.ReserveDevice1 = "Audio2"
+		spa.object.id = "6"
+		device.string = "2"
+	Ports:
+		analog-output: Analog Output (type: Analog, priority: 9900, availability unknown)
+	Active Port: analog-output
+	Formats:
+		pcm
+
+Source #912
+	State: SUSPENDED
+	Name: alsa_input.usb-Yealink_Yealink_BT51_3H81001125-00.mono-fallback
+	Description: Yealink BT51 Mono
+	Driver: PipeWire
+	Sample Specification: s16le 1ch 16000Hz
+	Channel Map: mono
+	Owner Module: 4294967295
+	Mute: no
+	Volume: mono: 65536 / 100% / 0.00 dB
+	        balance 0.00
+	Base Volume: 65687 / 100% / 0.06 dB
+	Monitor of Sink: n/a
+	Latency: 0 usec, configured 0 usec
+	Flags: HARDWARE HW_MUTE_CTRL HW_VOLUME_CTRL DECIBEL_VOLUME LATENCY 
+	Properties:
+		object.path = "alsa:acp:BT51:2:capture"
+		api.alsa.path = "hw:2"
+		api.alsa.pcm.card = "2"
+		api.alsa.pcm.stream = "capture"
+		port.group = "capture"
+		device.icon_name = "audio-card-analog"
+		device.bus = "usb"
+		audio.channels = "1"
+		audio.position = "[ MONO ]"
+		device.routes = "1"
+		alsa.resolution_bits = "16"
+		alsa.card = "2"
+		alsa.card_name = "Yealink BT51"
+		alsa.long_card_name = "Yealink Yealink BT51 at usb-0000:00:14.0-6.4.4.1, full speed"
+		alsa.driver_name = "snd_usb_audio"
+		alsa.mixer_name = "USB Mixer"
+		alsa.components = "USB6993:b204"
+		alsa.id = "BT51"
+		device.api = "alsa"
+		device.class = "sound"
+		alsa.class = "generic"
+		alsa.subclass = "generic-mix"
+		alsa.name = "USB Audio"
+		alsa.subdevice = "0"
+		alsa.subdevice_name = "subdevice #0"
+		alsa.device = "0"
+		alsa.sync.id = "00000000:00000000:00000000:00000000"
+		device.profile.name = "mono-fallback"
+		device.profile.description = "Mono"
+		card.profile.device = "2"
+		device.id = "113"
+		factory.name = "api.alsa.pcm.source"
+		node.pause-on-idle = "false"
+		priority.driver = "2100"
+		priority.session = "2100"
+		media.class = "Audio/Source"
+		node.name = "alsa_input.usb-Yealink_Yealink_BT51_3H81001125-00.mono-fallback"
+		node.nick = "Yealink BT51"
+		device.description = "Yealink BT51"
+		api.alsa.card.name = "Yealink BT51"
+		api.alsa.card.longname = "Yealink Yealink BT51 at usb-0000:00:14.0-6.4.4.1, full speed"
+		factory.id = "19"
+		clock.quantum-limit = "8192"
+		client.id = "47"
+		node.driver = "true"
+		node.loop.name = "data-loop.0"
+		library.name = "audioconvert/libspa-audioconvert"
+		object.id = "111"
+		object.serial = "912"
+		device.enum.api = "udev"
+		api.alsa.card = "2"
+		device.plugged.usec = "59203626984"
+		device.bus_path = "pci-0000:00:14.0-usb-0:6.4.4.1:1.0"
+		sysfs.path = "/devices/pci0000:00/0000:00:14.0/usb1/1-6/1-6.4/1-6.4.4/1-6.4.4.1/1-6.4.4.1:1.0/sound/card2"
+		device.bus-id = "usb-Yealink_Yealink_BT51_3H81001125-00"
+		device.subsystem = "sound"
+		device.vendor.id = "0x6993"
+		device.vendor.name = "Yealink Network Technology Co., Ltd."
+		device.product.id = "0xb204"
+		device.product.name = "Yealink BT51"
+		device.serial = "Yealink_Yealink_BT51_3H81001125"
+		device.name = "alsa_card.usb-Yealink_Yealink_BT51_3H81001125-00"
+		device.nick = "Yealink BT51"
+		api.alsa.use-acp = "true"
+		api.acp.auto-profile = "false"
+		api.acp.auto-port = "false"
+		api.dbus.ReserveDevice1.Priority = "-20"
+		api.alsa.split-enable = "true"
+		api.dbus.ReserveDevice1 = "Audio2"
+		spa.object.id = "6"
+		device.string = "2"
+	Ports:
+		analog-input-headset-mic: Headset Microphone (type: Headset, priority: 8800, availability unknown)
+	Active Port: analog-input-headset-mic
+	Formats:
+		pcm
++ wpctl status
+PipeWire 'pipewire-0' [1.6.7, scipio@hp, cookie:1045246904]
+ └─ Clients:
+        32. WirePlumber                         [1.6.7, scipio@hp, pid:1003]
+        33. pipewire                            [1.6.7, scipio@hp, pid:1004]
+        47. WirePlumber [export]                [1.6.7, scipio@hp, pid:1003]
+        58. Mutter                              [1.6.7, scipio@hp, pid:1143]
+        61. Telegram                            [1.6.7, scipio@hp, pid:1348]
+        81. GNOME Volume Control Media Keys     [1.6.7, scipio@hp, pid:1315]
+        82. gnome-shell                         [1.6.7, scipio@hp, pid:1143]
+        83. GNOME Shell Volume Control          [1.6.7, scipio@hp, pid:1143]
+        84. Telegram                            [1.6.7, scipio@hp, pid:1348]
+        85. xdg-desktop-portal                  [1.6.7, scipio@hp, pid:1922]
+        86. Chromium input                      [1.6.7, scipio@hp, pid:6013]
+        87. WEBRTC VoiceEngine                  [1.6.7, scipio@hp, pid:5962]
+        88. WEBRTC VoiceEngine                  [1.6.7, scipio@hp, pid:5962]
+        89. Chromium input                      [1.6.7, scipio@hp, pid:6073]
+        91. Firefox                             [1.6.7, scipio@hp, pid:8697]
+       104. Firefox                             [1.6.7, scipio@hp, pid:8697]
+       116. Chromium                            [1.6.7, scipio@hp, pid:6013]
+       120. wpctl                               [1.6.7, scipio@hp, pid:1511689]
+
+Audio
+ ├─ Devices:
+ │      48. Navi 48 HDMI/DP Audio Controller    [alsa]
+ │      49. HD Pro Webcam C920                  [alsa]
+ │      51. Built-in Audio                      [alsa]
+ │     113. Yealink BT51                        [alsa]
+ │  
+ ├─ Sinks:
+ │      59. Built-in Audio Analog Stereo        [vol: 0.68]
+ │      71. Navi 48 HDMI/DP Audio Controller Digital Stereo (HDMI) [vol: 0.50]
+ │  *  118. Yealink BT51 Analog Stereo          [vol: 0.70]
+ │  
+ ├─ Sources:
+ │      45. HD Pro Webcam C920 Analog Stereo    [vol: 0.48]
+ │      60. Built-in Audio Analog Stereo        [vol: 1.00]
+ │  *  111. Yealink BT51 Mono                   [vol: 1.00]
+ │  
+ ├─ Filters:
+ │  
+ └─ Streams:
+        43. Chromium                                                    
+             44. output_FR       > Yealink BT51:playback_FR	[active]
+             70. output_FL       > Yealink BT51:playback_FL	[active]
+       100. Telegram                                                    
+             98. output_FL       > Yealink BT51:playback_FL	[active]
+            101. output_FR       > Yealink BT51:playback_FR	[active]
+
+Video
+ ├─ Devices:
+ │      34. HD Pro Webcam C920                  [v4l2]
+ │      46. HD Pro Webcam C920                  [v4l2]
+ │  
+ ├─ Sinks:
+ │  
+ ├─ Sources:
+ │  *   79. HD Pro Webcam C920 (V4L2)          
+ │  
+ ├─ Filters:
+ │  
+ └─ Streams:
+
+Settings
+ └─ Default Configured Devices:
+         0. Audio/Sink    alsa_output.usb-Yealink_Yealink_BT51_3H81001125-00.analog-stereo
+         1. Audio/Source  alsa_input.usb-Yealink_Yealink_BT51_3H81001125-00.mono-fallback
+++ grep -i 'BT51\|yealink' /proc/asound/cards
+++ awk '{print $1}'
++ BT51_CARD=$'2\nYealink'
++ echo $'ALSA card: 2\nYealink'
+ALSA card: 2
+Yealink
++ arecord -D $'hw:2\nYealink,0' --dump-hw-params /dev/null
+ALSA lib conf.c:5718:(snd_config_expand) [error.core] Parse arguments error: Invalid argument
+ALSA lib pcm.c:2722:(snd_pcm_open_noupdate) [error.pcm] Unknown PCM hw:2
+Yealink,0
+arecord: main:850: audio open error: Invalid argument
++ amixer -c $'2\nYealink' contents
++ lsusb -v -d 6993:b204
++ grep -E 'bDeviceClass|bInterfaceClass|iProduct'
+  bDeviceClass            0 [unknown]
+  iProduct                2 Yealink BT51
+      bInterfaceClass         1 Audio
+      bInterfaceClass         1 Audio
+      bInterfaceClass         1 Audio
+      bInterfaceClass         1 Audio
+      bInterfaceClass         1 Audio
+      bInterfaceClass         3 Human Interface Device
++ hciconfig
++ bluetoothctl info
++ grep -E 'Name|Connected|UUID|Profile'
++ head -20
+	Name: clavis
+	Connected: yes
+	UUID: Generic Access Profile    (00001800-0000-1000-8000-00805f9b34fb)
+	UUID: Generic Attribute Profile (00001801-0000-1000-8000-00805f9b34fb)
+	UUID: Device Information        (0000180a-0000-1000-8000-00805f9b34fb)
+	UUID: Battery Service           (0000180f-0000-1000-8000-00805f9b34fb)
+	UUID: Human Interface Device    (00001812-0000-1000-8000-00805f9b34fb)
++ pipewire --version
+pipewire
+Compiled with libpipewire 1.6.7
+Linked with libpipewire 1.6.7
++ pw-cli --version
+pw-cli
+Compiled with libpipewire 1.6.7
+Linked with libpipewire 1.6.7
+++ grep -i 'BT51\|yealink' /proc/asound/cards
+++ awk '{print $1}'
++ BT51_CARD=$'2\nYealink'
++ arecord -D $'hw:2\nYealink,0' -f S16_LE -r 16000 -c 1 -d 3 /tmp/bt51_raw.wav
+ALSA lib conf.c:5718:(snd_config_expand) [error.core] Parse arguments error: Invalid argument
+ALSA lib pcm.c:2722:(snd_pcm_open_noupdate) [error.pcm] Unknown PCM hw:2
+Yealink,0
+arecord: main:850: audio open error: Invalid argument
++ aplay /tmp/bt51_raw.wav

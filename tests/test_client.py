@@ -51,11 +51,119 @@ class TestClientAsync:
         with patch.dict(
             os.environ, {"LIVEKIT_URL": "http://test.url", "LIVEKIT_ROOM": "test-room"}
         ):
-            await run_session(mic, devices, pw_device, stop_event)
+            await run_session(
+                mic, devices, pw_device, stop_event, wait_for_participant=False
+            )
 
         mock_room.connect.assert_called_once_with("http://test.url", "test-token")
         mock_room.local_participant.publish_track.assert_called_once()
         mock_room.disconnect.assert_called_once()
+
+    @pytest.mark.asyncio
+    @patch("alexa_custom.client.Room")
+    @patch("alexa_custom.client.get_token")
+    @patch("alexa_custom.client.LocalAudioTrack")
+    @patch("alexa_custom.client.TrackPublishOptions")
+    async def test_run_session_wait_for_participant_publishes_on_join(
+        self, mock_opts, mock_local_track, mock_get_token, mock_room_class
+    ):
+        mock_room = MagicMock()
+        mock_room.connect = AsyncMock()
+        mock_room.disconnect = AsyncMock()
+        mock_room.local_participant.publish_track = AsyncMock()
+        mock_room.local_participant.identity = "test-identity"
+        mock_room.remote_participants = {}
+
+        callbacks = {}
+
+        def mock_on(event_name):
+            def decorator(func):
+                callbacks[event_name] = func
+                return func
+
+            return decorator
+
+        mock_room.on.side_effect = mock_on
+        mock_room_class.return_value = mock_room
+        mock_get_token.return_value = "test-token"
+
+        mic = MagicMock()
+        devices = MagicMock()
+        player = MagicMock()
+        player.start = AsyncMock()
+        player.aclose = AsyncMock()
+        devices.open_output.return_value = player
+        pw_device = 0
+        stop_event = asyncio.Event()
+
+        async def simulate_participant_join_then_leave():
+            await asyncio.sleep(0.05)
+            mock_participant = MagicMock()
+            mock_participant.identity = "caller"
+            callbacks["participant_connected"](mock_participant)
+            await asyncio.sleep(0.05)
+            mock_room.remote_participants = {}
+            callbacks["participant_disconnected"](mock_participant)
+
+        asyncio.create_task(simulate_participant_join_then_leave())
+
+        with patch.dict(
+            os.environ, {"LIVEKIT_URL": "http://test.url", "LIVEKIT_ROOM": "test-room"}
+        ):
+            await run_session(
+                mic, devices, pw_device, stop_event, wait_for_participant=True
+            )
+
+        mock_room.local_participant.publish_track.assert_called_once()
+        mock_room.disconnect.assert_called_once()
+
+    @pytest.mark.asyncio
+    @patch("alexa_custom.client.Room")
+    @patch("alexa_custom.client.get_token")
+    @patch("alexa_custom.client.LocalAudioTrack")
+    @patch("alexa_custom.client.TrackPublishOptions")
+    async def test_run_session_wait_for_participant_answer_timeout(
+        self, mock_opts, mock_local_track, mock_get_token, mock_room_class
+    ):
+        mock_room = MagicMock()
+        mock_room.connect = AsyncMock()
+        mock_room.disconnect = AsyncMock()
+        mock_room.local_participant.publish_track = AsyncMock()
+        mock_room.local_participant.identity = "test-identity"
+        mock_room.remote_participants = {}
+        mock_room.on.side_effect = lambda e: lambda f: f
+        mock_room_class.return_value = mock_room
+        mock_get_token.return_value = "test-token"
+
+        mic = MagicMock()
+        devices = MagicMock()
+        player = MagicMock()
+        player.start = AsyncMock()
+        player.aclose = AsyncMock()
+        devices.open_output.return_value = player
+        pw_device = 0
+        stop_event = asyncio.Event()
+
+        events_emitted = []
+
+        def capture_event(event, data=None):
+            events_emitted.append(event)
+
+        with patch.dict(
+            os.environ, {"LIVEKIT_URL": "http://test.url", "LIVEKIT_ROOM": "test-room"}
+        ):
+            await run_session(
+                mic,
+                devices,
+                pw_device,
+                stop_event,
+                on_event=capture_event,
+                wait_for_participant=True,
+                answer_timeout=0.1,
+            )
+
+        mock_room.local_participant.publish_track.assert_not_called()
+        assert "answer_timeout" in events_emitted
 
     @pytest.mark.asyncio
     @patch("alexa_custom.client.Room")
@@ -195,7 +303,7 @@ class TestClientCLI(unittest.TestCase):
 
         mock_load_config.return_value = None
 
-        with patch.object(sys, "argv", ["alexa-client"]):
+        with patch.object(sys, "argv", ["serena-client"]):
             main()
             mock_run_web.assert_called_once()
             mock_os_exit.assert_called_once_with(0)

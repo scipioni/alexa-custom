@@ -2,46 +2,126 @@
 #
 # Copy to conf/config.yaml and edit as needed.
 # Credentials (LiveKit, Telegram, LLM, MQTT passwords) go in conf/secrets.yaml.
+# Custom triggers and extra wake words go in conf/actions/user.yaml.
 # This file is hot-reloaded every ~system.config_poll_interval seconds.
 
+
 # ---------------------------------------------------------------------------
-# Wake words (required)
-# Each group listens for its 'word' and optional 'aliases'.
-# Per-group triggers (wake_triggers in action files) override the global list.
+# Wake words
 # ---------------------------------------------------------------------------
+# Flat list of phrases that activate the assistant. All variants and aliases
+# belong in this list — the STT model matches any of them.
+# Extra phrases can also be added from conf/actions/*.yaml via a 'wake_words:' key.
 wake_words:
-  - word: "galileo"
-    # id: galileo          # stable key used in wake_triggers (defaults to word)
-    # aliases: ["ehi galileo", "hey galileo"]
-    lang: "it-IT"
-  - word: "assistente"
+  - "ehi serena"
+  - "ascolta assistente"
+  # - "ehi assistente"
+
 
 # ---------------------------------------------------------------------------
 # Recognition
 # ---------------------------------------------------------------------------
 recognition:
-  mode: two-stage         # two-stage | single-stage
-  command_timeout: 2.5    # seconds to listen after wake word (two-stage only)
-  wake_tone: wake         # tone on wake: wake | startup | success | error | info | warning | none
+  wake_window: 8.0          # seconds after a wake word to listen for a command
+  wake_tone: wake           # tone on wake: wake | startup | success | error | info | warning | none
+  call_tone: false          # play rising/falling tones on call connect/disconnect
+  matching_algorithm: token_sort_ratio  # token_sort_ratio | token_set_ratio | levenshtein | ratio
+  matching_threshold: 75.0              # similarity threshold (0-100)
+  #   token_sort_ratio (default) is order-tolerant AND length-aware, so a single
+  #   word ("sono") cannot falsely match a longer command ("che ore sono").
+  #   token_set_ratio scores token-subsets as 100 and is prone to such false fires.
+  # min_word_overlap: 0.0  # extra lexical guard layered on top of the fuzzy score:
+  #   fraction of a trigger phrase's content words that must appear verbatim in the
+  #   transcript before fuzzy scoring runs. 0.0 (default) — off, token_sort_ratio
+  #   already prevents subset false-fires; 0.5 — half the words must be present;
+  #   1.0 — all words required. Individual triggers can override via min_word_overlap.
+  # post_dispatch_cooldown_ms: 800  # silence listening for this many ms after any
+  #   successful dispatch. Prevents immediate re-activation from acoustic echo.
+  # min_cmd_words: 1  # minimum word count in the recognised command before fuzzy
+  #   trigger matching runs. Raise to 2 to block single-phoneme noise.
+  reply_matching_algorithm: levenshtein  # token_sort_ratio | token_set_ratio | levenshtein | ratio
+  reply_matching_threshold: 80.0         # similarity threshold (0-100)
+  # follow_up: false          # re-open command window after a match without re-waking
+  # follow_up_timeout: 4.0    # seconds of silence before the follow-up window closes
+  # follow_up_max_turns: 5    # max consecutive follow-up turns (runaway guard)
+  # follow_up_tone: info      # chime played when the follow-up window opens
 
 # ---------------------------------------------------------------------------
 # STT — speech-to-text
 # ---------------------------------------------------------------------------
+# Single always-on model: continuously transcribes and matches wake words +
+# commands in one pass (no two-stage pipeline).
 stt:
-  vad_silence_ms: 500     # idle ms after last speech before command window closes
-
-  stage1:                  # continuous wake-word detection (low CPU)
-    backend: vosk          # vosk | sherpa-onnx
-    # model_path: models/it
-    confidence: 0.65       # Vosk minimum confidence (0.0–1.0) to accept wake word
-    vad_silence_ms: 500    # stage-1 force-finalize after this many ms of silence
-    rms_threshold: 0.02    # stage-1 minimum RMS energy considered speech
-    min_speech_ms: 200     # minimum sustained speech before silence timer starts
-
-  stage2:                  # command recognition after wake
-    backend: vosk          # can differ from stage1 for higher accuracy
-    # backend: sherpa-onnx
-    # model_path: models/it/kroko_128l
+  backend: sherpa-onnx      # vosk | sherpa-onnx
+  # model_path: models/it
+  #   For backend: sherpa-onnx, this points at a Kroko Zipformer model
+  #   directory instead (default models/it/kroko_64l; models/it/kroko_128l
+  #   is a higher-accuracy/higher-CPU alternative). Run
+  #   `serena-setup --sherpa-onnx-model 64l` to download it.
+  vad_silence_ms: 900       # ms of silence after last speech before endpoint fires
+  #   900 ms confirmed clean on-board (no utterance fragmentation).
+  #   Perceived latency ≈ vad_silence_ms + ~130 ms decode. 700–800 ms is viable
+  #   if ~1 s feels slow.
+  fast_vad_ms: 400          # fast endpoint: when the PARTIAL transcript already fully
+  #   matches a wake word or a trigger, fire after this many ms of silence instead of
+  #   waiting the full vad_silence_ms (~500 ms lower perceived latency on every wake
+  #   and command). Free-form speech (LLM fallback) never matches a trigger, so it
+  #   keeps the long fragmentation-safe endpoint. 0 disables. Keep above natural
+  #   intra-phrase pauses (~200-300 ms).
+  rms_threshold: 0.02       # minimum RMS energy considered speech
+  adaptive_rms: false       # dynamically adjusts rms_threshold based on noise floor
+  # min_speech_ms: 200      # minimum sustained speech before silence timer starts
+  # wake_match_threshold: 0.5  # fraction of wake-phrase tokens that must appear in
+  #   the transcript to count as a hit. 0.5 (default) — one of two words is enough
+  #   (handles "ehi" transcribed as "e"/"ei"); 1.0 — require the full phrase. Raise
+  #   to 1.0 ONLY in grammar mode (see below): it structurally blocks single-word
+  #   snaps like "serena"→wake, at the cost of recall if a real wake drops "ehi".
+  #
+  # --- Recognizer vocabulary (the main false-wake lever) ---------------------
+  # RECOMMENDED: free-text. The always-on model writes down what was actually
+  # said, so real speech/noise transcribes to real words and does NOT get forced
+  # onto a wake word. Validated with `alexa-wake-eval` against real room audio:
+  # free-text gave 0 false wakes + 100% recall, while grammar mode snapped noise
+  # onto "serena" and false-fired. Free-text also keeps free-form commands and the
+  # LLM fallback accurate; the ask/reply windows still apply their own per-call
+  # grammar regardless of this setting, so constrained replies ("sì" vs "se") are
+  # unaffected.
+  vosk_grammar: false       # false (recommended) = free-text. true = constrain the
+  #   always-on recognizer to the wake words + every trigger phrase. Grammar is
+  #   cheaper/snappier on the board but FORCES every utterance onto the closest
+  #   phrase, so it snaps noise onto wake words — only viable with confidence > 0
+  #   AND wake_match_threshold: 1.0, and still loses to free-text on real-audio FPs.
+  confidence: 0.0           # minimum acoustic confidence (0..1) to accept a wake or
+  #   command; 0.0 disables the gate. Leave at 0.0 with free-text — free-text recall
+  #   degrades sharply under the gate (clean wake clips score low) and it doesn't
+  #   need the gate (no snapping). The gate exists mainly to claw back grammar-mode
+  #   false wakes; if you run grammar mode, ~0.65 and tune with `alexa-wake-eval`.
+  # confidence_mode: first  # how to aggregate confidence across the wake-word
+  #   tokens (trailing command excluded): first (wake word, default) | min
+  #   (strictest) | mean. Scored identically online and in `alexa-wake-eval`, so
+  #   the sweep predicts runtime. Only relevant when confidence > 0.
+  # num_threads: 2           # ONNX threads (sherpa-onnx only; ignored by vosk)
+  # --- sherpa-onnx backend only (ignored by vosk) -----------------------------
+  # Tunes the internal Silero VAD gate that decides whether to feed audio to
+  # the Kroko encoder at all (a CPU-saving optimization, not the endpoint
+  # mechanism — that's still vad_silence_ms/fast_vad_ms above). NOT part of
+  # the backend-reload key: changing these takes effect on the next
+  # model_path/num_threads change or daemon restart, not immediately.
+  # sherpa_vad_threshold: 0.5       # Silero speech-probability threshold
+  # sherpa_vad_min_speech_ms: 100   # onset debounce (sherpa-onnx's own 250ms
+  #   default misses short commands like "accendi le luci" — see docs/asr-plan.md)
+  # sherpa_vad_min_silence_ms: 400  # internal VAD-gate hangover before the
+  #   CPU-saving gate closes
+  # flush_ms: 300            # audio discarded after wake beep (absorbs speaker echo)
+  # mono_capture: false      # force parec to capture mono (--channels=1) so PipeWire
+  #   handles stereo→mono in the driver. Eliminates the Python-side max-abs downmix.
+  #   Trade-off: PipeWire averages the two mics; the default max-abs picks the louder
+  #   channel per frame, which is better when one mic dominates.
+  capture_backend: gstreamer   # parec (default) | gstreamer
+  #   gstreamer: routes mic through a GStreamer pipeline with webrtcdsp (WebRTC APM)
+  #   for noise suppression, AGC, and high-pass filtering before Vosk sees audio.
+  #   Requires: gstreamer1.0-plugins-bad (webrtcdsp), gstreamer1.0-pulseaudio (pulsesrc),
+  #             python3-gst-1.0 (gi bindings). Configure the pipeline under audio.gstreamer.
 
 # ---------------------------------------------------------------------------
 # TTS — text-to-speech
@@ -49,20 +129,20 @@ stt:
 tts:
   backend: piper           # piper | pico
   voice: it_IT-paola-medium  # Piper voice name (run 'alexa-setup --piper-voice <name>')
-  preroll_ms: 300          # silence prepended to TTS audio (covers PipeWire cold-start)
+  preroll_ms: 100          # silence prepended to TTS audio (covers PipeWire cold-start)
 
 # ---------------------------------------------------------------------------
 # Audio hardware
 # ---------------------------------------------------------------------------
 audio:
-  #card_name: NewPie        # substring to identify audio card in PipeWire/ALSA
-  input_device: pipewire   # PipeWire source name substring, or 'pipewire' for default
-  output_device: pipewire  # PipeWire sink name substring, or 'pipewire' for default
+  card_name: auto           # 'auto' = first USB audio card (NewPie/Yealink/EMEET/...), or a name substring
+  input_device: auto        # 'auto' = first USB source, a name substring, or 'pipewire' for default
+  output_device: auto       # 'auto' = first USB sink, a name substring, or 'pipewire' for default
+  # keep_sink_alive: false  # silent stream keeping the sink awake: false (default) | true | auto (USB output detected)
   output_volume: 0.5       # speaker volume 0.0–1.0 (set via wpctl, persisted by WirePlumber)
-  input_gain: 1.0          # microphone gain multiplier (values > 1.0 boost mic)
-  mic_gain: 300            # ALSA mic gain percent used by 'task audio:setup'
-  post_playback_ms: 100    # STT gate hold after playback ends (lets echo decay)
-  tone_preroll_ms: 300     # silence before tones/beeps (covers PipeWire cold-start)
+  input_gain: 1.0           # microphone gain multiplier (raise for quiet preamps, e.g. 3.0 = 300% PulseAudio source)
+  post_playback_ms: 300    # STT gate hold after playback ends (lets echo decay)
+  tone_preroll_ms: 50      # silence before tones/beeps (covers PipeWire cold-start)
   sample_rates:
     usb: 48000
     bluetooth: 16000
@@ -72,20 +152,74 @@ audio:
     aec: true              # Acoustic Echo Cancellation
     noise_suppression: true
     high_pass_filter: true
+  gstreamer:             # GStreamer capture pipeline (used when stt.capture_backend: gstreamer)
+    source: pulsesrc         # pulsesrc | pipewiresrc — pipewiresrc stalls after first buffer when driven from Python (no GLib main loop); pulsesrc is reliable
+    noise_suppression: true       # set to false if the input source has integrated hardware-DSP noise suppression (e.g. Yealink) to prevent first-syllable clipping
+    noise_suppression_level: 2    # 0=mild 1=moderate 2=high 3=very-high (2 calibration-verified optimal)
+    agc: true
+    agc_target_level_dbfs: -3     # AGC target peak level in dBFS (−3 calibration-verified optimal; lower = weaker signal)
+    agc_compression_gain_db: 9    # max makeup gain applied by digital AGC (9 calibration-verified; higher amplifies noise floor)
+    high_pass_filter: true        # 80 Hz high-pass (removes USB power hum; essential for wake-word clarity)
+    compressor: false             # audiodynamic compressor after webrtcdsp (on reduces speech_ratio, no transcript benefit)
+    #compressor_threshold: 0.1     # normalized threshold 0.0–1.0
+    #compressor_ratio: 3.0         # compression ratio
+    expander: false               # audiodynamic expander (noise gate) after compressor (reduces idle CPU processing)
+    #expander_threshold: 0.05      # normalized threshold 0.0–1.0
+    #expander_ratio: 3.0           # expansion ratio
+    profiles:
+      # Named profiles — each overrides any subset of the gstreamer fields above
+      # plus rms_threshold and vad_silence_ms (STT-level overrides).
+      # Active profile is stored in conf/state.yaml and switched at runtime via
+      # the set_audio_profile action (voice triggers in conf/actions/user.yaml).
+      normal:                      # default: normal indoor conversation (calibration-verified on NewPie USB mic)
+        noise_suppression_level: 2  # sweet spot — 0/1/3 all score lower in calibration
+        agc_target_level_dbfs: -3   # WebRTC default; −6/−9 reduce signal with no quality gain
+        agc_compression_gain_db: 9  # conservative gain; 18/30 amplify noise floor and hurt speech_ratio
+        rms_threshold: 0.02
+        vad_silence_ms: 900
+      sensitive:                   # reverberant / distant-mic environments
+        noise_suppression_level: 1  # mild NS — gentler than 2, avoids suppressing weak distant speech
+        agc_target_level_dbfs: -3
+        agc_compression_gain_db: 18 # more makeup gain than normal (9) to lift distant signal; 70 over-amplifies background
+        rms_threshold: 0.012        # lower than normal (0.02) for quieter distant speech; NS keeps background below this
+        vad_silence_ms: 1200        # wait longer for reverb to decay before ending utterance
+      yealink:                     # Yealink SP92 / BT51 — hardware-DSP devices
+        source: pulsesrc           # BT51 with output:analog-stereo+input:mono-fallback profile places input under Audio/Source — pulsesrc works.
+        noise_suppression: false   # Bypassed (false) because Yealink has built-in hardware-DSP NS. Software NS causes aggressive first-syllable clipping!
+        noise_suppression_level: 2 # Default fallback level (active only if noise_suppression is set to true)
+        agc: false                 # MUST stay false on BT51: during idle the SP92 sends digital
+        #   zeros (hardware NS gate), WebRTC AGC winds its gain to max, and the first
+        #   utterance after idle arrives clipped/overshot — Vosk mangles the leading
+        #   word ("che ore sono" → "il ore sono"). Verified via trigger dumps 2026-07-03.
+        #   SP92 hardware AGC already handles level normalisation.
+        agc_target_level_dbfs: -3  # Optimal WebRTC target peak level (-3 dBFS)
+        agc_compression_gain_db: 9 # Conservative makeup gain (9 dB) to prevent amplifying the floor noise
+        high_pass_filter: true     # Removes sub-80Hz low-frequency room rumbles/bumps
+        input_gain: 0.2            # Calibration-verified optimal gain (20%) to prevent over-amplification and clipping
+        highpass_cutoff_hz: 220    # audiocheblimit 220 Hz HPF — rejects residual 128/175 Hz USB clock artifacts on cold-starts
+        expander: false             # Enable the downward expander (noise gate) to crush room clicks/taps
+        expander_threshold: 0.05   # Levels below 5% are expanded/crushed to absolute digital silence
+        expander_ratio: 3.0        # Downward expansion ratio
+        rms_threshold: 0.02
+        vad_silence_ms: 900
 
 # ---------------------------------------------------------------------------
-# LLM (Ollama)
+# LLM — OpenAI-compatible backend
 # ---------------------------------------------------------------------------
+# Uses the official openai Python package; works with any OpenAI-compatible
+# endpoint (Ollama, OpenAI API, LM Studio, vLLM, etc.).
+# Set llm_host (and optionally llm_api_key) in conf/secrets.yaml.
 llm:
-  backend: ollama
+  backend: ollama              # ollama | openai  (both use /v1/chat/completions)
   # host is set in conf/secrets.yaml as 'llm_host'
-  model: ssfdre38/gemma4-nano   # model name as shown by 'ollama list'
-  context_turns: 10             # conversation pairs kept in history
-  context_window_secs: 60       # inactivity seconds before history resets
-  fallback_on_no_match: false   # route unmatched commands to LLM
-  learn_commands: true          # enable llm_learn action type
-  request_timeout: 60.0         # HTTP request timeout
-  # system_prompt: null         # optional override for the default system prompt
+  # api_key is set in conf/secrets.yaml as 'llm_api_key' (or here for non-secret cases)
+  model: ssfdre38/gemma4-nano  # model name (e.g. 'gpt-4o' for OpenAI)
+  context_turns: 10            # conversation pairs kept in history
+  context_window_secs: 60      # inactivity seconds before history resets
+  fallback_on_no_match: false  # route unmatched commands to LLM
+  learn_commands: true         # enable llm_learn action type
+  request_timeout: 60.0        # HTTP request timeout
+  # system_prompt: null        # optional override for the default system prompt
 
 # ---------------------------------------------------------------------------
 # MQTT / Home Assistant
@@ -101,8 +235,11 @@ llm:
 # ---------------------------------------------------------------------------
 # Web dashboard
 # ---------------------------------------------------------------------------
-# web:
-#   port: 8080
+web:
+  port: 8080
+  history_file: /tmp/history.jsonl
+  # history_max_entries: 100   # trim history_file to this many most-recent
+  #   entries on every append (0 disables trimming, keep everything)
 
 # ---------------------------------------------------------------------------
 # Action files
@@ -110,6 +247,19 @@ llm:
 actions:
   dir: conf/actions                         # directory auto-discovered for .yaml files
   learn_file: conf/actions/learned.yaml    # file the llm_learn action appends to
+  # dump_triggers_dir: /tmp/trigger_dumps  # save pre-trigger audio WAV here on every fire
+
+# ---------------------------------------------------------------------------
+# Visual display feedback (Arduino UNO Q only)
+# ---------------------------------------------------------------------------
+# Uses the board's built-in LED matrix (8×13) and RGB LEDs.
+# Set enabled to false or omit this section to disable visual feedback entirely.
+display:
+  enabled: false
+  backend: auto           # auto | bridge | gpio | mock | i2c
+  transport: unix        # auto | subprocess | unix | tcp (bridge backend only)
+  matrix_brightness: 50   # 0-100
+  led_brightness: 50      # 0-100
 
 # ---------------------------------------------------------------------------
 # System tuning
@@ -118,3 +268,5 @@ actions:
 #   reconnect_delay: 5         # seconds between LiveKit reconnect attempts
 #   config_poll_interval: 2    # hot-reload polling interval in seconds
 #   empty_room_timeout: 0      # disconnect after N seconds with no participants (0 = never)
+#   wait_for_participant: true  # join room silently and wait for a remote participant before going live
+#   answer_timeout: 60         # seconds to wait for a participant before disconnecting (wait_for_participant only)

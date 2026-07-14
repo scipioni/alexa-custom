@@ -1,13 +1,14 @@
 # Configuration Guide
 
-Configuration lives in the `conf/` directory at the project root.
+Configuration lives in the `conf/` directory at the project root. All files are YAML.
 
 ```
 conf/
-  config.yaml          main config (wake words, audio, STT, TTS, LLM, MQTT)
-  secrets.yaml         credentials — git-ignored, restart required on change
+  config.yaml          main configuration (hot-reloaded)
+  secrets.yaml         credentials — git-ignored, restart required
+  state.yaml           runtime state (volume, active profile) — auto-managed
   actions/
-    system.yaml        startup message + system-level triggers (loaded first)
+    system.yaml        startup message + system triggers (loaded first)
     user.yaml          your custom triggers (or any *.yaml file)
     learned.yaml       auto-created by the llm_learn action
 ```
@@ -16,244 +17,328 @@ conf/
 
 ## conf/secrets.yaml
 
-Credentials and hostnames that should never be committed. Copy the example to get started:
+Credentials and hostnames never committed. Copy the example:
 
 ```bash
-cp conf/secrets.yaml.example conf/secrets.yaml
+cp conf.example/secrets.yaml conf/secrets.yaml
 ```
-
-All values are optional — omit any section you don't use.
 
 ```yaml
 livekit:
   url: wss://your-project.livekit.cloud
   api_key: YOUR_KEY
   api_secret: YOUR_SECRET
-  room: your-room           # room name to join on livekit_join action
+  room: your-room
 
 telegram:
   bot_token: "123456:TOKEN"
-  chat_id: "12345678"       # default recipient for telegram actions
+  chat_id: "12345678"
 
-llm_host: http://192.168.1.10:11434   # Ollama base URL
+llm_host: http://127.0.0.1:11434    # Ollama or OpenAI-compatible endpoint
+# llm_api_key: sk-your-key           # required for OpenAI, optional for Ollama
 
 mqtt:
-  username: user            # broker credentials (omit if auth not required)
+  username: user
   password: pass
 ```
 
-`load_secrets()` writes these values to `os.environ` so downstream code can read them as environment variables (`LIVEKIT_URL`, `LIVEKIT_API_KEY`, etc.). Changing `conf/secrets.yaml` requires a daemon restart.
+Values are written to `os.environ` and readable as `LIVEKIT_URL`, `TELEGRAM_BOT_TOKEN`, etc. Changing secrets requires a daemon restart.
 
 ---
 
 ## conf/config.yaml
 
-Hot-reloaded every `system.config_poll_interval` seconds (default: 2). Copy the example:
+Hot-reloaded every `system.config_poll_interval` seconds (**2**). Default values shown in **bold**.
 
-```bash
-cp conf/config.yaml.example conf/config.yaml
-```
+### Wake words — `wake_words`
 
-### Wake Words
+Flat list of strings. Extra phrases can be added from `conf/actions/*.yaml` via a `wake_words:` key.
 
 ```yaml
 wake_words:
-  - word: galileo           # the phrase to listen for
-    lang: it-IT             # language tag (used for TTS responses)
-    # aliases: ["ehi galileo", "hey galileo"]
-  - word: assistente
+  - "ehi serena"
+  - "ascolta assistente"
 ```
 
-### Recognition
+### Recognition — `recognition`
 
 ```yaml
 recognition:
-  mode: two-stage           # two-stage (default) or single-stage
-  command_timeout: 3.0      # seconds to listen for a command after wake word
-  wake_tone: wake           # tone on wake: wake | startup | success | error | info | warning | none
+  wake_window: 8.0                     # command window after wake (seconds)
+  wake_tone: "wake"                    # tone on wake: wake | startup | success | error | info | warning | none
+  call_tone: true                      # play tones on call connect/disconnect
+  matching_algorithm: "token_sort_ratio" # token_sort_ratio | token_set_ratio | levenshtein | ratio
+  matching_threshold: 75.0             # similarity 0–100
+  min_word_overlap: 0.0                # fraction of content words required verbatim (0=off)
+  reply_matching_algorithm: "levenshtein" # algorithm for ask replies
+  reply_matching_threshold: 80.0
+  follow_up: false                     # re-open window after match without re-waking
+  follow_up_timeout: 4.0               # silence before follow-up closes
+  follow_up_max_turns: 5               # max consecutive follow-up turns
+  follow_up_tone: "info"               # chime when follow-up opens
+  post_dispatch_cooldown_ms: 800       # silence after dispatch (echo prevention)
+  min_cmd_words: 1                     # minimum words in command before matching
+  dispatch_timeout: 90.0               # action dispatch timeout
 ```
 
-### STT — Speech-to-Text
+> **Removed keys**: `mode`, `command_timeout`, `command_max_timeout`, `partial_matching`, `partial_stability_ms`, `partial_stability_reads` — all replaced by the single-model design.
 
-The two-stage pipeline uses a lightweight stage 1 for always-on wake detection and an independent stage 2 for command recognition. Backends can differ.
+### Speech-to-Text — `stt`
+
+Single always-on model. No stage2. `vosk` (default) or `sherpa-onnx` (opt-in — see `docs/stt-simple.md`'s backend benchmark for the load-time/CPU/latency trade-offs before switching).
 
 ```yaml
 stt:
-  vad_silence_ms: 700       # idle ms before the command window closes
-
-  stage1:                   # continuous wake-word detection (low CPU)
-    backend: vosk           # vosk | sherpa-onnx
-    # model_path: models/it
-    confidence: 0.65        # minimum Vosk confidence to accept wake word (0–1)
-    vad_silence_ms: 500     # force-finalize after this many ms of silence
-    rms_threshold: 0.02     # minimum RMS energy to count as speech
-    min_speech_ms: 300      # minimum sustained speech before silence timer starts
-
-  stage2:                   # command recognition after wake word
-    backend: vosk           # can use a higher-accuracy backend than stage1
-    # model_path: models/it/kroko_128l
+  backend: "vosk"                      # vosk (default) | sherpa-onnx
+  model_path: null                     # override default model path (sherpa-onnx: a
+                                        #   Kroko model dir, default models/it/kroko_64l)
+  num_threads: 2                       # ONNX threads (vosk ignores)
+  vad_silence_ms: 900                  # milliseconds of silence before endpoint
+  rms_threshold: 0.02                  # minimum RMS energy for speech
+  adaptive_rms: true                   # dynamic threshold adjustment
+  adaptive_rms_margin: 0.01
+  min_speech_ms: 200                   # minimum sustained speech before VAD starts
+  wake_match_threshold: 0.5            # fraction of wake-phrase tokens required
+  mono_capture: false                  # force parec mono capture
+  capture_backend: "parec"             # parec (default) | gstreamer
+  sherpa_vad_threshold: 0.5            # sherpa-onnx only: internal Silero VAD gate threshold
+  sherpa_vad_min_speech_ms: 100        # sherpa-onnx only: VAD onset debounce
+  sherpa_vad_min_silence_ms: 400       # sherpa-onnx only: VAD gate hangover
 ```
 
-### TTS — Text-to-Speech
+### Text-to-Speech — `tts`
 
 ```yaml
 tts:
-  backend: piper            # piper | pico
-  voice: it_IT-paola-medium # Piper voice (run 'alexa-setup --piper-voice <name>')
-  preroll_ms: 400           # silence prepended to TTS to cover PipeWire cold-start
+  backend: "piper"                     # piper | pico
+  voice: "it_IT-paola-medium"          # Piper voice name
+  preroll_ms: 100                      # silence prepended (covers PipeWire cold-start)
 ```
 
-### Audio Hardware
+### Audio Hardware — `audio`
 
 ```yaml
 audio:
-  card_name: NewPie         # ALSA card name substring for hardware PCM restore
-  input_device: pipewire    # PipeWire source substring, or 'pipewire' for system default
-  output_device: pipewire   # PipeWire sink substring, or 'pipewire' for system default
-  output_volume: 0.5        # speaker volume 0.0–1.0 (persisted by WirePlumber via wpctl)
-  input_gain: 1.0           # microphone gain multiplier
-  mic_gain: 300             # ALSA PCM mic gain percent, applied by 'task audio:setup'
-  post_playback_ms: 100     # STT gate hold after playback ends (echo decay)
-  tone_preroll_ms: 300      # silence before tones to cover PipeWire cold-start
+  card_name: null                      # ALSA card name substring
+  input_device: null                   # PipeWire source substring (null=default)
+  output_device: null                  # PipeWire sink substring (null=default)
+  output_volume: 0.5                   # 0.0–1.0 (digital, not system mixer)
+  input_gain: 1.0                      # software gain multiplier (≥0.0, post-capture)
+  post_playback_ms: 100                # STT gate hold after playback (echo decay)
+  tone_preroll_ms: 50                  # silence before tones (PipeWire cold-start)
 
   sample_rates:
     usb: 48000
     bluetooth: 16000
+    internal: 48000
 
-  webrtc:                   # LiveKit WebRTC mic processing
-    agc: true               # Automatic Gain Control
-    aec: true               # Acoustic Echo Cancellation
+  webrtc:
+    agc: true                          # Automatic Gain Control
+    aec: true                          # Acoustic Echo Cancellation
     noise_suppression: true
     high_pass_filter: true
+
+  gstreamer:                           # only used when stt.capture_backend: gstreamer
+    source: "pulsesrc"                 # pulsesrc (default) | pipewiresrc (experimental)
+    noise_suppression: true
+    noise_suppression_level: 2         # 0=mild 1=moderate 2=high 3=very-high
+    agc: true
+    agc_target_level_dbfs: -3
+    agc_compression_gain_db: 9
+    high_pass_filter: true             # 80 Hz (removes USB power hum)
+    compressor: false
+    compressor_threshold: 0.1          # 0.0–1.0 (normalized)
+    compressor_ratio: 3.0
+    profiles: {}                       # named profiles with GStreamer + STT overrides
 ```
 
-To pin to a specific device rather than the system default, use a substring of the device name shown by `alexa-devices` (e.g., `NewPie`). Use `pipewire` to follow WirePlumber's routing.
+**GStreamer profiles** override pipeline params AND STT params (`rms_threshold`, `vad_silence_ms`). Switch at runtime via `set_audio_profile` action:
 
-### LLM (Ollama)
+```yaml
+audio:
+  gstreamer:
+    profiles:
+      normal:
+        noise_suppression_level: 2
+        agc_target_level_dbfs: -3
+        rms_threshold: 0.02
+        vad_silence_ms: 900
+      sensitive:
+        noise_suppression_level: 2
+        agc_compression_gain_db: 30
+        rms_threshold: 0.008
+        vad_silence_ms: 1200
+```
+
+### LLM — `llm`
+
+Supports any OpenAI-compatible endpoint (Ollama, OpenAI API, LM Studio, vLLM).
 
 ```yaml
 llm:
-  backend: ollama
-  # host is set in conf/secrets.yaml as 'llm_host'
-  model: gemma3:2b          # model name as shown by 'ollama list'
-  context_turns: 10         # conversation pairs kept in history
-  context_window_secs: 60   # inactivity before history resets
-  fallback_on_no_match: false  # route unmatched commands to LLM
-  learn_commands: true      # enable the llm_learn action type
-  request_timeout: 60.0
+  backend: "ollama"                    # ollama | openai
+  model: "ssfdre38/gemma4-nano"       # model name
+  context_turns: 10                    # conversation pairs in history
+  context_window_secs: 60              # inactivity before history reset
+  fallback_on_no_match: false          # route unmatched commands to LLM
+  learn_commands: true                 # enable llm_learn action type
+  request_timeout: 60.0                # HTTP timeout
+  system_prompt: null                  # optional system prompt override
+  exit_phrases:
+    - "stop"
+    - "esci"
+    - "basta"
+    - "fine"
+    - "fermati"
+    - "chiudi"
+    - "exit"
+    - "quit"
+    - "annulla"
+    - "cancella"
 ```
 
-`llm_host` must be set in `conf/secrets.yaml` — the `llm:` block is silently disabled if the host is missing or unreachable.
+`llm_host` and `llm_api_key` go in `conf/secrets.yaml`. The `llm:` block is disabled if host is missing.
 
-### MQTT / Home Assistant
+### MQTT — `mqtt`
+
+Omit this section to disable MQTT.
 
 ```yaml
 mqtt:
-  host: 127.0.0.1           # broker hostname; required to enable MQTT
+  host: 127.0.0.1                     # required to enable MQTT
   port: 1883
-  topic_prefix: alexa
-  node_id: living_room      # defaults to system hostname
-  queue_max: 200
+  topic_prefix: "alexa"
+  node_id: "living_room"              # defaults to hostname
+  queue_max: 200                       # max queued messages while broker unreachable
 ```
 
-Omit the `mqtt:` block entirely to disable MQTT.
-
-### Web Dashboard
+### Web Dashboard — `web`
 
 ```yaml
 web:
   port: 8080
+  cpu_limit: 4                         # CPU cores for dashboard display
+  history_file: "conf/history.jsonl"   # persistent interaction history
+  history_max_entries: 100             # trim to this many most-recent entries
+                                        # on every append (0 = keep everything)
 ```
 
-### Action Files
+### Display — `display`
+
+Visual feedback on Arduino UNO Q LED matrix. Omit to disable.
+
+```yaml
+display:
+  enabled: false
+  backend: "auto"                      # auto | bridge | gpio | mock | i2c
+  transport: "unix"                    # auto | subprocess | unix | tcp
+  matrix_brightness: 50                # 0–100
+  led_brightness: 50                   # 0–100
+```
+
+Action files — `actions`
 
 ```yaml
 actions:
-  dir: conf/actions                        # directory for .yaml action files
-  learn_file: conf/actions/learned.yaml   # file the llm_learn action writes to
+  dir: "conf/actions"                  # directory for .yaml action files
+  learn_file: "conf/actions/learned.yaml" # llm_learn writes here
+  # dump_triggers_dir: /tmp/trigger_dumps  # save pre-trigger audio WAV for debugging
 ```
 
-### System Tuning
+### System Tuning — `system`
 
 ```yaml
 system:
-  reconnect_delay: 5          # seconds between LiveKit reconnect attempts
-  config_poll_interval: 2     # hot-reload polling interval (seconds)
-  empty_room_timeout: 0       # disconnect after N seconds with no participants (0 = never)
+  reconnect_delay: 5                   # seconds between LiveKit reconnect attempts
+  config_poll_interval: 2              # hot-reload polling
+  empty_room_timeout: 0                # disconnect after N seconds empty (0=never)
+  wait_for_participant: true           # poll LK API before joining; connect only when caller appears
+  answer_timeout: 60                   # seconds to wait for participant before giving up
 ```
+
+`wait_for_participant: true` → `livekit_join` polls the LiveKit REST API for a remote participant before actually connecting. `answer_timeout` limits the wait.
 
 ---
 
 ## conf/actions/
 
-Action files are loaded in this order:
-
-1. **`system.yaml`** — always first, highest priority
-2. All other `*.yaml` files alphabetically
-
-Only `system.yaml` may contain `on_startup` actions. `on_startup` in other files is ignored with a debug log.
+Action files load in this order:
+1. **`system.yaml`** — always first (highest priority). Only this file can contain `on_startup`.
+2. All other `*.yaml` files alphabetically.
 
 ### Trigger structure
 
 ```yaml
-on_startup:
-  - type: say
-    text: Sistema pronto
-    lang: it-IT
+# File-level extra wake words (flat list, merged with config.yaml)
+wake_words:
+  - "aiuto"
 
 triggers:
-  - phrase: che ora è
+  - commands: ["che ore sono"]
+    with_wake: false                     # direct match, no wake word needed
     actions:
-      - type: shell
-        command: date "+Sono le %H e %M"
-        capture: true         # speak the command output via TTS
+      - type: say
+        text: "$(date +'Sono le %H e %M')"
+        lang: "it-IT"
 
-  - phrase: manda messaggio
+  - commands: ["accendi le luci"]
+    patterns:                            # tested before fuzzy scoring
+      - "accend* * luc*"
+    tag: luci                            # optional grouping tag
     actions:
-      - type: telegram
-        message: Chiamata in arrivo
+      - type: mqtt_publish
+        topic: home/light/set
+        payload: "ON"
 
-wake_triggers:               # triggers bound to a specific wake word
-  galileo:
-    - phrase: chiama stefano
-      actions:
-        - type: livekit_join
+  - commands: ["buonanotte"]
+    follow_up: false                     # override global follow-up per trigger
+    actions:
+      - type: say
+        text: "Buonanotte!"
 ```
 
-`wake_triggers` are merged per wake word across all action files. Triggers not bound to a wake word are global (match after any wake word).
+Trigger fields:
 
-### Action types
+| Field | Default | Description |
+|---|---|---|
+| `commands` | required | List of recognised phrases (first is canonical) |
+| `actions` | required | List of action entries |
+| `with_wake` | `true` | `false` = fires without wake word |
+| `patterns` | `[]` | Word-glob patterns (definitive match) |
+| `follow_up` | global | Per-trigger override of `recognition.follow_up` |
+| `min_word_overlap` | global | Per-trigger override of word-overlap guard |
+| `tag` | `""` | Optional grouping tag |
 
-| Type | Required params | Description |
-|------|----------------|-------------|
-| `say` | `text`, `lang` | Speak text via TTS |
-| `ask` | `question`, `answers` | Multi-turn dialogue |
-| `shell` | `command` | Run a shell command (`capture: true` to speak output) |
-| `livekit_join` | — | Join the configured LiveKit room |
-| `telegram` | `message` | Send a Telegram message |
-| `mqtt_publish` | `topic`, `payload` | Publish an MQTT message |
-| `tone` | `name` | Play an audio tone (`wake`, `success`, `error`, `info`, `warning`) |
-| `log` | `message` | Log a message (debug use) |
-| `llm_ask` | — | Send the spoken command to the LLM and speak the reply |
-| `llm_learn` | — | Interactive voice wizard to teach a new trigger |
+### All action types
+
+| Type | Required params | Optional params | Description |
+|---|---|---|---|
+| `say` | `text` | `lang` (**it-IT**) | Speak text via TTS. Supports `$(shell command)` expansion |
+| `ask` | `text`, `lang` | `timeout` (**5.0**), `on_reply`, `on_else` | Speak question, listen for reply, match against reply triggers |
+| `tone` | — | `name` (**info**) | Play tone: wake, startup, success, error, info, warning, none |
+| `log` | — | `message` | Log a message (debug) |
+| `livekit_join` | — | — | Join configured LiveKit room |
+| `telegram` | — | `chat_id` (env fallback), `text` | Send Telegram message. `$room` → LiveKit room URL |
+| `mqtt_publish` | — | `topic`, `payload`, `retain` (**false**) | Publish MQTT message |
+| `shell` | — | `command` | Execute shell command |
+| `llm_chat` | — | `system_prompt` | Multi-turn LLM chat via listen/speak loop |
+| `llm_learn` | — | — | Voice wizard to teach a new trigger |
+| `meteo` | — | `city`, `days`, `lang`, `latitude`, `longitude` | Weather forecast via Open-Meteo |
+| `set_volume` | — | `mode` (**absolute**), `value` (**0.5**), `step` (**0.1**) | Output volume control |
+| `set_volume_from_transcript` | — | — | Extract percentage from transcript, set volume |
+| `set_audio_profile` | — | `profile` (required), `say`, `lang` | Switch GStreamer capture profile |
+| `system_info` | — | — | Read CPU temp, load, memory, uptime → speak |
+| `calibrate_input_gain` | — | `sentence`, `gain_low` (**0.4**), `gain_mid` (**0.7**), `gain_high` (**1.2**), `listen_timeout` (**6.0**), `settle_ms` (**500**) | 5-probe mic gain calibration |
+| `record_and_playback` | — | `duration` (**7.0**), `lang` | Record audio and play back with RMS score |
+| `stop_listening` | — | — | Put STT to sleep |
+| `start_listening` | — | — | Wake STT from sleep |
+| `restart` | — | — | Restart the daemon process |
 
 ---
 
 ## Hot-reload behaviour
 
-- `conf/config.yaml` and all `conf/actions/*.yaml` files are watched for changes.
-- Changes apply within `system.config_poll_interval` seconds (default: 2).
-- **`conf/secrets.yaml` is never watched** — restart the daemon to apply credential changes.
-- If a file has a syntax error, the previous valid config is kept and the error is logged.
-
----
-
-## Migrating from the old flat config.yaml
-
-The old root-level `config.yaml` with a top-level `env:` block is no longer supported. To migrate:
-
-1. Move credentials from the old `env:` block into `conf/secrets.yaml`.
-2. Move `triggers:` and `wake_triggers:` into `conf/actions/user.yaml`.
-3. Move the remaining settings (audio, stt, tts, mqtt, etc.) into `conf/config.yaml` using the nested block format shown above.
-
-See `conf/config.yaml.example` and `conf/secrets.yaml.example` for the full structure.
+- `conf/config.yaml` and all `conf/actions/*.yaml` are polled every `system.config_poll_interval` seconds (**2**).
+- `conf/secrets.yaml` is **not** hot-reloaded — restart required.
+- On parse error, previous valid config is preserved and the error is logged.
+- `alexa_custom/dashboard.html` is also watched — any edit reloads the browser within ~1s.
