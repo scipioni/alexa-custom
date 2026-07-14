@@ -107,6 +107,7 @@ tasks:
           FEATS=$(git log --oneline --no-merges "${PREV}..HEAD" | sed -n 's/^[0-9a-f]* feat\(([^)]*)\)\?: //p' || true)
           FIXES=$(git log --oneline --no-merges "${PREV}..HEAD" | sed -n 's/^[0-9a-f]* fix\(([^)]*)\)\?: //p' || true)
           {
+            echo ""
             echo "## [${NEW}] - ${TODAY}"
             echo ""
             if [ -n "$FEATS" ]; then
@@ -120,8 +121,19 @@ tasks:
               echo ""
             fi
           } > /tmp/changelog_entry.tmp
-          if [ -f CHANGELOG.md ]; then
+          UNREL_LINE=$(grep -n -m1 -iE '^## .*\(unreleased\)' CHANGELOG.md 2>/dev/null | cut -d: -f1 || true)
+          if [ -n "$UNREL_LINE" ]; then
+            # Curated "## X.Y.Z (unreleased)" section: close it as this release
+            # (hand-written content wins over the generated commit list).
+            sed -i "${UNREL_LINE}s/.*/## ${NEW} - ${TODAY}/" CHANGELOG.md
+            echo "CHANGELOG.md: closed curated unreleased section as ${NEW}"
+          elif grep -q '^## \[Unreleased\]' CHANGELOG.md 2>/dev/null; then
             sed -i "/^## \[Unreleased\]/r /tmp/changelog_entry.tmp" CHANGELOG.md
+          elif [ -f CHANGELOG.md ]; then
+            # No unreleased marker at all: insert the generated entry right
+            # after the title line instead of silently skipping the changelog.
+            sed -i "1r /tmp/changelog_entry.tmp" CHANGELOG.md
+            echo "CHANGELOG.md: no unreleased section found, inserted generated entry at top"
           else
             {
               echo "# Changelog"
