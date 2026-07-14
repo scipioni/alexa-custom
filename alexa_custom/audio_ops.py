@@ -46,6 +46,11 @@ def is_playback_active() -> bool:
     return _playback_active.is_set()
 
 
+# Set (per-thread) by play_wake_beep_async when it has already reserved
+# _audio_lock on the caller's behalf, so _play_array must not re-acquire it.
+_audio_lock_reserved = threading.local()
+
+
 def _play_array(audio: np.ndarray, samplerate: int) -> None:
     """Play a float32 numpy array via pw-play (PipeWire) or aplay (ALSA fallback)."""
     import tempfile
@@ -80,7 +85,14 @@ def _play_array(audio: np.ndarray, samplerate: int) -> None:
         else:
             cmd = ["aplay", "-D", "pipewire", "-q", tmp_path]
 
-        with _audio_lock:
+        from contextlib import nullcontext
+
+        lock_ctx = (
+            nullcontext()
+            if getattr(_audio_lock_reserved, "held", False)
+            else _audio_lock
+        )
+        with lock_ctx:
             _playback_active.set()
             try:
                 result = subprocess.run(
@@ -410,15 +422,35 @@ def play_wake_beep(name: str = "wake") -> None:
 def play_wake_beep_async(name: str = "wake") -> None:
     """Start the wake/command tone without waiting for playback to finish.
 
-    The tone still runs through the synchronous playback path in a background
-    thread, so _audio_lock serialization, the _playback_active echo gate and
-    temp-file cleanup all behave exactly as in play_wake_beep.
+    _audio_lock is reserved synchronously here (non-blocking) and released by
+    the playback thread: an action's TTS that starts milliseconds after the
+    match (Piper cache hit) queues behind the tone instead of winning the race
+    while the tone is still being generated. If audio is already playing the
+    beep is skipped rather than queued after it.
+
+    The tone itself still runs through the synchronous playback path in a
+    background thread, so the _playback_active echo gate and temp-file cleanup
+    behave exactly as in play_wake_beep.
     """
     if name.lower() == "none":
         return
-    threading.Thread(
-        target=play_wake_beep, args=(name,), daemon=True, name="wake-beep"
-    ).start()
+    if not _audio_lock.acquire(blocking=False):
+        logger.debug("wake beep skipped: audio playback already active")
+        return
+
+    def _run() -> None:
+        _audio_lock_reserved.held = True
+        try:
+            play_wake_beep(name)
+        finally:
+            _audio_lock_reserved.held = False
+            _audio_lock.release()
+
+    try:
+        threading.Thread(target=_run, daemon=True, name="wake-beep").start()
+    except Exception:
+        _audio_lock.release()
+        raise
 
 
 def play_timeout_beep() -> None:
