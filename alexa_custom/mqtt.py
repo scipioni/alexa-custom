@@ -32,6 +32,8 @@ class MQTTClient:
         self._on_command_callback: (
             Callable[[dict[str, Any]], Awaitable[None]] | None
         ) = None
+        self._run_task: asyncio.Task | None = None
+        self._stopping = False
 
     def set_on_command(
         self, callback: Callable[[dict[str, Any]], Awaitable[None]]
@@ -40,7 +42,8 @@ class MQTTClient:
 
     async def run(self) -> None:
         """Background loop for MQTT connection and message processing."""
-        while True:
+        self._run_task = asyncio.current_task()
+        while not self._stopping:
             try:
                 async with aiomqtt.Client(hostname=self.host, port=self.port) as client:
                     self.client = client
@@ -198,6 +201,17 @@ class MQTTClient:
                 logger.debug("publish_offline: %s", e)
         else:
             logger.debug("publish_offline: no active client")
+
+    async def stop(self) -> None:
+        """Publish offline state and stop the background run loop (used on
+        graceful shutdown and when MQTT settings change on config reload)."""
+        self._stopping = True
+        try:
+            await self.publish_offline()
+        except Exception as e:
+            logger.debug("stop: publish_offline failed: %s", e)
+        if self._run_task is not None and not self._run_task.done():
+            self._run_task.cancel()
 
     def publish_threadsafe(
         self,

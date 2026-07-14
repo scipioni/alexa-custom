@@ -102,13 +102,13 @@ Expected output: matrix shows mic icon, LEDs turn green, then clear on Enter.
 
 ---
 
-## 3. Run alexa-custom with display enabled
+## 3. Run serena-custom with display enabled
 
 Once the firmware is flashed and `display:` is in config.yaml,
 run normally:
 
 ```bash
-alexa-client
+serena-client
 ```
 
 Expected behaviour:

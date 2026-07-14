@@ -9,12 +9,11 @@ import sys
 # Sibling imports and re-exports for 100% backward compatibility
 # ---------------------------------------------------------------------------
 from alexa_custom.audio_hw import (
-    _pw_device_resolved,
-    _pw_device_index,
     _STATE_FILE,
     configure,
     get_output_volume,
     get_input_gain,
+    get_software_input_gain,
     get_post_playback_ms,
     get_tone_preroll_ms,
     get_sample_rates,
@@ -22,8 +21,6 @@ from alexa_custom.audio_hw import (
     _restore_hw_pcm,
     pulse_session,
     find_pipewire_device,
-    get_pipewire_device,
-    invalidate_pipewire_device_cache,
     resolve_device,
     device_from_env,
     set_pipewire_defaults,
@@ -51,7 +48,6 @@ from alexa_custom.audio_ops import (
     _playback_level,
     get_playback_level,
     set_playback_level,
-    set_stt_gated_flag,
     is_playback_active,
     _play_array,
     _play_raw,
@@ -60,6 +56,7 @@ from alexa_custom.audio_ops import (
     play_tone,
     play_beep,
     play_wake_beep,
+    play_wake_beep_async,
     play_timeout_beep,
     play_call_start,
     play_call_end,
@@ -67,13 +64,12 @@ from alexa_custom.audio_ops import (
 from alexa_custom.audio_watcher import AudioWatcher
 
 __all__ = [
-    "_pw_device_resolved",
-    "_pw_device_index",
     "_UDEV_PATH",
     "_STATE_FILE",
     "configure",
     "get_output_volume",
     "get_input_gain",
+    "get_software_input_gain",
     "get_post_playback_ms",
     "get_tone_preroll_ms",
     "get_sample_rates",
@@ -81,8 +77,6 @@ __all__ = [
     "_restore_hw_pcm",
     "pulse_session",
     "find_pipewire_device",
-    "get_pipewire_device",
-    "invalidate_pipewire_device_cache",
     "resolve_device",
     "device_from_env",
     "set_pipewire_defaults",
@@ -105,7 +99,6 @@ __all__ = [
     "_playback_level",
     "get_playback_level",
     "set_playback_level",
-    "set_stt_gated_flag",
     "is_playback_active",
     "_play_array",
     "_play_raw",
@@ -114,6 +107,7 @@ __all__ = [
     "play_tone",
     "play_beep",
     "play_wake_beep",
+    "play_wake_beep_async",
     "play_timeout_beep",
     "play_call_start",
     "play_call_end",
@@ -135,7 +129,7 @@ def main_devices():
 
 
 def main_doctor():
-    """Entry point for `alexa-audio-doctor`: exit non-zero if any check fails."""
+    """Entry point for `serena-audio-doctor`: exit non-zero if any check fails."""
     sys.exit(audio_doctor())
 
 
@@ -159,10 +153,14 @@ def main_test():
     input_spec = config.audio.input_device if config else None
     output_spec = config.audio.output_device if config else None
 
+    from alexa_custom.audio_hw import resolve_output_sink
+
     try:
         set_pipewire_defaults(input_spec, output_spec)
     except Exception as e:
         print(f"WARNING: Could not set PipeWire defaults: {e}")
+
+    resolve_output_sink(output_spec)
 
     if config and config.audio.output_volume > 0:
         with pulse_session("alexa-test") as pulse:
@@ -183,13 +181,18 @@ def main_test():
 
     get_engine().say("Ciao, come ti chiami?")
 
-    print("3. Recording 5 seconds of audio...")
+    from alexa_custom.stt_gating import resolve_capture_source
+
+    capture_source, capture_channels = resolve_capture_source(input_spec)
+    print(
+        f"3. Recording 5 seconds of audio (source={capture_source or 'default'}, ch={capture_channels})..."
+    )
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
         tmp_wav = f.name
 
     try:
         print("   [RECORDING NOW - SPEAK INTO MICROPHONE]")
-        record_wav_file(tmp_wav, 5.0)
+        record_wav_file(tmp_wav, 5.0, capture_source, capture_channels)
         print("   [DONE]")
 
         print("4. TTS: Announcing playback...")

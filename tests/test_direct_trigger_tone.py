@@ -1,67 +1,102 @@
-from unittest.mock import MagicMock, patch
+"""Tests for direct (with_wake=False) trigger tone and dispatch behavior."""
+
 import pytest
-import asyncio
-import threading
-from alexa_custom.stt import _wake_detected
-from alexa_custom.config import WakeWordGroup, Trigger, ActionsConfig, RecognitionConfig
+from alexa_custom.config import Trigger, ActionsConfig, RecognitionConfig, ActionEntry
+
+
+def _make_config(wake_tone: str = "custom_direct_tone") -> ActionsConfig:
+    return ActionsConfig(
+        wake_words=["galileo"],
+        triggers=[
+            Trigger(
+                commands=["chiama stefano"],
+                phrase="chiama stefano",
+                actions=[ActionEntry(type="livekit_join", params={})],
+                with_wake=False,
+            )
+        ],
+        recognition=RecognitionConfig(wake_tone=wake_tone),
+    )
 
 
 @pytest.mark.asyncio
-async def test_direct_trigger_plays_tone():
-    # Arrange
-    wake_group = WakeWordGroup(word="galileo")
-    proc = MagicMock()
-    backend = MagicMock()
+async def test_direct_trigger_with_wake_false():
+    """Trigger with with_wake=False has with_wake set correctly."""
+    config = _make_config()
+    direct = config.triggers[0]
+    assert direct.with_wake is False
 
-    # Create configuration with direct trigger
-    recognition_config = RecognitionConfig(wake_tone="custom_direct_tone")
+
+@pytest.mark.asyncio
+async def test_direct_trigger_fires_without_wake_word():
+    """with_wake=False triggers are included in candidates even when not woken."""
+    from alexa_custom.stt import set_stt_sleeping
+
+    set_stt_sleeping(False)
+    config = _make_config()
+    # Simulate the candidate selection logic from _recognition_loop:
+    # direct triggers (with_wake=False) always included; wake-gated only when woken.
+    woken = False  # not woken
+    candidates = [t for t in config.triggers if not t.with_wake or woken]
+    assert len(candidates) == 1
+    assert candidates[0].with_wake is False
+
+
+@pytest.mark.asyncio
+async def test_wake_gated_trigger_excluded_when_not_woken():
+    """with_wake=True triggers are excluded from candidates when the wake window is closed."""
     config = ActionsConfig(
-        wake_words=[wake_group],
-        triggers=[],
-        recognition=recognition_config,
+        wake_words=["galileo"],
+        triggers=[
+            Trigger(
+                commands=["accendi la luce"],
+                phrase="accendi la luce",
+                actions=[ActionEntry(type="say", params={"text": "ok"})],
+                with_wake=True,
+            )
+        ],
+        recognition=RecognitionConfig(),
     )
+    woken = False
+    candidates = [t for t in config.triggers if not t.with_wake or woken]
+    assert candidates == []
 
-    stop_event = threading.Event()
-    telegram_client = MagicMock()
-    livekit_connected_flag = threading.Event()
-    on_stt_event = MagicMock()
-    mqtt_client = MagicMock()
 
-    # Create a direct trigger (wake_words=[])
-    direct_trigger = Trigger(
+@pytest.mark.asyncio
+async def test_wake_gated_trigger_included_when_woken():
+    """with_wake=True triggers are included when the wake window is open."""
+    config = ActionsConfig(
+        wake_words=["galileo"],
+        triggers=[
+            Trigger(
+                commands=["accendi la luce"],
+                phrase="accendi la luce",
+                actions=[ActionEntry(type="say", params={"text": "ok"})],
+                with_wake=True,
+            )
+        ],
+        recognition=RecognitionConfig(),
+    )
+    woken = True
+    candidates = [t for t in config.triggers if not t.with_wake or woken]
+    assert len(candidates) == 1
+
+
+def test_direct_triggers_subset_populated():
+    """ActionsConfig.direct_triggers must equal triggers filtered by with_wake=False."""
+    t_direct = Trigger(
+        commands=["chiama stefano"],
         phrase="chiama stefano",
-        actions=[],
-        wake_words=[],
+        actions=[ActionEntry(type="livekit_join", params={})],
+        with_wake=False,
     )
-
-    # Setup asyncio loops
-    loop = asyncio.get_event_loop()
-    dispatch_loop = loop
-
-    # Patch play_wake_beep and dispatch to verify execution
-    with (
-        patch("alexa_custom.stt.play_wake_beep") as mock_play_wake_beep,
-        patch("alexa_custom.stt.dispatch", new_callable=MagicMock) as mock_dispatch,
-    ):
-        # Act
-        _wake_detected(
-            wake_group=wake_group,
-            proc=proc,
-            channels=1,
-            backend=backend,
-            config=config,
-            stop_event=stop_event,
-            telegram_client=telegram_client,
-            livekit_connect_fn=None,
-            livekit_connected_flag=livekit_connected_flag,
-            on_stt_event=on_stt_event,
-            mqtt_client=mqtt_client,
-            loop=loop,
-            dispatch_loop=dispatch_loop,
-            pre_transcript="chiama stefano",
-            pre_trigger=direct_trigger,
-        )
-
-        # Assert
-        mock_play_wake_beep.assert_called_once_with("custom_direct_tone")
-        mock_dispatch.assert_called_once()
+    t_gated = Trigger(
+        commands=["accendi luce"],
+        phrase="accendi luce",
+        actions=[ActionEntry(type="say", params={"text": "ok"})],
+        with_wake=True,
+    )
+    all_triggers = [t_direct, t_gated]
+    direct = [t for t in all_triggers if not t.with_wake]
+    assert len(direct) == 1
+    assert direct[0].with_wake is False

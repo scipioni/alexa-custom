@@ -7,53 +7,6 @@ import urllib.request
 import zipfile
 from pathlib import Path
 
-_SHERPA_MODELS = {
-    "kroko_128l": (
-        "https://huggingface.co/hudaiapa88/sherpa-stt-onnx/resolve/main/it/kroko_128l",
-        "models/it/kroko_128l",
-    ),
-    "kroko_64l": (
-        "https://huggingface.co/hudaiapa88/sherpa-stt-onnx/resolve/main/it/kroko_64l",
-        "models/it/kroko_64l",
-    ),
-}
-_SHERPA_FILES = [
-    "encoder.int8.onnx",
-    "decoder.int8.onnx",
-    "joiner.int8.onnx",
-    "tokens.txt",
-]
-
-
-def download_sherpa_onnx(model: str = "kroko_128l", force: bool = False) -> None:
-    if model not in _SHERPA_MODELS:
-        print(
-            f"Unknown sherpa-onnx model {model!r}. Available: {', '.join(_SHERPA_MODELS)}",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
-    base_url, dest_path = _SHERPA_MODELS[model]
-    dest = Path(dest_path)
-
-    if dest.exists() and not force:
-        print(
-            f"sherpa-onnx model already present at {dest.resolve()} — skipping (use --force to replace)."
-        )
-        return
-
-    if dest.exists() and force:
-        print(f"Removing existing sherpa-onnx model at {dest.resolve()} …")
-        shutil.rmtree(dest)
-
-    dest.mkdir(parents=True, exist_ok=True)
-    for filename in _SHERPA_FILES:
-        print(f"Downloading sherpa-onnx {filename} …")
-        _download(f"{base_url}/{filename}", dest / filename)
-
-    print(f"sherpa-onnx model ready at {dest.resolve()}")
-
-
 _VOSK_MODELS = {
     "small": (
         "https://alphacephei.com/vosk/models/vosk-model-small-it-0.22.zip",
@@ -76,6 +29,26 @@ _PIPER_VOICES = {
 }
 _PIPER_HF_BASE = "https://huggingface.co/rhasspy/piper-voices/resolve/main"
 _PIPER_DEST_DIR = Path("models/piper")
+
+# Kroko Zipformer Italian model (stt.backend: sherpa_onnx). Source is a
+# third-party re-upload (Apache 2.0) — not an official Banafo/k2-fsa catalog
+# entry — verified byte-size-identical to the model this backend was
+# developed and tested against. If it ever disappears, look for a mirror
+# with the same it/kroko_64l|128l/{encoder,decoder,joiner}.int8.onnx,tokens.txt
+# layout, or the original https://huggingface.co/Banafo/Kroko-ASR release.
+_KROKO_HF_BASE = "https://huggingface.co/hudaiapa88/sherpa-stt-onnx/resolve/main/it"
+_KROKO_FILES = [
+    "encoder.int8.onnx",
+    "decoder.int8.onnx",
+    "joiner.int8.onnx",
+    "tokens.txt",
+]
+_KROKO_DEST_ROOT = Path("models/it")
+
+_SILERO_VAD_URL = (
+    "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx"
+)
+_SILERO_VAD_DEST = Path("models/vad/silero_vad.onnx")
 
 
 def _progress(count: int, block_size: int, total: int) -> None:
@@ -171,6 +144,43 @@ def download_piper_voice(voice: str, force: bool = False) -> None:
     print(f"Piper voice ready at {onnx_dest.resolve()}")
 
 
+def download_sherpa_onnx_kroko(variant: str = "64l", force: bool = False) -> None:
+    """Download the Kroko Zipformer Italian model for the sherpa_onnx STT backend."""
+    if variant not in ("64l", "128l"):
+        print(f"Unknown Kroko variant {variant!r}. Choices: 64l, 128l", file=sys.stderr)
+        sys.exit(1)
+
+    dest_dir = _KROKO_DEST_ROOT / f"kroko_{variant}"
+    if (
+        dest_dir.is_dir()
+        and not force
+        and all((dest_dir / f).is_file() for f in _KROKO_FILES)
+    ):
+        print(
+            f"Kroko {variant} model already present at {dest_dir.resolve()} — skipping (use --force to replace)."
+        )
+        return
+
+    base = f"{_KROKO_HF_BASE}/kroko_{variant}"
+    print(f"Downloading Kroko {variant} Italian model (~154 MB) …")
+    for filename in _KROKO_FILES:
+        print(f"  {filename} …")
+        _download(f"{base}/{filename}", dest_dir / filename)
+    print(f"Kroko {variant} model ready at {dest_dir.resolve()}")
+
+
+def download_silero_vad(force: bool = False) -> None:
+    """Download Silero VAD, required by the sherpa_onnx STT backend's CPU-saving gate."""
+    if _SILERO_VAD_DEST.is_file() and not force:
+        print(
+            f"Silero VAD model already present at {_SILERO_VAD_DEST.resolve()} — skipping."
+        )
+        return
+    print("Downloading Silero VAD model …")
+    _download(_SILERO_VAD_URL, _SILERO_VAD_DEST)
+    print(f"Silero VAD model ready at {_SILERO_VAD_DEST.resolve()}")
+
+
 def main() -> None:
     import argparse
 
@@ -198,19 +208,16 @@ def main() -> None:
         help="Skip the Vosk model download",
     )
     parser.add_argument(
+        "--sherpa-onnx-model",
+        choices=["64l", "128l"],
+        default=None,
+        help="Download the Kroko Zipformer Italian model + Silero VAD for the "
+        "sherpa_onnx STT backend (not downloaded by default — opt in explicitly)",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="Re-download even if assets are already present",
-    )
-    parser.add_argument(
-        "--sherpa-onnx",
-        nargs="?",
-        const="kroko_128l",
-        metavar="MODEL",
-        help=(
-            "Download a sherpa-onnx Italian transducer model. "
-            f"MODEL is one of: {', '.join(_SHERPA_MODELS)} (default: kroko_128l)"
-        ),
     )
     args = parser.parse_args()
 
@@ -218,8 +225,9 @@ def main() -> None:
         download_vosk(large=args.large, force=args.force)
     if not args.no_piper:
         download_piper_voice(args.piper_voice, force=args.force)
-    if args.sherpa_onnx:
-        download_sherpa_onnx(model=args.sherpa_onnx, force=args.force)
+    if args.sherpa_onnx_model:
+        download_sherpa_onnx_kroko(variant=args.sherpa_onnx_model, force=args.force)
+        download_silero_vad(force=args.force)
 
 
 if __name__ == "__main__":

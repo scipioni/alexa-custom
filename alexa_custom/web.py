@@ -8,8 +8,11 @@ import fcntl
 import json
 import logging
 import os
+import re
+import signal
 import sys
 import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
@@ -114,7 +117,11 @@ class WebServer:
         self._extra_event_cb = extra_event_cb
         self._extra_stt_event_cb = extra_stt_event_cb
         self._config_manager: Any = None
-        self._html = _DASHBOARD_PATH.read_text()
+        _asset_ver = str(int(time.time()))
+        _raw_html = _DASHBOARD_PATH.read_text()
+        self._html = re.sub(
+            r'(/static/[^"]+\.(js|css))"', rf'\1?v={_asset_ver}"', _raw_html
+        )
         self._clients: set[web.WebSocketResponse] = set()
         self._queue: asyncio.Queue = asyncio.Queue(maxsize=200)
         self._pending_vu: dict[str, float] = {}
@@ -124,12 +131,19 @@ class WebServer:
         self._handler: _WebLogHandler | None = None
         self._shutting_down = False
         self._active_session: dict | None = None
+        self._last_history_clear: float = 0.0
 
-        if hot_reload:
-            from alexa_custom.config_manager import ConfigManager
+        # The YAML config hot-reload watcher runs in the production daemon,
+        # not only under --hot-reload (which gates the separate .py
+        # source-file auto-restart watcher started in run()).
+        from alexa_custom.config_manager import ConfigManager
+        from alexa_custom.audio_hw import configure as audio_configure
+        from alexa_custom.audio_hw import signal_capture_restart
 
-            cm = ConfigManager(None)
-            self._config_manager = cm
+        cm = ConfigManager(None)
+        cm.register_reload_callback(audio_configure)
+        cm.register_reload_callback(lambda _cfg: signal_capture_restart())
+        self._config_manager = cm
 
         self._livekit_ok = all(
             os.environ.get(k)
@@ -148,7 +162,13 @@ class WebServer:
             )
         )
         self._history_file = Path("conf/history.jsonl")
+        self._history_max_entries = 100
         # snapshot for hello message on new WS connects
+        from alexa_custom.audio_hw import (
+            get_active_gst_profile,
+            register_profile_callback,
+        )
+
         self._state: dict[str, Any] = {
             "status": "Starting…",
             "room": "",
@@ -161,12 +181,19 @@ class WebServer:
             "llm_state": "idle",
             "room_status": "closed",
             "room_answer_timeout": 0,
+            "gst_profile": get_active_gst_profile(),
         }
+        register_profile_callback(self._on_gst_profile_change)
 
     # ── persistent history helpers ────────────────────────────────────────────
 
     async def _append_history_log(self, session_data: dict) -> None:
-        """Appends a single JSON line to the configured history file asynchronously."""
+        """Appends a single JSON line to the configured history file asynchronously.
+
+        Trims the file to the last web.history_max_entries lines afterwards
+        (0 disables trimming) so a long-running deployment doesn't grow the
+        file unbounded.
+        """
 
         def _write():
             try:
@@ -174,6 +201,13 @@ class WebServer:
                 with _file_lock(self._history_file, exclusive=True):
                     with self._history_file.open("a", encoding="utf-8") as f:
                         f.write(json.dumps(session_data, ensure_ascii=False) + "\n")
+                    max_entries = self._history_max_entries
+                    if max_entries > 0:
+                        with self._history_file.open("r", encoding="utf-8") as f:
+                            lines = f.readlines()
+                        if len(lines) > max_entries:
+                            with self._history_file.open("w", encoding="utf-8") as f:
+                                f.writelines(lines[-max_entries:])
             except Exception as e:
                 logger.error(
                     "Failed to append history to file %s: %s", self._history_file, e
@@ -238,27 +272,33 @@ class WebServer:
         loop = self._loop or asyncio.get_running_loop()
         await loop.run_in_executor(None, _update)
 
-    def _read_last_history_entries(self, limit: int = 20) -> list[dict]:
+    async def _read_last_history_entries(self, limit: int = 20) -> list[dict]:
         """Reads the last limit entries from history.jsonl in chronological order."""
-        if not self._history_file.exists():
-            return []
-        try:
-            with _file_lock(self._history_file, exclusive=False):
-                with self._history_file.open("r", encoding="utf-8") as f:
-                    lines = [line.strip() for line in f if line.strip()]
-            last_lines = lines[-limit:]
-            entries = []
-            for line_str in last_lines:
-                try:
-                    entries.append(json.loads(line_str))
-                except Exception:
-                    pass
-            return entries
-        except Exception as e:
-            logger.error(
-                "Failed to read last history entries from %s: %s", self._history_file, e
-            )
-            return []
+
+        def _read() -> list[dict]:
+            if not self._history_file.exists():
+                return []
+            try:
+                with _file_lock(self._history_file, exclusive=False):
+                    with self._history_file.open("r", encoding="utf-8") as f:
+                        lines = [line.strip() for line in f if line.strip()]
+                entries = []
+                for line_str in lines[-limit:]:
+                    try:
+                        entries.append(json.loads(line_str))
+                    except Exception:
+                        pass
+                return entries
+            except Exception as e:
+                logger.error(
+                    "Failed to read last history entries from %s: %s",
+                    self._history_file,
+                    e,
+                )
+                return []
+
+        loop = self._loop or asyncio.get_running_loop()
+        return await loop.run_in_executor(None, _read)
 
     def _process_history_event(self, event: str, data: dict) -> None:
         """Processes STT lifecycle events on the main event loop to aggregate and persist sessions."""
@@ -268,6 +308,17 @@ class WebServer:
             if self._active_session:
                 session = self._active_session
                 self._active_session = None
+
+                # Drop superseded partial-only sessions. When a wake word is
+                # re-finalized together with the command inside the open window
+                # (one-breath, e.g. "ehi serena volume basso"), the recognition
+                # loop emits a fresh `wake` event that flushes the prior session.
+                # That prior session may only ever have captured a `transcribing`
+                # partial — never a finalizing matched/nomatch — so persisting it
+                # produces a phantom history entry that looks like a nomatch even
+                # though the command matched in the next session. Discard it.
+                if session.pop("_partial_only", False):
+                    return
 
                 if not session.get("transcript"):
                     session["transcript"] = {
@@ -279,9 +330,38 @@ class WebServer:
                     session.setdefault("diagnostics", {})["gated"] = True
 
                 asyncio.create_task(self._append_history_log(session))
-                asyncio.create_task(
-                    self._broadcast({"type": "history_item", "session": session})
-                )
+                try:
+                    self._queue.put_nowait({"type": "history_item", "session": session})
+                except asyncio.QueueFull:
+                    pass
+
+        if event == "matched" and not self._active_session:
+            session_id = (
+                f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
+            )
+            self._active_session = {
+                "session_id": session_id,
+                "timestamp": datetime.now().isoformat() + "Z",
+                "wake": {
+                    "word": "",
+                    "timeout": 0.0,
+                    "confidence": None,
+                },
+                "diagnostics": {
+                    "max_mic_level": self._pending_vu.get("mic", 0.0),
+                    "rms_threshold": self._pending_vu.get("rms_threshold", 0.0),
+                    "gated": False,
+                    "input_gain": self._input_gain,
+                    "cpu_limit": self._cpu_limit,
+                },
+                "transcript": None,
+                "action": None,
+                "llm": None,
+                "feedback": {
+                    "false_positive": False,
+                    "user_flagged": False,
+                },
+            }
 
         if event == "wake":
             _flush_session()
@@ -319,6 +399,7 @@ class WebServer:
 
             if event == "gated":
                 self._active_session["diagnostics"]["gated"] = True
+                self._active_session["_partial_only"] = False
                 _flush_session()
 
             elif event == "transcribing":
@@ -333,6 +414,10 @@ class WebServer:
                         }
                     else:
                         self._active_session["transcript"]["text"] = text
+                    # Mark as not-yet-finalized: a finalizing matched/nomatch/gated
+                    # event clears this. A session flushed while still flagged was
+                    # superseded mid-recognition and is dropped (see _flush_session).
+                    self._active_session["_partial_only"] = True
 
             elif event in ("matched", "nomatch"):
                 transcript_text = data.get("transcript", data.get("text", ""))
@@ -353,6 +438,7 @@ class WebServer:
                     "match_phrase": data.get("phrase", ""),
                     "match_score": data.get("score", 0),
                 }
+                self._active_session["_partial_only"] = False
                 if action_info:
                     self._active_session["action"] = action_info
 
@@ -483,6 +569,15 @@ class WebServer:
         self._enqueue(event, data)
 
     def on_stt_event(self, event: str, data: dict) -> None:
+        if event == "action_error":
+            # An action could not complete (e.g. mqtt_publish with no broker).
+            # Surface it to the dashboard as a transient error toast. Not a
+            # session-lifecycle event, so skip history aggregation.
+            self._enqueue(
+                "toast",
+                {"message": data.get("message", "Action failed"), "level": "error"},
+            )
+            return
         if event == "level":
             loop = self._loop
             if loop and not loop.is_closed():
@@ -549,43 +644,48 @@ class WebServer:
         self._state["audio_conn_type"] = conn_type
         self._enqueue("audio_status", {"connected": connected, "conn_type": conn_type})
 
+    def _on_gst_profile_change(self, profile: str) -> None:
+        self._state["gst_profile"] = profile
+        self._enqueue("gst_profile", {"profile": profile})
+
     # ── HTTP / WebSocket routes ───────────────────────────────────────────────
 
     async def _handle_index(self, request: web.Request) -> web.Response:
         return web.Response(text=self._html, content_type="text/html")
+
+    async def _snapshot(self) -> dict:
+        """Full state snapshot sent as the `hello` message on every new WS connect."""
+        participants_list = [
+            {"identity": k, "tracks": v} for k, v in self._state["participants"].items()
+        ]
+        return {
+            "type": "hello",
+            "status": self._state["status"],
+            "room": self._state["room"],
+            "participants": participants_list,
+            "audio_connected": self._state["audio_connected"],
+            "audio_conn_type": self._state["audio_conn_type"],
+            "stt_state": self._state["stt_state"],
+            "stt_text": self._state["stt_text"],
+            "actions_config": self._state["actions_config"],
+            "llm_state": self._state["llm_state"],
+            "room_status": self._state["room_status"],
+            "room_answer_timeout": self._state["room_answer_timeout"],
+            "input_gain": self._input_gain,
+            "output_volume": self._output_volume,
+            "cpu_limit": self._cpu_limit,
+            "livekit_configured": self._livekit_ok,
+            "telegram_configured": self._telegram_ok,
+            "gst_profile": self._state["gst_profile"],
+            "history": await self._read_last_history_entries(20),
+        }
 
     async def _handle_ws(self, request: web.Request) -> web.WebSocketResponse:
         ws = web.WebSocketResponse()
         await ws.prepare(request)
         self._clients.add(ws)
 
-        participants_list = [
-            {"identity": k, "tracks": v} for k, v in self._state["participants"].items()
-        ]
-        await ws.send_str(
-            json.dumps(
-                {
-                    "type": "hello",
-                    "status": self._state["status"],
-                    "room": self._state["room"],
-                    "participants": participants_list,
-                    "audio_connected": self._state["audio_connected"],
-                    "audio_conn_type": self._state["audio_conn_type"],
-                    "stt_state": self._state["stt_state"],
-                    "stt_text": self._state["stt_text"],
-                    "actions_config": self._state["actions_config"],
-                    "llm_state": self._state["llm_state"],
-                    "room_status": self._state["room_status"],
-                    "room_answer_timeout": self._state["room_answer_timeout"],
-                    "input_gain": self._input_gain,
-                    "output_volume": self._output_volume,
-                    "cpu_limit": self._cpu_limit,
-                    "livekit_configured": self._livekit_ok,
-                    "telegram_configured": self._telegram_ok,
-                    "history": self._read_last_history_entries(20),
-                }
-            )
-        )
+        await ws.send_str(json.dumps(await self._snapshot()))
 
         try:
             async for msg in ws:
@@ -595,7 +695,10 @@ class WebServer:
                     except json.JSONDecodeError:
                         continue
                     if payload.get("type") == "control":
-                        await self._handle_control(payload.get("action", ""))
+                        try:
+                            await self._handle_control(payload)
+                        except Exception:
+                            logger.exception("Error handling control action")
                 elif msg.type in (WSMsgType.ERROR, WSMsgType.CLOSE):
                     break
         finally:
@@ -603,7 +706,8 @@ class WebServer:
 
         return ws
 
-    async def _handle_control(self, action: str) -> None:
+    async def _handle_control(self, payload: dict) -> None:
+        action = payload.get("action", "")
         if action == "restart":
             logger.info("Restart requested via web dashboard")
             await self._broadcast({"type": "restarting"})
@@ -613,11 +717,16 @@ class WebServer:
             else:
                 os.execv(sys.executable, [sys.executable] + sys.argv)
         elif action == "clear_history":
+            now = self._loop.time() if self._loop else time.monotonic()
+            if now - self._last_history_clear < 1.0:
+                return
+            self._last_history_clear = now
             logger.info("Clear history requested via web dashboard")
+            self._active_session = None
             await self._clear_history_log()
             await self._broadcast({"type": "history_cleared"})
-        elif action.startswith("flag_fp:"):
-            session_id = action.split(":", 1)[1]
+        elif action == "flag_fp":
+            session_id = payload.get("session_id", "")
             logger.info("Flag false positive requested for session: %s", session_id)
             await self._flag_history_log_fp(session_id)
             await self._broadcast({"type": "history_flagged", "session_id": session_id})
@@ -767,15 +876,16 @@ class WebServer:
 
         if "wake_words" in config:
             for ww in config["wake_words"]:
-                if not ww.get("word"):
+                word = ww if isinstance(ww, str) else ww.get("word", "")
+                if not word:
                     return False, "Wake word cannot be empty"
 
         if "recognition" in config:
             rec = config["recognition"]
-            if "command_timeout" in rec:
-                command_timeout = rec["command_timeout"]
-                if command_timeout is not None and command_timeout <= 0:
-                    return False, "command_timeout must be positive"
+            if "wake_window" in rec:
+                wake_window = rec["wake_window"]
+                if wake_window is not None and wake_window <= 0:
+                    return False, "wake_window must be positive"
             if "matching_threshold" in rec:
                 threshold = rec["matching_threshold"]
                 if threshold is not None and not (0 <= threshold <= 100):
@@ -784,7 +894,12 @@ class WebServer:
                 threshold = rec["reply_matching_threshold"]
                 if threshold is not None and not (0 <= threshold <= 100):
                     return False, "reply_matching_threshold must be between 0 and 100"
-            _valid_algos = {"token_set_ratio", "levenshtein", "ratio"}
+            _valid_algos = {
+                "token_set_ratio",
+                "token_sort_ratio",
+                "levenshtein",
+                "ratio",
+            }
             if (
                 "matching_algorithm" in rec
                 and rec["matching_algorithm"] not in _valid_algos
@@ -801,20 +916,14 @@ class WebServer:
 
         if "stt" in config:
             stt = config["stt"]
-            if "stage1" in stt:
-                stage1 = stt["stage1"]
-                if "backend" in stage1:
-                    valid_backends = ["vosk", "sherpa-onnx"]
-                    if stage1["backend"] not in valid_backends:
-                        return False, f"Invalid STT backend: {stage1['backend']}"
-                if "confidence" in stage1:
-                    conf = stage1["confidence"]
-                    if conf is not None and not (0 <= conf <= 1):
-                        return False, "confidence must be between 0 and 1"
-                if "rms_threshold" in stage1:
-                    rms = stage1["rms_threshold"]
-                    if rms is not None and not (0 <= rms <= 1):
-                        return False, "rms_threshold must be between 0 and 1"
+            if "backend" in stt:
+                valid_backends = ["vosk", "sherpa-onnx"]
+                if stt["backend"] not in valid_backends:
+                    return False, f"Invalid STT backend: {stt['backend']}"
+            if "rms_threshold" in stt:
+                rms = stt["rms_threshold"]
+                if rms is not None and not (0 <= rms <= 1):
+                    return False, "rms_threshold must be between 0 and 1"
 
         if "audio" in config:
             audio = config["audio"]
@@ -855,25 +964,16 @@ class WebServer:
         return result
 
     def _merge_wake_words(self, current: list, updates: list) -> list:
-        """Replace wake words list. Preserve extra fields from existing entries.
+        """Replace wake words list (flat string list in new schema).
 
-        For each new wake word, if an entry with the same 'word' exists in
-        the current config, merge the new fields onto the existing entry.
-        This preserves fields like id, skip_unmatched_inline that the
-        frontend doesn't send.
+        Accepts both string lists and legacy {word: ...} dicts.
         """
-        existing = {}
-        for e in current:
-            if isinstance(e, dict) and "word" in e:
-                existing[e["word"]] = e
-
         result = []
         for u in updates:
-            word = u.get("word")
-            if word and word in existing:
-                merged = copy.deepcopy(existing[word])
-                merged.update(u)
-                result.append(merged)
+            if isinstance(u, str):
+                result.append(u)
+            elif isinstance(u, dict) and u.get("word"):
+                result.append(u["word"])
             else:
                 result.append(u)
 
@@ -891,19 +991,16 @@ class WebServer:
         word/aliases/id/skip_unmatched_inline on wake words.
         """
         payload = copy.deepcopy(payload)
-        payload.pop("global_triggers", None)
-        for entry in payload.get("wake_words", []):
-            if isinstance(entry, dict):
-                entry.pop("triggers", None)
+        payload.pop("triggers", None)
         return payload
 
     def _deep_update_raw(self, raw: Any, updates: dict) -> None:
         """Recursively merge `updates` into the ruamel `raw` mapping in place.
 
         Only leaf keys present in `updates` are overwritten; nested mappings on
-        disk (e.g. stt.stage1's model_path, vad_silence_ms, …) that the editor
-        does not serialize are preserved. A shallow dict.update() would replace
-        whole nested mappings and silently wipe those keys.
+        disk (e.g. stt.model_path, num_threads, …) that the editor does not
+        serialize are preserved. A shallow dict.update() would replace whole
+        nested mappings and silently wipe those keys.
         """
         for key, value in updates.items():
             if key in raw and isinstance(raw[key], dict) and isinstance(value, dict):
@@ -1056,32 +1153,51 @@ class WebServer:
             pass
 
     async def _stt_watchdog_loop(
-        self, stt_thread_holder: list, stt_params: dict
+        self,
+        stt_thread_holder: list,
+        stt_params: dict,
+        on_stt_event: Callable[[str, dict], None] | None = None,
     ) -> None:
         from alexa_custom.stt import start_stt_thread
 
+        _on_stt_event = on_stt_event or self.on_stt_event
+        check_interval = 5.0
+        backoff_base = 2.0
+        backoff = backoff_base
+        backoff_cap = 60.0
+        healthy_since = time.monotonic()
+
         while True:
-            await asyncio.sleep(5)
-            if not stt_thread_holder[0].is_alive():
-                logger.warning("STT thread died unexpectedly — restarting")
-                await self._broadcast({"type": "stt", "state": "stt_dead"})
-                new_stop = threading.Event()
-                stt_params["stop_event"] = new_stop
-                new_thread = start_stt_thread(
-                    config=lambda: (
-                        self._config_manager.config
-                        if self._config_manager
-                        and self._config_manager.config is not None
-                        else stt_params["config"]
-                    ),
-                    stop_event=new_stop,
-                    telegram_client=stt_params["telegram_client"],
-                    livekit_connect_fn=stt_params["connect_fn"],
-                    livekit_connected_flag=stt_params["connected_flag"],
-                    on_stt_event=self.on_stt_event,
-                    stt_ready_event=stt_params.get("stt_ready_event"),
-                )
-                stt_thread_holder[0] = new_thread
+            await asyncio.sleep(check_interval)
+            if stt_thread_holder[0].is_alive():
+                if time.monotonic() - healthy_since >= 600:
+                    backoff = backoff_base
+                continue
+
+            logger.error("STT thread died unexpectedly — restarting in %.0fs", backoff)
+            await self._broadcast({"type": "stt", "state": "stt_dead"})
+            await asyncio.sleep(backoff)
+
+            _mqtt_holder = stt_params.get("mqtt_client_holder")
+            new_stop = threading.Event()
+            stt_params["stop_event"] = new_stop
+            new_thread = start_stt_thread(
+                config=lambda: (
+                    self._config_manager.config
+                    if self._config_manager and self._config_manager.config is not None
+                    else stt_params["config"]
+                ),
+                stop_event=new_stop,
+                telegram_client=stt_params["telegram_client"],
+                livekit_connect_fn=stt_params["connect_fn"],
+                livekit_connected_flag=stt_params["connected_flag"],
+                on_stt_event=_on_stt_event,
+                mqtt_client=_mqtt_holder[0] if _mqtt_holder else None,
+                stt_ready_event=stt_params.get("stt_ready_event"),
+            )
+            stt_thread_holder[0] = new_thread
+            healthy_since = time.monotonic()
+            backoff = min(backoff * 2, backoff_cap)
 
     # ── logging ───────────────────────────────────────────────────────────────
 
@@ -1098,10 +1214,12 @@ class WebServer:
     def _serialize_trigger(t) -> dict:
         return {
             "phrase": t.phrase,
+            "commands": t.commands,
             "aliases": t.aliases,
             "actions": WebServer._serialize_action_list(t.actions),
-            "direct_match": t.wake_words is not None and len(t.wake_words) == 0,
+            "with_wake": t.with_wake,
             "sleeping_only": any(a.type == "start_listening" for a in t.actions),
+            "tag": t.tag,
         }
 
     @staticmethod
@@ -1127,33 +1245,16 @@ class WebServer:
         if not isinstance(config, ActionsConfig):
             return {}
 
-        ww = []
-        for g in config.wake_words:
-            entry: dict[str, Any] = {
-                "word": g.word,
-                "aliases": g.aliases,
-                "triggers": [self._serialize_trigger(t) for t in g.triggers],
-            }
-            if g.skip_unmatched_inline:
-                entry["skip_unmatched_inline"] = True
-            if g.id and g.id != g.word:
-                entry["id"] = g.id
-            ww.append(entry)
-
         result: dict[str, Any] = {
-            "wake_words": ww,
-            "global_triggers": [
-                self._serialize_trigger(t)
-                for t in config.triggers + config.direct_triggers
-            ],
+            "wake_words": list(config.wake_words),
+            "triggers": [self._serialize_trigger(t) for t in config.triggers],
         }
 
         if config.recognition is not None:
             result["recognition"] = {
-                "command_timeout": config.recognition.command_timeout,
+                "wake_window": config.recognition.wake_window,
                 "matching_threshold": config.recognition.matching_threshold,
                 "matching_algorithm": config.recognition.matching_algorithm,
-                "partial_matching": config.recognition.partial_matching,
                 "reply_matching_algorithm": config.recognition.reply_matching_algorithm,
                 "reply_matching_threshold": config.recognition.reply_matching_threshold,
                 "follow_up": config.recognition.follow_up,
@@ -1163,12 +1264,10 @@ class WebServer:
 
         if config.stt is not None:
             result["stt"] = {
-                "stage1": {
-                    "backend": config.stt.stage1.backend,
-                    "confidence": config.stt.stage1.confidence,
-                    "rms_threshold": config.stt.stage1.rms_threshold,
-                    "adaptive_rms": config.stt.stage1.adaptive_rms,
-                }
+                "backend": config.stt.backend,
+                "rms_threshold": config.stt.rms_threshold,
+                "adaptive_rms": config.stt.adaptive_rms,
+                "vad_silence_ms": config.stt.vad_silence_ms,
             }
 
         if config.audio is not None:
@@ -1208,8 +1307,6 @@ class WebServer:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         self._livekit_loop = loop
-        livekit_stop = asyncio.Event()
-        self._livekit_stop_event = livekit_stop
 
         def _exc_handler(lp: asyncio.AbstractEventLoop, context: dict) -> None:
             if isinstance(context.get("exception"), asyncio.QueueFull):
@@ -1217,14 +1314,54 @@ class WebServer:
             lp.default_exception_handler(context)
 
         loop.set_exception_handler(_exc_handler)
-        try:
-            loop.run_until_complete(
-                run_fn(stop_threading, on_event_cb or self.on_event, livekit_stop)
-            )
-        except Exception as e:
-            self._enqueue("error", {"msg": str(e)})
-        finally:
-            loop.close()
+
+        # Supervise run_fn (the LiveKit connect/reconnect loop): an uncaught
+        # exception here previously killed this thread silently, with the
+        # daemon's ability to place/receive calls gone but nothing else
+        # (web dashboard, STT) showing any sign of it. Restart with backoff,
+        # logging to the journal — parity with the STT thread watchdog.
+        backoff_base = 5.0
+        backoff_cap = 60.0
+        backoff = backoff_base
+
+        while not stop_threading.is_set():
+            livekit_stop = asyncio.Event()
+            self._livekit_stop_event = livekit_stop
+            started = time.monotonic()
+            try:
+                loop.run_until_complete(
+                    run_fn(stop_threading, on_event_cb or self.on_event, livekit_stop)
+                )
+                break  # run_fn returned normally (stop_threading was set)
+            except RuntimeError as e:
+                if "is not set" in str(e):
+                    # require_env(): missing LIVEKIT_* configuration is not
+                    # something a retry can fix. Log loudly and give up on
+                    # the LiveKit loop only — web dashboard and STT continue.
+                    logger.critical(
+                        "LiveKit worker: missing required configuration — %s "
+                        "— giving up on LiveKit; web dashboard and STT remain available",
+                        e,
+                    )
+                    self._enqueue("error", {"msg": str(e)})
+                    return
+                logger.exception("LiveKit worker crashed")
+                self._enqueue("error", {"msg": str(e)})
+            except Exception as e:
+                logger.exception("LiveKit worker crashed")
+                self._enqueue("error", {"msg": str(e)})
+
+            if stop_threading.is_set():
+                break
+            if time.monotonic() - started >= 300:
+                backoff = backoff_base
+            logger.warning("LiveKit worker restarting in %.0fs", backoff)
+            deadline = time.monotonic() + backoff
+            while time.monotonic() < deadline and not stop_threading.is_set():
+                time.sleep(0.5)
+            backoff = min(backoff * 2, backoff_cap)
+
+        loop.close()
 
     # ── main coroutine ────────────────────────────────────────────────────────
 
@@ -1255,15 +1392,43 @@ class WebServer:
             and hasattr(config_obj.web, "history_file")
         ):
             self._history_file = Path(config_obj.web.history_file)
+        if (
+            config_obj
+            and hasattr(config_obj, "web")
+            and hasattr(config_obj.web, "history_max_entries")
+        ):
+            self._history_max_entries = config_obj.web.history_max_entries
+
+        # Always run the YAML config hot-reload watcher in production (spec:
+        # yaml-config "Hot-reload watcher"). --hot-reload gates only the
+        # separate .py source-file auto-restart watcher below.
+        if self._config_manager is not None:
+            if config_obj is not None:
+                self._config_manager.config = config_obj
+            self._config_manager.start_watcher(self._conf_dir / "config.yaml")
+
+            mqtt_client_holder = (
+                stt_params.get("mqtt_client_holder") if stt_params else None
+            )
+            if mqtt_client_holder is not None:
+                from alexa_custom.client import make_mqtt_reload_callback
+
+                self._config_manager.register_reload_callback(
+                    make_mqtt_reload_callback(
+                        mqtt_client_holder,
+                        lambda: self._livekit_loop,
+                        initial_config=config_obj,
+                    )
+                )
 
         if hot_reload:
-            from alexa_custom.config_manager import ConfigManager
 
             async def _on_source_restart():
                 await self._broadcast({"type": "restarting"})
 
-            cm = ConfigManager(None)
-            cm.start_source_watcher("alexa_custom", on_restart=_on_source_restart)
+            self._config_manager.start_source_watcher(
+                "alexa_custom", on_restart=_on_source_restart
+            )
 
         app = web.Application()
         app.router.add_get("/", self._handle_index)
@@ -1291,6 +1456,10 @@ class WebServer:
             _DASHBOARD_PATH,
             Path(__file__).parent / "static" / "dashboard.css",
             Path(__file__).parent / "static" / "dashboard.js",
+            Path(__file__).parent / "static" / "dashboard-graph.js",
+            Path(__file__).parent / "static" / "dashboard-config.js",
+            Path(__file__).parent / "static" / "dashboard-monitor.js",
+            Path(__file__).parent / "static" / "dashboard-history.js",
         ]
         asyncio.create_task(self._asset_watcher_loop(all_watch))
 
@@ -1341,6 +1510,7 @@ class WebServer:
         if stt_params is not None:
             from alexa_custom.stt import start_stt_thread
 
+            _mqtt_holder = stt_params.get("mqtt_client_holder")
             stt_thread = start_stt_thread(
                 config=lambda: (
                     self._config_manager.config
@@ -1352,15 +1522,28 @@ class WebServer:
                 livekit_connect_fn=stt_params["connect_fn"],
                 livekit_connected_flag=stt_params["connected_flag"],
                 on_stt_event=_on_stt_event,
+                mqtt_client=_mqtt_holder[0] if _mqtt_holder else None,
                 stt_ready_event=stt_params.get("stt_ready_event"),
             )
             stt_thread_holder = [stt_thread]
             watchdog_task = asyncio.create_task(
-                self._stt_watchdog_loop(stt_thread_holder, stt_params)
+                self._stt_watchdog_loop(stt_thread_holder, stt_params, _on_stt_event)
             )
 
+        # SIGTERM (systemctl stop/restart) otherwise kills the process without
+        # running any of the teardown below; SIGINT already raises
+        # KeyboardInterrupt via Python's default handler, but installing an
+        # explicit handler for both lets a single stop_evt drive one ordered
+        # shutdown path regardless of signal.
+        stop_evt = asyncio.Event()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                self._loop.add_signal_handler(sig, stop_evt.set)
+            except (NotImplementedError, RuntimeError):
+                pass
+
         try:
-            await asyncio.Future()  # blocks until cancelled (Ctrl+C)
+            await stop_evt.wait()
         except asyncio.CancelledError:
             pass
         finally:
@@ -1374,6 +1557,14 @@ class WebServer:
             stop_threading.set()
             if stt_params:
                 stt_params["stop_event"].set()
+                _mqtt_holder = stt_params.get("mqtt_client_holder")
+                if _mqtt_holder and _mqtt_holder[0] is not None:
+                    try:
+                        await asyncio.wait_for(
+                            _mqtt_holder[0].publish_offline(), timeout=0.5
+                        )
+                    except Exception as e:
+                        logger.debug("Shutdown: MQTT offline publish failed: %s", e)
             audio_watcher.stop()
             for ws in list(self._clients):
                 try:
@@ -1435,5 +1626,9 @@ def run_web(
             )
         )
     except KeyboardInterrupt:
+        # Defensive fallback: server.run() installs its own SIGINT/SIGTERM
+        # handlers and returns normally after ordered teardown (see the
+        # graceful-shutdown spec), so this is only hit if handler
+        # installation failed (e.g. running outside the main thread).
         if shutdown_callback is not None:
             shutdown_callback()

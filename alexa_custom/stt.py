@@ -10,8 +10,6 @@ import threading
 import time
 from typing import Awaitable, Callable, TYPE_CHECKING
 
-import vosk
-
 if TYPE_CHECKING:
     from alexa_custom.mqtt import MQTTClient
 
@@ -20,40 +18,31 @@ from alexa_custom.actions import (
     ActionContext,
     TelegramClient,
     dispatch,
-    match_trigger,
     match_trigger_with_score,
-    normalize_text,
 )
-from alexa_custom.audio import play_wake_beep
+from alexa_custom.audio import play_wake_beep_async
 from alexa_custom.config import (
     ActionEntry,
     ActionsConfig,
     Trigger,
-    WakeWordGroup,
 )
 
-# ---------------------------------------------------------------------------
-# Sibling imports and re-exports for 100% backward compatibility
-# ---------------------------------------------------------------------------
 from alexa_custom.stt_backends import (
     STTBackend,
     VoskSTT,
-    SherpaOnnxSTT,
-    SherpaKeywordSpotter,
     _load_model,
-    _tokenize_keyword,
+    _MODEL_PATH,
     get_stt_backend,
-    _vosk_confidence,
-    _vosk_check_result,
     _phrases_to_grammar,
     _grammar_json,
-    _grammar_json_all,
+    _vosk_confidence,
+    _vosk_check_result,
 )
 from alexa_custom.stt_phonetics import (
+    _match_wake_word,
+    _wake_token_count,
     _approx_wake_match,
-    _resolve_triggers,
     _build_alias_map,
-    build_intent_map,
 )
 from alexa_custom.stt_gating import (
     _CHUNK,
@@ -75,17 +64,15 @@ from alexa_custom.stt_capture import (
 __all__ = [
     "STTBackend",
     "VoskSTT",
-    "SherpaOnnxSTT",
-    "SherpaKeywordSpotter",
     "_load_model",
-    "_tokenize_keyword",
+    "_MODEL_PATH",
     "get_stt_backend",
-    "_vosk_confidence",
-    "_vosk_check_result",
     "_phrases_to_grammar",
     "_grammar_json",
+    "_vosk_confidence",
+    "_vosk_check_result",
+    "_loop_grammar",
     "_approx_wake_match",
-    "_resolve_triggers",
     "_build_alias_map",
     "_CHUNK",
     "_rms_level",
@@ -97,8 +84,6 @@ __all__ = [
     "start_capture",
     "_iter_gated_audio",
     "run_stt_worker",
-    "_extract_wake_command",
-    "_match_full_intent",
     "capture_transcript",
     "start_stt_thread",
     "_stt_heartbeat",
@@ -106,41 +91,24 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-_MODEL_PATH = os.environ.get("VOSK_MODEL_PATH", "models/it")
-_STT_COOLDOWN = 1.0
-_SHERPA_MODEL_PATH = os.environ.get("SHERPA_ONNX_PATH", "models/sherpa-onnx")
-
-_STAGE1_VAD_SILENCE_MS = int(os.environ.get("STT_STAGE1_VAD_SILENCE_MS", "500"))
-_STAGE1_RMS_THRESHOLD = float(os.environ.get("STT_STAGE1_RMS_THRESHOLD", "0.02"))
-_STAGE1_MIN_SPEECH_MS = int(os.environ.get("STT_STAGE1_MIN_SPEECH_MS", "200"))
-
-
 _stt_sleeping = False
 
-# Heartbeat stamped by the recognition loops on every iteration.
-# The main async loop (client.py) gates systemd WATCHDOG=1 pings on freshness.
-# Single-element list so writes are atomic under the GIL.
+# Stamped on every recognition iteration; client.py gates systemd WATCHDOG pings on this.
 _stt_heartbeat: list[float] = [0.0]
 
 
 def get_wake_up_phrases(config: ActionsConfig) -> str:
-    wake_up_phrases = []
-    for t in getattr(config, "direct_triggers", []):
-        if any(a.type == "start_listening" for a in t.actions):
-            wake_up_phrases.append(t.phrase)
-    for t in getattr(config, "triggers", []):
-        if any(a.type == "start_listening" for a in t.actions):
-            wake_up_phrases.append(t.phrase)
-    for g in getattr(config, "wake_words", []):
-        for t in g.triggers:
-            if any(a.type == "start_listening" for a in t.actions):
-                wake_up_phrases.append(t.phrase)
-    return ", ".join(sorted(list(set(wake_up_phrases))))
+    phrases = [
+        t.phrase
+        for t in config.triggers
+        if any(a.type == "start_listening" for a in t.actions)
+    ]
+    return ", ".join(sorted(set(phrases)))
 
 
 def set_stt_sleeping(sleeping: bool) -> None:
     global _stt_sleeping
-    logger.info(f"STT: set sleeping state to {sleeping}")
+    logger.info("STT: set sleeping state to %s", sleeping)
     _stt_sleeping = sleeping
 
 
@@ -148,46 +116,31 @@ def is_stt_sleeping() -> bool:
     return _stt_sleeping
 
 
-def _get_stage1_key(cfg: ActionsConfig) -> tuple:
-    needs_phrase_hash = (
-        cfg.stt.stage1.vosk_grammar
-        or cfg.stt.stage1.backend in ("sherpa-hotwords",)
-        or cfg.stt.stage1.keyword_spotter
-    )
-    return (
-        cfg.stt.stage1.backend,
-        cfg.stt.stage1.model_path,
-        cfg.stt.stage1.vosk_grammar,
-        cfg.stt.stage1.hotwords_score
-        if cfg.stt.stage1.backend == "sherpa-hotwords"
-        else 0.0,
-        hash(
-            (
-                tuple(g.word for g in cfg.wake_words),
-                tuple(g.word + "/" + a for g in cfg.wake_words for a in g.aliases),
-                tuple(t.phrase for g in cfg.wake_words for t in g.triggers),
-                tuple(t.phrase for t in cfg.triggers),
-                tuple(t.phrase for t in cfg.direct_triggers),
-            )
-        )
-        if needs_phrase_hash
-        else 0,
-    )
+def _loop_grammar(cfg: ActionsConfig) -> str | None:
+    """Grammar for the always-on recognizer, or None for free-text.
+
+    When ``stt.vosk_grammar`` is set, restrict the recognizer to the wake words
+    plus every trigger command/alias so it can only emit phrases the matcher
+    accepts — an omitted phrase is physically unrecognisable. Confidence gating
+    (``stt.confidence``) then rejects whatever the constrained model snapped out
+    of noise.
+    """
+    if not cfg.stt.vosk_grammar:
+        return None
+    phrases: list[str] = list(cfg.wake_words)
+    for t in cfg.triggers:
+        phrases.extend(t.commands or [t.phrase])
+        phrases.extend(t.aliases)
+    return _phrases_to_grammar(phrases, label="wake-loop")
 
 
-def _get_stage2_key(cfg: ActionsConfig) -> tuple:
+def _get_backend_key(cfg: ActionsConfig) -> tuple:
     return (
-        cfg.stt.stage2.backend,
-        cfg.stt.stage2.model_path,
-        cfg.stt.stage2.vosk_grammar,
-        hash(
-            (
-                tuple(g.word for g in cfg.wake_words),
-                tuple(t.phrase for t in cfg.triggers),
-            )
-        )
-        if cfg.stt.stage2.vosk_grammar
-        else 0,
+        cfg.stt.backend,
+        cfg.stt.model_path,
+        cfg.stt.num_threads,
+        cfg.stt.vosk_grammar,
+        _loop_grammar(cfg),
     )
 
 
@@ -218,1589 +171,78 @@ def _dump_trigger_wav(
 
 
 def _log_activation_phrases(config: ActionsConfig) -> None:
-    """Log all phrases that can trigger the system, grouped by type."""
-    lines: list[str] = ["Activation phrases:"]
-
-    for group in config.wake_words:
-        aliases = f"  aliases: {group.aliases}" if group.aliases else ""
-        lines.append(f"  [wake]    {group.word!r}{aliases}")
-
-    for t in config.direct_triggers:
-        lines.append(f"  [direct]  {t.phrase!r}  → {[a.type for a in t.actions]}")
-
+    lines = ["Activation phrases:"]
+    for w in config.wake_words:
+        lines.append(f"  [wake]     {w!r}")
     for t in config.triggers:
-        lines.append(f"  [global]  {t.phrase!r}  → {[a.type for a in t.actions]}")
-
-    for group in config.wake_words:
-        for t in group.triggers:
-            lines.append(
-                f"  [scoped:{group.word}]  {t.phrase!r}  → {[a.type for a in t.actions]}"
-            )
-
+        tag = "direct" if not t.with_wake else "wake-gated"
+        cmd = t.commands[0] if t.commands else t.phrase
+        lines.append(f"  [{tag}]  {cmd!r}  → {[a.type for a in t.actions]}")
     logger.info("\n".join(lines))
 
 
-def run_stt_worker(
-    config: ActionsConfig | Callable[[], ActionsConfig],
-    stop_event: threading.Event,
-    telegram_client: TelegramClient,
-    livekit_connect_fn: Callable[[], Awaitable[None]] | None,
-    livekit_connected_flag: threading.Event,
-    on_stt_event: Callable[[str, dict], None] | None = None,
-    mqtt_client: MQTTClient | None = None,
-    loop: asyncio.AbstractEventLoop | None = None,
-    stt_ready_event: threading.Event | None = None,
-) -> None:
-    """Entry point for the STT daemon thread."""
-    _stt_heartbeat[0] = time.monotonic()
+def _fast_partial_hit(partial: str, config: ActionsConfig, woken: bool) -> bool:
+    """True when the partial transcript already fully matches a wake word or a
+    dispatchable trigger.
 
-    _get_config: Callable[[], ActionsConfig]
-    if callable(config) and not isinstance(config, ActionsConfig):
-        _get_config = config  # type: ignore[assignment]
-    else:
-
-        def _get_config():
-            return config  # type: ignore[return-value]
-
-    current_config = _get_config()
-    input_spec = current_config.audio.input_device
-    source, channels = resolve_capture_source(input_spec)
-
-    logger.info(
-        f"STT: wake words={[g.word for g in current_config.wake_words]}, "
-        f"timeout={current_config.recognition.command_timeout}s, "
-        f"source={source or 'default'} ({channels} ch), "
-        f"stage1={current_config.stt.stage1.backend} stage2={current_config.stt.stage2.backend}"
-    )
-    _log_activation_phrases(current_config)
-
-    if mqtt_client:
-        mqtt_client.publish_threadsafe(
-            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "idle", loop=loop
-        )
-
-    try:
-        t0 = time.monotonic()
-        _kws_keywords = [
-            p for g in current_config.wake_words for p in [g.word] + g.aliases
-        ]
-        # Direct-match triggers fire without a wake word — the KWS must detect them.
-        for _t in current_config.direct_triggers:
-            _kws_keywords.append(_t.phrase)
-            _kws_keywords.extend(_t.aliases)
-        # One-breath: wake + command said together as a single utterance.
-        if current_config.recognition.kws_one_breath:
-            for _g in current_config.wake_words:
-                for _t in current_config.triggers + [tt for tt in _g.triggers]:
-                    _kws_keywords.append(f"{_g.word} {_t.phrase}")
-        stage1_backend = get_stt_backend(
-            current_config.stt.stage1, keywords=list(set(_kws_keywords))
-        )
-        logger.info(
-            f"STT stage1 backend ({current_config.stt.stage1.backend}) loaded in {time.monotonic() - t0:.1f}s"
-        )
-        t0 = time.monotonic()
-        stage2_grammar = (
-            _grammar_json_all(
-                current_config.wake_words, current_config.triggers, label="stage-2"
-            )
-            if current_config.stt.stage2.vosk_grammar
-            else None
-        )
-        stage2_backend = get_stt_backend(
-            current_config.stt.stage2, grammar=stage2_grammar
-        )
-        logger.info(
-            f"STT stage2 backend ({current_config.stt.stage2.backend}) loaded in {time.monotonic() - t0:.1f}s"
-        )
-    except RuntimeError as e:
-        logger.error(f"STT backend creation failed: {e}")
-        return
-
-    stage1_key = _get_stage1_key(current_config)
-    stage2_key = _get_stage2_key(current_config)
-
-    _dispatch_loop = asyncio.new_event_loop()
-    try:
-        while not stop_event.is_set():
-            current_config = _get_config()
-            loop_fn = (
-                _single_stage_loop
-                if current_config.recognition.mode == "single-stage"
-                else _recognition_loop
-            )
-
-            new_stage1_key = _get_stage1_key(current_config)
-            new_stage2_key = _get_stage2_key(current_config)
-
-            if new_stage1_key != stage1_key:
-                try:
-                    _kws_keywords = [
-                        p
-                        for g in current_config.wake_words
-                        for p in [g.word] + g.aliases
-                    ]
-                    for _t in current_config.direct_triggers:
-                        _kws_keywords.append(_t.phrase)
-                        _kws_keywords.extend(_t.aliases)
-                    if current_config.recognition.kws_one_breath:
-                        for _g in current_config.wake_words:
-                            for _t in current_config.triggers + list(_g.triggers):
-                                _kws_keywords.append(f"{_g.word} {_t.phrase}")
-                    stage1_backend = get_stt_backend(
-                        current_config.stt.stage1, keywords=list(set(_kws_keywords))
-                    )
-                    stage1_key = new_stage1_key
-                    logger.info("STT stage1 backend reloaded after config change")
-                except RuntimeError as e:
-                    logger.error(f"STT stage1 backend reload failed: {e}")
-                    stop_event.wait(2)
-                    continue
-
-            if new_stage2_key != stage2_key:
-                try:
-                    stage2_grammar = (
-                        _grammar_json_all(
-                            current_config.wake_words,
-                            current_config.triggers,
-                            label="stage-2",
-                        )
-                        if current_config.stt.stage2.vosk_grammar
-                        else None
-                    )
-                    stage2_backend = get_stt_backend(
-                        current_config.stt.stage2, grammar=stage2_grammar
-                    )
-                    stage2_key = new_stage2_key
-                    logger.info("STT stage2 backend reloaded after config change")
-                except RuntimeError as e:
-                    logger.error(f"STT stage2 backend reload failed: {e}")
-                    stop_event.wait(2)
-                    continue
-
-            proc: subprocess.Popen | None = None
-            try:
-                proc = start_capture(source, channels)
-                if stt_ready_event is not None and not stt_ready_event.is_set():
-                    stt_ready_event.set()
-                    logger.info("STT ready — listening for wake words")
-                loop_fn(
-                    proc=proc,
-                    channels=channels,
-                    stage1_backend=stage1_backend,
-                    stage2_backend=stage2_backend,
-                    config=current_config,
-                    stop_event=stop_event,
-                    telegram_client=telegram_client,
-                    livekit_connect_fn=livekit_connect_fn,
-                    livekit_connected_flag=livekit_connected_flag,
-                    on_stt_event=on_stt_event,
-                    mqtt_client=mqtt_client,
-                    loop=loop,
-                    dispatch_loop=_dispatch_loop,
-                )
-            except Exception as e:
-                logger.error(f"STT error: {e}", exc_info=True)
-                stop_event.wait(2)
-            else:
-                # loop_fn returned without raising: capture ended (e.g. parec EOF
-                # on mic unplug / pipewire restart). start_capture() succeeds even
-                # when the device is gone, so without this backoff the while loop
-                # respawns parec tens of times per second.
-                if not stop_event.is_set():
-                    logger.info("Capture ended unexpectedly — restarting in 2s")
-                    stop_event.wait(2.0)
-            finally:
-                if proc is not None:
-                    try:
-                        proc.terminate()
-                        proc.wait(timeout=3)
-                    except Exception:
-                        pass
-    finally:
-        _dispatch_loop.close()
-
-
-def _extract_wake_command(
-    text: str,
-    alias_map: dict[str, WakeWordGroup],
-    fuzzy: bool = False,
-    wake_match_threshold: float = 0.5,
-) -> tuple[WakeWordGroup | None, str]:
-    """Return (group, command) if text begins with a known wake phrase, else (None, '').
-
-    With fuzzy=True (sherpa-onnx single-stage path) uses _approx_wake_match to
-    handle open-vocabulary transcription noise around wake words.
+    Used by the fast-VAD path: when the recognizer's partial result is already
+    a complete, matchable utterance, the endpoint fires after
+    ``stt.fast_vad_ms`` of silence instead of the full ``vad_silence_ms`` —
+    cutting ~500 ms off every wake/command. Free-form speech (LLM fallback)
+    never matches here, so it keeps the long, fragmentation-safe endpoint.
     """
-    norm_text = normalize_text(text)
-    for norm_phrase, group in alias_map.items():
-        if norm_text.startswith(norm_phrase):
-            rest = norm_text[len(norm_phrase) :]
-            if rest and not rest.startswith(" "):
-                continue  # prefix of a longer word — not a valid wake boundary
-            return group, rest.strip()
-    if fuzzy:
-        group = _approx_wake_match(text, alias_map, threshold=wake_match_threshold)
-        if group:
-            # Best-effort command extraction: drop any token that belongs to the
-            # group's wake phrases (canonical word + aliases). Token-level removal
-            # avoids substring mangling (e.g. "ehi" turning "ehilà" into "là") and
-            # works even when an alias matched rather than the canonical word.
-            wake_tokens = {
-                w
-                for phrase in [group.word, *group.aliases]
-                for w in normalize_text(phrase).split()
-            }
-            command = " ".join(t for t in norm_text.split() if t not in wake_tokens)
-            return group, command
-    return None, ""
-
-
-def _match_full_intent(
-    partial: str,
-    alias_map: dict[str, WakeWordGroup],
-    intent_map: dict[str, tuple[WakeWordGroup, Trigger]],
-) -> tuple[WakeWordGroup, Trigger, str] | None:
-    """Return (group, trigger, inline_cmd) if partial matches a complete (wake + trigger) intent.
-
-    Uses exact matching only — fuzzy is never applied on partial transcripts.
-    Returns None if only a wake word is present or the command is not a known trigger.
-    """
-    wake_group, inline_cmd = _extract_wake_command(partial, alias_map, fuzzy=False)
-    if wake_group is None or not inline_cmd:
-        return None
-    norm_cmd = normalize_text(inline_cmd)
-    for norm_wake, group in alias_map.items():
-        if group is not wake_group:
-            continue
-        key = normalize_text(f"{norm_wake} {norm_cmd}")
-        if key in intent_map:
-            matched_group, trigger = intent_map[key]
-            return matched_group, trigger, inline_cmd
-    return None
-
-
-def _single_stage_loop(
-    proc: subprocess.Popen,
-    channels: int,
-    stage1_backend: STTBackend,
-    stage2_backend: STTBackend,
-    config: ActionsConfig,
-    stop_event: threading.Event,
-    telegram_client: TelegramClient,
-    livekit_connect_fn: Callable[[], Awaitable[None]] | None,
-    livekit_connected_flag: threading.Event,
-    on_stt_event: Callable[[str, dict], None] | None = None,
-    mqtt_client: "MQTTClient | None" = None,
-    loop: asyncio.AbstractEventLoop | None = None,
-    dispatch_loop: asyncio.AbstractEventLoop | None = None,
-) -> None:
-    """Single-stage: full transcription always; wake word + command in one phrase."""
-    backend = stage2_backend
-    cooldown_until = 0.0
-    alias_map = _build_alias_map(config.wake_words)
-    _eff_vad_ms = config.stt.vad_silence_ms
-
-    if on_stt_event:
-        on_stt_event("listening", {"wake_words": [g.word for g in config.wake_words]})
-
-    _listen_fn = _make_listen_fn(
-        proc, channels, backend, stop_event, on_stt_event, _eff_vad_ms
+    wake_phrase, residual = _match_wake_word(
+        partial, config.wake_words, threshold=config.stt.wake_match_threshold
     )
-    _dloop = dispatch_loop
-    assert _dloop is not None, "dispatch_loop must be provided to _single_stage_loop"
-    _ctx = ActionContext(
-        telegram_client=telegram_client,
-        livekit_connect_fn=livekit_connect_fn,
-        livekit_connected=livekit_connected_flag.is_set(),
-        listen_fn=_listen_fn,
-        mqtt_client=mqtt_client,
-        on_stt_event=on_stt_event,
-        actions_config=config,
-    )
-
-    _adaptive_rms = config.stt.stage1.adaptive_rms
-    _adaptive_rms_margin = config.stt.stage1.adaptive_rms_margin
-    _eff_stage1_rms = config.stt.stage1.rms_threshold
-    _noise_floor_buffer: list[float] = []
-
-    for data in _iter_gated_audio(
-        proc,
-        channels,
-        stop_event,
-        on_playback_end=backend.reset,
-        name="single-stage",
-        post_playback_ms=config.audio.post_playback_ms,
-    ):
-        _stt_heartbeat[0] = time.monotonic()
-        if data is None:
-            continue
-
-        if livekit_connected_flag.is_set():
-            cooldown_until = time.monotonic() + _STT_COOLDOWN
-            if on_stt_event:
-                on_stt_event("gated", {})
-            continue
-
-        rms = _rms_level(data)
-        if _adaptive_rms:
-            _noise_floor_buffer.append(rms)
-            if len(_noise_floor_buffer) > 50:
-                _noise_floor_buffer.pop(0)
-                _eff_stage1_rms = (
-                    sum(_noise_floor_buffer) / len(_noise_floor_buffer)
-                ) + _adaptive_rms_margin
-
-        if on_stt_event:
-            on_stt_event(
-                "level",
-                {
-                    "mic": rms,
-                    "rms_threshold": _eff_stage1_rms,
-                    "confidence": None,
-                    "adaptive": _adaptive_rms,
-                },
-            )
-
-        if time.monotonic() < cooldown_until:
-            backend.reset()
-            continue
-
-        if not backend.accept_waveform(data):
-            if on_stt_event:
-                partial = backend.partial_text()
-                if partial:
-                    on_stt_event("transcribing", {"text": partial})
-            continue
-
-        text = backend.text()
-        if not text:
-            backlog = _drain_pipe(proc)
-            if backlog:
-                logger.debug(
-                    f"single-stage: drained {backlog} backlog bytes after empty segment"
-                )
-            backend.reset()
-            continue
-
-        wake_group, command = _extract_wake_command(
-            text,
-            alias_map,
-            fuzzy=not isinstance(backend, VoskSTT),
-            wake_match_threshold=config.stt.stage1.wake_match_threshold,
-        )
-        if wake_group is None:
-            backlog = _drain_pipe(proc)
-            if backlog:
-                logger.debug(
-                    f"single-stage: drained {backlog} backlog bytes after non-wake segment"
-                )
-            backend.reset()
-            continue
-
-        if is_stt_sleeping():
-            temp_triggers = _resolve_triggers(wake_group, config.triggers)
-            temp_trigger = (
-                match_trigger(
-                    command,
-                    temp_triggers,
-                    algorithm=config.recognition.matching_algorithm,
-                    threshold=config.recognition.matching_threshold,
-                    min_word_overlap=config.recognition.min_word_overlap,
-                )
-                if command
-                else None
-            )
-            has_start_listening = temp_trigger is not None and any(
-                a.type == "start_listening" for a in temp_trigger.actions
-            )
-            if not has_start_listening:
-                phrases_str = get_wake_up_phrases(config)
-                logger.info(f"sleeping... wait for wake up {phrases_str}")
-                backend.reset()
-                continue
-
-        logger.info(f"Single-stage: wake='{wake_group.word}' command='{command}'")
-        if on_stt_event:
-            on_stt_event("wake", {"word": wake_group.word, "timeout": 0})
-
-        try:
-            play_wake_beep(config.recognition.wake_tone)
-        except Exception as e:
-            logger.debug(f"Wake beep failed: {e}")
-
-        if not command:
-            if on_stt_event:
-                on_stt_event("nomatch", {"transcript": ""})
-            _play_timeout()
-            continue
-
-        triggers = _resolve_triggers(wake_group, config.triggers)
-        trigger, score = match_trigger_with_score(
-            command,
-            triggers,
+    if wake_phrase is not None:
+        if not residual:
+            return True
+        trig, _ = match_trigger_with_score(
+            residual,
+            config.triggers,
             algorithm=config.recognition.matching_algorithm,
             threshold=config.recognition.matching_threshold,
             min_word_overlap=config.recognition.min_word_overlap,
         )
-        if trigger is None:
-            if on_stt_event:
-                on_stt_event("nomatch", {"transcript": command, "score": score})
-            if config.llm and config.llm.fallback_on_no_match:
-                _fb_trigger = Trigger(
-                    phrase="__llm_fallback__",
-                    actions=[ActionEntry(type="llm_chat", params={})],
-                )
-                try:
-                    _ctx.livekit_connected = livekit_connected_flag.is_set()
-                    _dloop.run_until_complete(
-                        asyncio.wait_for(
-                            dispatch(
-                                _fb_trigger,
-                                _ctx,
-                                wake_word=wake_group.word,
-                                transcript=command,
-                            ),
-                            timeout=config.recognition.dispatch_timeout,
-                        )
-                    )
-                except asyncio.TimeoutError:
-                    logger.warning(
-                        "LLM fallback dispatch timed out after %.0fs",
-                        config.recognition.dispatch_timeout,
-                    )
-                except Exception as e:
-                    logger.error("LLM fallback error: %s", e)
-                _drain_pipe(proc)
-                backend.reset()
-            else:
-                _play_timeout()
-            continue
+        return trig is not None
 
-        metrics.inc("commands_matched")
-        if on_stt_event:
-            on_stt_event(
-                "matched",
-                {"transcript": command, "trigger": trigger.phrase, "score": score},
-            )
-
-        try:
-            _ctx.livekit_connected = livekit_connected_flag.is_set()
-            _dloop.run_until_complete(
-                asyncio.wait_for(
-                    dispatch(
-                        trigger, _ctx, wake_word=wake_group.word, transcript=command
-                    ),
-                    timeout=config.recognition.dispatch_timeout,
-                )
-            )
-            _drain_pipe(proc)
-            backend.reset()
-            if on_stt_event:
-                on_stt_event(
-                    "listening", {"wake_words": [g.word for g in config.wake_words]}
-                )
-        except asyncio.TimeoutError:
-            logger.warning(
-                "Dispatch timed out after %.0fs — resetting and resuming",
-                config.recognition.dispatch_timeout,
-            )
-            _drain_pipe(proc)
-            backend.reset()
-        except Exception as e:
-            logger.error(f"Action dispatch failed: {e}")
-
-
-def _recognition_loop(
-    proc: subprocess.Popen,
-    channels: int,
-    stage1_backend: STTBackend,
-    stage2_backend: STTBackend,
-    config: ActionsConfig,
-    stop_event: threading.Event,
-    telegram_client: TelegramClient,
-    livekit_connect_fn: Callable[[], Awaitable[None]] | None,
-    livekit_connected_flag: threading.Event,
-    on_stt_event: Callable[[str, dict], None] | None = None,
-    mqtt_client: MQTTClient | None = None,
-    loop: asyncio.AbstractEventLoop | None = None,
-    dispatch_loop: asyncio.AbstractEventLoop | None = None,
-) -> None:
-    _eff_stage1_vad_ms = config.stt.stage1.vad_silence_ms
-    _eff_stage1_rms = config.stt.stage1.rms_threshold
-    _eff_stage1_min_speech_ms = config.stt.stage1.min_speech_ms
-    _eff_vad_ms = config.stt.vad_silence_ms
-
-    _adaptive_rms = config.stt.stage1.adaptive_rms
-    _adaptive_rms_margin = config.stt.stage1.adaptive_rms_margin
-    _noise_floor_buffer: list[float] = []
-
-    # Rolling audio buffer for trigger dumps (last ~8 s at 16 kHz s16le)
-    _dump_dir = config.dump_triggers_dir
-    _audio_buf: collections.deque[bytes] = collections.deque(
-        maxlen=int(8 * 16000 * 2 * channels / 4096) + 1
+    candidates = [t for t in config.triggers if not t.with_wake or woken]
+    if not candidates:
+        return False
+    trig, _ = match_trigger_with_score(
+        partial,
+        candidates,
+        algorithm=config.recognition.matching_algorithm,
+        threshold=config.recognition.matching_threshold,
+        min_word_overlap=config.recognition.min_word_overlap,
     )
-
-    alias_map = _build_alias_map(config.wake_words)
-    intent_map = build_intent_map(alias_map, config.triggers)
-    is_vosk = isinstance(stage1_backend, VoskSTT)
-    is_kws = isinstance(stage1_backend, SherpaKeywordSpotter)
-    vosk_use_grammar = config.stt.stage1.vosk_grammar
-
-    def _make_stage1_recognizer() -> "vosk.KaldiRecognizer":
-        if vosk_use_grammar:
-            # Wake-gated command phrases (scoped + global triggers) are only
-            # needed in stage-1 for single-breath "wake + command" partial
-            # matching. With partial_matching off they only widen the
-            # false-positive surface, so keep the grammar to wake words +
-            # direct-match triggers.
-            include_wake_gated = config.recognition.partial_matching
-            logger.info(
-                "Stage-1 grammar scope: %s (partial_matching=%s)",
-                "wake words + all trigger phrases"
-                if include_wake_gated
-                else "wake words + direct-match triggers only",
-                config.recognition.partial_matching,
-            )
-            rec = vosk.KaldiRecognizer(
-                vosk_model,
-                16000,
-                _grammar_json_all(
-                    config.wake_words,
-                    config.triggers,
-                    config.direct_triggers,
-                    include_wake_gated=include_wake_gated,
-                    label="stage-1",
-                ),
-            )
-        else:
-            rec = vosk.KaldiRecognizer(vosk_model, 16000)
-        rec.SetWords(True)
-        return rec
-
-    if is_vosk:
-        vosk_model = stage1_backend.model
-        stage1 = _make_stage1_recognizer()
-    else:
-        stage1 = None
-    cooldown_until = 0.0
-    was_gated = False
-    stage1_last_speech_t = 0.0
-    stage1_speech_ms = 0.0
-    _partial_stable_key: tuple | None = None
-    _partial_stable_reads: int = 0
-    _partial_stable_since: float = 0.0
-    _last_partial: str = ""
-    # Cache of the per-partial match results, keyed on the partial string. The
-    # matches are a deterministic function of the partial, so we recompute only
-    # when the partial text changes — the stability counter still advances on
-    # unchanged partials (a stable partial is exactly what it waits for).
-    _eval_partial: str = ""
-    _cached_intent_result: tuple | None = None
-    _cached_direct_partial: "Trigger | None" = None
-
-    if on_stt_event:
-        on_stt_event(
-            "listening",
-            {"wake_words": [g.word for g in config.wake_words]},
-        )
-
-    if mqtt_client:
-        mqtt_client.publish_threadsafe(
-            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "idle", loop=loop
-        )
-
-    def _reset_stage1_state() -> None:
-        nonlocal stage1_last_speech_t, stage1_speech_ms
-        nonlocal _partial_stable_key, _partial_stable_reads, _partial_stable_since
-        nonlocal _last_partial
-        nonlocal _eval_partial, _cached_intent_result, _cached_direct_partial
-        stage1_last_speech_t = 0.0
-        stage1_speech_ms = 0.0
-        _partial_stable_key = None
-        _partial_stable_reads = 0
-        _partial_stable_since = 0.0
-        _last_partial = ""
-        _eval_partial = ""
-        _cached_intent_result = None
-        _cached_direct_partial = None
-
-    if is_vosk:
-
-        def _on_playback_end() -> None:
-            assert stage1 is not None
-            stage1.Reset()
-            _reset_stage1_state()
-    elif is_kws:
-
-        def _on_playback_end() -> None:
-            stage1_backend.reset()
-    else:
-
-        def _on_playback_end() -> None:
-            stage1_backend.reset()
-            _reset_stage1_state()
-
-    _dispatch_ended_at: list[float] = [0.0]
-
-    def _fire(label: str, **kw) -> None:
-        """Dump pre-trigger audio then call _wake_detected."""
-        if _dump_dir:
-            _dump_trigger_wav(_audio_buf, channels, label, _dump_dir)
-        _wake_detected(**kw)
-
-    for data in _iter_gated_audio(
-        proc,
-        channels,
-        stop_event,
-        on_playback_end=_on_playback_end,
-        name="two-stage",
-        post_playback_ms=config.audio.post_playback_ms,
-        dispatch_ended_at=_dispatch_ended_at,
-    ):
-        _stt_heartbeat[0] = time.monotonic()
-        if data is None:
-            continue
-
-        if livekit_connected_flag.is_set():
-            cooldown_until = time.monotonic() + _STT_COOLDOWN
-            if not was_gated:
-                logger.info("STT gated (call active)")
-                if on_stt_event:
-                    on_stt_event("gated", {})
-                if mqtt_client:
-                    mqtt_client.publish_threadsafe(
-                        f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
-                        "gated",
-                        loop=loop,
-                    )
-                was_gated = True
-            continue
-
-        rms = _rms_level(data)
-        if _dump_dir:
-            _audio_buf.append(data)
-
-        # Adaptive RMS tracking
-        if _adaptive_rms and not was_gated and stage1_speech_ms == 0:
-            _noise_floor_buffer.append(rms)
-            if len(_noise_floor_buffer) > 50:  # ~1 second rolling window
-                _noise_floor_buffer.pop(0)
-                _current_noise_floor = sum(_noise_floor_buffer) / len(
-                    _noise_floor_buffer
-                )
-                _eff_stage1_rms = _current_noise_floor + _adaptive_rms_margin
-
-        if on_stt_event:
-            on_stt_event(
-                "level",
-                {
-                    "mic": rms,
-                    "rms_threshold": _eff_stage1_rms,
-                    "confidence": config.stt.stage1.confidence
-                    if is_vosk and vosk_use_grammar
-                    else None,
-                    "adaptive": _adaptive_rms,
-                },
-            )
-
-        if was_gated:
-            logger.info("STT resumed (call ended)")
-            was_gated = False
-            if on_stt_event:
-                on_stt_event(
-                    "listening", {"wake_words": [g.word for g in config.wake_words]}
-                )
-            if mqtt_client:
-                mqtt_client.publish_threadsafe(
-                    f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
-                    "idle",
-                    loop=loop,
-                )
-
-        _post_dispatch_s = config.recognition.post_dispatch_cooldown_ms / 1000.0
-        _in_post_dispatch = (
-            _post_dispatch_s > 0
-            and _dispatch_ended_at[0] > 0
-            and time.monotonic() - _dispatch_ended_at[0] < _post_dispatch_s
-        )
-        if time.monotonic() < cooldown_until or _in_post_dispatch:
-            if is_vosk:
-                stage1.Reset()
-                _reset_stage1_state()
-            elif is_kws:
-                stage1_backend.reset()
-            else:
-                stage1_backend.reset()
-                _reset_stage1_state()
-            continue
-
-        if is_kws:
-            if stage1_backend.accept_waveform(data):
-                keyword = stage1_backend.text()
-                norm_kw = normalize_text(keyword)
-                wake_match = alias_map.get(norm_kw)
-
-                # --- direct-match trigger (wake_words: []) ---
-                # ratio + min_word_overlap=1.0 for parity with the vosk/sherpa
-                # direct paths: a one-breath keyword like "galileo chiama stefano"
-                # must not match the bare "chiama stefano" direct trigger (which
-                # token_set_ratio would score ~100 on token overlap) — it should
-                # fall through to the one-breath wake+command handling below.
-                _direct_trigger = (
-                    match_trigger(
-                        keyword,
-                        config.direct_triggers,
-                        algorithm="ratio",
-                        threshold=config.recognition.matching_threshold,
-                        min_word_overlap=1.0,
-                    )
-                    if not wake_match and config.direct_triggers
-                    else None
-                )
-
-                # --- one-breath: wake word + inline command ---
-                _inline_cmd: str = ""
-                if (
-                    not wake_match
-                    and not _direct_trigger
-                    and config.recognition.kws_one_breath
-                ):
-                    wake_match, _inline_cmd = _extract_wake_command(
-                        keyword, alias_map, fuzzy=False
-                    )
-
-                if is_stt_sleeping():
-                    if wake_match or _direct_trigger:
-                        phrases_str = get_wake_up_phrases(config)
-                        logger.info(f"sleeping... wait for wake up {phrases_str}")
-                elif _direct_trigger:
-                    logger.info(
-                        "KWS direct-match trigger: %r -> %r",
-                        keyword,
-                        _direct_trigger.phrase,
-                    )
-                    _fire(
-                        _direct_trigger.phrase,
-                        wake_group=config.wake_words[0],
-                        proc=proc,
-                        channels=channels,
-                        backend=stage2_backend,
-                        config=config,
-                        stop_event=stop_event,
-                        telegram_client=telegram_client,
-                        livekit_connect_fn=livekit_connect_fn,
-                        livekit_connected_flag=livekit_connected_flag,
-                        on_stt_event=on_stt_event,
-                        mqtt_client=mqtt_client,
-                        loop=loop,
-                        dispatch_loop=dispatch_loop,
-                        vad_silence_ms=_eff_vad_ms,
-                        pre_transcript=_direct_trigger.phrase,
-                        pre_trigger=_direct_trigger,
-                    )
-                    _drain_pipe(proc)
-                    _dispatch_ended_at[0] = time.monotonic()
-                    if on_stt_event:
-                        on_stt_event(
-                            "listening",
-                            {"wake_words": [g.word for g in config.wake_words]},
-                        )
-                    if mqtt_client:
-                        mqtt_client.publish_threadsafe(
-                            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
-                            "idle",
-                            loop=loop,
-                        )
-                elif wake_match:
-                    logger.debug(
-                        "Stage1 KWS hit: %r%s",
-                        keyword,
-                        f" (inline: {_inline_cmd!r})" if _inline_cmd else "",
-                    )
-                    _fire(
-                        keyword,
-                        wake_group=wake_match,
-                        proc=proc,
-                        channels=channels,
-                        backend=stage2_backend,
-                        config=config,
-                        stop_event=stop_event,
-                        telegram_client=telegram_client,
-                        livekit_connect_fn=livekit_connect_fn,
-                        livekit_connected_flag=livekit_connected_flag,
-                        on_stt_event=on_stt_event,
-                        mqtt_client=mqtt_client,
-                        loop=loop,
-                        dispatch_loop=dispatch_loop,
-                        vad_silence_ms=_eff_vad_ms,
-                        pre_transcript=_inline_cmd,
-                    )
-                    _drain_pipe(proc)
-                    _dispatch_ended_at[0] = time.monotonic()
-                    if on_stt_event:
-                        on_stt_event(
-                            "listening",
-                            {"wake_words": [g.word for g in config.wake_words]},
-                        )
-                    if mqtt_client:
-                        mqtt_client.publish_threadsafe(
-                            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
-                            "idle",
-                            loop=loop,
-                        )
-                else:
-                    logger.debug(
-                        "Stage1 KWS hit but keyword %r not matched — ignoring", keyword
-                    )
-                    stage1_backend.reset()
-        elif is_vosk:
-            chunk_ms = len(data) / (16000 * 2) * 1000
-            if rms > _eff_stage1_rms:
-                stage1_last_speech_t = time.monotonic()
-                stage1_speech_ms += chunk_ms
-
-            # Only parse the partial when something consumes it — the JSON
-            # decode runs on every always-on chunk otherwise.
-            _need_partial = (
-                on_stt_event is not None or config.recognition.partial_matching
-            )
-            partial = ""
-            if _need_partial:
-                partial = json.loads(stage1.PartialResult()).get("partial", "").strip()
-                if on_stt_event and partial and partial != _last_partial:
-                    on_stt_event("transcribing", {"text": partial})
-                _last_partial = partial
-
-            if partial and config.recognition.partial_matching:
-                # Recompute matches only when the partial text changed; reuse
-                # the cached results otherwise (see _eval_partial above).
-                if partial != _eval_partial:
-                    _eval_partial = partial
-                    _cached_intent_result = _match_full_intent(
-                        partial, alias_map, intent_map
-                    )
-                    if _cached_intent_result is None and config.direct_triggers:
-                        _partial_word_count = len(normalize_text(partial).split())
-                        _sized_triggers = [
-                            t
-                            for t in config.direct_triggers
-                            if len(normalize_text(t.phrase).split())
-                            <= _partial_word_count
-                        ]
-                        _cached_direct_partial = (
-                            match_trigger(
-                                partial,
-                                _sized_triggers,
-                                # ratio instead of token_set_ratio: character-level
-                                # similarity prevents token-overlap false positives
-                                # (e.g. "stefano comando il" sharing "stefano" with
-                                # "chiama Stefano" scoring 100 with token_set_ratio).
-                                algorithm="ratio",
-                                threshold=config.recognition.matching_threshold,
-                                min_word_overlap=1.0,
-                            )
-                            if _sized_triggers
-                            else None
-                        )
-                    else:
-                        _cached_direct_partial = None
-                intent_result = _cached_intent_result
-                if intent_result is not None and not is_stt_sleeping():
-                    intent_key = (intent_result[0].word, intent_result[1].phrase)
-                    if intent_key == _partial_stable_key:
-                        _partial_stable_reads += 1
-                        elapsed_ms = (time.monotonic() - _partial_stable_since) * 1000
-                        if (
-                            _partial_stable_reads
-                            >= config.recognition.partial_stability_reads
-                            and elapsed_ms >= config.recognition.partial_stability_ms
-                        ):
-                            wake_group, trigger, inline_cmd = intent_result
-                            logger.info("Partial intent fired: %r", partial)
-                            _reset_stage1_state()
-                            stage1.Reset()
-                            _fire(
-                                trigger.phrase,
-                                wake_group=wake_group,
-                                proc=proc,
-                                channels=channels,
-                                pre_transcript=inline_cmd,
-                                backend=stage2_backend,
-                                config=config,
-                                stop_event=stop_event,
-                                telegram_client=telegram_client,
-                                livekit_connect_fn=livekit_connect_fn,
-                                livekit_connected_flag=livekit_connected_flag,
-                                on_stt_event=on_stt_event,
-                                mqtt_client=mqtt_client,
-                                loop=loop,
-                                dispatch_loop=dispatch_loop,
-                                vad_silence_ms=_eff_vad_ms,
-                            )
-                            _drain_pipe(proc)
-                            _dispatch_ended_at[0] = time.monotonic()
-                            if on_stt_event:
-                                on_stt_event(
-                                    "listening",
-                                    {"wake_words": [g.word for g in config.wake_words]},
-                                )
-                            if mqtt_client:
-                                mqtt_client.publish_threadsafe(
-                                    f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
-                                    "idle",
-                                    loop=loop,
-                                )
-                            continue
-                    else:
-                        _partial_stable_key = intent_key
-                        _partial_stable_reads = 1
-                        _partial_stable_since = time.monotonic()
-                elif config.direct_triggers and not is_stt_sleeping():
-                    _direct_partial = _cached_direct_partial
-                    if _direct_partial:
-                        direct_key = ("__direct__", _direct_partial.phrase)
-                        if direct_key == _partial_stable_key:
-                            _partial_stable_reads += 1
-                            elapsed_ms = (
-                                time.monotonic() - _partial_stable_since
-                            ) * 1000
-                            if (
-                                _partial_stable_reads
-                                >= config.recognition.partial_stability_reads
-                                and elapsed_ms
-                                >= config.recognition.partial_stability_ms
-                            ):
-                                logger.info("Partial direct trigger fired: %r", partial)
-                                _reset_stage1_state()
-                                stage1.Reset()
-                                _fire(
-                                    _direct_partial.phrase,
-                                    wake_group=config.wake_words[0],
-                                    proc=proc,
-                                    channels=channels,
-                                    pre_transcript=_direct_partial.phrase,
-                                    pre_trigger=_direct_partial,
-                                    backend=stage2_backend,
-                                    config=config,
-                                    stop_event=stop_event,
-                                    telegram_client=telegram_client,
-                                    livekit_connect_fn=livekit_connect_fn,
-                                    livekit_connected_flag=livekit_connected_flag,
-                                    on_stt_event=on_stt_event,
-                                    mqtt_client=mqtt_client,
-                                    loop=loop,
-                                    dispatch_loop=dispatch_loop,
-                                    vad_silence_ms=_eff_vad_ms,
-                                )
-                                _drain_pipe(proc)
-                                _dispatch_ended_at[0] = time.monotonic()
-                                if on_stt_event:
-                                    on_stt_event(
-                                        "listening",
-                                        {
-                                            "wake_words": [
-                                                g.word for g in config.wake_words
-                                            ]
-                                        },
-                                    )
-                                if mqtt_client:
-                                    mqtt_client.publish_threadsafe(
-                                        f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
-                                        "idle",
-                                        loop=loop,
-                                    )
-                                continue
-                        else:
-                            _partial_stable_key = direct_key
-                            _partial_stable_reads = 1
-                            _partial_stable_since = time.monotonic()
-                    else:
-                        _partial_stable_key = None
-                        _partial_stable_reads = 0
-                        _partial_stable_since = 0.0
-                else:
-                    _partial_stable_key = None
-                    _partial_stable_reads = 0
-                    _partial_stable_since = 0.0
-
-            vad_triggered = (
-                stage1_speech_ms >= _eff_stage1_min_speech_ms
-                and stage1_last_speech_t > 0
-                and (time.monotonic() - stage1_last_speech_t) * 1000
-                >= _eff_stage1_vad_ms
-            )
-            endpoint_fired = stage1.AcceptWaveform(data)
-
-            if not endpoint_fired and not vad_triggered:
-                continue
-
-            if vad_triggered and not endpoint_fired:
-                result = json.loads(stage1.FinalResult())
-                rms_gate = 0.0  # speech already confirmed by software VAD
-                logger.debug("Stage1 Vosk force-finalized by software VAD")
-            else:
-                result = json.loads(stage1.Result())
-                # The chunk that fires the Vosk endpoint is usually trailing
-                # silence, so gating its RMS would reject valid wakes. Skip the
-                # chunk gate when the speech tracker already saw enough speech
-                # across the utterance.
-                rms_gate = (
-                    0.0
-                    if stage1_speech_ms >= _eff_stage1_min_speech_ms
-                    else config.stt.stage1.rms_threshold
-                )
-
-            stage1_last_speech_t = 0.0
-            stage1_speech_ms = 0.0
-
-            inline_cmd = ""
-            vosk_text = result.get("text", "").strip()
-            if vosk_use_grammar:
-                wake_match, inline_cmd = _vosk_check_result(
-                    data,
-                    result,
-                    alias_map,
-                    config.stt.stage1.confidence,
-                    config.stt.stage1.confidence_mode,
-                    rms_gate,
-                )
-            else:
-                text = vosk_text
-                logger.debug("Stage1 Vosk free-vocab result: %r", text)
-                wake_match, inline_cmd = (
-                    _extract_wake_command(text, alias_map, fuzzy=False)
-                    if text
-                    else (None, "")
-                )
-
-            if wake_match is not None and not is_stt_sleeping():
-                if wake_match.skip_unmatched_inline:
-                    if not inline_cmd:
-                        logger.debug(
-                            "skip_unmatched_inline: standalone wake %r with no command — skipping",
-                            wake_match.word,
-                        )
-                        if on_stt_event:
-                            on_stt_event(
-                                "skipped",
-                                {"word": wake_match.word, "text": ""},
-                            )
-                        _reset_stage1_state()
-                        stage1.Reset()
-                        continue
-                    triggers = _resolve_triggers(wake_match, config.triggers)
-                    if not match_trigger(
-                        inline_cmd,
-                        triggers,
-                        algorithm=config.recognition.matching_algorithm,
-                        threshold=config.recognition.matching_threshold,
-                        min_word_overlap=config.recognition.min_word_overlap,
-                    ):
-                        logger.debug(
-                            "skip_unmatched_inline: inline %r didn't match any trigger for %r",
-                            inline_cmd,
-                            wake_match.word,
-                        )
-                        if on_stt_event:
-                            on_stt_event(
-                                "skipped",
-                                {"word": wake_match.word, "text": inline_cmd},
-                            )
-                        _reset_stage1_state()
-                        stage1.Reset()
-                        continue
-                _fire(
-                    vosk_text,
-                    wake_group=wake_match,
-                    proc=proc,
-                    channels=channels,
-                    backend=stage2_backend,
-                    config=config,
-                    stop_event=stop_event,
-                    telegram_client=telegram_client,
-                    livekit_connect_fn=livekit_connect_fn,
-                    livekit_connected_flag=livekit_connected_flag,
-                    on_stt_event=on_stt_event,
-                    mqtt_client=mqtt_client,
-                    loop=loop,
-                    dispatch_loop=dispatch_loop,
-                    vad_silence_ms=_eff_vad_ms,
-                    pre_transcript=inline_cmd,
-                )
-                logger.debug(
-                    f"two-stage: dispatch returned — livekit_flag={livekit_connected_flag.is_set()} "
-                    f"was_gated={was_gated}"
-                )
-                _drain_pipe(proc)
-                _dispatch_ended_at[0] = time.monotonic()
-                _reset_stage1_state()
-                # Reset() clears decoder state without recompiling the grammar
-                # FST — far cheaper than rebuilding the recognizer, avoiding a
-                # post-command latency spike on the target board.
-                stage1.Reset()
-                if on_stt_event:
-                    on_stt_event(
-                        "listening",
-                        {"wake_words": [g.word for g in config.wake_words]},
-                    )
-                if mqtt_client:
-                    mqtt_client.publish_threadsafe(
-                        f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
-                        "idle",
-                        loop=loop,
-                    )
-            else:
-                if vosk_use_grammar and vosk_text and config.wake_words:
-                    _direct_triggers = config.direct_triggers
-                    _dm_trigger = None
-                    if _direct_triggers:
-                        _vosk_words = len(vosk_text.split())
-                        _dm_candidates = [
-                            t
-                            for t in _direct_triggers
-                            if _vosk_words >= len(normalize_text(t.phrase).split())
-                        ]
-                        _dm_trigger = (
-                            match_trigger(
-                                vosk_text,
-                                _dm_candidates,
-                                algorithm="ratio",
-                                threshold=config.recognition.matching_threshold,
-                                min_word_overlap=1.0,
-                            )
-                            if _dm_candidates
-                            else None
-                        )
-                        if _dm_trigger is not None:
-                            logger.info(
-                                "Direct-match trigger: %r -> %r",
-                                vosk_text,
-                                _dm_trigger.phrase,
-                            )
-                            _reset_stage1_state()
-                            stage1.Reset()
-                            _fire(
-                                _dm_trigger.phrase,
-                                wake_group=config.wake_words[0],
-                                proc=proc,
-                                channels=channels,
-                                backend=stage2_backend,
-                                config=config,
-                                stop_event=stop_event,
-                                telegram_client=telegram_client,
-                                livekit_connect_fn=livekit_connect_fn,
-                                livekit_connected_flag=livekit_connected_flag,
-                                on_stt_event=on_stt_event,
-                                mqtt_client=mqtt_client,
-                                loop=loop,
-                                dispatch_loop=dispatch_loop,
-                                vad_silence_ms=_eff_vad_ms,
-                                pre_transcript=vosk_text,
-                                pre_trigger=_dm_trigger,
-                            )
-                            _drain_pipe(proc)
-                            _dispatch_ended_at[0] = time.monotonic()
-                            if on_stt_event:
-                                on_stt_event(
-                                    "listening",
-                                    {"wake_words": [g.word for g in config.wake_words]},
-                                )
-                            if mqtt_client:
-                                mqtt_client.publish_threadsafe(
-                                    f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
-                                    "idle",
-                                    loop=loop,
-                                )
-                            continue
-                    if _dm_trigger is None and is_stt_sleeping() and vosk_text:
-                        phrases_str = get_wake_up_phrases(config)
-                        logger.info(f"sleeping... wait for wake up {phrases_str}")
-                _drain_pipe(proc)
-                _reset_stage1_state()
-                stage1.Reset()
-        else:
-            chunk_ms = len(data) / (16000 * 2) * 1000
-            if rms > _eff_stage1_rms:
-                stage1_last_speech_t = time.monotonic()
-                stage1_speech_ms += chunk_ms
-
-            vad_triggered = (
-                stage1_speech_ms >= _eff_stage1_min_speech_ms
-                and stage1_last_speech_t > 0
-                and (time.monotonic() - stage1_last_speech_t) * 1000
-                >= _eff_stage1_vad_ms
-            )
-            endpoint_fired = stage1_backend.accept_waveform(data)
-
-            if endpoint_fired or vad_triggered:
-                speech_ms_snapshot = stage1_speech_ms
-                if vad_triggered and not endpoint_fired:
-                    text = stage1_backend.finalize().strip()
-                    trigger_src = "vad"
-                else:
-                    text = stage1_backend.text().strip()
-                    stage1_backend.reset()
-                    trigger_src = "endpoint"
-                stage1_last_speech_t = 0.0
-                stage1_speech_ms = 0.0
-                _last_partial = ""
-                if (
-                    trigger_src == "endpoint"
-                    and speech_ms_snapshot < _eff_stage1_min_speech_ms
-                ):
-                    logger.debug(
-                        "stage-1 sherpa endpoint rejected: speech_ms=%.0f < min=%d",
-                        speech_ms_snapshot,
-                        _eff_stage1_min_speech_ms,
-                    )
-                    continue
-                if text:
-                    logger.debug(f"Stage1 result (sherpa/{trigger_src}): {text!r}")
-
-                    # Direct-match triggers (wake_words: []) — checked before wake words.
-                    # Filter to candidates whose phrase is no longer than the transcript
-                    # so a single-token noise artifact can't score 100 against a
-                    # multi-word trigger (e.g. 'e' → 'che ora è').
-                    _dm_trigger = None
-                    if config.direct_triggers:
-                        _sherpa_words = len(normalize_text(text).split())
-                        _dm_candidates = [
-                            t
-                            for t in config.direct_triggers
-                            if _sherpa_words >= len(normalize_text(t.phrase).split())
-                        ]
-                        _dm_trigger = (
-                            match_trigger(
-                                text,
-                                _dm_candidates,
-                                # ratio (not token_set_ratio) for parity with the
-                                # vosk and sherpa-partial direct paths: character-level
-                                # similarity rejects longer/extra-word utterances that
-                                # merely contain the trigger's words (e.g. "chiama
-                                # stefano per favore" or "stefano comando il"), which
-                                # token_set_ratio would score ~100.
-                                algorithm="ratio",
-                                threshold=config.recognition.matching_threshold,
-                                min_word_overlap=1.0,
-                            )
-                            if _dm_candidates
-                            else None
-                        )
-
-                    wake_match = _approx_wake_match(
-                        text,
-                        alias_map,
-                        threshold=config.stt.stage1.wake_match_threshold,
-                    )
-
-                    if is_stt_sleeping():
-                        if wake_match or _dm_trigger:
-                            phrases_str = get_wake_up_phrases(config)
-                            logger.info(f"sleeping... wait for wake up {phrases_str}")
-                    elif _dm_trigger:
-                        logger.info(
-                            "Stage1 sherpa direct-match: %r -> %r",
-                            text,
-                            _dm_trigger.phrase,
-                        )
-                        _fire(
-                            _dm_trigger.phrase,
-                            wake_group=config.wake_words[0],
-                            proc=proc,
-                            channels=channels,
-                            backend=stage2_backend,
-                            config=config,
-                            stop_event=stop_event,
-                            telegram_client=telegram_client,
-                            livekit_connect_fn=livekit_connect_fn,
-                            livekit_connected_flag=livekit_connected_flag,
-                            on_stt_event=on_stt_event,
-                            mqtt_client=mqtt_client,
-                            loop=loop,
-                            dispatch_loop=dispatch_loop,
-                            vad_silence_ms=_eff_vad_ms,
-                            pre_transcript=_dm_trigger.phrase,
-                            pre_trigger=_dm_trigger,
-                        )
-                        _drain_pipe(proc)
-                        _dispatch_ended_at[0] = time.monotonic()
-                        stage1_last_speech_t = 0.0
-                        stage1_speech_ms = 0.0
-                        if on_stt_event:
-                            on_stt_event(
-                                "listening",
-                                {"wake_words": [g.word for g in config.wake_words]},
-                            )
-                        if mqtt_client:
-                            mqtt_client.publish_threadsafe(
-                                f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
-                                "idle",
-                                loop=loop,
-                            )
-                    elif wake_match:
-                        # One-breath: if the transcript contains the wake word
-                        # followed by a command, extract the command portion and
-                        # pass it to stage-2 as pre_transcript so it fires
-                        # immediately without waiting for another utterance.
-                        _, _inline_cmd = _extract_wake_command(
-                            text,
-                            alias_map,
-                            fuzzy=True,
-                            wake_match_threshold=config.stt.stage1.wake_match_threshold,
-                        )
-                        # Only trust the extracted inline command if it actually
-                        # matches a known trigger. Open-vocabulary backends often
-                        # append short acoustic artifacts (e.g. "egli", "ei") at
-                        # the tail of the wake word — those would otherwise skip
-                        # stage-2 capture and always fail with "no match".
-                        if _inline_cmd:
-                            _norm_cmd = normalize_text(_inline_cmd)
-                            _inline_cmd_valid = any(
-                                normalize_text(f"{nw} {_norm_cmd}") in intent_map
-                                for nw, grp in alias_map.items()
-                                if grp is wake_match
-                            )
-                            if not _inline_cmd_valid:
-                                _inline_cmd = ""
-                        _fire(
-                            text,
-                            wake_group=wake_match,
-                            proc=proc,
-                            channels=channels,
-                            backend=stage2_backend,
-                            config=config,
-                            stop_event=stop_event,
-                            telegram_client=telegram_client,
-                            livekit_connect_fn=livekit_connect_fn,
-                            livekit_connected_flag=livekit_connected_flag,
-                            on_stt_event=on_stt_event,
-                            mqtt_client=mqtt_client,
-                            loop=loop,
-                            dispatch_loop=dispatch_loop,
-                            vad_silence_ms=_eff_vad_ms,
-                            pre_transcript=_inline_cmd or None,
-                        )
-                        _drain_pipe(proc)
-                        _dispatch_ended_at[0] = time.monotonic()
-                        stage1_last_speech_t = 0.0
-                        stage1_speech_ms = 0.0
-                        if on_stt_event:
-                            on_stt_event(
-                                "listening",
-                                {"wake_words": [g.word for g in config.wake_words]},
-                            )
-                        if mqtt_client:
-                            mqtt_client.publish_threadsafe(
-                                f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
-                                "idle",
-                                loop=loop,
-                            )
-            else:
-                partial = stage1_backend.partial_text().strip()
-                if partial and partial != _last_partial and on_stt_event:
-                    on_stt_event("transcribing", {"text": partial})
-                _last_partial = partial
-
-                # One-breath partial firing: if the partial already contains a
-                # recognised wake word + command, fire immediately without waiting
-                # for the endpoint (mirrors vosk's partial_matching behaviour).
-                if (
-                    partial
-                    and config.recognition.partial_matching
-                    and not is_stt_sleeping()
-                ):
-                    # Recompute only when the partial changed (see vosk path).
-                    if partial != _eval_partial:
-                        _eval_partial = partial
-                        _cached_intent_result = _match_full_intent(
-                            partial, alias_map, intent_map
-                        )
-                        if _cached_intent_result is None and config.direct_triggers:
-                            _partial_word_count = len(normalize_text(partial).split())
-                            _sized_triggers = [
-                                t
-                                for t in config.direct_triggers
-                                if len(normalize_text(t.phrase).split())
-                                <= _partial_word_count
-                            ]
-                            _cached_direct_partial = (
-                                match_trigger(
-                                    partial,
-                                    _sized_triggers,
-                                    algorithm="ratio",
-                                    threshold=config.recognition.matching_threshold,
-                                    min_word_overlap=1.0,
-                                )
-                                if _sized_triggers
-                                else None
-                            )
-                        else:
-                            _cached_direct_partial = None
-                    intent_result = _cached_intent_result
-                    if intent_result is not None:
-                        intent_key = (intent_result[0].word, intent_result[1].phrase)
-                        if intent_key == _partial_stable_key:
-                            _partial_stable_reads += 1
-                            elapsed_ms = (
-                                time.monotonic() - _partial_stable_since
-                            ) * 1000
-                            if (
-                                _partial_stable_reads
-                                >= config.recognition.partial_stability_reads
-                                and elapsed_ms
-                                >= config.recognition.partial_stability_ms
-                            ):
-                                wake_group, trigger, inline_cmd = intent_result
-                                logger.info(
-                                    "Partial intent fired (sherpa): %r", partial
-                                )
-                                _reset_stage1_state()
-                                stage1_backend.reset()
-                                _fire(
-                                    trigger.phrase,
-                                    wake_group=wake_group,
-                                    proc=proc,
-                                    channels=channels,
-                                    pre_transcript=inline_cmd,
-                                    backend=stage2_backend,
-                                    config=config,
-                                    stop_event=stop_event,
-                                    telegram_client=telegram_client,
-                                    livekit_connect_fn=livekit_connect_fn,
-                                    livekit_connected_flag=livekit_connected_flag,
-                                    on_stt_event=on_stt_event,
-                                    mqtt_client=mqtt_client,
-                                    loop=loop,
-                                    dispatch_loop=dispatch_loop,
-                                    vad_silence_ms=_eff_vad_ms,
-                                )
-                                _drain_pipe(proc)
-                                _dispatch_ended_at[0] = time.monotonic()
-                                if on_stt_event:
-                                    on_stt_event(
-                                        "listening",
-                                        {
-                                            "wake_words": [
-                                                g.word for g in config.wake_words
-                                            ]
-                                        },
-                                    )
-                                if mqtt_client:
-                                    mqtt_client.publish_threadsafe(
-                                        f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
-                                        "idle",
-                                        loop=loop,
-                                    )
-                                continue
-                        else:
-                            _partial_stable_key = intent_key
-                            _partial_stable_reads = 1
-                            _partial_stable_since = time.monotonic()
-                    elif config.direct_triggers:
-                        _direct_partial = _cached_direct_partial
-                        if _direct_partial:
-                            direct_key = ("__direct__", _direct_partial.phrase)
-                            if direct_key == _partial_stable_key:
-                                _partial_stable_reads += 1
-                                elapsed_ms = (
-                                    time.monotonic() - _partial_stable_since
-                                ) * 1000
-                                if (
-                                    _partial_stable_reads
-                                    >= config.recognition.partial_stability_reads
-                                    and elapsed_ms
-                                    >= config.recognition.partial_stability_ms
-                                ):
-                                    logger.info(
-                                        "Partial direct trigger fired (sherpa): %r",
-                                        partial,
-                                    )
-                                    _reset_stage1_state()
-                                    stage1_backend.reset()
-                                    _fire(
-                                        _direct_partial.phrase,
-                                        wake_group=config.wake_words[0],
-                                        proc=proc,
-                                        channels=channels,
-                                        pre_transcript=_direct_partial.phrase,
-                                        pre_trigger=_direct_partial,
-                                        backend=stage2_backend,
-                                        config=config,
-                                        stop_event=stop_event,
-                                        telegram_client=telegram_client,
-                                        livekit_connect_fn=livekit_connect_fn,
-                                        livekit_connected_flag=livekit_connected_flag,
-                                        on_stt_event=on_stt_event,
-                                        mqtt_client=mqtt_client,
-                                        loop=loop,
-                                        dispatch_loop=dispatch_loop,
-                                        vad_silence_ms=_eff_vad_ms,
-                                    )
-                                    _drain_pipe(proc)
-                                    _dispatch_ended_at[0] = time.monotonic()
-                                    if on_stt_event:
-                                        on_stt_event(
-                                            "listening",
-                                            {
-                                                "wake_words": [
-                                                    g.word for g in config.wake_words
-                                                ]
-                                            },
-                                        )
-                                    if mqtt_client:
-                                        mqtt_client.publish_threadsafe(
-                                            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
-                                            "idle",
-                                            loop=loop,
-                                        )
-                                    continue
-                            else:
-                                _partial_stable_key = direct_key
-                                _partial_stable_reads = 1
-                                _partial_stable_since = time.monotonic()
-                        else:
-                            _partial_stable_key = None
-                            _partial_stable_reads = 0
-                            _partial_stable_since = 0.0
-                    else:
-                        _partial_stable_key = None
-                        _partial_stable_reads = 0
-
-                max_pw = config.stt.stage1.max_partial_words
-                if max_pw > 0 and partial and len(partial.split()) >= max_pw:
-                    logger.debug(
-                        "stage-1 partial exceeded %d words, resetting stream", max_pw
-                    )
-                    stage1_backend.reset()
-                    _last_partial = ""
+    return trig is not None
 
 
 def _follow_up_active(trigger: "Trigger | None", config: ActionsConfig) -> bool:
-    """Return whether a follow-up window should open after dispatching *trigger*.
+    """Return whether a follow-up window should open after dispatching trigger.
 
-    Per-trigger follow_up override takes precedence over the global flag.
-    llm_chat-only triggers manage their own multi-turn loop, so we suppress the
+    Per-trigger follow_up overrides the global flag.
+    llm_chat-only triggers manage their own conversation loop; suppress the
     outer follow-up window for them to avoid double-looping.
     """
     if not config.recognition.follow_up and (
         trigger is None or trigger.follow_up is None
     ):
         return False
-    if trigger is not None and trigger.follow_up is not None:
-        explicit = trigger.follow_up
-    else:
-        explicit = config.recognition.follow_up
+    explicit = (
+        trigger.follow_up
+        if trigger is not None and trigger.follow_up is not None
+        else config.recognition.follow_up
+    )
     if not explicit:
         return False
-    # Suppress for llm_chat-only triggers — they run their own conversation loop.
     if trigger is not None and all(a.type == "llm_chat" for a in trigger.actions):
         return False
     return True
 
 
-def _wake_detected(
-    wake_group: WakeWordGroup,
+def _recognition_loop(
     proc: subprocess.Popen,
     channels: int,
     backend: STTBackend,
@@ -1810,63 +252,74 @@ def _wake_detected(
     livekit_connect_fn: Callable[[], Awaitable[None]] | None,
     livekit_connected_flag: threading.Event,
     on_stt_event: Callable[[str, dict], None] | None = None,
-    mqtt_client: MQTTClient | None = None,
+    mqtt_client: "MQTTClient | None" = None,
     loop: asyncio.AbstractEventLoop | None = None,
     dispatch_loop: asyncio.AbstractEventLoop | None = None,
-    vad_silence_ms: int | None = None,
-    pre_transcript: str = "",
-    pre_trigger: "Trigger | None" = None,
+    capture_restart_event: threading.Event | None = None,
 ) -> None:
-    if pre_trigger is not None:
-        logger.info(f"Direct trigger: '{pre_trigger.phrase}'")
-        if on_stt_event:
-            on_stt_event("direct", {"phrase": pre_trigger.phrase})
-    else:
-        logger.info(f"Wake word detected: '{wake_group.word}'")
-        metrics.inc("wake_detections")
-        if on_stt_event:
-            on_stt_event(
-                "wake",
-                {
-                    "word": wake_group.word,
-                    "timeout": config.recognition.command_timeout,
-                },
-            )
-        try:
-            play_wake_beep(config.recognition.wake_tone)
-        except Exception as e:
-            logger.debug(f"Wake beep failed: {e}")
-    if mqtt_client:
-        mqtt_client.publish_threadsafe(
-            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
-            "listening",
-            loop=loop,
+    """Single-model transcribe→match→gate→tone→dispatch recognition loop."""
+    assert dispatch_loop is not None
+
+    wake_deadline: float = 0.0
+    _dispatch_ended_at: list[float] = [0.0]
+    _noise_floor: list[float] = []
+    speech_ms: float = 0.0
+    last_speech_t: float = 0.0
+    was_gated = False
+    _last_partial: str = ""
+    # Decoder hygiene during idle: hardware-NS speakerphones (SP92) gate a
+    # quiet room to digital zeros, and minutes of pure zeros are pathological
+    # input for Vosk's adaptive decoder state. Reset the recognizer after
+    # every _IDLE_RESET_S of continuous sub-threshold audio so the first real
+    # utterance after idle decodes from a clean slate.
+    _IDLE_RESET_S = 30.0
+    _last_voice_t: float = time.monotonic()
+    _last_idle_reset: float = time.monotonic()
+
+    from alexa_custom.audio_hw import get_profile_stt_overrides as _get_stt_overrides
+
+    _profile_stt = _get_stt_overrides()
+    _eff_rms = float(_profile_stt.get("rms_threshold", config.stt.rms_threshold))
+    _vad_silence_ms = int(_profile_stt.get("vad_silence_ms", config.stt.vad_silence_ms))
+    _fast_vad_ms = int(_profile_stt.get("fast_vad_ms", config.stt.fast_vad_ms))
+    if _fast_vad_ms >= _vad_silence_ms:
+        _fast_vad_ms = 0  # fast path can never fire before the normal endpoint
+    if _profile_stt:
+        logger.debug(
+            "Profile STT overrides active: rms_threshold=%.4f vad_silence_ms=%d",
+            _eff_rms,
+            _vad_silence_ms,
         )
 
-    if pre_transcript:
-        logger.info(f"Inline command from stage-1: '{pre_transcript}'")
-        transcript = pre_transcript
-    else:
-        transcript = capture_transcript(
-            proc,
-            channels,
-            backend,
-            config.recognition.command_timeout,
-            stop_event,
-            on_stt_event,
-            flush_ms=config.stt.flush_ms,
-            vad_silence_ms=vad_silence_ms,
-            hard_timeout=config.recognition.command_max_timeout,
-        )
-    logger.info(f"Command transcript: '{transcript}'")
+    # Rolling pre-trigger buffer for dump_triggers_dir, budgeted in BYTES.
+    # Chunk sizes vary by capture backend (parec ~4 KB reads, GStreamer ~320-byte
+    # 10 ms buffers), so a chunk-count maxlen silently shrinks the window — a
+    # 63-chunk cap held ~1.2 s of gst audio instead of the intended 8 s.
+    # The buffer always holds post-downmix MONO s16le chunks (_iter_gated_audio
+    # downmixes before yielding), regardless of the capture's own channel
+    # count — so the budget and dump WAV must always be sized for 1 channel,
+    # not the capture `channels` (which was doubling both for stereo sources).
+    _audio_buf: collections.deque[bytes] = collections.deque()
+    _audio_buf_bytes = 0
+    _audio_buf_max = 8 * 16000 * 2
+
+    def _buffer_dump_audio(chunk: bytes) -> None:
+        nonlocal _audio_buf_bytes
+        _audio_buf.append(chunk)
+        _audio_buf_bytes += len(chunk)
+        while _audio_buf_bytes > _audio_buf_max:
+            _audio_buf_bytes -= len(_audio_buf.popleft())
 
     _listen_fn = _make_listen_fn(
-        proc, channels, backend, stop_event, on_stt_event, vad_silence_ms
+        proc,
+        channels,
+        backend,
+        stop_event,
+        on_stt_event,
+        _vad_silence_ms,
+        confidence=config.stt.confidence,
+        confidence_mode=config.stt.confidence_mode,
     )
-    _dloop = dispatch_loop
-    if _dloop is None:
-        logger.error("_wake_detected: dispatch_loop is None — cannot dispatch actions")
-        return
     _ctx = ActionContext(
         telegram_client=telegram_client,
         livekit_connect_fn=livekit_connect_fn,
@@ -1877,179 +330,669 @@ def _wake_detected(
         actions_config=config,
     )
 
-    if not transcript:
-        if on_stt_event:
-            on_stt_event("nomatch", {"transcript": ""})
-        _play_timeout()
-        return
+    def woken() -> bool:
+        return time.monotonic() < wake_deadline
 
-    def _handle_command(
-        cmd: str, forced_trigger: "Trigger | None" = None
-    ) -> "Trigger | None":
-        """Match and dispatch one command turn. Returns the matched trigger or None."""
+    def _reset_vad() -> None:
+        nonlocal speech_ms, last_speech_t
+        speech_ms = 0.0
+        last_speech_t = 0.0
+
+    def _publish_state(state: str) -> None:
         if mqtt_client:
-            payload = json.dumps(
-                {"text": cmd, "wake_word": wake_group.word, "timestamp": time.time()}
-            )
             mqtt_client.publish_threadsafe(
-                f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/command",
-                payload,
+                f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
+                state,
                 loop=loop,
             )
 
-        score = 100.0
-        if forced_trigger is not None:
-            trig = forced_trigger
-        else:
-            if (
-                config.recognition.min_cmd_words > 0
-                and len(cmd.split()) < config.recognition.min_cmd_words
-            ):
-                if on_stt_event:
-                    on_stt_event("nomatch", {"transcript": cmd, "score": 0})
-                _play_timeout()
-                return None
-            triggers = _resolve_triggers(wake_group, config.triggers)
-            trig, score = match_trigger_with_score(
-                cmd,
-                triggers,
-                algorithm=config.recognition.matching_algorithm,
-                threshold=config.recognition.matching_threshold,
-                min_word_overlap=config.recognition.min_word_overlap,
-            )
+    def _dispatch_trigger(
+        trigger: Trigger,
+        wake_phrase: str | None,
+        transcript: str,
+        score: float,
+    ) -> None:
+        nonlocal wake_deadline
 
-        if trig is not None and is_stt_sleeping():
-            has_start_listening = any(a.type == "start_listening" for a in trig.actions)
-            if not has_start_listening:
-                phrases_str = get_wake_up_phrases(config)
-                logger.info(f"sleeping... wait for wake up {phrases_str}")
-                return None
-
-        if trig is not None and not is_stt_sleeping():
-            if any(a.type == "start_listening" for a in trig.actions):
-                logger.info(
-                    "start_listening trigger '%s' ignored: system is already awake",
-                    trig.phrase,
-                )
-                return None
-
-        if trig is None:
-            if on_stt_event:
-                on_stt_event("nomatch", {"transcript": cmd, "score": score})
-            if config.llm and config.llm.fallback_on_no_match:
-                _fb_trigger = Trigger(
-                    phrase="__llm_fallback__",
-                    actions=[ActionEntry(type="llm_chat", params={})],
-                )
-                try:
-                    _ctx.livekit_connected = livekit_connected_flag.is_set()
-                    _dloop.run_until_complete(
-                        asyncio.wait_for(
-                            dispatch(
-                                _fb_trigger,
-                                _ctx,
-                                wake_word=wake_group.word,
-                                transcript=cmd,
-                            ),
-                            timeout=config.recognition.dispatch_timeout,
-                        )
-                    )
-                except asyncio.TimeoutError:
-                    logger.warning(
-                        "LLM fallback dispatch timed out after %.0fs",
-                        config.recognition.dispatch_timeout,
-                    )
-                except Exception as e:
-                    logger.error("LLM fallback error: %s", e)
-                _drain_pipe(proc)
-                backend.reset()
-            else:
-                _play_timeout()
-            return None
+        if config.dump_triggers_dir:
+            # _audio_buf holds post-downmix mono chunks regardless of the
+            # capture's channel count — always dump as 1 channel.
+            _dump_trigger_wav(_audio_buf, 1, trigger.phrase, config.dump_triggers_dir)
 
         metrics.inc("commands_matched")
         if on_stt_event:
             on_stt_event(
-                "matched", {"transcript": cmd, "trigger": trig.phrase, "score": score}
+                "matched",
+                {
+                    "transcript": transcript,
+                    "phrase": trigger.commands[0]
+                    if trigger.commands
+                    else trigger.phrase,
+                    "score": score,
+                    "actions": [
+                        {"type": a.type, "params": a.params} for a in trigger.actions
+                    ],
+                },
+            )
+        if mqtt_client:
+            mqtt_client.publish_threadsafe(
+                f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/command",
+                json.dumps(
+                    {
+                        "text": transcript,
+                        "wake_word": wake_phrase or "",
+                        "timestamp": time.time(),
+                    }
+                ),
+                loop=loop,
             )
 
-        if trig.wake_words == []:
+        _timeout = (
+            trigger.dispatch_timeout
+            if trigger.dispatch_timeout is not None
+            else config.recognition.dispatch_timeout
+        )
+
+        async def _dispatch_with_heartbeat() -> None:
+            # Keep the watchdog heartbeat fresh for legitimate long dispatches
+            # (e.g. LLM conversations with reply windows) by stamping while
+            # the dispatch coroutine is actually yielding control back to the
+            # loop. A dispatch wedged in a non-yielding call (e.g. a
+            # synchronous subprocess without a timeout) blocks this loop too,
+            # so the stamp correctly stops advancing in that case.
+            async def _stamp_periodically() -> None:
+                while True:
+                    await asyncio.sleep(5.0)
+                    _stt_heartbeat[0] = time.monotonic()
+
+            stamp_task = asyncio.ensure_future(_stamp_periodically())
             try:
-                play_wake_beep(config.recognition.wake_tone)
-            except Exception as e:
-                logger.debug(f"Direct match beep failed: {e}")
+                await dispatch(
+                    trigger,
+                    _ctx,
+                    wake_word=wake_phrase or "",
+                    transcript=transcript,
+                )
+            finally:
+                stamp_task.cancel()
 
         try:
             _ctx.livekit_connected = livekit_connected_flag.is_set()
-            _dloop.run_until_complete(
-                asyncio.wait_for(
-                    dispatch(trig, _ctx, wake_word=wake_group.word, transcript=cmd),
-                    timeout=config.recognition.dispatch_timeout,
-                )
+            dispatch_loop.run_until_complete(
+                asyncio.wait_for(_dispatch_with_heartbeat(), timeout=_timeout)
             )
         except asyncio.TimeoutError:
             logger.warning(
                 "Dispatch timed out after %.0fs — resetting and resuming",
-                config.recognition.dispatch_timeout,
+                _timeout,
             )
-            _drain_pipe(proc)
-            backend.reset()
         except Exception as e:
-            logger.error(f"Action dispatch failed: {e}")
+            logger.error("Action dispatch failed: %s", e)
 
-        return trig
-
-    matched_trigger = _handle_command(transcript, forced_trigger=pre_trigger)
-
-    # Follow-up conversation loop: re-listen without requiring the wake word.
-    turns = 0
-    while (
-        _follow_up_active(matched_trigger, config)
-        and not livekit_connected_flag.is_set()
-        and turns < config.recognition.follow_up_max_turns
-    ):
-        turns += 1
         _drain_pipe(proc)
-        try:
-            play_wake_beep(config.recognition.follow_up_tone)
-        except Exception as e:
-            logger.debug(f"Follow-up tone failed: {e}")
-        if mqtt_client:
-            mqtt_client.publish_threadsafe(
-                f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
-                "listening",
-                loop=loop,
-            )
+        backend.reset()
+        _reset_vad()
+        _dispatch_ended_at[0] = time.monotonic()
+
+        if _follow_up_active(trigger, config) and not livekit_connected_flag.is_set():
+            wake_deadline = time.monotonic() + config.recognition.follow_up_timeout
+            try:
+                play_wake_beep_async(config.recognition.follow_up_tone)
+            except Exception:
+                pass
+        else:
+            wake_deadline = 0.0
+
+        if on_stt_event:
+            on_stt_event("listening", {"wake_words": config.wake_words})
+        _publish_state("idle")
+
+    if on_stt_event:
+        on_stt_event("listening", {"wake_words": config.wake_words})
+    _publish_state("idle")
+
+    for data in _iter_gated_audio(
+        proc,
+        channels,
+        stop_event,
+        on_playback_end=backend.reset,
+        name="single-model",
+        post_playback_ms=config.audio.post_playback_ms,
+        dispatch_ended_at=_dispatch_ended_at,
+        restart_event=capture_restart_event,
+        capture_stall_secs=config.stt.capture_stall_secs,
+    ):
+        _stt_heartbeat[0] = time.monotonic()
+
+        if livekit_connected_flag.is_set():
+            if not was_gated:
+                logger.info("STT gated (call active)")
+                if on_stt_event:
+                    on_stt_event("gated", {})
+                _publish_state("gated")
+                was_gated = True
+            backend.reset()
+            _reset_vad()
+            continue
+
+        if was_gated:
+            logger.info("STT resumed (call ended)")
+            was_gated = False
+            backend.reset()
+            _reset_vad()
+            if on_stt_event:
+                on_stt_event("listening", {"wake_words": config.wake_words})
+            _publish_state("idle")
+
+        if data is None:
+            continue
+
+        rms = _rms_level(data)
+
+        if config.stt.adaptive_rms and speech_ms == 0.0:
+            _noise_floor.append(rms)
+            if len(_noise_floor) > 50:
+                _noise_floor.pop(0)
+                _adaptive = (
+                    sum(_noise_floor) / len(_noise_floor)
+                ) + config.stt.adaptive_rms_margin
+                # Profile rms_threshold acts as a floor: the adaptive
+                # mechanism may raise the threshold in a loud room, but never
+                # drops below the calibrated profile value (which sets the
+                # minimum sensitivity ceiling for a quiet room).
+                _eff_rms = max(
+                    _adaptive, float(_profile_stt.get("rms_threshold", _adaptive))
+                )
+
         if on_stt_event:
             on_stt_event(
-                "listening", {"wake_words": [g.word for g in config.wake_words]}
+                "level",
+                {
+                    "mic": rms,
+                    "rms_threshold": _eff_rms,
+                    "confidence": None,
+                    "adaptive": config.stt.adaptive_rms,
+                },
             )
 
-        follow_up_transcript = capture_transcript(
-            proc,
-            channels,
-            backend,
-            config.recognition.follow_up_timeout,
-            stop_event,
-            on_stt_event,
-            flush_ms=config.stt.flush_ms,
-            vad_silence_ms=vad_silence_ms,
+        _post_s = config.recognition.post_dispatch_cooldown_ms / 1000.0
+        if (
+            _post_s > 0
+            and _dispatch_ended_at[0] > 0
+            and time.monotonic() - _dispatch_ended_at[0] < _post_s
+        ):
+            backend.reset()
+            _reset_vad()
+            continue
+
+        now = time.monotonic()
+        if rms > _eff_rms:
+            last_speech_t = now
+            _last_voice_t = now
+            speech_ms += (len(data) / 2) / 16000.0 * 1000.0
+        elif (
+            speech_ms == 0.0
+            and now - max(_last_voice_t, _last_idle_reset) >= _IDLE_RESET_S
+        ):
+            # Long idle, no utterance in progress: clear decoder state built
+            # up from gated silence/zeros before real speech arrives.
+            backend.reset()
+            _last_idle_reset = now
+
+        if config.dump_triggers_dir:
+            _buffer_dump_audio(data)
+
+        endpoint = backend.accept_waveform(data)
+
+        if on_stt_event and rms > _eff_rms:
+            partial = backend.partial_text()
+            if partial and partial != _last_partial:
+                on_stt_event("transcribing", {"text": partial})
+            _last_partial = partial
+
+        _silence_ms = (now - last_speech_t) * 1000.0 if last_speech_t > 0 else 0.0
+        _speech_done = speech_ms >= config.stt.min_speech_ms and last_speech_t > 0
+
+        vad_fire = _speech_done and _silence_ms >= _vad_silence_ms
+
+        # Fast endpoint: when the partial transcript is already a complete
+        # wake/trigger match, fire after fast_vad_ms instead of waiting the
+        # full vad_silence_ms. Free-form utterances never match and keep the
+        # long endpoint.
+        if (
+            not vad_fire
+            and not endpoint
+            and _fast_vad_ms > 0
+            and _speech_done
+            and _silence_ms >= _fast_vad_ms
+        ):
+            _p = backend.partial_text()
+            if _p and _fast_partial_hit(_p, config, woken()):
+                logger.debug(
+                    "Fast endpoint: partial %r after %.0f ms silence",
+                    _p,
+                    _silence_ms,
+                )
+                vad_fire = True
+
+        if vad_fire and not endpoint:
+            text = backend.finalize().strip()
+            # finalize() flushed the decoder (InputFinished); reset so the
+            # next utterance starts on a clean pipeline instead of feeding a
+            # flushed recognizer.
+            backend.reset()
+            _vad_speech_ms = speech_ms
+            _reset_vad()
+            _last_partial = ""
+        elif endpoint:
+            text = backend.text().strip()
+            _vad_speech_ms = speech_ms
+            backend.reset()
+            _reset_vad()
+            _last_partial = ""
+        else:
+            continue
+
+        if not text:
+            if on_stt_event and _vad_speech_ms >= 50.0:
+                on_stt_event("vad_empty", {"speech_ms": round(_vad_speech_ms)})
+            continue
+
+        # --- Wake word detection ---
+        wake_phrase, residual = _match_wake_word(
+            text,
+            config.wake_words,
+            threshold=config.stt.wake_match_threshold,
         )
-        if not follow_up_transcript:
-            logger.debug("Follow-up: silence — closing window")
-            break
 
-        from alexa_custom.llm import is_exit_phrase
-
-        exit_phrases = config.llm.exit_phrases if config.llm else None
-        if is_exit_phrase(follow_up_transcript, exit_phrases):
-            logger.debug(
-                "Follow-up: exit phrase '%s' — closing window", follow_up_transcript
+        # --- Acoustic confidence gate ---
+        # In grammar mode the recognizer snaps noise onto the closest phrase;
+        # the per-word `conf` is the only signal that separates that from a real
+        # utterance. 0.0 disables the gate (free-text default). When a wake word
+        # matched, score only its tokens (transcript minus the trailing command)
+        # — this mirrors the offline eval harness (_vosk_check_result), so
+        # first/min/mean behave identically online and offline, and a low-
+        # confidence trailing command can't sink an otherwise-clear wake. The
+        # command/direct-trigger path (no wake word) is scored over the full
+        # transcript, since there is no wake portion to isolate.
+        _conf = None
+        if config.stt.confidence > 0.0 and isinstance(backend, VoskSTT):
+            _n_words = (
+                _wake_token_count(text, residual) if wake_phrase is not None else None
             )
-            break
+            _conf = backend.last_confidence(
+                config.stt.confidence_mode, n_words=_n_words
+            )
+            if _conf < config.stt.confidence:
+                logger.debug(
+                    "Confidence gate rejected %r (conf=%.2f < %.2f, mode=%s, wake=%s)",
+                    text,
+                    _conf,
+                    config.stt.confidence,
+                    config.stt.confidence_mode,
+                    wake_phrase,
+                )
+                metrics.inc("confidence_rejections")
+                continue
 
-        logger.info("Follow-up turn %d: '%s'", turns, follow_up_transcript)
-        matched_trigger = _handle_command(follow_up_transcript)
+        logger.debug("Transcript: %r (conf=%s)", text, _conf)
+
+        if wake_phrase is not None:
+            if is_stt_sleeping():
+                # Sleeping: only react if residual matches a start_listening trigger
+                wake_up_candidates = [
+                    t
+                    for t in config.triggers
+                    if any(a.type == "start_listening" for a in t.actions)
+                ]
+                if residual and wake_up_candidates:
+                    trig, score = match_trigger_with_score(
+                        residual,
+                        wake_up_candidates,
+                        algorithm=config.recognition.matching_algorithm,
+                        threshold=config.recognition.matching_threshold,
+                        min_word_overlap=config.recognition.min_word_overlap,
+                    )
+                    if trig is not None:
+                        wake_deadline = (
+                            time.monotonic() + config.recognition.wake_window
+                        )
+                        try:
+                            play_wake_beep_async(config.recognition.wake_tone)
+                        except Exception:
+                            pass
+                        _dispatch_trigger(trig, wake_phrase, residual, score)
+                        continue
+                logger.info("Sleeping — wake up with: %s", get_wake_up_phrases(config))
+                continue
+
+            metrics.inc("wake_detections")
+            wake_deadline = time.monotonic() + config.recognition.wake_window
+            logger.info(
+                "Wake: %r  residual=%r  window=+%.0fs",
+                wake_phrase,
+                residual,
+                config.recognition.wake_window,
+            )
+            if config.dump_triggers_dir:
+                # _audio_buf holds post-downmix mono chunks — always dump 1ch.
+                _dump_trigger_wav(
+                    _audio_buf,
+                    1,
+                    f"wake_{wake_phrase}",
+                    config.dump_triggers_dir,
+                )
+            _publish_state("listening")
+
+            if not residual:
+                if on_stt_event:
+                    on_stt_event(
+                        "wake",
+                        {
+                            "word": wake_phrase,
+                            "timeout": config.recognition.wake_window,
+                        },
+                    )
+                try:
+                    play_wake_beep_async(config.recognition.wake_tone)
+                except Exception as e:
+                    logger.debug("Wake beep failed: %s", e)
+                continue
+
+            # One-breath: residual present — try to match a command immediately
+            trig, score = match_trigger_with_score(
+                residual,
+                config.triggers,
+                algorithm=config.recognition.matching_algorithm,
+                threshold=config.recognition.matching_threshold,
+                min_word_overlap=config.recognition.min_word_overlap,
+            )
+            if trig is not None:
+                logger.info(
+                    "One-breath: %r → %r (score=%.0f)", residual, trig.phrase, score
+                )
+                if on_stt_event:
+                    on_stt_event("wake", {"word": wake_phrase, "timeout": 0})
+                try:
+                    play_wake_beep_async(config.recognition.wake_tone)
+                except Exception as e:
+                    logger.debug("Wake beep failed: %s", e)
+                _dispatch_trigger(trig, wake_phrase, residual, score)
+            else:
+                # Wake word recognised but command not matched — open window, wait
+                if on_stt_event:
+                    on_stt_event(
+                        "wake",
+                        {
+                            "word": wake_phrase,
+                            "timeout": config.recognition.wake_window,
+                        },
+                    )
+                try:
+                    play_wake_beep_async(config.recognition.wake_tone)
+                except Exception as e:
+                    logger.debug("Wake beep failed: %s", e)
+            continue
+
+        # --- Command matching ---
+        if is_stt_sleeping():
+            continue
+
+        candidates = [t for t in config.triggers if not t.with_wake or woken()]
+        if not candidates:
+            continue
+
+        if (
+            config.recognition.min_cmd_words > 0
+            and len(text.split()) < config.recognition.min_cmd_words
+        ):
+            continue
+
+        # Exit phrase: close wake window early
+        if woken() and config.llm:
+            from alexa_custom.llm import is_exit_phrase
+
+            if is_exit_phrase(text, config.llm.exit_phrases):
+                logger.debug("Exit phrase %r — closing wake window", text)
+                wake_deadline = 0.0
+                continue
+
+        trig, score = match_trigger_with_score(
+            text,
+            candidates,
+            algorithm=config.recognition.matching_algorithm,
+            threshold=config.recognition.matching_threshold,
+            min_word_overlap=config.recognition.min_word_overlap,
+        )
+
+        if trig is None:
+            if woken():
+                logger.info("No match while woken: %r (score=%.0f)", text, score)
+                if on_stt_event:
+                    on_stt_event("nomatch", {"transcript": text, "score": score})
+                if config.llm and config.llm.fallback_on_no_match:
+                    _fb = Trigger(
+                        commands=["__llm_fallback__"],
+                        phrase="__llm_fallback__",
+                        actions=[ActionEntry(type="llm_chat", params={})],
+                    )
+                    try:
+                        _ctx.livekit_connected = livekit_connected_flag.is_set()
+                        dispatch_loop.run_until_complete(
+                            asyncio.wait_for(
+                                dispatch(_fb, _ctx, wake_word="", transcript=text),
+                                timeout=config.recognition.dispatch_timeout,
+                            )
+                        )
+                    except asyncio.TimeoutError:
+                        logger.warning(
+                            "LLM fallback dispatch timed out after %.0fs",
+                            config.recognition.dispatch_timeout,
+                        )
+                    except Exception as e:
+                        logger.error("LLM fallback error: %s", e)
+                    _drain_pipe(proc)
+                    backend.reset()
+                    _reset_vad()
+                    _dispatch_ended_at[0] = time.monotonic()
+                    if on_stt_event:
+                        on_stt_event("listening", {"wake_words": config.wake_words})
+                    _publish_state("idle")
+                else:
+                    _play_timeout()
+            continue
+
+        # start_listening triggers are pointless when already awake
+        if (
+            any(a.type == "start_listening" for a in trig.actions)
+            and not is_stt_sleeping()
+        ):
+            logger.info(
+                "start_listening trigger %r ignored: system is already awake",
+                trig.phrase,
+            )
+            continue
+
+        if trig.with_wake:
+            logger.info("Command: %r → %r (score=%.0f)", text, trig.phrase, score)
+        else:
+            logger.info("Direct: %r → %r (score=%.0f)", text, trig.phrase, score)
+
+        try:
+            play_wake_beep_async(config.recognition.wake_tone)
+        except Exception as e:
+            logger.debug("Command beep failed: %s", e)
+
+        _dispatch_trigger(trig, None, text, score)
+
+
+def run_stt_worker(
+    config: ActionsConfig | Callable[[], ActionsConfig],
+    stop_event: threading.Event,
+    telegram_client: TelegramClient,
+    livekit_connect_fn: Callable[[], Awaitable[None]] | None,
+    livekit_connected_flag: threading.Event,
+    on_stt_event: Callable[[str, dict], None] | None = None,
+    mqtt_client: "MQTTClient | None" = None,
+    loop: asyncio.AbstractEventLoop | None = None,
+    stt_ready_event: threading.Event | None = None,
+) -> None:
+    """Entry point for the STT daemon thread."""
+    _stt_heartbeat[0] = time.monotonic()
+
+    if callable(config) and not isinstance(config, ActionsConfig):
+        _get_config: Callable[[], ActionsConfig] = config  # type: ignore[assignment]
+    else:
+
+        def _get_config() -> ActionsConfig:
+            return config  # type: ignore[return-value]
+
+    current_config = _get_config()
+    source, channels = resolve_capture_source(current_config.audio.input_device)
+    if (
+        current_config.stt.mono_capture
+        or current_config.stt.capture_backend == "gstreamer"
+    ):
+        channels = 1
+
+    logger.info(
+        "STT: wake_words=%r backend=%s vad_silence_ms=%d source=%s (%d ch)",
+        current_config.wake_words,
+        current_config.stt.backend,
+        current_config.stt.vad_silence_ms,
+        source or "default",
+        channels,
+    )
+    _log_activation_phrases(current_config)
+
+    if mqtt_client:
+        mqtt_client.publish_threadsafe(
+            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "idle", loop=loop
+        )
+
+    backend = None
+    _load_backoff = 10.0
+    while backend is None and not stop_event.is_set():
+        try:
+            t0 = time.monotonic()
+            backend = get_stt_backend(
+                current_config.stt, grammar=_loop_grammar(current_config)
+            )
+            logger.info(
+                "STT backend (%s) loaded in %.1fs (grammar=%s, confidence=%.2f/%s)",
+                current_config.stt.backend,
+                time.monotonic() - t0,
+                current_config.stt.vosk_grammar,
+                current_config.stt.confidence,
+                current_config.stt.confidence_mode,
+            )
+        except Exception as e:
+            logger.error(
+                "STT backend creation failed: %s — retrying in %.0fs",
+                e,
+                _load_backoff,
+                exc_info=True,
+            )
+            stop_event.wait(_load_backoff)
+            _load_backoff = min(_load_backoff * 2, 60.0)
+
+    if backend is None:
+        # stop_event was set while waiting on a retry — clean shutdown.
+        return
+
+    backend_key = _get_backend_key(current_config)
+    _dispatch_loop = asyncio.new_event_loop()
+
+    from alexa_custom.audio_hw import gst_profile_change_event
+
+    try:
+        while not stop_event.is_set():
+            current_config = _get_config()
+
+            # Re-resolve the capture source on every (re)start: after a device
+            # unplug/replug — or a swap for a different speakerphone — the node
+            # name can change, and capture must reattach to the new node. Keep
+            # the previous name while the device is absent so the retry loop
+            # reconnects as soon as it reappears.
+            new_source, new_channels = resolve_capture_source(
+                current_config.audio.input_device
+            )
+            if new_source is not None and new_source != source:
+                logger.info("Capture source changed: %s -> %s", source, new_source)
+                source, channels = new_source, new_channels
+                if (
+                    current_config.stt.mono_capture
+                    or current_config.stt.capture_backend == "gstreamer"
+                ):
+                    channels = 1
+
+            new_key = _get_backend_key(current_config)
+            if new_key != backend_key:
+                try:
+                    t0 = time.monotonic()
+                    backend = get_stt_backend(
+                        current_config.stt, grammar=_loop_grammar(current_config)
+                    )
+                    backend_key = new_key
+                    logger.info(
+                        "STT backend reloaded (%.1fs) after config change",
+                        time.monotonic() - t0,
+                    )
+                except Exception as e:
+                    logger.error("STT backend reload failed: %s", e, exc_info=True)
+                    stop_event.wait(2)
+                    continue
+
+            proc: subprocess.Popen | None = None
+            try:
+                proc = start_capture(source, channels, config=current_config)
+                if stt_ready_event is not None and not stt_ready_event.is_set():
+                    stt_ready_event.set()
+                    logger.info("STT ready — listening for wake words")
+                _recognition_loop(
+                    proc=proc,
+                    channels=channels,
+                    backend=backend,
+                    config=current_config,
+                    stop_event=stop_event,
+                    telegram_client=telegram_client,
+                    livekit_connect_fn=livekit_connect_fn,
+                    livekit_connected_flag=livekit_connected_flag,
+                    on_stt_event=on_stt_event,
+                    mqtt_client=mqtt_client,
+                    loop=loop,
+                    dispatch_loop=_dispatch_loop,
+                    capture_restart_event=gst_profile_change_event,
+                )
+            except Exception as e:
+                logger.error("STT error: %s", e, exc_info=True)
+                stop_event.wait(2)
+            else:
+                if not stop_event.is_set():
+                    if gst_profile_change_event.is_set():
+                        gst_profile_change_event.clear()
+                        logger.info("GStreamer profile changed — restarting capture")
+                    else:
+                        logger.info("Capture ended unexpectedly — restarting in 2s")
+                        stop_event.wait(2.0)
+            finally:
+                if proc is not None:
+                    try:
+                        proc.terminate()
+                        proc.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        logger.warning(
+                            "Capture process ignored SIGTERM — sending SIGKILL"
+                        )
+                        proc.kill()
+                        try:
+                            proc.wait(timeout=2)
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
+    finally:
+        _dispatch_loop.close()
 
 
 def start_stt_thread(
@@ -2059,7 +1002,7 @@ def start_stt_thread(
     livekit_connect_fn: Callable[[], Awaitable[None]] | None,
     livekit_connected_flag: threading.Event,
     on_stt_event: Callable[[str, dict], None] | None = None,
-    mqtt_client: MQTTClient | None = None,
+    mqtt_client: "MQTTClient | None" = None,
     loop: asyncio.AbstractEventLoop | None = None,
     stt_ready_event: threading.Event | None = None,
 ) -> threading.Thread:

@@ -13,8 +13,11 @@ from alexa_custom.audio_hw import (
     pulse_session,
     set_output_volume,
     set_input_gain,
-    invalidate_pipewire_device_cache,
+    invalidate_output_sink,
     get_default_card_name,
+    get_input_gain,
+    get_output_volume,
+    signal_capture_restart,
 )
 
 logger = logging.getLogger(__name__)
@@ -37,6 +40,8 @@ class AudioWatcher(threading.Thread):
         self.on_status_change = on_status_change
         self.output_volume = output_volume
         self.input_gain = input_gain
+        self._last_applied_vol: float | None = None
+        self._last_applied_gain: float | None = None
         self._stop = threading.Event()
         self.connected = False
         self.conn_type = "unknown"
@@ -72,18 +77,39 @@ class AudioWatcher(threading.Thread):
 
     def _check_and_enforce(self, pulse: pulsectl.Pulse):
         ok, conn = enforce_audio_state(pulse, self.input_spec, self.output_spec)
-        if ok != self.connected or conn != self.conn_type:
-            if ok and not self.connected:
-                logger.info(f"Audio device {conn} connected and configured")
-                metrics.inc("audio_device_connects")
+
+        current_vol = get_output_volume()
+        current_gain = get_input_gain()
+
+        state_changed = ok != self.connected or conn != self.conn_type
+        params_changed = (
+            current_vol != self._last_applied_vol
+            or current_gain != self._last_applied_gain
+        )
+
+        if state_changed or (ok and params_changed):
+            if ok:
                 _restore_hw_pcm()
-                if self.output_volume > 0:
-                    set_output_volume(pulse, self.output_spec, self.output_volume)
-                set_input_gain(pulse, self.input_spec, self.input_gain)
+                if current_vol > 0:
+                    set_output_volume(pulse, self.output_spec, current_vol)
+                set_input_gain(pulse, self.input_spec, current_gain)
+
+                self._last_applied_vol = current_vol
+                self._last_applied_gain = current_gain
+
+                if state_changed and not self.connected:
+                    logger.info(f"Audio device {conn} connected and configured")
+                    metrics.inc("audio_device_connects")
+                    # A replugged/swapped device can expose a new node name —
+                    # signal the STT worker to restart capture and re-resolve
+                    # its source, and invalidate the cached output sink so
+                    # playback re-resolves too, rather than keep talking to a
+                    # stale node in either direction.
+                    signal_capture_restart()
+                    invalidate_output_sink()
 
             self.connected = ok
             self.conn_type = conn
             metrics.set_gauge("audio_connected", 1.0 if ok else 0.0)
-            invalidate_pipewire_device_cache()
             if self.on_status_change:
                 self.on_status_change(ok, conn)

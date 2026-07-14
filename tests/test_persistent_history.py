@@ -47,6 +47,29 @@ class TestHistoryFileHelpers:
         assert temp_history_file.exists()
         assert temp_history_file.stat().st_size == 0
 
+    async def test_append_trims_to_max_entries(self, server, temp_history_file):
+        """Appending past history_max_entries drops the oldest lines, keeps the newest."""
+        server._loop = asyncio.get_running_loop()
+        server._history_max_entries = 3
+        for i in range(5):
+            await server._append_history_log({"session_id": f"s{i}"})
+
+        lines = temp_history_file.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 3
+        assert [json.loads(line)["session_id"] for line in lines] == ["s2", "s3", "s4"]
+
+    async def test_append_trim_disabled_keeps_everything(
+        self, server, temp_history_file
+    ):
+        """history_max_entries: 0 disables trimming."""
+        server._loop = asyncio.get_running_loop()
+        server._history_max_entries = 0
+        for i in range(5):
+            await server._append_history_log({"session_id": f"s{i}"})
+
+        lines = temp_history_file.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 5
+
     async def test_flag_history_log_fp(self, server, temp_history_file):
         """Flag FP helper must update the targeted session ID in-place in the file."""
         server._loop = asyncio.get_running_loop()
@@ -81,7 +104,7 @@ class TestHistoryFileHelpers:
                 json.dumps({"id": i}) + "\n"
             )
 
-        entries = server._read_last_history_entries(limit=3)
+        entries = await server._read_last_history_entries(limit=3)
         assert len(entries) == 3
         # Should return last 3 in chronological order
         assert entries[0]["id"] == 2
@@ -144,6 +167,51 @@ class TestSessionAggregation:
         assert b_msg["type"] == "history_item"
         assert b_msg["session"]["session_id"] == session_id
 
+    async def test_clear_discards_active_session_and_new_session_appends(
+        self, server, temp_history_file
+    ):
+        """Clearing history must discard the in-progress session and allow new sessions."""
+        server._loop = asyncio.get_running_loop()
+        server._pending_vu["confidence"] = 0.9
+
+        # Start a session without completing it
+        server._process_history_event("wake", {"word": "alexa"})
+        assert server._active_session is not None
+
+        # Clear history mid-session (as _handle_control does)
+        await server._clear_history_log()
+        server._active_session = None
+        server._broadcast.reset_mock()
+
+        # A lingering listening event from the previous dispatch must be a no-op
+        server._process_history_event("listening", {})
+        await asyncio.sleep(0.01)
+        # File should not exist or be empty — the discarded session must not have been written
+        assert not temp_history_file.exists() or temp_history_file.stat().st_size == 0
+        server._broadcast.assert_not_called()
+
+        # New session after the clear must be appended and broadcast
+        server._process_history_event("wake", {"word": "alexa"})
+        server._process_history_event(
+            "matched",
+            {
+                "transcript": "new command",
+                "phrase": "new command",
+                "score": 90,
+                "actions": [{"type": "mqtt_publish"}],
+            },
+        )
+        await asyncio.sleep(0.01)
+
+        lines = temp_history_file.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1
+        assert json.loads(lines[0])["transcript"]["text"] == "new command"
+
+        server._broadcast.assert_called_once()
+        msg = server._broadcast.call_args[0][0]
+        assert msg["type"] == "history_item"
+        assert msg["session"]["transcript"]["text"] == "new command"
+
     async def test_gated_false_trigger_aggregation(self, server, temp_history_file):
         """A wake word followed by a gating event must record a false trigger."""
         server._loop = asyncio.get_running_loop()
@@ -164,3 +232,86 @@ class TestSessionAggregation:
         assert record["transcript"]["text"] == ""
         assert record["transcript"]["is_matched"] is False
         assert record["diagnostics"]["gated"] is True
+
+    async def test_one_breath_partial_session_dropped(self, server, temp_history_file):
+        """A wake session that only captured a transcribing partial, then was
+        superseded by a one-breath re-finalization, must not be persisted as a
+        phantom nomatch. Regression for the 'ehi serena volume basso' session
+        that logged is_matched=false while the command actually matched next.
+        """
+        server._loop = asyncio.get_running_loop()
+
+        # S1: wake opens window, partial bleeds in (wake word + command), no
+        # finalizing event before the next wake.
+        server._process_history_event("wake", {"word": "ehi serena", "timeout": 8.0})
+        server._process_history_event(
+            "transcribing", {"text": "ehi serena volume basso"}
+        )
+        # One-breath re-finalization: fresh wake (timeout 0) flushes S1 and opens S2.
+        server._process_history_event("wake", {"word": "ehi serena", "timeout": 0})
+        server._process_history_event(
+            "matched",
+            {
+                "transcript": "volume basso",
+                "phrase": "volume basso",
+                "score": 100,
+                "actions": [{"type": "set_volume"}],
+            },
+        )
+        await asyncio.sleep(0.01)
+
+        lines = temp_history_file.read_text(encoding="utf-8").splitlines()
+        # Only the matched session persists — the partial-only S1 is dropped.
+        assert len(lines) == 1
+        record = json.loads(lines[0])
+        assert record["transcript"]["text"] == "volume basso"
+        assert record["transcript"]["is_matched"] is True
+        assert "_partial_only" not in record
+
+    async def test_partial_then_nomatch_persists(self, server, temp_history_file):
+        """A partial followed by a genuine nomatch is a real outcome and must
+        still be persisted (the partial-only drop must not swallow it)."""
+        server._loop = asyncio.get_running_loop()
+
+        server._process_history_event("wake", {"word": "ehi serena", "timeout": 8.0})
+        server._process_history_event("transcribing", {"text": "ehi serena blah"})
+        server._process_history_event("nomatch", {"transcript": "blah", "score": 30})
+        server._process_history_event("listening", {})
+        await asyncio.sleep(0.01)
+
+        lines = temp_history_file.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1
+        record = json.loads(lines[0])
+        assert record["transcript"]["is_matched"] is False
+        assert record["transcript"]["text"] == "blah"
+        assert "_partial_only" not in record
+
+    async def test_direct_command_aggregation(self, server, temp_history_file):
+        """A direct command match (no wake event) must aggregate and append a session log."""
+        server._loop = asyncio.get_running_loop()
+        server._pending_vu["mic"] = 0.12
+        server._pending_vu["rms_threshold"] = 0.04
+
+        # Simulate a direct command "matched" event without any preceding "wake" event
+        server._process_history_event(
+            "matched",
+            {
+                "transcript": "che ore sono",
+                "phrase": "che ore sono",
+                "score": 100,
+                "actions": [{"type": "tts_say", "params": {"text": "Sono le 21"}}],
+            },
+        )
+
+        assert server._active_session is None
+        await asyncio.sleep(0.01)
+
+        assert temp_history_file.exists()
+        lines = temp_history_file.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 1
+        record = json.loads(lines[0])
+
+        assert record["wake"]["word"] == ""
+        assert record["transcript"]["text"] == "che ore sono"
+        assert record["transcript"]["is_matched"] is True
+        assert record["action"]["type"] == "tts_say"

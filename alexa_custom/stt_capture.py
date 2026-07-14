@@ -40,6 +40,8 @@ def _make_listen_fn(
     stop_event: threading.Event,
     on_stt_event: Callable[[str, dict], None] | None,
     vad_silence_ms: int | None,
+    confidence: float = 0.0,
+    confidence_mode: str = "first",
 ) -> Callable:
     """Return an async listen function closed over the given capture context."""
 
@@ -66,6 +68,8 @@ def _make_listen_fn(
             phrases=phrases,
             start_after_playback=start_after_playback,
             vad_silence_ms=vad_silence_ms,
+            confidence=confidence,
+            confidence_mode=confidence_mode,
         )
 
     return _listen_fn
@@ -83,6 +87,8 @@ def capture_transcript(
     start_after_playback: bool = False,
     vad_silence_ms: int | None = None,
     hard_timeout: float | None = None,
+    confidence: float = 0.0,
+    confidence_mode: str = "first",
 ) -> str:
     """Capture audio for a set duration and return the transcribed text.
 
@@ -111,6 +117,42 @@ def capture_transcript(
         backend.recreate(grammar)
     else:
         backend.reset()
+    try:
+        return _capture_loop(
+            proc,
+            channels,
+            backend,
+            timeout,
+            stop_event,
+            on_stt_event,
+            phrases=phrases,
+            start_after_playback=start_after_playback,
+            vad_silence_ms=vad_silence_ms,
+            hard_timeout=hard_timeout,
+            confidence=confidence,
+            confidence_mode=confidence_mode,
+        )
+    finally:
+        if grammar is not None and isinstance(backend, VoskSTT):
+            # Restore the recognizer's base grammar (free-text None, or the
+            # always-on wake/command grammar) — not unconditionally free-text.
+            backend.restore_base()
+
+
+def _capture_loop(
+    proc: subprocess.Popen,
+    channels: int,
+    backend: STTBackend,
+    timeout: float,
+    stop_event: threading.Event,
+    on_stt_event: Callable[[str, dict], None] | None = None,
+    phrases: list[str] | None = None,
+    start_after_playback: bool = False,
+    vad_silence_ms: int | None = None,
+    hard_timeout: float | None = None,
+    confidence: float = 0.0,
+    confidence_mode: str = "first",
+) -> str:
     deadline = time.monotonic() + timeout
     hard_deadline = (
         time.monotonic() + hard_timeout
@@ -161,8 +203,25 @@ def capture_transcript(
 
         if backend.accept_waveform(data):
             text = backend.text()
+            _conf = (
+                backend.last_confidence(confidence_mode)
+                if confidence > 0.0 and isinstance(backend, VoskSTT)
+                else None
+            )
             backend.reset()
             if text:
+                # Grammar capture snaps noise onto an on_reply phrase; drop
+                # low-confidence snaps and keep listening within the window.
+                if _conf is not None and _conf < confidence:
+                    logger.debug(
+                        "Capture confidence gate rejected %r (conf=%.2f < %.2f)",
+                        text,
+                        _conf,
+                        confidence,
+                    )
+                    last_partial = ""
+                    continue
+
                 logger.info(f"Capture match: '{text}'")
                 if on_stt_event:
                     on_stt_event("partial", {"text": text})
@@ -199,7 +258,20 @@ def capture_transcript(
 
     final_text = backend.finalize()
     if final_text:
-        transcript_parts.append(final_text)
+        _final_conf = (
+            backend.last_confidence(confidence_mode)
+            if confidence > 0.0 and isinstance(backend, VoskSTT)
+            else None
+        )
+        if _final_conf is not None and _final_conf < confidence:
+            logger.debug(
+                "Capture finalize() confidence gate rejected %r (conf=%.2f < %.2f)",
+                final_text,
+                _final_conf,
+                confidence,
+            )
+        else:
+            transcript_parts.append(final_text)
 
     return " ".join(transcript_parts).strip()
 

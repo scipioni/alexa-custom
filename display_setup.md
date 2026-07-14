@@ -33,7 +33,7 @@ ss -tlnp | grep 7501
 
 # 5. Restart Router and test
 sudo systemctl restart arduino-router
-alexa-client
+serena-client
 ```
 
 ## 1. Flash the STM32 firmware

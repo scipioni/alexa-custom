@@ -4,7 +4,7 @@
 </div>
 
 <p align="center">
-  <em>Turn any USB speakerphone into an Italian-speaking AI assistant with an arduino— optional fully local, open source, zero cloud.</em>
+  <em>Turn any USB speakerphone into an Italian-speaking AI assistant with an Arduino Uno Q — optional fully local, open source, zero cloud.</em>
 </p>
 
 <p align="center">
@@ -42,11 +42,13 @@
 - [🏗️ Architecture](#%EF%B8%8F-architecture)
 - [🖥️ Web Dashboard](#%EF%B8%8F-web-dashboard)
 - [🔩 Requirements](#-requirements)
+- [🔌 Power-Loss Resilience](#-power-loss-resilience)
 - [⚙️ Configuration](#-configuration)
 - [🔒 Security](#-security)
 - [🛠️ Commands](#%EF%B8%8F-commands)
 - [🔧 Troubleshooting](#-troubleshooting)
 - [📚 Documentation](#-documentation)
+- [🗜️ Headroom](#%EF%B8%8F-headroom--context-compression-for-ai-agents)
 - [🤝 Contributing](#-contributing)
 
 ---
@@ -63,8 +65,8 @@
 
 | | |
 |---|---|
-| 🧠 **Two-Stage STT** | Lightweight wake-word runs continuously (stage 1). Full command recognition fires only after activation (stage 2). Backends configurable independently per stage. |
-| ⚡ **Smart Inline Pass-Through** | If the command follows the wake word in one breath, stage 2 fires immediately — no second capture round-trip. Three speaking patterns for different use cases. |
+| 🧠 **Single-Model STT** | One always-on free-vocabulary model transcribes continuously. Wake-word detection and command matching both run on the same transcript — no model switching, lower latency. |
+| ⚡ **Smart Inline Pass-Through** | If the command follows the wake word in one breath, it's matched immediately — no second capture round-trip. Three speaking patterns for different use cases. |
 | 🗣️ **Neural Italian TTS** | Piper speaks back with natural intonation. Falls back to lightweight Pico when every millisecond counts. Both run locally — zero API fees. |
 | 📞 **Polite LiveKit Join** | Polls the room via REST API; only connects when a remote participant is present. Disconnects cleanly if nobody joins within the timeout. |
 | 🏠 **Home Assistant Discovery** | Auto-registers as Media Player and Voice Assistant entities via MQTT. No configuration needed — just point at your broker. |
@@ -80,36 +82,45 @@
 
 ## 🚀 Quick Start
 
+network connection
+```
+nmcli connection modify <name> ipv6.method disable
+nmcli connection modify <name> 802-11-wireless.powersave 2
+```
+
 ```bash
 # 1. System dependencies (Debian 13)
-sudo apt install python3-venv pipewire pulseaudio-utils alsa-utils
+sudo apt install -y python3-venv pipewire pulseaudio-utils alsa-utils libportaudio2
+sudo apt install -y libgstreamer1.0-dev gstreamer1.0-plugins-bad gstreamer1.0-tools gstreamer1.0-pipewire python3-gst-1.0
 
 # 2. Python environment
 python3 -m venv .venv && source .venv/bin/activate
 
 # 3. Install Serena
 pip install -e .
+pip install -e .[gstreamer]
 pip install smbus2   # optional: I2C OLED display
 
-# 4. Download speech models (Vosk, sherpa-onnx, Piper)
-alexa-setup
+# 4. Download speech models (Vosk, Piper)
+serena-setup
 
 # 5. Configure audio routing (run once)
 sudo apt install task  
 task audio:setup
+task setup:gstreamer
 
 # 6. Create configuration
 mkdir -p conf/actions
-cp conf.example/config.yaml conf/config.yaml
-cp conf.example/secrets.yaml conf/secrets.yaml
+cp -a conf.example conf
+
 
 # 7A. Install as a systemd service (recommended for headless use)
 task setup
-sudo loginctl enable-linger arduino 
-systemctl --user start alexa-custom
+sudo loginctl enable-linger $(whoami)
+systemctl --user start serena
 
 # 7B.  or start the assistant directly
-alexa-client
+serena-client
 ```
 
 Open **http://localhost:8080** for the web dashboard.
@@ -119,9 +130,9 @@ Open **http://localhost:8080** for the web dashboard.
 ### Audio diagnostics
 
 ```bash
-alexa-devices       # list audio input/output devices
-alexa-audio         # microphone → speaker loopback test
-alexa-audio-doctor  # full audio diagnostics
+serena-devices       # list audio input/output devices
+serena-audio         # microphone → speaker loopback test
+serena-audio-doctor  # full audio diagnostics
 task audio:status   # audio device health dashboard
 ```
 
@@ -129,17 +140,100 @@ task audio:status   # audio device health dashboard
 
 ## 🏗️ Architecture
 
-<p align="center">
-  <img src="docs/how-it-works.png" alt="Serena architecture diagram" width="800">
-</p>
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│                        🎙️  AUDIO CAPTURE LAYER                        │
+│                                                                        │
+│   [🎙️ USB Mic (NewPie)] ───► ALSA/PipeWire Sound Daemon                 │
+│                                │                                       │
+│          ┌─────────────────────┴─────────────────────┐                 │
+│          ▼                                           ▼                 │
+│   [Legacy Backend]                            [Modern Backend]         │
+│   "parec" subprocess                          "gstreamer" pipeline     │
+│          │                                           │                 │
+│          │ (Raw s16le PCM)                           │ (pulsesrc/pw)   │
+│          │                                           ▼                 │
+│          │                                    ┌──────────────┐         │
+│          │                                    │  webrtcdsp   │ (C++ NS │
+│          │                                    │  Noise & AGC │  & AGC) │
+│          │                                    └──────┬───────┘         │
+│          │                                           ▼                 │
+│          │                                    ┌──────────────┐         │
+│          │                                    │ audiodynamic │ (C++    │
+│          │                                    │  Compressor  │  Comp)  │
+│          │                                    └──────┬───────┘         │
+│          │                                           │                 │
+│          ▼                                           ▼                 │
+│   ┌──────────────────────────────────────────────────────────────┐     │
+│   │                 📬  Non-blocking OS Pipe (stdout)             │     │
+│   └──────────────────────────────┬───────────────────────────────┘     │
+└──────────────────────────────────┼─────────────────────────────────────┘
+                                   │ Raw 16kHz s16le Mono
+                                   ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                        🧠  STT PIPELINE LAYER                          │
+│                                                                        │
+│          ┌───────────────────────────────────────────┐                 │
+│          │  VAD Gate (RMS Energy & Silence Filter)   │                 │
+│          └─────────────────────┬─────────────────────┘                 │
+│                                │                                       │
+│                                ▼                                       │
+│          ┌───────────────────────────────────────────┐                 │
+│          │  Vosk / sherpa-onnx Single Always-On Model│                 │
+│          └─────────────────────┬─────────────────────┘                 │
+└──────────────────────────────────┼─────────────────────────────────────┘
+                                   │ 📝 Live Text Transcript
+                                   ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                        🎯  TRIGGER MATCHING LAYER                      │
+│                                                                        │
+│          ┌───────────────────────────────────────────┐                 │
+│          │ Italian Phonetic Normalization (graphemes)│                 │
+│          └─────────────────────┬─────────────────────┘                 │
+│                                │                                       │
+│                                ▼                                       │
+│          ┌───────────────────────────────────────────┐                 │
+│          │   Fuzzy String Distance Match (RapidFuzz)  │                 │
+│          └─────────────────────┬─────────────────────┘                 │
+└──────────────────────────────────┼─────────────────────────────────────┘
+                                   │ ⚡ Intent Match
+                                   ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                        ⚙️  ACTION DISPATCH LAYER                       │
+│                                                                        │
+│   ┌───────────────┐ ┌───────────────┐ ┌───────────────┐ ┌───────────┐  │
+│   │ 🐚 Shell      │ │ 📡 MQTT      │ │ 📞 LiveKit    │ │ 🤖 LLM    │  │
+│   │   Command     │ │   Publish     │ │   Room Join   │ │   Chat    │  │
+│   └──────┬────────┘ └───────┬───────┘ └───────┬───────┘ └─────┬─────┘  │
+│          │                  │                 │               │        │
+│          └──────────────────┴────────┬────────┴───────────────┘        │
+│                                      ▼                                 │
+└────────────────────────────────────────────────────────────────────────┘
+                                       │
+                                       ▼ Output Response
+┌────────────────────────────────────────────────────────────────────────┐
+│                        🗣️  TTS & WEB INTERFACE                         │
+│                                                                        │
+│          ┌───────────────────────────────────────────┐                 │
+│          │     Piper / Pico Neural TTS Synthesizer   │                 │
+│          └─────────────────────┬─────────────────────┘                 │
+│                                │                                       │
+│                                ▼                                       │
+│          ┌───────────────────────────────────────────┐                 │
+│          │        🔊 Playback via pw-play client     │                 │
+│          └───────────────────────────────────────────┘                 │
+│                                                                        │
+│   🖥️  aiohttp Web Dashboard ◄───[WebSockets]───► Client Daemon          │
+└────────────────────────────────────────────────────────────────────────┘
+```
 
 Serena is built in five layers:
 
-1. **Audio Pipeline** — `parec` captures raw 16 kHz s16le from the USB microphone. A VAD gate filters audio during TTS playback to prevent echo loops. Input gain is applied in software.
-2. **STT Pipeline** — Stage 1 runs a lightweight wake-word recognizer continuously (Vosk grammar or sherpa-onnx keyword spotter). On match, stage 2 transcribes the follow-on command until silence. Both backends can be mixed.
+1. **Audio Pipeline** — Captures raw 16 kHz s16le audio from the USB microphone using either a standard `parec` subprocess or a high-performance **GStreamer pipeline** (`pulsesrc`/`pipewiresrc` + `webrtcdsp`). The GStreamer backend performs hardware-accelerated noise suppression, high-pass filtering, automatic gain control (AGC), and dynamic range compression (`audiodynamic`) natively in C++ before sending audio to the STT pipeline. A VAD gate filters audio during TTS playback to prevent echo loops.
+2. **STT Pipeline** — Runs a single always-on free-vocabulary Vosk or sherpa-onnx transcription model that continuously transcribes the captured audio stream. Wake detection and command recognition both happen by matching this single model's live output.
 3. **Trigger Matching** — The transcript is matched against YAML-defined triggers using Italian phonetic normalization + fuzzy matching (RapidFuzz). Supports glob patterns, direct matches, and scoped wake-word groups.
 4. **Action Dispatch** — Matched triggers invoke registered handlers: TTS, MQTT, LiveKit, Telegram, shell, LLM chat, volume control, weather, and more.
-5. **Web & Integration** — aiohttp dashboard serves real-time status. MQTT publishes Home Assistant auto-discovery. LiveKit client manages JWT tokens and bidirectional audio.
+5. **Web & Integration** — aiohttp dashboard serves real-time status and hot-reloads configuration. MQTT publishes Home Assistant auto-discovery. LiveKit client manages JWT tokens and bidirectional audio.
 
 ---
 
@@ -172,6 +266,20 @@ Optimized for the **Arduino Uno Q** (Qualcomm Snapdragon 801), but runs on any L
 
 ---
 
+## 🔌 Power-Loss Resilience
+
+The reference deployment (Arduino Uno Q) survives hard power cuts without corruption or manual intervention — no UPS required for data safety:
+
+- **Journaled filesystems on soldered eMMC** — both the root and data partitions are ext4 with journaling and metadata checksums (`metadata_csum`, `journal_checksum_v3`). A power cut mid-write is repaired automatically by journal replay at the next boot; at worst the last few seconds of writes are lost. The soldered eMMC is also far more tolerant of hard cuts than an SD card.
+- **No swap traffic on flash** — swap lives on zram (compressed RAM), so sudden power loss can never corrupt swap and the eMMC sees no swap wear.
+- **Bounded logging** — journald is capped (`SystemMaxUse=50M`), keeping steady-state flash writes small.
+- **Unattended recovery** — user lingering is enabled and all services (`serena`, `alsa-pcm-unmute`, …) are enabled at `default.target` with `Restart=on-failure`. When power returns the board boots, the restore service re-applies USB audio profile/routing/mixer levels, and the assistant comes back with no one logging in.
+- **Graceful config degradation** — runtime state readers (`conf/state.yaml`) return safe defaults on any read error instead of crashing the daemon.
+
+A small UPS on the USB-C input (mini DC "router" UPS, 5 V ⩾ 3 A to also power the speakerphone) adds continuity through outages, but it is protection against downtime — not a requirement for data integrity.
+
+---
+
 ## ⚙️ Configuration
 
 Configuration lives in `conf/` with hot-reload support:
@@ -184,16 +292,22 @@ Configuration lives in `conf/` with hot-reload support:
 
 ```yaml
 wake_words:
-  - word: galileo
-    lang: it-IT
+  - "ehi serena"
+
+recognition:
+  wake_window: 8.0
+  matching_threshold: 75.0
+
+stt:
+  backend: vosk
+  vad_silence_ms: 900
 
 triggers:
-  - phrase: che ore sono
+  - commands: ["che ore sono"]
     actions:
       - type: shell
         command: date +%H:%M
-  - phrase: accendi la luce
-    wake_words: [galileo]
+  - commands: ["accendi la luce"]
     actions:
       - type: mqtt_publish
         topic: home/light/set
@@ -203,9 +317,11 @@ triggers:
 ### Key environment variables
 
 | Variable | Description |
-|---|---|
-| `ALEXA_CONFIG` | Path to config directory (default: `conf/`) |
-| `ALEXA_WEB_PORT` | Override web dashboard port |
+|---|---|---|
+| `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET` / `LIVEKIT_ROOM` | LiveKit connection (required for calls) |
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | Telegram notifications |
+| `LLM_HOST` / `LLM_API_KEY` | OpenAI-compatible LLM endpoint |
+| `LOG_LEVEL` | Python log level (default: `INFO`) |
 
 ---
 
@@ -242,14 +358,13 @@ triggers:
 
 | Command | Description |
 |---|---|
-| `alexa-client --web-port 8080` | Start with dashboard on custom port |
-| `alexa-client --web-host 127.0.0.1` | Restrict dashboard to localhost |
-| `alexa-setup` | Download/update STT and TTS models |
-| `alexa-devices` | List detected audio devices |
-| `alexa-audio` | Microphone → speaker loopback test |
-| `alexa-audio-doctor` | Full audio diagnostics |
-| `alexa-record --duration 5` | Record and transcribe audio |
-| `alexa-stt --text "..."` | Test STT without microphone |
+| `serena-client --web-port 8080` | Start with dashboard on custom port |
+| `serena-client --web-host 127.0.0.1` | Restrict dashboard to localhost |
+| `serena-setup` | Download/update STT and TTS models |
+| `serena-devices` | List detected audio devices |
+| `serena-audio` | Microphone → speaker loopback test |
+| `serena-audio-doctor` | Full audio diagnostics |
+| `serena-record --duration 5` | Record and transcribe audio |
 
 ---
 
@@ -259,9 +374,9 @@ triggers:
 |---|---|
 | No audio after boot | `amixer -c 0 sset PCM 100%` — PCM mixer resets on PipeWire init |
 | Audio drops mid-session | `task audio:restart` — restores routing and PCM |
-| Microphone not detected | `alexa-devices` to list cards; check `wpctl status` |
+| Microphone not detected | `serena-devices` to list cards; check `wpctl status` |
 | LiveKit join hangs | Verify `wait_for_participant` and `answer_timeout` in config |
-| Service won't start | `journalctl --user -fu alexa-custom` — check logs |
+| Service won't start | `journalctl --user -fu serena` — check logs |
 
 ---
 
@@ -280,6 +395,9 @@ triggers:
 | `httpx` | HTTP client for LLM/Ollama |
 | `rapidfuzz` | Fuzzy phonetic matching |
 | `ruamel.yaml` | YAML round-trip editing |
+| `openai` | OpenAI-compatible LLM backend |
+| `pyyaml` | Base YAML loading |
+| `smbus2` | I2C OLED display (optional) |
 
 ---
 
@@ -288,14 +406,66 @@ triggers:
 | Guide | What's inside |
 |---|---|
 | [→ Technical Reference](details.md) | Full architecture, config reference, CLI, audio pipeline, STT, actions, displays, MQTT, development, troubleshooting |
+| [→ Bill of Materials](docs/BOM.md) | Hardware add-ons with prices, links, and running total |
+| [→ Workflow](docs/workflow.md) | Development procedure (local) and deploy/operate procedure (production board) |
 | [→ Hardware Setup](docs/setup_hardware.md) | PipeWire configuration, Bluetooth, board-specific fixes |
 | [→ Software Installation](docs/setup_software.md) | Dependencies, virtual environment, model downloads |
 | [→ Configuration Reference](docs/configuration.md) | Every config field documented |
 | [→ Audio Architecture](docs/audio.md) | Capture and playback paths, known bugs and workarounds |
 | [→ STT Pipeline](docs/stt.md) | Two-stage detection, Italian phonetics, trigger matching |
+| [→ Home Assistant Setup](docs/homeassistant.md) | Install Mosquitto and HA Core as systemd services, connect Serena |
 | [→ MQTT & HA](docs/mqtt_integration.md) | Home Assistant auto-discovery, entities, bidirectional control |
 | [→ Displays](docs/display_setup.md) | LED matrix, I2C OLED, GPIO LED configuration |
 | [→ Troubleshooting](docs/troubleshooting.md) | Common issues: audio, connection, permissions |
+
+---
+
+## 🗜️ Headroom — Context Compression for AI Agents
+
+[Headroom](https://github.com/chopratejas/headroom) is installed as an MCP server so Claude Code and Gemini CLI can compress tool outputs, logs, and conversation history before they reach the model — reducing token usage by 60–95% on large contexts.
+
+### MCP server
+
+The server is registered in `.claude/settings.json` (Claude Code) and `~/.gemini/settings.json` (Gemini CLI):
+
+```json
+{
+  "mcpServers": {
+    "headroom": {
+      "command": "headroom",
+      "args": ["mcp", "serve"]
+    }
+  }
+}
+```
+
+Both tools expose three MCP tools automatically: `headroom_compress`, `headroom_retrieve`, and `headroom_stats`.
+
+### Using headroom in Python
+
+```python
+from headroom import compress
+
+# Compress a large log or tool output before sending to a model
+compressed = compress(log_text)
+```
+
+### CLI proxy (zero-code integration)
+
+Run headroom as a drop-in proxy in front of any OpenAI-compatible endpoint:
+
+```bash
+headroom proxy --port 8787
+# Then point your LLM_HOST to http://localhost:8787
+```
+
+### Installation
+
+```bash
+pip install "headroom-ai[mcp,proxy]"
+```
+
+> Requires Python ≤ 3.13 for source builds. On Python 3.14+ use `--only-binary headroom-ai`.
 
 ---
 
@@ -316,5 +486,5 @@ task fix           # auto-fix, format, and test
   <a href="LICENSE"><img src="https://img.shields.io/badge/Apache_2.0-D22128?style=for-the-badge&logo=apache&logoColor=white" alt="Apache 2.0"></a>
 </p>
 <p align="center">
-  Made by Galielo Team for privacy-first voice assistants
+  Made by Galileo Team for privacy-first voice assistants
 </p>

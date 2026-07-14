@@ -1,46 +1,35 @@
 # Capability: Trigger Wake Words
 
 ## Purpose
-Declare per-trigger wake word scoping so a single flat trigger list can target any runtime slot (direct-match, global, or per-group).
+Declare per-trigger wake word scoping so a single flat trigger list can target any runtime slot (direct-match or wake-gated).
 
 ## Requirements
 
 ### Requirement: wake_words field on trigger entries
-Each trigger entry in an action file MAY include a `wake_words` field (list of strings). The system SHALL resolve this field at parse time to determine which runtime slot the trigger occupies:
 
-- Field absent or list containing `"global"` → trigger is active after any wake word (global slot).
-- Empty list (`[]`) → trigger fires directly from stage-1 STT without a wake word (direct-match slot).
-- List of one or more wake-word group IDs → trigger is appended to each named group's trigger list.
+Trigger entries SHALL express their wake requirement through a boolean `with_wake` field instead of the previous `wake_words: None | [] | [ids]` taxonomy. `with_wake: false` means the command fires with no wake word (formerly *direct*). `with_wake: true` (the default) means the command fires only when a wake word was recently detected (formerly *global*). Per-wake-word *scoping* (binding a command to a specific wake group) is no longer expressed on the trigger.
 
-The `wake_words` field SHALL NOT be present on the resolved `Trigger` object at runtime; resolution is a parse-time concern.
+#### Scenario: Direct trigger via with_wake false
 
-#### Scenario: Trigger with no wake_words is global
-- **WHEN** an action file defines a trigger with no `wake_words` field
-- **THEN** that trigger is available after any wake word fires, identical to the previous global `triggers:` behaviour
+- **WHEN** a trigger sets `with_wake: false`
+- **THEN** its commands fire on match regardless of wake state
 
-#### Scenario: Trigger with wake_words: [global] is global
-- **WHEN** an action file defines a trigger with `wake_words: [global]`
-- **THEN** that trigger is available after any wake word fires
+#### Scenario: Wake-gated trigger via with_wake true
 
-#### Scenario: Trigger with wake_words: [] is a direct-match trigger
-- **WHEN** an action file defines a trigger with `wake_words: []`
-- **THEN** that trigger is placed in `ActionsConfig.direct_triggers` and evaluated by stage-1 STT without requiring a wake word
+- **WHEN** a trigger sets `with_wake: true` or omits the field
+- **THEN** its commands fire only when a wake word is currently active
 
-#### Scenario: Trigger scoped to a single wake-word group
-- **WHEN** an action file defines a trigger with `wake_words: [help]` and a wake-word group with `id: help` exists
-- **THEN** that trigger is appended to the `help` group's trigger list only
+### Requirement: wake_words is a flat list of phrases
 
-#### Scenario: Trigger scoped to multiple wake-word groups
-- **WHEN** an action file defines a trigger with `wake_words: [galileo, help]`
-- **THEN** that trigger is appended to both the `galileo` group's and the `help` group's trigger lists
+`wake_words` SHALL be configured as a flat list of phrase strings. Any configured phrase, when matched and confirmed, activates the recently-woken state. Wake-word *groups* (with `id`, per-group `aliases`, per-group `triggers`, `lang`, `skip_unmatched_inline`) SHALL NOT exist.
 
-#### Scenario: Unknown wake-word id in wake_words
-- **WHEN** a trigger's `wake_words` contains an id that does not match any configured wake-word group
-- **THEN** that id is silently ignored with a debug log; the trigger is still resolved using any valid ids in the list
+#### Scenario: Flat list parsed
 
-### Requirement: ActionsConfig carries direct_triggers list
-`ActionsConfig` SHALL expose a `direct_triggers: list[Trigger]` field containing all triggers resolved to the direct-match slot.
+- **WHEN** `wake_words` is `["ehi assistente", "ascolta assistente", "aiuto"]`
+- **THEN** each string is a wake phrase
+- **AND** matching any one of them opens the recently-woken window
 
-#### Scenario: direct_triggers populated at load time
-- **WHEN** config is loaded and one trigger has `wake_words: []`
-- **THEN** `ActionsConfig.direct_triggers` contains that trigger and `ActionsConfig.triggers` does not
+#### Scenario: Legacy group mapping rejected with guidance
+
+- **WHEN** `wake_words` contains a group mapping (e.g. `- word: ... id: ...`)
+- **THEN** the loader raises a `ConfigError` (or warns) directing the user to the flat-list form

@@ -1,7 +1,7 @@
 """CLI / diagnostic tools for audio hardware.
 
-These functions are only used by interactive entry-points (alexa-devices,
-alexa-audio, alexa-audio-doctor, alexa-setup) and setup scripts.
+These functions are only used by interactive entry-points (serena-devices,
+serena-audio, serena-audio-doctor, serena-setup) and setup scripts.
 Runtime audio state and routing live in audio_hw.py.
 
 Dependency direction: diagnostics → runtime (audio_hw), never the reverse.
@@ -80,7 +80,7 @@ def speakerphone():
     import sounddevice as sd
 
     print("=" * 60)
-    print("NewPie Conference Speakerphone")
+    print("USB Conference Speakerphone")
     print("=" * 60)
 
     ok, conn = check_newpie_ready()
@@ -146,7 +146,7 @@ def speakerphone():
         print(f"\nStopped after {frame_count // samplerate}s ({frame_count} frames).")
     except sd.PortAudioError as e:
         print(f"\nAudio error: {e}")
-        print("Is the NewPie still connected?")
+        print("Is the speakerphone still connected?")
         sys.exit(1)
 
 
@@ -296,18 +296,197 @@ def setup_audio() -> None:
 
 
 def _amixer_pcm_percent(card_index: int) -> int | None:
-    """Return the NewPie hardware PCM level as a percentage, or None if unreadable."""
+    """Return the NewPie hardware playback level as a percentage, or None if unreadable.
+
+    Tries "PCM" first (original NewPie); falls back to "Playback Volume" (NewPie 32).
+    """
+    for control in ("PCM", "Playback Volume"):
+        try:
+            result = subprocess.run(
+                ["amixer", "-c", str(card_index), "sget", control],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except FileNotFoundError:
+            return None
+        m = re.search(r"\[(\d+)%\]", result.stdout)
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def _amixer_capture_percent(card_index: int) -> int | None:
+    """Return the hardware capture level as a percentage, or None if unreadable.
+
+    Tries "Capture" first, then "Mic", then "Capture Volume", then "Headset".
+    """
+    for control in ("Capture", "Mic", "Capture Volume", "Headset"):
+        try:
+            result = subprocess.run(
+                ["amixer", "-c", str(card_index), "sget", control],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except FileNotFoundError:
+            return None
+        m = re.search(r"\[(\d+)%\]", result.stdout)
+        if m:
+            return int(m.group(1))
+    return None
+
+
+def _measure_source_rms(source_name: str, duration_s: float = 0.5) -> float | None:
+    """Capture audio from source_name via parec and return the RMS level (0.0–1.0).
+
+    Returns None if parec is unavailable, the source cannot be opened, or the
+    read times out.  A near-zero result (< ~0.001) when the source is a Yealink
+    BT51 typically means the Bluetooth SCO link to the SP92 is not established.
+    """
+    if shutil.which("parec") is None:
+        return None
+    n_bytes = int(16000 * duration_s) * 2  # s16le, 1ch, 16 kHz
+    try:
+        proc = subprocess.Popen(
+            [
+                "parec",
+                f"--device={source_name}",
+                "--rate=16000",
+                "--channels=1",
+                "--format=s16le",
+                "--latency-msec=100",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        try:
+            data, _ = proc.communicate(timeout=duration_s + 2.0)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            data, _ = proc.communicate()
+        data = data[:n_bytes]
+        if len(data) < 2:
+            return None
+        arr = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
+        return float(np.sqrt(np.mean(arr**2)))
+    except Exception:
+        return None
+
+
+def _pactl_source_volume_percent(source_name: str) -> int | None:
+    """Return the source volume of source_name as a percentage, or None if unreadable."""
     try:
         result = subprocess.run(
-            ["amixer", "-c", str(card_index), "sget", "PCM"],
+            ["pactl", "get-source-volume", source_name],
             capture_output=True,
             text=True,
             check=False,
         )
-    except FileNotFoundError:
-        return None
-    m = re.search(r"\[(\d+)%\]", result.stdout)
-    return int(m.group(1)) if m else None
+        if result.returncode == 0:
+            m = re.search(r"/ (\d+)%\s*/", result.stdout)
+            if m:
+                return int(m.group(1))
+    except Exception:
+        pass
+    return None
+
+
+def _get_all_alsa_capture_levels() -> list[tuple[str, str, str]]:
+    """Scan all ALSA cards and return a list of (card_id, control_name, level_str) for controls with capture capability."""
+    results = []
+    if not os.path.exists("/proc/asound"):
+        return results
+    for entry in os.listdir("/proc/asound"):
+        if not entry.startswith("card") or not entry[4:].isdigit():
+            continue
+        card_index = int(entry[4:])
+        try:
+            with open(f"/proc/asound/{entry}/id") as f:
+                card_id = f.read().strip()
+        except OSError:
+            card_id = f"card{card_index}"
+
+        if "ArduinoImolaHPH" in card_id:
+            continue
+
+        try:
+            proc = subprocess.run(
+                ["amixer", "-c", str(card_index), "scontents"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if proc.returncode == 0:
+                current_control = None
+                is_capture = False
+                volumes = []
+                for line in proc.stdout.splitlines():
+                    if line.startswith("Simple mixer control"):
+                        if current_control and is_capture and volumes:
+                            results.append(
+                                (card_id, current_control, "/".join(volumes))
+                            )
+                        m = re.search(r"Simple mixer control '([^']+)'", line)
+                        current_control = m.group(1) if m else "Unknown"
+                        is_capture = False
+                        volumes = []
+                    elif "Capture" in line or "cvolume" in line or "cswitch" in line:
+                        is_capture = True
+
+                    v_match = re.findall(r"\[(\d+%)\]", line)
+                    if v_match:
+                        volumes.extend(v_match)
+
+                if current_control and is_capture and volumes:
+                    results.append((card_id, current_control, "/".join(volumes)))
+        except Exception:
+            pass
+    return results
+
+
+def _get_all_pipewire_source_levels() -> list[tuple[str, str, str]]:
+    """Scan all PipeWire sources and return a list of (source_name, description, volume_str)."""
+    results = []
+    try:
+        proc = subprocess.run(
+            ["pactl", "list", "sources"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode == 0:
+            current_name = None
+            current_desc = None
+            current_vol = None
+            for line in proc.stdout.splitlines():
+                if line.startswith("Source #") or line.strip() == "":
+                    if current_name:
+                        results.append(
+                            (
+                                current_name,
+                                current_desc or "Unknown",
+                                current_vol or "Unknown",
+                            )
+                        )
+                    current_name = None
+                    current_desc = None
+                    current_vol = None
+                elif "Name:" in line:
+                    current_name = line.split("Name:")[-1].strip()
+                elif "Description:" in line:
+                    current_desc = line.split("Description:")[-1].strip()
+                elif "Volume:" in line and "Base Volume:" not in line:
+                    v_match = re.findall(r"(\d+%)", line)
+                    if v_match:
+                        current_vol = "/".join(v_match)
+            if current_name:
+                results.append(
+                    (current_name, current_desc or "Unknown", current_vol or "Unknown")
+                )
+    except Exception:
+        pass
+    return results
 
 
 def audio_doctor() -> int:
@@ -333,28 +512,84 @@ def audio_doctor() -> int:
         elif not present:
             warn(f"binary:{tool}", "not found (optional)")
 
-    # 2. NewPie present as an ALSA card
-    card = _find_alsa_card("NewPie")
-    ok("newpie:alsa-card", card is not None, "NewPie not found in /proc/asound")
+    # 2. A USB audio device present as an ALSA card — device-agnostic: any USB
+    #    sound card is accepted (they expose /proc/asound/cardN/usbid), so
+    #    NewPie, Yealink, EMEET, ... all pass without a hardcoded name list.
+    card = _find_alsa_card("auto")
+    device_label = card[1] if card is not None else None
+    device_desc = ""
+    if card is not None:
+        try:
+            with open("/proc/asound/cards") as f:
+                for line in f:
+                    parts = line.split()
+                    if parts and parts[0] == str(card[0]):
+                        device_desc = line.strip()
+                        break
+        except OSError:
+            pass
+    is_yealink = "yealink" in f"{device_label} {device_desc}".lower()
+    ok(
+        "usb-audio:alsa-card",
+        card is not None,
+        "no USB audio device found in /proc/asound",
+    )
 
-    # 3. Hardware PCM not muted
+    # 3. Hardware playback volume not muted (PCM reset bug — skip silently on
+    #    devices without a PCM/Playback Volume control, e.g. Yealink BT51)
     if card is not None:
         pct = _amixer_pcm_percent(card[0])
         if pct is None:
-            warn("newpie:pcm-level", "could not read PCM level")
+            if "newpie" in f"{device_label} {device_desc}".lower():
+                warn("usb-audio:pcm-level", "could not read PCM level")
         else:
             ok(
-                "newpie:pcm-level",
+                "usb-audio:pcm-level",
                 pct >= 100,
                 f"PCM at {pct}% (expected 100% — run `task audio:restart`)",
             )
 
-    # 4. Default routing points at NewPie
+    # 3b. Hardware Mic/Capture volume at 100% (system-level)
+    if card is not None:
+        cap_pct = _amixer_capture_percent(card[0])
+        if cap_pct is None:
+            warn("usb-audio:mic-alsa-level", "could not read ALSA capture/mic volume")
+        else:
+            ok(
+                "usb-audio:mic-alsa-level",
+                cap_pct >= 100,
+                f"ALSA Capture at {cap_pct}% (expected 100% — run `task audio:setup` to fix)",
+            )
+
+    # 3c. PipeWire default source volume at 100% (system-level)
+    if device_label is not None:
+        source_name = _find_pipewire_source("auto")
+        if source_name is None:
+            warn("usb-audio:mic-pipewire-source", "could not find PipeWire source node")
+        else:
+            pw_pct = _pactl_source_volume_percent(source_name)
+            if pw_pct is None:
+                warn(
+                    "usb-audio:mic-pipewire-level",
+                    f"could not read volume on PipeWire source {source_name}",
+                )
+            else:
+                ok(
+                    "usb-audio:mic-pipewire-level",
+                    pw_pct >= 100,
+                    f"PipeWire Source volume at {pw_pct}% (expected 100% — run `task audio:setup` to fix)",
+                )
+
+    # 4. Default routing points at a USB audio device
     try:
-        routed, conn = check_newpie_ready()
-        ok("newpie:default-routing", routed, f"connection={conn}")
+        routed, conn = check_newpie_ready(input_spec="auto", output_spec="auto")
+        ok(
+            "usb-audio:default-routing",
+            routed,
+            f"device={device_label} connection={conn}",
+        )
     except Exception as e:
-        warn("newpie:default-routing", f"check failed: {e}")
+        warn("usb-audio:default-routing", f"check failed: {e}")
 
     # 5. No stale switch-on-connect drop-ins (crash this board's PipeWire 1.4.2)
     home = Path.home()
@@ -369,11 +604,15 @@ def audio_doctor() -> int:
         f"remove: {', '.join(present_stale)}" if present_stale else "",
     )
 
-    # 6. USB autosuspend disabled for the NewPie
-    autosuspend_rule = Path("/etc/udev/rules.d/99-newpie-no-autosuspend.rules")
+    # 6. USB autosuspend disabled (generic rule; accept the legacy
+    #    NewPie-specific one from older installs)
+    autosuspend_rules = [
+        Path("/etc/udev/rules.d/99-usb-audio-no-autosuspend.rules"),
+        Path("/etc/udev/rules.d/99-newpie-no-autosuspend.rules"),
+    ]
     ok(
-        "newpie:no-autosuspend",
-        autosuspend_rule.exists(),
+        "usb-audio:no-autosuspend",
+        any(p.exists() for p in autosuspend_rules),
         "udev rule missing — run `task audio:setup`",
     )
 
@@ -397,6 +636,102 @@ def audio_doctor() -> int:
         except FileNotFoundError:
             warn("service:alsa-pcm-unmute", "systemctl not available")
 
+    # 8. Yealink BT51: active PipeWire profile must not be pro-audio
+    #    pro-audio leaves the Bluetooth SCO link idle → capture returns USB clock noise.
+    #    The correct profile is output:analog-stereo+input:mono-fallback, applied by
+    #    WirePlumber reading ~/.local/state/wireplumber/default-profile.
+    if is_yealink:
+        yealink_profile_ok = False
+        yealink_profile_name = "unknown"
+        yealink_source_in_sources = False
+        try:
+            cards_out = subprocess.run(
+                ["pactl", "list", "cards"],
+                capture_output=True,
+                text=True,
+                check=False,
+            ).stdout
+            in_yealink = False
+            for line in cards_out.splitlines():
+                if "Yealink" in line and "Name:" in line:
+                    in_yealink = True
+                if in_yealink and "Active Profile:" in line:
+                    yealink_profile_name = line.split("Active Profile:")[-1].strip()
+                    yealink_profile_ok = yealink_profile_name != "pro-audio"
+                    break
+        except Exception:
+            pass
+        ok(
+            "yealink:profile",
+            yealink_profile_ok,
+            f"active={yealink_profile_name!r} — pro-audio causes idle Bluetooth SCO link; "
+            "run `task audio:setup` to fix",
+        )
+
+        try:
+            sources_out = subprocess.run(
+                ["pactl", "list", "sources", "short"],
+                capture_output=True,
+                text=True,
+                check=False,
+            ).stdout
+            # Source node must appear here (not only under Filters) for pulsesrc to work.
+            # With pro-audio the node is absent from pactl sources when BT link is idle.
+            yealink_source_in_sources = any(
+                "Yealink" in l and "monitor" not in l for l in sources_out.splitlines()
+            )
+        except Exception:
+            pass
+        ok(
+            "yealink:source-visible",
+            yealink_source_in_sources,
+            "Yealink source not in pactl list sources — pulsesrc will fail; "
+            "run `task audio:setup`",
+        )
+
+        # 8b. Yealink BT51: Bluetooth SCO link should be delivering real audio.
+        #     Clearly non-zero RMS proves the link is up. A near-zero probe is
+        #     INCONCLUSIVE, not a failure: the SP92's onboard noise suppression
+        #     gates a quiet room to digital zero (with occasional low-level
+        #     leaks), which is indistinguishable from a dead link in a short
+        #     sample. The genuinely broken configuration (pro-audio profile →
+        #     USB clock noise only) is already caught by yealink:profile above.
+        if yealink_source_in_sources:
+            yealink_source_name = _find_pipewire_source("Yealink")
+            if yealink_source_name is not None:
+                rms = _measure_source_rms(yealink_source_name, duration_s=3.0)
+                if rms is None:
+                    warn(
+                        "yealink:audio-flowing",
+                        "could not read audio from Yealink source (parec unavailable or timed out)",
+                    )
+                elif rms > 0.0002:
+                    ok("yealink:audio-flowing", True, "")
+                else:
+                    warn(
+                        "yealink:audio-flowing",
+                        f"mic RMS={rms:.5f} over 3s — inconclusive: either the room "
+                        "is quiet (SP92 noise suppression gates silence to digital "
+                        "zero) or the Bluetooth SCO link is down. Speak near the "
+                        "device and re-run; if it stays near zero, press the SP92 "
+                        "connect button or run `task audio:restart`",
+                    )
+
+        # WirePlumber state file must not have pro-audio for the Yealink card
+        state_file = home / ".local/state/wireplumber/default-profile"
+        wp_state_ok = False
+        if state_file.exists():
+            content = state_file.read_text()
+            for line in content.splitlines():
+                if "Yealink" in line and "BT51" in line:
+                    wp_state_ok = "pro-audio" not in line
+                    break
+        ok(
+            "yealink:wireplumber-state",
+            wp_state_ok,
+            f"{state_file} has pro-audio for BT51 — run `task audio:setup` to fix",
+        )
+
     # Report
     print("=" * 60)
     print(" AUDIO DOCTOR")
@@ -415,4 +750,30 @@ def audio_doctor() -> int:
         print(f"{failures} check(s) failed. See suggestions above.")
     else:
         print("All critical checks passed.")
+
+    # Print Microphone Source Levels
+    print("\n" + "=" * 60)
+    print(" MICROPHONE SOURCE LEVELS")
+    print("=" * 60)
+    print("  ALSA Hardware Layer:")
+    alsa_mics = _get_all_alsa_capture_levels()
+    if alsa_mics:
+        for card_id, control_name, level_str in alsa_mics:
+            print(
+                f"    - Card: {card_id:<12} Control: {control_name:<15} Level: {level_str}"
+            )
+    else:
+        print("    No hardware capture controls found.")
+
+    print("\n  WirePlumber / PipeWire Layer:")
+    pw_mics = _get_all_pipewire_source_levels()
+    if pw_mics:
+        for name, desc, vol_str in pw_mics:
+            src_type = "[Monitor]   " if "monitor" in name.lower() else "[Microphone]"
+            print(f"    - {src_type} {desc:<40} Level: {vol_str}")
+            print(f"                 Name: {name}")
+    else:
+        print("    No PipeWire sources found.")
+    print("=" * 60)
+
     return failures

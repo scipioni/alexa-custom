@@ -1,27 +1,27 @@
 # Wake-Word Detection Evaluation
 
-The `alexa-wake-eval` tool scores stage-1 wake detection offline — no microphone, no parec — and reports **false-positives-per-hour** and **miss-rate** for a given configuration.
+The `serena-wake-eval` tool scores stage-1 wake detection offline — no microphone, no parec — and reports **false-positives-per-hour** and **miss-rate** for a given configuration.
 
 ## Quick start
 
 ```bash
 # Generate corpus from Piper TTS (one-time, ~30 s)
-alexa-wake-eval --gen-corpus
+serena-wake-eval --gen-corpus
 
 # Score with default config (vosk, conf=0.65, mode=first, rms=0.02)
-alexa-wake-eval
+serena-wake-eval
 
 # Score with verbose per-clip output
-alexa-wake-eval -v
+serena-wake-eval -v
 
 # Sweep backends, thresholds, and confidence modes
-alexa-wake-eval --sweep
+serena-wake-eval --sweep
 
 # Save regression baseline
-alexa-wake-eval --save-baseline eval/baseline.yaml
+serena-wake-eval --save-baseline eval/baseline.yaml
 
 # Check against baseline (exits non-zero on regression)
-alexa-wake-eval --check-baseline eval/baseline.yaml
+serena-wake-eval --check-baseline eval/baseline.yaml
 ```
 
 ## Corpus
@@ -55,7 +55,7 @@ rates — real room conversation is harder.  To add recorded clips:
    `generate_corpus()` in `alexa_custom/wake_eval.py` with a download step.
 3. Storage options for recorded fixtures:
    - **Small clips (< 500 kB total)**: commit directly to the repo.
-   - **Large sets**: use Git LFS or a `--download-ambient` step in `alexa-setup`.
+   - **Large sets**: use Git LFS or a `--download-ambient` step in `serena-setup`.
 
 Italian Common Voice clips (`cv-corpus-*/it/clips/*.mp3`) can be converted
 with `ffmpeg -i clip.mp3 -ar 16000 -ac 1 clip.wav` and are a good source of
@@ -113,13 +113,13 @@ confidences.
 Once a satisfactory config is found:
 
 ```bash
-alexa-wake-eval --save-baseline eval/baseline.yaml
+serena-wake-eval --save-baseline eval/baseline.yaml
 ```
 
 Future runs can check against it:
 
 ```bash
-alexa-wake-eval --check-baseline eval/baseline.yaml
+serena-wake-eval --check-baseline eval/baseline.yaml
 # exits 1 if FP/hour or miss-rate has regressed beyond tolerance
 ```
 

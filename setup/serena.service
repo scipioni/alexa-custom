@@ -1,0 +1,26 @@
+[Unit]
+Description=alexa-custom LiveKit voice client
+After=pipewire.service pipewire-pulse.service alsa-pcm-unmute.service
+Wants=pipewire.service pipewire-pulse.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/serena
+#ExecStartPre=-/usr/bin/amixer -c 0 sset PCM 100%
+#ExecStartPre=-/usr/bin/amixer -c NewPie sset PCM 100%
+ExecStartPre=-/usr/bin/wpctl set-volume @DEFAULT_SINK@ 1.0
+ExecStart=%h/serena/.venv/bin/serena
+Restart=on-failure
+RestartSec=5s
+Environment=PYTHONUNBUFFERED=1
+Environment=LANG=it
+Environment=LOG_LEVEL=DEBUG
+# Systemd watchdog: enable only after an on-board soak (see
+# openspec/changes/harden-serena-runtime/design.md, decision D4) confirming
+# no false-positive kills during long LLM conversations. Once confirmed,
+# uncomment both lines below and change Type=simple to Type=notify above.
+#Type=notify
+#WatchdogSec=90
+
+[Install]
+WantedBy=default.target

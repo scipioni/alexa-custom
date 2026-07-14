@@ -16,3 +16,7 @@ setup/display_firmware/uart_bridge
 *.wav
 conf.sherpa/
 conf.vosk/
+
+history.jsonl
+state.yaml
+*.blend1

@@ -1,6 +1,6 @@
 # Serena — Technical Reference
 
-> Package name: `alexa-custom` · CLI entry points: `alexa-*` · systemd: `alexa-custom.service`
+> Package name: `alexa-custom` · CLI entry points: `serena-*` · systemd: `serena.service`
 
 ---
 
@@ -26,52 +26,54 @@
 ### System Components
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        alexa-custom daemon                       │
+┌────────────────────────────────────────────────────────────────────┐
+│                           serena daemon                          │
 │                                                                   │
 │  ┌──────────┐  ┌─────────────────┐  ┌──────────┐  ┌──────────┐ │
 │  │ client.py │─▶│  stt.py         │─▶│ actions  │─▶│  tts.py  │ │
-│  │ (main     │  │  (stage 1 + 2)  │  │ .py      │  │  (Piper) │ │
-│  │  loop)    │  │                  │  │          │  │          │ │
-│  └─────┬─────┘  └────────┬────────┘  └────┬─────┘  └────┬─────┘ │
-│        │                 │                 │              │       │
+│  │ (main     │  │  (Vosk single   │  │ .py      │  │  (Piper) │ │
+│  │  loop)    │  │   model)        │  │ (20+     │  │          │ │
+│  └─────┬─────┘  └────────┬────────┘  │  types)  │  └────┬─────┘ │
+│        │                 │           └────┬─────┘       │       │
 │  ┌─────┴──────┐  ┌───────┴────────┐  ┌────┴─────┐  ┌────┴─────┐ │
 │  │ config_    │  │  audio_hw.py   │  │  mqtt.py │  │  web.py  │ │
-│  │ manager.py │  │  audio_ops.py  │  │          │  │(aiohttp) │ │
+│  │ manager.py │  │  audio_ops.py  │  │  llm.py  │  │(aiohttp) │ │
 │  │ (hot-      │  │  audio_watcher │  │  ── HA   │  │          │ │
 │  │  reload)   │  │                │  │  Discovery│  │dashboard │ │
 │  └────────────┘  └───────┬────────┘  └──────────┘  └──────────┘ │
 │                          │                                       │
 │                    ┌─────┴──────┐                                │
 │                    │  display.py │                                │
-│                    │  (LED/OLED) │                                │
+│                    │  (bridge/   │                                │
+│                    │   gpio/i2c) │                                │
 │                    └────────────┘                                │
-└─────────────────────────────────────────────────────────────────┘
+└────────────────────────────────────────────────────────────────────┘
                               │
                     ┌─────────┴──────────┐
                     │    Audio I/O        │
-                    │  parec · pw-play   │
-                    │  pulsectl · amixer │
+                    │  gstreamer         │
+                    │  pw-play · amixer  │
+                    │  pulsectl          │
                     └────────────────────┘
 ```
 
 ### Data Flow
 
-1. **Capture**: `parec` streams raw s16le audio from the USB microphone
-2. **Stage 1 (wake detection)**: Lightweight Vosk or sherpa-onnx model runs continuously on the audio stream
-3. **Stage 2 (command recognition)**: On wake word detection, full STT processes the follow-on command
-4. **Trigger matching**: The transcript is matched against configured triggers using phonetic normalization + fuzzy matching
-5. **Action dispatch**: Matched actions execute — LiveKit join, MQTT publish, shell command, Telegram, LLM chat, etc.
+1. **Capture**: `parec` or `gstreamer` streams raw s16le audio from the USB microphone
+2. **STT Pipeline**: Single always-on Vosk model transcribes the audio stream continuously
+3. **VAD Gate**: RMS energy + silence filter gates audio during TTS playback to prevent echo loops
+4. **Trigger matching**: Two-phase matching — word-glob patterns first, then phonetic normalization + fuzzy matching (RapidFuzz)
+5. **Action dispatch**: Matched actions execute — LiveKit join, MQTT publish, shell, Telegram, LLM chat, etc.
 6. **TTS response**: Piper or Pico TTS synthesises speech, played back via `pw-play`
 7. **Feedback**: Visual display (LED matrix, OLED, GPIO) updates to reflect state
 
 ### Threading Model
 
 - **Main thread**: Event loop driving STT pipeline, trigger matching, action dispatch
-- **Audio watcher thread**: `AudioWatcher` monitors PipeWire graph events via pulsectl
+- **Audio watcher thread**: `AudioWatcher` monitors PipeWire graph events via pulsectl; auto-restores PCM after pulsectl resets
 - **Web server thread**: aiohttp serves the dashboard on a separate asyncio loop
 - **Config watcher thread**: Polls config files for changes every ~2 seconds
-- **LLM calls**: Non-blocking HTTP requests to Ollama (offloaded via asyncio)
+- **LLM calls**: Non-blocking HTTP requests to Ollama or OpenAI (offloaded via asyncio)
 
 ---
 
@@ -90,7 +92,7 @@
 # Core
 sudo apt install python3 python3-pip python3-venv
 sudo apt install pipewire pipewire-pulse wireplumber
-sudo apt install pulseaudio-utils    # parec, paplay
+sudo apt install gstreamer1.0-tools gstreamer1.0-plugins-good
 sudo apt install pipewire-bin        # pw-play, pw-metadata, wpctl
 sudo apt install alsa-utils          # amixer
 
@@ -116,12 +118,11 @@ Optional: `pip install smbus2` for I2C OLED display support.
 ### Model Download
 
 ```bash
-alexa-setup
+serena-setup
 ```
 
 Downloads:
 - Vosk Italian model (`models/it/vosk-model-small-it-0.22`)
-- Sherpa-onnx Italian model (`models/it/sherpa-onnx-kroko-8l`)
 - Piper TTS voice (`it_IT-paola-medium`)
 
 ### Audio Configuration
@@ -134,7 +135,7 @@ task audio:setup
 
 This command:
 1. Removes stale `switch-on-connect` PipeWire config drop-ins (module not available on this board)
-2. Installs udev rule to disable USB autosuspend for the NewPie
+2. Installs WirePlumber conf to disable USB autosuspend for the NewPie (`autosuspend_delay_ms=-1`)
 3. Switches NewPie from `pro-audio` to `analog-stereo` profile
 4. Sets WirePlumber persistent default sink/source
 5. Unmutes hardware PCM volume
@@ -166,21 +167,21 @@ Edit `conf/config.yaml` with your wake words and preferences.
 ```bash
 task setup
 sudo loginctl enable-linger arduino
-systemctl --user start alexa-custom
+systemctl --user start serena
 ```
 
 Useful commands:
 
 ```bash
-systemctl --user status  alexa-custom   # check status
-journalctl --user -fu    alexa-custom   # follow logs
-systemctl --user restart alexa-custom   # restart
+systemctl --user status  serena         # check status
+journalctl --user -fu    serena         # follow logs
+systemctl --user restart serena         # restart
 ```
 
 ### First Run
 
 ```bash
-alexa-client
+serena-client
 ```
 
 Open http://localhost:8080 for the web dashboard.
@@ -201,23 +202,17 @@ Configuration is split across three locations in `conf/`:
 
 ```yaml
 # ---------------------------------------------------------------------------
-# Wake words
+# Wake words (flat list)
 # ---------------------------------------------------------------------------
 wake_words:
-  - word: ehi galileo       # the phrase to detect
-    id: galileo             # stable id used by triggers in action files
-    # aliases:
-    #   - galileo
-    # skip_unmatched_inline: false  # silently drop one-breath commands that
-    #   don't match any trigger
+  - "ehi galileo"           # wake phrases — flat list of strings
+  # - "aiuto"               # extra wake words can also be in action files
 
 # ---------------------------------------------------------------------------
 # Recognition
 # ---------------------------------------------------------------------------
 recognition:
-  mode: two-stage           # two-stage | single-stage
-  command_timeout: 3.0      # seconds to listen after wake word (two-stage only)
-  # command_max_timeout: 8.0  # absolute cap; slides while user keeps speaking
+  wake_window: 8.0          # seconds to listen after wake word; slides while speaking
   wake_tone: wake           # tone on wake: wake | startup | success | error | info | warning | none
   partial_matching: true    # scan Vosk partials for (wake+trigger) combos
   matching_algorithm: token_set_ratio  # token_set_ratio | levenshtein | ratio
@@ -232,19 +227,15 @@ recognition:
 # STT — speech-to-text
 # ---------------------------------------------------------------------------
 stt:
-  vad_silence_ms: 500       # idle ms before command window closes
-  stage1:                   # continuous wake-word detection (low CPU)
-    backend: vosk            # vosk | sherpa-onnx | sherpa-hotwords
-    confidence: 0.75
-    confidence_mode: min    # first | min | mean
-    vad_silence_ms: 900
-    rms_threshold: 0.02
-    adaptive_rms: true
-    min_speech_ms: 200
-    vosk_grammar: true
-  stage2:                   # command recognition after wake
-    backend: vosk
-    vosk_grammar: true
+  backend: vosk              # vosk (only supported backend)
+  capture_backend: parec     # parec | gstreamer
+  capture_profile: default   # capture profile name (default, optimized, etc.)
+  vad_silence_ms: 900        # idle ms before command window closes
+  rms_threshold: 0.02
+  adaptive_rms: true
+  adaptive_rms_margin: 0.01
+  min_speech_ms: 200
+  wake_match_threshold: 0.5
 
 # ---------------------------------------------------------------------------
 # TTS — text-to-speech
@@ -253,6 +244,7 @@ tts:
   backend: piper            # piper | pico
   voice: it_IT-paola-medium
   preroll_ms: 100
+  pico_fallback: true       # fall back to pico if piper model missing
 
 # ---------------------------------------------------------------------------
 # Audio hardware
@@ -267,18 +259,44 @@ audio:
     usb: 48000
     bluetooth: 16000
     internal: 48000
+  # GStreamer pipeline configuration (used when stt.capture_backend = gstreamer)
+  # gstreamer:
+  #   webrtc: true
+  #   high_pass: 200
+  #   agc: true
+  #   noise_suppression: -20
+  #   compressor: true
+
+  # Capture profiles: per-backend tuning
+  # profiles:
+  #   default:
+  #     backend: gstreamer
+  #     sample_rate: 16000
+  #     format: s16le
+  #     channels: 1
+  #     rms_threshold: 0.02
+  #   optimized:
+  #     backend: gstreamer
+  #     sample_rate: 16000
+  #     format: s16le
+  #     channels: 1
+  #     rms_threshold: 0.015
 
 # ---------------------------------------------------------------------------
 # LLM (Ollama)
 # ---------------------------------------------------------------------------
 llm:
-  backend: ollama
+  backend: ollama           # ollama | openai
   model: ssfdre38/gemma4-nano
   context_turns: 10
   context_window_secs: 60
   fallback_on_no_match: false
   learn_commands: true
   request_timeout: 60.0
+  # exit_phrases:           # customizable exit phrases for LLM chat
+  #   - "esci"
+  #   - "basta così"
+  #   - "fine"
 
 # ---------------------------------------------------------------------------
 # MQTT / Home Assistant
@@ -302,9 +320,10 @@ actions:
 # ---------------------------------------------------------------------------
 display:
   enabled: false
-  backend: auto             # auto | bridge | gpio | mock | i2c
+  backend: auto             # auto | bridge | gpio | mock | i2c | uart
   matrix_brightness: 50
   led_brightness: 50
+  # uart_bridge_cmd: "sudo ./uart_bridge"
 ```
 
 ### conf/secrets.yaml
@@ -334,17 +353,16 @@ All values are optional. Omit sections you don't use.
 Action files are loaded alphabetically. `system.yaml` loads first (highest priority).
 
 ```yaml
-# Extra wake word groups (merged with config.yaml)
+# Extra wake words (flat list, merged with config.yaml)
 wake_words:
-  - word: "aiuto"
-    id: help
-    aliases:
-      - "aiutami"
+  - "aiuto"
+  - "aiutami"
 
 # Triggers
 triggers:
-  - phrase: "che ore sono ?"
-    wake_words: []       # direct match — no wake word required
+  - commands:
+      - "che ore sono ?"
+    with_wake: false          # direct match — no wake word required
     aliases:
       - "che ora è ?"
     actions:
@@ -352,20 +370,24 @@ triggers:
         text: "$(date +'Sono le %H e %M')"
 ```
 
-**Trigger scoping** via the `wake_words` field:
+**Trigger scoping** via the `with_wake` field:
 
 | Value | Behaviour |
 |---|---|
-| Not specified | Active after any wake word (global) |
-| `[]` (empty list) | Direct match — fires without a wake word |
-| `[id]` | Active only after the named wake word group |
+| Not specified / `true` | Active after any wake word (global) |
+| `false` | Direct match — fires without a wake word |
 
-**Pattern matching** supports glob-style word patterns:
+**Pattern matching** supports glob-style word patterns (checked before fuzzy match):
 
 ```yaml
-- phrase: "accendi la luce"
+- commands:
+    - "accendi la luce"
   patterns:
     - "accend* * luc*"    # matches "accendi le luci", "accendere la luce", etc.
+  actions:
+    - type: mqtt_publish
+      topic: home/light/set
+      payload: "ON"
 ```
 
 ---
@@ -376,16 +398,18 @@ triggers:
 
 | Command | Description |
 |---------|-------------|
-| `alexa-client [--web-port PORT]` | Main daemon with web dashboard and config panel |
-| `alexa-audio` | Microphone → speaker loopback test |
-| `alexa-devices` | List detected audio devices |
-| `alexa-test` | Audio test utility |
-| `alexa-setup` | Download/update STT and TTS models |
-| `alexa-audio-setup` | Configure audio routing |
-| `alexa-audio-doctor` | Audio diagnostic checks |
-| `alexa-wake-eval` | Wake word evaluation tool |
-| `alexa-record` | WAV recording utility |
-| `alexa-stt` | Direct STT testing via CLI |
+| `serena-client [--web-port PORT]` | Main daemon with web dashboard and config panel |
+| `serena-audio` | Microphone → speaker loopback test |
+| `serena-devices` | List detected audio devices |
+| `serena-test` | Audio test utility |
+| `serena-setup` | Download/update STT and TTS models |
+| `serena-audio-setup` | Configure audio routing |
+| `serena-audio-doctor` | Audio diagnostic checks |
+| `serena-wake-eval` | Wake word evaluation tool |
+| `serena-record` | WAV recording utility |
+| `serena-stt` | Direct STT testing via CLI |
+| `serena` | Daemon alias (same as `serena-client`) |
+| `serena-stt` | Standalone STT mode (capture + transcribe only) |
 
 ### Task Commands
 
@@ -395,7 +419,7 @@ triggers:
 | `task lint` | Ruff check + format --check |
 | `task format` | Ruff format |
 | `task fix` | Ruff fix + format + test |
-| `task run` | Run alexa-client directly |
+| `task run` | Run serena-client directly |
 | `task start` | Start with hot-reload enabled |
 | `task setup` | Install systemd user service |
 | `task audio:setup` | Set NewPie as default, install PCM restore service, disable USB autosuspend |
@@ -411,7 +435,9 @@ triggers:
 | `task release:patch` | Bump PATCH version (0.3.0 → 0.3.1) |
 | `task release:minor` | Bump MINOR version (0.3.0 → 0.4.0) |
 | `task release:major` | Bump MAJOR version (1.0.0 → 2.0.0) |
+| `task release:rollback` | Rollback last version bump |
 | `task clean` | Remove __pycache__, build artifacts |
+| `task test-stt-e2e` | End-to-end STT test (synthesises speech with Piper) |
 
 ---
 
@@ -423,17 +449,29 @@ The Arduino Uno Q's PortAudio was compiled with only the ALSA backend — no nat
 
 ### Capture Path
 
+The daemon uses **GStreamer** for audio capture, configured via `audio.gstreamer` in `config.yaml`.
+
+#### GStreamer Pipeline
+
 ```
-USB Mic (NewPie) → ALSA → PipeWire → PulseAudio compat socket
-                    ↓
-              parec (pulseaudio-utils)
-                    ↓
-              s16le 16 kHz stereo → daemon
+USB Mic (NewPie) → ALSA → PipeWire (pulsesrc/pipewiresrc)
+                               ↓
+                        GStreamer Pipeline
+                         - webrtcdsp (Noise Suppress & AGC)
+                         - audiodynamic (Optional Compressor)
+                               ↓
+                        fdsink (os.pipe write-end)
+                               ↓
+                        s16le 16 kHz mono → daemon (via os.pipe read-end)
 ```
 
-- **Command**: `parec --device=<source> --rate=16000 --format=s16le --channels=1`
-- **Device selection**: By name, accessed via PulseAudio compat socket at `/run/user/1000/pulse/native`
-- **Never use**: `sounddevice` or `PyAudio` for capture
+- **Pipeline**: Configured via `audio.gstreamer` in `config.yaml`.
+- **Duck-typing**: `GStreamerCapture` acts as a drop-in replacement for a `subprocess.Popen` object, exposing a non-blocking `stdout` file-like object read via `os.pipe()`.
+- **Features**: Performs hardware-accelerated, real-time noise suppression, automatic gain control (AGC), high-pass filtering, and dynamic range compression natively in C++.
+
+#### Capture Mandates
+- **Only use**: GStreamer for audio capture.
+- **Never use**: `sounddevice`, `PyAudio`, or legacy subprocess-based capture for STT.
 
 ### Playback Path
 
@@ -476,13 +514,13 @@ Piper TTS → s16le WAV file (temp) → pw-play <file> → PipeWire → ALSA →
 
 **Fix**: The `alsa-pcm-unmute.service` polls and calls `pw-metadata` to force the active sink/source.
 
-**Note**: `libpipewire-module-switch-on-connect` is NOT available on this board's PipeWire 1.4.2 build. The `ifexists nofail` flag doesn't work — it crashes PipeWire and `pipewire-pulse`. `task audio:setup` actively removes stale config drop-ins.
+**Note**: `libpipewire-module-switch-on-connect` is NOT available on this board's PipeWire 1.4.2 build. The `ifexists nofail` flag doesn't work — it crashes PipeWire and `pipewire-pulse`.
 
 #### 3. USB Autosuspend (Mid-Session Audio Loss)
 
 **Problem**: Linux suspends the NewPie USB device after inactivity. PipeWire reinitialises it on wake, resetting PCM to 0% and dropping routing.
 
-**Fix**: `task audio:setup` installs `setup/99-newpie-no-autosuspend.rules` to `/etc/udev/rules.d/`, setting `autosuspend_delay_ms=-1` for the NewPie (USB ID `0a12:1260`).
+**Fix**: `task audio:setup` installs a WirePlumber configuration drop-in that sets `autosuspend_delay_ms=-1` for the NewPie (USB ID `0a12:1260`), plus a systemd user service (`alsa-pcm-unmute.service`) that restores routing and PCM on wake. Previously a udev rule was used; the current approach is more reliable with PipeWire 1.4.2.
 
 **Ad-hoc recovery**: `task audio:restart`
 
@@ -510,84 +548,74 @@ Piper TTS → s16le WAV file (temp) → pw-play <file> → PipeWire → ALSA →
 
 ## 6. STT Pipeline
 
-### Two-Stage Design
+### Single-Model Architecture
 
 ```
-Audio Stream ──▶ Stage 1 (always-on, low CPU) ──▶ Wake word?
-                                                    │
-                                              Yes  │  No (continue)
-                                                    ▼
-                                           Stage 2 (command recognition)
-                                                    │
-                                              ┌─────┴─────┐
-                                              ▼           ▼
-                                        Trigger      No match
-                                        Match         (re-arm stage 1)
-                                           │
-                                           ▼
-                                      Action dispatch
+Audio Stream ──▶ parec / GStreamer capture ──▶ VAD gate ──▶ Vosk model
+                                                              │
+                                                     ┌────────┴────────┐
+                                                     ▼                 ▼
+                                              Wake detection    Continuous
+                                              (fuzzy match)     transcription
+                                                     │                 │
+                                                     ▼                 ▼
+                                              Command window     Trigger matching
+                                              opened / one-    (glob → phonetic →
+                                              breath match     action dispatch)
 ```
 
-### Stage 1: Wake Word Detection
+Serena runs a single always-on Vosk free-vocabulary transcription model. Both wake word detection and command recognition happen by matching this model's continuous output — no stage switching, no mode toggling.
 
-Runs continuously with minimal CPU usage. Configurable backends:
+### Capture Backend
 
-| Backend | Description | Best for |
-|---------|-------------|----------|
-| `vosk` | Grammar mode restricts Vosk to wake-word vocabulary | Low CPU, stable environment |
-| `sherpa-onnx` | Open-vocabulary neural network | Higher accuracy, more CPU |
-| `sherpa-hotwords` | Keyword-spotter mode | Minimal CPU, wake-only |
+Selectable via `stt.capture_backend`:
 
-Key parameters:
-- `confidence`: Minimum confidence threshold (0.0–1.0) to accept a wake word
-- `confidence_mode`: How per-token confidence is aggregated (`first`, `min`, `mean`)
-- `vad_silence_ms`: Force-finalize after this many ms of silence
-- `rms_threshold`: Minimum audio energy to consider as speech
-- `adaptive_rms`: Dynamically adjust threshold based on room noise floor
+| Backend | Latency | CPU | NS/AGC | Notes |
+|---------|---------|-----|--------|-------|
+| `parec` | Low | Low | No | Standard subprocess, raw PCM via stdout |
+| `gstreamer` | Medium | Medium | Yes | `pulsesrc` + `webrtcdsp` (NS + AGC) + `audiodynamic` (compressor) |
 
-### Stage 2: Command Recognition
-
-Activated only after a wake word. Uses a full STT model for accurate transcription.
-
-- `vosk_grammar: true`: Grammar mode — lower CPU, forces segments onto configured vocabulary
-- `vosk_grammar: false`: Free-vocabulary — full decoder, better at handling unexpected phrases
-- `command_timeout`: How many seconds to listen after the wake word
-- `command_max_timeout`: Absolute cap (slides while user keeps speaking)
+When using `gstreamer`, the VAD gate can be configured independently via capture profiles.
 
 ### Speaking Patterns
 
-| Mode | Pattern | Description |
-|---|---|---|
-| 1 | Wake → pause → beep → command | Traditional: say wake word, wait for beep, speak command |
-| 2 | Wake + command (one breath) | Speak wake word and command together; no beep; fires immediately on silence |
-| 3 | Partial match | Fires while user is still speaking, on a stable partial transcription |
+| Pattern | Description |
+|---------|-------------|
+| Wake + command (one breath) | Speak wake word and command in one utterance. On silence, fires immediately without waiting for another capture round. |
+| Wake → pause → command | Say wake word, wait, speak command. Command window stays open for `wake_window` seconds after wake, sliding while speech continues. |
+| Partial match | Fires while user is still speaking, on a stable partial transcript that matches a trigger. |
 
-### Trigger Matching
+### Two-Phase Trigger Matching
 
-Triggers are matched against the transcribed command using a configurable algorithm:
+Matching proceeds in two phases, checked in order:
+
+1. **Word-glob patterns** — exact word-sequence glob matches (e.g., `accend* * luc*`). Bypasses fuzzy matching entirely.
+2. **Italian phonetic normalization + fuzzy matching** — custom normalizer handles digraphs (`sci`/`sce`, `gn`, `gli`, `ch`/`gh`), geminate consonants, verb root extraction, and article elision. The normalized text is matched via RapidFuzz using the configured algorithm.
+
+Available matching algorithms:
 
 | Algorithm | Description |
 |-----------|-------------|
-| `token_set_ratio` | Compares sets of tokens (handles reordering well) |
-| `levenshtein` | Edit distance between strings |
+| `token_set_ratio` | Token set comparison (handles reordering well) |
+| `levenshtein` | Edit distance |
 | `ratio` | Simple similarity ratio |
 
-Matching threshold (0–100) controls strictness.
+### Sleeping Mode
 
-**Word-glob patterns** can bypass fuzzy matching entirely:
+When no one speaks for a configurable silence window, the STT pipeline enters a low-power "sleeping" state. During sleep, wake word matching uses a relaxed threshold. On wake, the full pipeline re-engages. The web dashboard displays a sleeping indicator.
 
-```
-accend* * luc*    → matches "accendi le luci", "accendere la luce", etc.
-```
+### Follow-Up
 
-### Italian Phonetic Normalization
+When `follow_up` is enabled in `recognition`, after a successful trigger match the command window re-opens for a configurable timeout (up to `follow_up_max_turns`). Users can chain commands without repeating the wake word.
 
-Custom phonetic matching handles Italian-specific linguistic features:
+### VAD Gate
 
-- **Digraphs**: `sci`/`sce`, `gn`, `gli`, `ch`/`gh`, `qu`
-- **Geminate consonants**: Double consonants normalized for matching
-- **Verb conjugations**: Root-based matching catches "accendere", "accendi", "accenda"
-- **Article elision**: Handles "l'", "un'", "dell'" variations
+An RMS-energy gate filters audio during TTS playback to prevent echo loops. Key parameters:
+- `rms_threshold`: Minimum audio energy to consider as speech.
+- `adaptive_rms`: Dynamically adjust threshold based on room noise floor.
+- `adaptive_rms_margin`: Margin above noise floor.
+- `min_speech_ms`: Minimum speech duration to avoid brief clicks.
+- `post_playback_ms`: Gate hold time after TTS playback ends.
 
 ---
 
@@ -601,23 +629,23 @@ on_startup:
   - type: say
     text: "Sistema pronto"
 
-# Extra wake word groups (optional)
+# Extra wake words (flat list, optional)
 wake_words:
-  - word: "aiuto"
-    id: help
+  - "aiuto"
 
 # Triggers
 triggers:
-  - phrase: "che ore sono ?"       # display name / canonical form
-    wake_words: []                 # scoping (see below)
-    aliases:                       # alternative phrasings
+  - commands:                       # list of command phrases (any triggers the action)
+      - "che ore sono ?"
+    with_wake: false                # false = no wake word required
+    aliases:                        # alternative phrasings (fuzzy matched)
       - "che ora è ?"
-    patterns:                      # word-glob patterns (optional)
+    patterns:                       # word-glob patterns (checked first)
       - "che * * ora"
-    actions:                       # list of actions to execute
+    actions:                        # list of actions to execute
       - type: say
         text: "$(date +'Sono le %H e %M')"
-    follow_up: false               # override global follow-up setting
+    follow_up: false                # override global follow-up setting
 ```
 
 ### Loading Order
@@ -668,21 +696,20 @@ When `llm_learn` is triggered:
 
 Multiple display backends provide visual feedback on the Arduino UNO Q:
 
-### LED Matrix (via RouterBridge)
+### LED Matrix (via UART Bridge)
 
 - STM32 firmware in `setup/display_firmware/display_firmware.ino`
-- Communication via `Arduino_RouterBridge` over UART → TCP port 7501
-- Animated icons: scanning wave (listening), hourglass (thinking), checkmark (connected), cross (error)
+- Communication via `uart_bridge.c` — bypasses kernel driver via `/dev/mem` register access
+- Animated icons: scanning wave (listening), hourglass (thinking), checkmark (success), cross (error)
 
-**Flash firmware**:
+**Compile and test**:
 ```bash
-arduino-cli lib install Arduino_RouterBridge ArduinoGraphics
-arduino-cli compile --upload --fqbn arduino:zephyr:unoq \
-  setup/display_firmware/display_firmware.ino
-sudo systemctl restart arduino-router
+task display:compile   # gcc -o uart_bridge setup/display_firmware/uart_bridge.c
+task display:test      # verify UART communication with STM32
+task display:setup     # compile + sudoers setup
 ```
 
-**Router TCP port fix**: Some UNO Q board images have a systemd drop-in that removes the `--listen-port` flag. If `ss -tlnp | grep 7501` shows nothing, check `sudo systemctl cat arduino-router` for drop-ins.
+Use via config: set `display.backend: uart` and `display.uart_bridge_cmd: "sudo ./uart_bridge"`
 
 ### I2C OLED (SSD1306)
 
@@ -699,7 +726,7 @@ sudo systemctl restart arduino-router
 
 - Bypasses kernel driver via `/dev/mem` register access
 - Compile: `gcc -o uart_bridge setup/display_firmware/uart_bridge.c`
-- Run: `ALEXA_DISPLAY_CMD="sudo ./uart_bridge" alexa-client`
+- Run: `ALEXA_DISPLAY_CMD="sudo ./uart_bridge" serena-client`
 
 ---
 
@@ -708,15 +735,15 @@ sudo systemctl restart arduino-router
 ### Auto-Discovery
 
 Serena uses Home Assistant's MQTT Discovery protocol to register itself automatically:
-- **Media Player entity**: Shows call status and provides play/stop controls
-- **Voice Assistant entity**: `conversation/agent` — accepts text commands and returns spoken responses
+- **Sensor entity**: Reports daemon state (listening, sleeping, error, busy)
+- **Text entity**: Accepts spoken text from HA, returns TTS responses
 
 ### Entities
 
 | Entity | Type | Purpose |
 |--------|------|---------|
-| Media Player | `media_player` | LiveKit call status, play/stop |
-| Voice Assistant | `conversation/agent` | Text command input, spoken response |
+| State Sensor | `sensor` | Daemon state (listening/sleeping/busy/error) |
+| Conversation Agent | `text` | Text command input, TTS response output |
 
 ### Bidirectional Communication
 
@@ -813,12 +840,10 @@ Rollback: `task release:rollback`
 | `numpy` | core | Audio signal processing |
 | `pulsectl` | core | PipeWire/PulseAudio routing |
 | `vosk` | core | Local wake-word + STT |
-| `pyyaml` | core | Config file parsing |
-| `httpx` | core | HTTP client for LLM/Ollama |
+| `openai` | core | HTTP client for LLM (Ollama / OpenAI API) |
 | `aiomqtt` | core | MQTT / Home Assistant |
 | `aiohttp` | core | Web dashboard server |
 | `piper-tts` | core | Local text-to-speech |
-| `sherpa-onnx` | core | Alternative STT backend |
 | `rapidfuzz` | core | Fuzzy phonetic matching |
 | `ruamel.yaml` | core | YAML round-trip editing (preserves comments) |
 | `smbus2` | optional | I2C OLED display backend |
@@ -828,24 +853,27 @@ Rollback: `task release:rollback`
 ```
 ├── alexa_custom/           # Main Python package
 │   ├── client.py           # Main loop, LiveKit session, wake-word dispatch
-│   ├── stt.py              # Two-stage STT pipeline (Vosk + sherpa-onnx)
-│   ├── tts.py              # Text-to-speech (Piper)
+│   ├── stt.py              # STT pipeline (Vosk single model)
+│   ├── tts.py              # Text-to-speech (Piper / Pico)
 │   ├── audio_hw.py         # Core audio state, PCM restore, routing
 │   ├── audio_ops.py        # Playback operations (pw-play, WAV files, tones)
 │   ├── audio_watcher.py    # Daemon thread monitoring PipeWire graph
-│   ├── actions.py          # Action dispatcher
+│   ├── actions.py          # Action dispatcher (20+ types)
 │   ├── config.py           # Typed config dataclasses and loaders
 │   ├── config_manager.py   # Hot-reload config watcher
 │   ├── mqtt.py             # MQTT client, Home Assistant Discovery
+│   ├── llm.py              # LLM client (Ollama / OpenAI), conversation engine
 │   ├── web.py              # aiohttp web dashboard server
 │   ├── dashboard.html      # Dashboard HTML (dark/light theme)
-│   ├── display.py          # Display backends (bridge, gpio, i2c, mock)
-│   ├── llm.py              # Ollama client, conversation engine
+│   ├── display.py          # Display backends (bridge, gpio, i2c, mock, uart)
 │   ├── record.py           # WAV recording utility
-│   ├── stt_backends.py     # STT backend wrappers (Vosk, SherpaOnnx)
-│   ├── stt_capture.py      # Stage-2 command capture
-│   ├── stt_gating.py       # Audio capture via parec, gating logic
+│   ├── stt_backends.py     # STT backend wrappers (Vosk)
+│   ├── stt_capture.py      # Command capture and buffering
+│   ├── stt_gating.py       # Audio capture routing and gating logic
+│   ├── stt_gst_capture.py  # GStreamer audio capture backend
 │   ├── stt_phonetics.py    # Phonetic matching and normalization
+│   ├── stt_profiles.py     # Capture profile definitions
+│   ├── watcher.py          # PipeWire graph event watcher
 │   └── static/             # Web assets (CSS, JS, favicon)
 ├── conf/                   # Live configuration (hot-reloaded)
 ├── conf.example/           # Example config templates
@@ -877,7 +905,7 @@ task audio:restart               # restore routing and PCM
 
 **Device not found**
 ```bash
-alexa-devices                    # list available audio devices
+serena-devices                    # list available audio devices
 lsusb | grep NewPie              # check USB detection
 ```
 
@@ -915,15 +943,15 @@ sudo loginctl enable-linger $USER  # keep user service alive without login
 
 **systemd service won't start**
 ```bash
-journalctl --user -fu alexa-custom   # check logs
-systemctl --user status alexa-custom  # check status
+journalctl --user -fu serena         # check logs
+systemctl --user status serena       # check status
 ```
 
 ### Model Issues
 
 **STT not working after setup**
 ```bash
-alexa-setup --force                  # re-download models
+serena-setup --force                  # re-download models
 ls models/                           # verify models directory contents
 ```
 

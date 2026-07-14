@@ -53,7 +53,7 @@ import wave
 # Make the package importable when run as `python scripts/bench_stt.py`.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from alexa_custom.config import STTStage2Config  # noqa: E402
+from alexa_custom.config import STTConfig  # noqa: E402
 from alexa_custom.stt_backends import get_stt_backend  # noqa: E402
 from alexa_custom.stt_gating import (  # noqa: E402
     _CHUNK,
@@ -131,7 +131,7 @@ class AudioSource:
 
 def _make_backend(backend: str, model_path: str | None, num_threads: int):
     """Build a single full-transcription model (free-vocab — no grammar)."""
-    cfg = STTStage2Config(
+    cfg = STTConfig(
         backend=backend,
         model_path=model_path,
         vosk_grammar=False,  # always-on free vocab, the single-model design
@@ -141,8 +141,10 @@ def _make_backend(backend: str, model_path: str | None, num_threads: int):
 
 
 def benchmark(args, backend: str) -> dict:
-    print(f"\n=== backend: {backend} (num_threads={args.num_threads}) ===",
-          file=sys.stderr)
+    print(
+        f"\n=== backend: {backend} (num_threads={args.num_threads}) ===",
+        file=sys.stderr,
+    )
     t_load0 = time.monotonic()
     be = _make_backend(backend, args.model, args.num_threads)
     load_s = time.monotonic() - t_load0
@@ -283,24 +285,50 @@ def _print_report(results: list[dict], cores: int):
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--backend", action="append", default=[],
-                    choices=["vosk", "sherpa-onnx"],
-                    help="backend(s) to test; repeat to compare (default: vosk)")
-    ap.add_argument("--model", default=None,
-                    help="model dir override (default: backend's built-in path)")
-    ap.add_argument("--source", default=None,
-                    help="mic device spec (e.g. 'NewPie'); default = system default")
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument(
+        "--backend",
+        action="append",
+        default=[],
+        choices=["vosk", "sherpa-onnx"],
+        help="backend(s) to test; repeat to compare (default: vosk)",
+    )
+    ap.add_argument(
+        "--model",
+        default=None,
+        help="model dir override (default: backend's built-in path)",
+    )
+    ap.add_argument(
+        "--source",
+        default=None,
+        help="mic device spec (e.g. 'NewPie'); default = system default",
+    )
     ap.add_argument("--wav", default=None, help="feed a 16 kHz WAV instead of the mic")
-    ap.add_argument("--feed", choices=["mic", "silence"], default="mic",
-                    help="'silence' generates zeros (no mic) for pure RTF/CPU")
-    ap.add_argument("--duration", type=float, default=30.0,
-                    help="seconds to run (ignored for WAV: runs to EOF)")
-    ap.add_argument("--live", action="store_true",
-                    help="latency mode: speak phrases and watch per-utterance latency")
-    ap.add_argument("--num-threads", type=int, default=2,
-                    help="ONNX intra-op threads for sherpa (default 2, per CLAUDE.md)")
+    ap.add_argument(
+        "--feed",
+        choices=["mic", "silence"],
+        default="mic",
+        help="'silence' generates zeros (no mic) for pure RTF/CPU",
+    )
+    ap.add_argument(
+        "--duration",
+        type=float,
+        default=30.0,
+        help="seconds to run (ignored for WAV: runs to EOF)",
+    )
+    ap.add_argument(
+        "--live",
+        action="store_true",
+        help="latency mode: speak phrases and watch per-utterance latency",
+    )
+    ap.add_argument(
+        "--num-threads",
+        type=int,
+        default=2,
+        help="Number of decoder threads (default: 2)",
+    )
     ap.add_argument("--rms-threshold", type=float, default=0.02)
     ap.add_argument("--min-speech-ms", type=int, default=200)
     ap.add_argument("--vad-silence-ms", type=int, default=500)
@@ -308,8 +336,9 @@ def main():
 
     backends = args.backend or ["vosk"]
     if args.live and args.feed == "silence":
-        print("note: --live with synthetic silence will never see speech",
-              file=sys.stderr)
+        print(
+            "note: --live with synthetic silence will never see speech", file=sys.stderr
+        )
 
     cores = os.cpu_count() or 1
     results = []

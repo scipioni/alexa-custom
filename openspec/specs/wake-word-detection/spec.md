@@ -72,8 +72,8 @@ The system SHALL load wake words from the `wake_words` list in `actions.yaml`. A
 After wake word detection, the system SHALL open a full-transcription recognition window using the **stage-2 backend** (`stt.stage2`). The window duration is `recognition.command_timeout`. All other behaviour (trigger matching, timeout beep, MQTT publish) is unchanged.
 
 #### Scenario: Command captured using stage-2 backend
-- **WHEN** wake word is detected with stage1=vosk and stage2=sherpa-onnx
-- **THEN** the command window uses the sherpa-onnx model for transcription
+- **WHEN** wake word is detected with stage1=vosk and stage2=vosk
+- **THEN** the command window uses the Vosk model for transcription
 
 #### Scenario: Command matched using group triggers
 - **WHEN** wake word group "galileo" has its own triggers and the user speaks a matching phrase

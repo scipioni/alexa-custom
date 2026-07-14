@@ -57,39 +57,21 @@ def _stt_heartbeat_fresh(
     return (time.monotonic() - stt_heartbeat_ref[0]) < heartbeat_freshness
 
 
-async def _graceful_shutdown(
-    stt_stop: threading.Event | None,
-    mqtt_client,
-    livekit_stop: asyncio.Event | None,
-) -> None:
-    """Ordered teardown: STT → MQTT offline → LiveKit stop → drain → os.execv."""
-    import sys
-
-    logger.info("Graceful shutdown: stopping STT...")
-    if stt_stop is not None:
-        stt_stop.set()
-
-    if mqtt_client is not None:
-        logger.info("Graceful shutdown: publishing MQTT offline...")
-        try:
-            await asyncio.wait_for(mqtt_client.publish_offline(), timeout=0.5)
-        except Exception as e:
-            logger.debug("MQTT offline publish failed: %s", e)
-
-    if livekit_stop is not None:
-        logger.info("Graceful shutdown: stopping LiveKit session...")
-        livekit_stop.set()
-
-    await asyncio.sleep(0.3)
-    logger.info("Graceful shutdown: restarting process...")
-    os.execv(sys.executable, [sys.executable] + sys.argv)
-
-
 logging.basicConfig(
     level=getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO),
     format="%(asctime)s %(levelname)s %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+def _log_task_exception(task: asyncio.Task) -> None:
+    """Done-callback for fire-and-forget tasks: log failures instead of
+    letting asyncio silently report "Task exception was never retrieved"."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error("Background task %r failed: %s", task.get_name(), exc)
 
 
 def get_token() -> str:
@@ -143,6 +125,7 @@ class LiveKitSessionManager:
         empty_room_timeout: int = 0,
         wait_for_participant: bool = True,
         answer_timeout: float = 60,
+        call_tone: bool = True,
     ):
         self.mic = mic
         self.devices = devices
@@ -151,11 +134,11 @@ class LiveKitSessionManager:
         self._empty_room_timeout = empty_room_timeout
         self._wait_for_participant = wait_for_participant
         self._answer_timeout = answer_timeout
+        self._call_tone = call_tone
         self.room = Room()
         self.disconnected = asyncio.Event()
         self._participant_arrived = asyncio.Event()
         self.call_connected = False
-        self.subscribed_tracks: dict[str, AudioStream] = {}
         self.player_tracks: set[str] = set()
         self.volumes = {"mic": 0.0, "spk": 0.0}
         self.tap_tasks: list[asyncio.Task] = []
@@ -191,9 +174,9 @@ class LiveKitSessionManager:
             if track.kind == TrackKind.KIND_AUDIO:
                 logger.info(f"Audio track unsubscribed from {participant.identity}")
                 self.emit("track_unsubscribed", {"identity": participant.identity})
-                self.subscribed_tracks.pop(participant.identity, None)
                 if track.sid in self.player_tracks:
-                    asyncio.create_task(self.player.remove_track(track))
+                    _t = asyncio.create_task(self.player.remove_track(track))
+                    _t.add_done_callback(_log_task_exception)
                     self.player_tracks.discard(track.sid)
 
         @self.room.on("participant_connected")
@@ -320,7 +303,9 @@ class LiveKitSessionManager:
                         self.emit("answer_timeout", {})
                     return
 
-            asyncio.create_task(asyncio.to_thread(play_call_start))
+            if self._call_tone:
+                _t = asyncio.create_task(asyncio.to_thread(play_call_start))
+                _t.add_done_callback(_log_task_exception)
 
             track = LocalAudioTrack.create_audio_track("microphone", self.mic.source)
             opts = TrackPublishOptions()
@@ -355,12 +340,11 @@ class LiveKitSessionManager:
         for t in self.tap_tasks:
             t.cancel()
         self.tap_tasks.clear()
-        self.subscribed_tracks.clear()
         # Signal disconnection early so STT ungates while we finish cleanup.
         # The room "disconnected" event may not fire until room.disconnect() below.
         logger.debug("cleanup: emitting early 'disconnected' to ungate STT")
         self.emit("disconnected", {})
-        if self.call_connected:
+        if self.call_connected and self._call_tone:
             try:
                 await asyncio.to_thread(play_call_end)
             except Exception:
@@ -422,6 +406,7 @@ async def run_session(
     empty_room_timeout: int = 0,
     wait_for_participant: bool = True,
     answer_timeout: float = 60,
+    call_tone: bool = True,
 ):
     """Connect to one LiveKit session; return when disconnected or stop_event fires."""
     manager = LiveKitSessionManager(
@@ -432,6 +417,7 @@ async def run_session(
         empty_room_timeout,
         wait_for_participant,
         answer_timeout,
+        call_tone,
     )
     await manager.run(stop_event)
 
@@ -445,7 +431,17 @@ async def _async_main(
     mqtt_client: MQTTClient | None = None,
     stt_ready_event: threading.Event | None = None,
 ) -> None:
-    logger.info(f"Browser join URL:\n  {browser_join_url()}")
+    try:
+        logger.info(f"Browser join URL:\n  {browser_join_url()}")
+    except RuntimeError as e:
+        # Missing LIVEKIT_* env var: don't let this abort the rest of startup
+        # (audio wait, startup actions, "Sistema pronto") — the worker
+        # supervisor in _livekit_worker treats this as a terminal condition
+        # for the LiveKit connection loop specifically, further down.
+        logger.warning("Browser join URL unavailable: %s", e)
+
+    if mqtt_client is not None:
+        asyncio.get_running_loop().create_task(mqtt_client.run())
 
     input_spec = (
         actions_config.audio.input_device
@@ -474,13 +470,12 @@ async def _async_main(
             "PipeWire PortAudio device not found — using system default for LiveKit I/O"
         )
     else:
-        in_info = sd.query_devices(pw_device)
-        out_info = sd.query_devices(pw_device)
+        device_info = sd.query_devices(pw_device)
         logger.info(
-            f"Input device:  {input_spec or in_info['name']} ({in_info['max_input_channels']} ch)"
+            f"Input device:  {input_spec or device_info['name']} ({device_info['max_input_channels']} ch)"
         )
         logger.info(
-            f"Output device: {output_spec or out_info['name']} ({out_info['max_output_channels']} ch)"
+            f"Output device: {output_spec or device_info['name']} ({device_info['max_output_channels']} ch)"
         )
 
     if on_event:
@@ -535,7 +530,7 @@ async def _async_main(
         on_event("idle", {})
 
     # Use connection-type-appropriate sample rate from config (default: usb=48000, bt=16000).
-    from alexa_custom.audio import check_newpie_ready, get_sample_rates
+    from alexa_custom.audio import get_sample_rates
 
     _, conn_type = await asyncio.to_thread(
         check_newpie_ready, _input_spec, _output_spec
@@ -614,13 +609,19 @@ async def _async_main(
     _ever_connected = False
 
     use_watchdog = should_use_watchdog()
-    last_watchdog_ping = 0.0
     watchdog_interval = 10.0  # ping every 10 seconds
 
     # Compute STT heartbeat freshness threshold from systemd's WatchdogSec.
     # If the STT thread stamps more than `_heartbeat_freshness` seconds ago, the
     # ping is withheld so systemd restarts a deaf/hung assistant.
-    _watchdog_usec = int(os.environ.get("WATCHDOG_USEC", "0"))
+    try:
+        _watchdog_usec = int(os.environ.get("WATCHDOG_USEC", "0"))
+    except ValueError:
+        logger.warning(
+            "Watchdog: WATCHDOG_USEC=%r is not a valid integer — treating as disabled",
+            os.environ.get("WATCHDOG_USEC"),
+        )
+        _watchdog_usec = 0
     _watchdog_sec = _watchdog_usec / 1_000_000 if _watchdog_usec > 0 else 0.0
     _heartbeat_freshness = (
         _watchdog_sec - watchdog_interval if _watchdog_sec > watchdog_interval else 0.0
@@ -635,6 +636,24 @@ async def _async_main(
 
         _stt_heartbeat_ref = _imported_hb
 
+    async def _watchdog_ping_loop() -> None:
+        # Runs as an independent task so pings continue in every main-loop
+        # state (idle trigger-wait, participant polling, an active session)
+        # instead of only once per outer-loop iteration.
+        while True:
+            await asyncio.sleep(watchdog_interval)
+            if _stt_heartbeat_fresh(_stt_heartbeat_ref, _heartbeat_freshness):
+                sd_notify("WATCHDOG=1")
+            else:
+                heartbeat_age = time.monotonic() - (_stt_heartbeat_ref or [0.0])[0]
+                logger.warning(
+                    "Watchdog: STT heartbeat stale (%.0fs old, threshold=%.0fs)"
+                    " — withholding ping",
+                    heartbeat_age,
+                    _heartbeat_freshness,
+                )
+
+    watchdog_ping_task: asyncio.Task | None = None
     # Send initial systemd notification to signal startup complete.
     if use_watchdog:
         if _watchdog_sec > 0:
@@ -645,27 +664,13 @@ async def _async_main(
                 _heartbeat_freshness if _heartbeat_freshness > 0 else float("inf"),
             )
         sd_notify("READY=1")
-        last_watchdog_ping = time.time()
+        sd_notify("WATCHDOG=1")
+        watchdog_ping_task = asyncio.get_running_loop().create_task(
+            _watchdog_ping_loop()
+        )
 
     try:
         while not stop_event.is_set():
-            # Periodically ping systemd watchdog to prevent auto-restart.
-            # Only ping if enabled (Type=notify + WatchdogSec in systemd unit).
-            # Ping is gated on STT heartbeat freshness: a hung STT thread stops
-            # stamping, the heartbeat goes stale, and systemd triggers a restart.
-            if use_watchdog and (time.time() - last_watchdog_ping) >= watchdog_interval:
-                if _stt_heartbeat_fresh(_stt_heartbeat_ref, _heartbeat_freshness):
-                    sd_notify("WATCHDOG=1")
-                    last_watchdog_ping = time.time()
-                else:
-                    heartbeat_age = time.monotonic() - (_stt_heartbeat_ref or [0.0])[0]
-                    logger.warning(
-                        "Watchdog: STT heartbeat stale (%.0fs old, threshold=%.0fs)"
-                        " — withholding ping",
-                        heartbeat_age,
-                        _heartbeat_freshness,
-                    )
-
             # On-demand mode: wait for STT to signal a connect trigger.
             if connect_trigger is not None:
                 logger.info("Waiting for voice trigger to connect to LiveKit…")
@@ -738,6 +743,9 @@ async def _async_main(
                 await asyncio.sleep(reconnect_delay)
                 continue
 
+            _call_tone = (
+                actions_config.recognition.call_tone if actions_config else True
+            )
             try:
                 await run_session(
                     mic,
@@ -748,6 +756,7 @@ async def _async_main(
                     empty_room_timeout=_empty_room_timeout,
                     wait_for_participant=False,
                     answer_timeout=_answer_timeout,
+                    call_tone=_call_tone,
                 )
             except Exception as e:
                 logger.error(f"Session error: {e}")
@@ -778,6 +787,8 @@ async def _async_main(
             except asyncio.TimeoutError:
                 pass
     finally:
+        if watchdog_ping_task is not None:
+            watchdog_ping_task.cancel()
         logger.info("Shutting down LiveKit loop...")
 
 
@@ -801,10 +812,15 @@ def _mqtt_settings_from_config(config: ActionsConfig | None) -> dict:
 
 def make_mqtt_reload_callback(
     client_holder: list,  # list[MQTTClient | None] — mutable single-element container
-    loop: asyncio.AbstractEventLoop,
+    loop_getter: Callable[[], "asyncio.AbstractEventLoop | None"],
     initial_config: ActionsConfig | None = None,
 ):
-    """Return a reload callback that reconnects MQTT when broker settings change."""
+    """Return a reload callback that reconnects MQTT when broker settings change.
+
+    ``loop_getter`` is resolved at call time (not registration time) because the
+    LiveKit worker's event loop is created on a background thread shortly after
+    the daemon starts; registering the callback happens before that loop exists.
+    """
     # Seed from the current config so the first reload of an *unrelated* setting
     # doesn't spuriously tear down and recreate the MQTT client.
     prev_settings: dict = (
@@ -815,6 +831,14 @@ def make_mqtt_reload_callback(
         nonlocal prev_settings
         current = _mqtt_settings_from_config(new_config)
         if current == prev_settings:
+            return
+
+        loop = loop_getter()
+        if loop is None or loop.is_closed():
+            logger.warning(
+                "MQTT settings changed on reload but LiveKit loop isn't ready yet — "
+                "will retry on next reload"
+            )
             return
         prev_settings = current
         logger.info("MQTT settings changed on reload — reconnecting MQTT client")
@@ -830,6 +854,7 @@ def make_mqtt_reload_callback(
                 port=int(current["port"]),
                 topic_prefix=current["prefix"],
                 node_id=current["node_id"],
+                queue_max=current["queue_max"],
             )
             asyncio.run_coroutine_threadsafe(new_client.run(), loop)
             client_holder[0] = new_client
@@ -864,6 +889,117 @@ def ensure_setup() -> None:
             download_piper_voice(default_voice)
         except Exception as e:
             logger.error(f"Failed to download Piper voice: {e}")
+
+
+# Keep-alive stream level: ~-60 dBFS uniform noise (inaudible on a speakerphone
+# at normal volume). Digital ZEROS are not enough — the SP92's DSP treats an
+# all-zero stream as "nothing playing" and lets its microphone path doze even
+# while the PipeWire sink shows RUNNING, garbling the first utterance after
+# idle. Real (but inaudible) samples keep the device's audio chain engaged.
+_KEEP_ALIVE_AMPLITUDE = 33  # int16 counts ≈ -60 dBFS
+_KEEP_ALIVE_RATE = 16000
+
+
+def _start_keep_alive_stream() -> None:
+    """Feed low-level noise to the default sink from a daemon thread, forever.
+
+    Restarts pacat if it dies (e.g. device replug). Runs detached — failures
+    are logged and retried, never propagated.
+    """
+    import random
+    import shutil
+    import struct
+    import subprocess
+    import threading
+
+    pacat_bin = shutil.which("pacat")
+    if not pacat_bin:
+        logger.warning("keep_sink_alive: pacat not found — keep-alive stream disabled")
+        return
+
+    # One second of pre-generated noise, looped (content repetition is fine —
+    # the point is non-zero PCM, not spectral quality).
+    rng = random.Random(0)
+    second = struct.pack(
+        f"<{_KEEP_ALIVE_RATE}h",
+        *(
+            rng.randint(-_KEEP_ALIVE_AMPLITUDE, _KEEP_ALIVE_AMPLITUDE)
+            for _ in range(_KEEP_ALIVE_RATE)
+        ),
+    )
+    block = second[: _KEEP_ALIVE_RATE // 10 * 2]  # 100 ms per write
+
+    def _run() -> None:
+        while True:
+            try:
+                proc = subprocess.Popen(
+                    [
+                        pacat_bin,
+                        f"--rate={_KEEP_ALIVE_RATE}",
+                        "--channels=1",
+                        "--format=s16le",
+                    ],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                assert proc.stdin is not None
+                pos = 0
+                while True:
+                    # len(second) is a whole multiple of the block size, so
+                    # every slice is a full 100 ms block; pacat's realtime
+                    # consumption paces the writes.
+                    proc.stdin.write(second[pos : pos + len(block)])
+                    proc.stdin.flush()
+                    pos = (pos + len(block)) % len(second)
+            except Exception as e:
+                logger.warning(
+                    "keep_sink_alive: stream died (%s) — restarting in 5s", e
+                )
+                time.sleep(5)
+
+    logger.info(
+        "USB output active: starting keep-alive stream (%d-count noise ≈ -60 dBFS) to keep the sink and any radio link behind it awake",
+        _KEEP_ALIVE_AMPLITUDE,
+    )
+    threading.Thread(target=_run, daemon=True, name="keep-sink-alive").start()
+
+
+def _keep_sink_alive_enabled(config: ActionsConfig) -> bool:
+    """Decide whether to run the background silent stream.
+
+    audio.keep_sink_alive: false (default) keeps it off; true forces it on;
+    "auto" enables it when the configured output resolves to a USB sink (any
+    vendor) — the case where a dongle's radio link can idle out when nothing
+    plays.
+    """
+    setting = getattr(config.audio, "keep_sink_alive", False)
+    if isinstance(setting, bool):
+        return setting
+    normalized = str(setting).strip().lower()
+    if normalized in ("true", "on", "yes", "1"):
+        return True
+    if normalized in ("false", "off", "no", "0"):
+        return False
+
+    import alexa_custom.audio_hw as audio_hw
+
+    sink = audio_hw.get_output_sink()
+    if sink is None:
+        # Default routing — ask PipeWire which sink is actually the default.
+        import subprocess
+
+        try:
+            sink = subprocess.run(
+                ["pactl", "get-default-sink"],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            ).stdout.strip()
+        except Exception:
+            sink = ""
+    return bool(sink) and ".usb-" in sink
 
 
 def main() -> None:
@@ -903,19 +1039,23 @@ def main() -> None:
         logger.info("Hot-reload enabled (watching alexa_custom/*.py)")
 
     from alexa_custom.web import run_web
+    import alexa_custom.audio_hw as audio_hw
+
+    if config is not None:
+        audio_hw.configure(config)
+
+    # Background keep-alive stream keeps the sink active. Bluetooth-dongle
+    # speakerphones (e.g. Yealink BT51) drop their radio audio link when the
+    # sink idles, so the capture returns only clock noise until something
+    # plays. audio.keep_sink_alive: false (default) — opt in with true, or
+    # "auto" to enable whenever the output resolves to a USB sink.
+    if config is not None and _keep_sink_alive_enabled(config):
+        _start_keep_alive_stream()
 
     input_spec = config.audio.input_device if config is not None else None
     output_spec = config.audio.output_device if config is not None else None
-    output_volume = config.audio.output_volume if config is not None else 0.5
-    input_gain = config.audio.input_gain if config is not None else 1.0
-    from alexa_custom.audio_hw import load_input_gain_state, load_volume_state
-
-    _state_gain = load_input_gain_state()
-    if _state_gain is not None:
-        input_gain = _state_gain
-    _state_vol = load_volume_state()
-    if _state_vol is not None:
-        output_volume = _state_vol
+    output_volume = audio_hw.get_output_volume()
+    input_gain = audio_hw.get_input_gain()
     room = os.environ.get("LIVEKIT_ROOM", "")
 
     # Optional display controller
@@ -943,6 +1083,22 @@ def main() -> None:
     livekit_connected_flag: threading.Event | None = None
     stt_params: dict | None = None
 
+    # MQTT: connect at startup when a broker host is configured. Held in a
+    # single-element list so a config reload (make_mqtt_reload_callback) can
+    # swap in a reconnected client for future STT-thread restarts.
+    mqtt_client_holder: list[MQTTClient | None] = [None]
+    if config is not None and config.mqtt is not None and config.mqtt.host:
+        mqtt_client_holder[0] = MQTTClient(
+            host=config.mqtt.host,
+            port=config.mqtt.port,
+            topic_prefix=config.mqtt.topic_prefix,
+            node_id=config.mqtt.node_id,
+            queue_max=config.mqtt.queue_max,
+        )
+        logger.info("MQTT enabled — broker: %s:%d", config.mqtt.host, config.mqtt.port)
+    else:
+        logger.info("MQTT disabled (no mqtt.host configured)")
+
     if config is not None:
         from alexa_custom.actions import TelegramClient
         from alexa_custom.tts import init_engine
@@ -969,6 +1125,7 @@ def main() -> None:
             "connect_fn": _livekit_connect_fn_web,
             "connected_flag": livekit_connected_flag,
             "stt_ready_event": stt_ready_event,
+            "mqtt_client_holder": mqtt_client_holder,
         }
 
         if config.llm is not None:
@@ -992,6 +1149,7 @@ def main() -> None:
             connect_trigger=connect_trigger,
             livekit_connected_flag=livekit_connected_flag,
             actions_config=config,
+            mqtt_client=mqtt_client_holder[0],
             stt_ready_event=stt_params["stt_ready_event"] if stt_params else None,
         )
 

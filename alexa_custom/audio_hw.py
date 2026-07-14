@@ -15,6 +15,16 @@ logger = logging.getLogger(__name__)
 
 _input_gain_lock = threading.Lock()
 
+# PipeWire names every USB audio object with these prefixes, regardless of
+# vendor — the basis for device-agnostic ("auto") matching.
+USB_SINK_PREFIX = "alsa_output.usb-"
+USB_SOURCE_PREFIX = "alsa_input.usb-"
+
+
+def is_auto_spec(spec: str | None) -> bool:
+    """True when the device spec asks for automatic USB-audio detection."""
+    return spec is not None and spec.strip().lower() == "auto"
+
 
 # Mutable audio parameters, updated by configure()/setters at runtime.
 # Centralised in one object so there is a single source of truth: always read
@@ -30,14 +40,50 @@ class _AudioState:
     )
     default_card_name: str | None = None
     output_volume: float = 0.5
+    output_sink: str | None = None
+    output_spec: str | None = None
+    output_sink_dirty: bool = False
     input_gain: float = 1.0
+    hw_gain_applied: bool = False
 
 
 _state = _AudioState()
 
-_pw_device_resolved = False
-_pw_device_index: int | None = None
 _STATE_FILE = "conf/state.yaml"
+
+# Fired by set_active_gst_profile(); the STT worker clears it and restarts
+# the capture process so the new profile takes effect without a full restart.
+gst_profile_change_event = threading.Event()
+
+# Optional callbacks invoked (with the new profile name) when the active
+# GStreamer capture profile changes.  Register via register_profile_callback().
+_profile_callbacks: list = []
+
+
+# STT-level overrides carried by the active profile (rms_threshold, vad_silence_ms).
+# Stored in memory only — derived from config at the time the profile is activated.
+_profile_stt_overrides: dict = {}
+
+
+def set_profile_stt_overrides(overrides: dict) -> None:
+    global _profile_stt_overrides
+    _profile_stt_overrides = dict(overrides)
+
+
+def get_profile_stt_overrides() -> dict:
+    return dict(_profile_stt_overrides)
+
+
+def register_profile_callback(cb) -> None:
+    """Register a callable(profile: str) notified when the active GST profile changes."""
+    _profile_callbacks.append(cb)
+
+
+def unregister_profile_callback(cb) -> None:
+    try:
+        _profile_callbacks.remove(cb)
+    except ValueError:
+        pass
 
 
 def _load_state_file() -> dict:
@@ -100,6 +146,54 @@ def load_input_gain_state() -> float | None:
     return None
 
 
+def save_gstreamer_overrides(overrides: dict) -> None:
+    """Save GStreamer overrides to state.yaml for persistence across restarts."""
+    state = _load_state_file()
+    state["gstreamer_override"] = overrides
+    _save_state_file(state)
+    logger.info(f"Saved GStreamer overrides to {_STATE_FILE}: {overrides}")
+
+
+def load_gstreamer_overrides() -> dict | None:
+    """Load persisted GStreamer overrides from state.yaml, returns None if absent."""
+    overrides = _load_state_file().get("gstreamer_override")
+    if isinstance(overrides, dict):
+        return overrides
+    return None
+
+
+def get_active_gst_profile() -> str:
+    """Return the persisted GStreamer capture profile name (default: 'normal')."""
+    return str(_load_state_file().get("gst_profile", "normal"))
+
+
+def signal_capture_restart() -> None:
+    """Ask the STT worker to restart its capture subprocess on the next chunk.
+
+    Generalizes the profile-change signal (`gst_profile_change_event`) to any
+    event that should make a long-running capture re-read config or
+    re-resolve its device: a config hot-reload or an audio device
+    reconnect. The recognition loop already re-reads config and re-resolves
+    the capture source at the top of every restart, so reusing this one
+    signal is sufficient — no separate "config changed" event is needed.
+    """
+    gst_profile_change_event.set()
+
+
+def set_active_gst_profile(profile: str) -> None:
+    """Persist a new GStreamer capture profile and signal the STT worker to restart."""
+    state = _load_state_file()
+    state["gst_profile"] = profile
+    _save_state_file(state)
+    gst_profile_change_event.set()
+    logger.info("GStreamer audio profile changed to: %s", profile)
+    for cb in list(_profile_callbacks):
+        try:
+            cb(profile)
+        except Exception as exc:
+            logger.warning("Profile callback error: %s", exc)
+
+
 def configure(cfg) -> None:
     """Update audio parameters from ActionsConfig."""
     _state.post_playback_ms = int(cfg.audio.post_playback_ms)
@@ -117,12 +211,85 @@ def configure(cfg) -> None:
     if state_gain is not None:
         _state.input_gain = state_gain
 
+    overrides = load_gstreamer_overrides()
+    if overrides and hasattr(cfg.audio, "gstreamer"):
+        for k, v in overrides.items():
+            if hasattr(cfg.audio.gstreamer, k):
+                setattr(cfg.audio.gstreamer, k, v)
+
+    _state.output_spec = cfg.audio.output_device
+    resolve_output_sink(cfg.audio.output_device)
+
 
 def get_output_volume() -> float:
     return _state.output_volume
 
 
+def get_output_sink() -> str | None:
+    """Return the cached PipeWire sink name, re-resolving first if a device
+    (re)connect invalidated it (see invalidate_output_sink()) — so playback
+    never targets a node name that belonged to a replugged/swapped device."""
+    if _state.output_sink_dirty:
+        resolve_output_sink(_state.output_spec, retries=1)
+        _state.output_sink_dirty = False
+    return _state.output_sink
+
+
+def invalidate_output_sink() -> None:
+    """Mark the cached output sink stale; re-resolved lazily on next playback.
+
+    Called on audio device (re)connect. Lazy (not an eager re-resolve here)
+    avoids opening an extra pulsectl session — each one costs a PCM
+    reset/restore round-trip — right in the watcher's hot path.
+    """
+    _state.output_sink_dirty = True
+
+
+def resolve_output_sink(
+    output_spec: str | None, retries: int = 5, retry_delay: float = 1.0
+) -> str | None:
+    """Look up and cache the PipeWire sink name for output_spec.
+
+    Returns the sink node name for use as pw-play --target, or None when
+    output_spec is 'pipewire'/'default'/None (let PipeWire route normally).
+    Retries up to `retries` times with `retry_delay` seconds between attempts
+    to survive the startup race where WirePlumber hasn't finished initializing
+    the USB device when the first pulsectl connection is opened.
+    """
+    _state.output_spec = output_spec
+    if not output_spec or output_spec.lower() in ("pipewire", "default"):
+        _state.output_sink = None
+        return None
+    auto = is_auto_spec(output_spec)
+    needle = output_spec.lower()
+    for attempt in range(retries):
+        with pulse_session("alexa-sink-lookup") as pulse:
+            for s in pulse.sink_list():
+                if auto:
+                    if s.name.startswith(USB_SINK_PREFIX):
+                        _state.output_sink = s.name
+                        return s.name
+                elif needle in s.description.lower() or needle in s.name.lower():
+                    _state.output_sink = s.name
+                    return s.name
+        if attempt < retries - 1:
+            logger.debug(
+                f"resolve_output_sink: sink {output_spec!r} not ready, "
+                f"retrying in {retry_delay}s ({attempt + 1}/{retries})"
+            )
+            time.sleep(retry_delay)
+    logger.warning(f"resolve_output_sink: no sink found for {output_spec!r}")
+    _state.output_sink = None
+    return None
+
+
 def get_input_gain() -> float:
+    return _state.input_gain
+
+
+def get_software_input_gain() -> float:
+    if _state.hw_gain_applied:
+        return 1.0
     return _state.input_gain
 
 
@@ -160,13 +327,24 @@ def _restore_hw_pcm(card: int | None = None) -> None:
     else:
         card_index = card
     try:
-        subprocess.run(
-            ["amixer", "-c", str(card_index), "sset", "PCM", "100%"],
-            capture_output=True,
-            check=False,
-        )
+        # Playback control name varies by hardware: PCM (original NewPie),
+        # 'Playback Volume' (NewPie 32) — try in order until one succeeds.
+        for control in ("PCM", "Playback Volume"):
+            result = subprocess.run(
+                ["amixer", "-c", str(card_index), "sset", control, "100%"],
+                capture_output=True,
+                check=False,
+                timeout=5,
+            )
+            if result.returncode == 0:
+                break
     except FileNotFoundError:
         logger.warning("_restore_hw_pcm: amixer not installed; cannot restore PCM")
+    except subprocess.TimeoutExpired:
+        logger.warning(
+            "_restore_hw_pcm: amixer timed out after 5s (card %s) — skipping",
+            card_index,
+        )
 
 
 @contextmanager
@@ -200,22 +378,6 @@ def find_pipewire_device():
     )
 
 
-def get_pipewire_device() -> int | None:
-    """Cached lookup of the PortAudio index of the PipeWire ALSA device."""
-    global _pw_device_resolved, _pw_device_index
-    if not _pw_device_resolved:
-        _pw_device_index = find_pipewire_device()
-        _pw_device_resolved = True
-    return _pw_device_index
-
-
-def invalidate_pipewire_device_cache() -> None:
-    """Clear the cached PortAudio device index."""
-    global _pw_device_resolved, _pw_device_index
-    _pw_device_resolved = False
-    _pw_device_index = None
-
-
 def resolve_device(name_or_index: str) -> int:
     """Resolve a device name substring or numeric index string to a sounddevice index."""
     import sounddevice as sd
@@ -227,7 +389,7 @@ def resolve_device(name_or_index: str) -> int:
         if needle in d["name"].lower():
             return i
     raise RuntimeError(
-        f"Audio device not found: {name_or_index!r} — run 'alexa-audio --list' to see available devices"
+        f"Audio device not found: {name_or_index!r} — run 'serena-audio --list' to see available devices"
     )
 
 
@@ -239,16 +401,27 @@ def device_from_env(key: str) -> int | None:
     return resolve_device(val)
 
 
+def _spec_matches(
+    spec: str | None, name: str, description: str, usb_prefix: str
+) -> bool:
+    """True when a sink/source matches the device spec ('auto' → any USB node)."""
+    if is_auto_spec(spec):
+        return name.startswith(usb_prefix)
+    needle = (spec or "").lower()
+    return needle in description.lower() or needle in name.lower()
+
+
 def set_pipewire_defaults(input_spec: str | None, output_spec: str | None):
     """Set PipeWire default source/sink by matching INPUT_DEVICE/OUTPUT_DEVICE name."""
     with pulse_session("alexa-routing") as pulse:
         if output_spec and output_spec.lower() not in ("pipewire", "default"):
-            needle = output_spec.lower()
             match = next(
                 (
                     s
                     for s in pulse.sink_list()
-                    if needle in s.description.lower() or needle in s.name.lower()
+                    if _spec_matches(
+                        output_spec, s.name, s.description, USB_SINK_PREFIX
+                    )
                 ),
                 None,
             )
@@ -260,13 +433,14 @@ def set_pipewire_defaults(input_spec: str | None, output_spec: str | None):
                 )
 
         if input_spec and input_spec.lower() not in ("pipewire", "default"):
-            needle = input_spec.lower()
             match = next(
                 (
                     s
                     for s in pulse.source_list()
                     if "monitor" not in s.name
-                    and (needle in s.description.lower() or needle in s.name.lower())
+                    and _spec_matches(
+                        input_spec, s.name, s.description, USB_SOURCE_PREFIX
+                    )
                 ),
                 None,
             )
@@ -279,9 +453,20 @@ def set_pipewire_defaults(input_spec: str | None, output_spec: str | None):
 
 
 def find_alexa_card(pulse, spec: str | None = None):
-    """Return the pulsectl card object matching the spec (name, desc, or index)."""
+    """Return the pulsectl card object matching the spec (name, desc, or index).
+
+    A spec of 'auto' matches the first USB audio card, whatever its vendor.
+    """
     if not spec:
         spec = _state.default_card_name
+    if not spec:
+        return None
+
+    if is_auto_spec(spec):
+        for card in pulse.card_list():
+            if card.proplist.get("device.bus", "").lower() == "usb":
+                return card
+        return None
 
     spec_lower = spec.lower()
     is_numeric = spec.strip().isdigit()
@@ -339,15 +524,24 @@ def set_input_gain(
         if source_name is not None:
             _restore_hw_pcm()
             pct = int(max(0.0, gain) * 100)
-            result = subprocess.run(
-                ["pactl", "set-source-volume", source_name, f"{pct}%"],
-                capture_output=True,
-                check=False,
-            )
-            if result.returncode == 0:
+            try:
+                result = subprocess.run(
+                    ["pactl", "set-source-volume", source_name, f"{pct}%"],
+                    capture_output=True,
+                    check=False,
+                    timeout=5,
+                )
+            except subprocess.TimeoutExpired:
+                logger.warning(
+                    "pactl set-source-volume timed out after 5s on %s — "
+                    "falling back to software scaling",
+                    source_name,
+                )
+                result = None
+            if result is not None and result.returncode == 0:
                 logger.info(f"Mic gain set to {pct}% on {source_name} (OS level)")
                 hw_ok = True
-            else:
+            elif result is not None:
                 logger.warning(
                     f"pactl set-source-volume failed: "
                     f"{result.stderr.decode(errors='replace').strip()} — "
@@ -360,13 +554,10 @@ def set_input_gain(
                 f"falling back to software scaling for input gain"
             )
 
-        if hw_ok:
-            # Gain was applied at the source (hardware) level. The software
-            # scaling path in stt_gating multiplies every chunk by the input
-            # gain, so it must be a no-op here — else gain is applied twice (gain²).
-            _state.input_gain = 1.0
-        else:
-            _state.input_gain = max(0.0, gain)
+        _state.input_gain = max(0.0, gain)
+        _state.hw_gain_applied = hw_ok
+
+        if not hw_ok:
             logger.warning(
                 f"Input gain {gain:.0%} applied in software (CPU overhead, clipping risk)"
             )
@@ -376,7 +567,9 @@ def enforce_audio_state(
     pulse: pulsectl.Pulse, input_spec: str | None = None, output_spec: str | None = None
 ) -> tuple[bool, str]:
     """Find configured card, force profile if it exists, and set default sink/source."""
-    is_virtual = (output_spec or "").lower() in ("pipewire", "default")
+    is_virtual = (output_spec or "").lower() in ("pipewire", "default") or (
+        output_spec is None and _state.default_card_name is None
+    )
 
     card = find_alexa_card(pulse, output_spec)
     if not card:
@@ -432,7 +625,9 @@ def check_newpie_ready(
         input_spec = os.environ.get("INPUT_DEVICE", "").strip() or None
     if output_spec is None:
         output_spec = os.environ.get("OUTPUT_DEVICE", "").strip() or None
-    is_virtual = (output_spec or "").lower() in ("pipewire", "default")
+    is_virtual = (output_spec or "").lower() in ("pipewire", "default") or (
+        output_spec is None and _state.default_card_name is None
+    )
 
     with pulse_session("alexa-check") as pulse:
         ok, conn = enforce_audio_state(pulse, input_spec, output_spec)
@@ -452,20 +647,21 @@ def check_newpie_ready(
         default_sink = sinks.get(info.default_sink_name)
         default_source = sources.get(info.default_source_name)
 
-        target_out = (output_spec or _state.default_card_name).lower()
-        if not default_sink or (
-            target_out not in default_sink.description.lower()
-            and target_out not in default_sink.name.lower()
+        target_out = output_spec or _state.default_card_name
+        if not default_sink or not _spec_matches(
+            target_out, default_sink.name, default_sink.description, USB_SINK_PREFIX
         ):
             print(
                 f"WARNING: Default sink is not the expected device (got: {info.default_sink_name})"
             )
             ok = False
 
-        target_in = (input_spec or _state.default_card_name).lower()
-        if not default_source or (
-            target_in not in default_source.description.lower()
-            and target_in not in default_source.name.lower()
+        target_in = input_spec or _state.default_card_name
+        if not default_source or not _spec_matches(
+            target_in,
+            default_source.name,
+            default_source.description,
+            USB_SOURCE_PREFIX,
         ):
             print(
                 f"WARNING: Default source is not the expected device (got: {info.default_source_name})"
@@ -476,30 +672,78 @@ def check_newpie_ready(
 
 
 def _find_alsa_card(needle: str) -> tuple[int, str] | None:
-    """Return (card_index, card_id) for first ALSA card whose id contains needle."""
+    """Return (card_index, card_id) for first ALSA card whose id or description contains needle.
+
+    Checks the short card ID first (e.g. "NewPie"), then falls back to the full
+    description in /proc/asound/cards (e.g. "USB-Audio - NewPie 32") so that devices
+    whose ALSA id is truncated/sanitized (e.g. "N32") are still found.
+
+    A needle of "auto" returns the first USB sound card (USB cards expose a
+    usbid file in /proc/asound/cardN/), whatever its vendor.
+    """
+    if is_auto_spec(needle):
+        for entry in sorted(os.listdir("/proc/asound")):
+            if not entry.startswith("card") or not entry[4:].isdigit():
+                continue
+            if os.path.isfile(f"/proc/asound/{entry}/usbid"):
+                try:
+                    with open(f"/proc/asound/{entry}/id") as f:
+                        return int(entry[4:]), f.read().strip()
+                except OSError:
+                    pass
+        return None
+
+    needle_lower = needle.lower()
     for entry in os.listdir("/proc/asound"):
         if not entry.startswith("card"):
             continue
         try:
             with open(f"/proc/asound/{entry}/id") as f:
                 card_id = f.read().strip()
-            if needle.lower() in card_id.lower():
+            if needle_lower in card_id.lower():
                 return int(entry[4:]), card_id
         except OSError:
             pass
+    # Fallback: search full card descriptions in /proc/asound/cards
+    try:
+        with open("/proc/asound/cards") as f:
+            for line in f:
+                if needle_lower not in line.lower():
+                    continue
+                parts = line.split()
+                if parts and parts[0].isdigit():
+                    card_index = int(parts[0])
+                    try:
+                        with open(f"/proc/asound/card{card_index}/id") as fid:
+                            return card_index, fid.read().strip()
+                    except OSError:
+                        pass
+    except OSError:
+        pass
     return None
 
 
-def _find_pipewire_source(input_spec: str | None) -> str | None:
-    """Return the PipeWire source name matching input_spec, or None if not found."""
-    with pulse_session("alexa-source-lookup") as pulse:
-        if input_spec is None:
-            info = pulse.server_info()
-            return info.default_source_name or None
-        needle = input_spec.lower()
-        for s in pulse.source_list():
-            if "monitor" in s.name:
-                continue
-            if needle in s.description.lower() or needle in s.name.lower():
-                return s.name
+def _find_pipewire_source(input_spec: str | None, retries: int = 3) -> str | None:
+    """Return the PipeWire source name matching input_spec, or None if not found.
+
+    Retries up to `retries` times with a short sleep because opening a pulsectl
+    connection triggers pipewire-pulse to re-initialise the ALSA device, which
+    can transiently hide sources from the source list.
+    """
+    for attempt in range(retries):
+        with pulse_session("alexa-source-lookup") as pulse:
+            if input_spec is None:
+                info = pulse.server_info()
+                if info.default_source_name:
+                    return info.default_source_name
+            else:
+                for s in pulse.source_list():
+                    if "monitor" in s.name:
+                        continue
+                    if _spec_matches(
+                        input_spec, s.name, s.description, USB_SOURCE_PREFIX
+                    ):
+                        return s.name
+        if attempt < retries - 1:
+            time.sleep(0.5)
     return None

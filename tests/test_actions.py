@@ -6,9 +6,11 @@ from alexa_custom.actions import (
     _match_glob_pattern,
     _run_action,
     _trigger_matches_patterns,
+    dispatch,
     italian_phonetic,
     match_trigger,
     normalize_text,
+    registry,
 )
 from alexa_custom.config import ActionEntry, Trigger
 
@@ -53,6 +55,11 @@ class TestItalianPhonetic:
         # diacritics are stripped by normalize_text; no phonetic rule changes 'si'
         assert italian_phonetic("sì") == "si"
 
+    def test_esistente_assistente_alignment(self):
+        assert italian_phonetic("esistente") == italian_phonetic("assistente")
+        assert italian_phonetic("esistenti") == italian_phonetic("assistenti")
+        assert italian_phonetic("esistenza") == italian_phonetic("assistenza")
+
     def test_idempotent(self):
         result = italian_phonetic("chiama")
         assert italian_phonetic(result) == result
@@ -91,6 +98,33 @@ class TestMatchTrigger:
         assert result.phrase == "chiama"
 
 
+class TestContentWordFloor:
+    """The fuzzy fallback requires ≥1 phonetic content-word overlap, so a
+    transcript that only shares stopwords with a trigger no longer fires it."""
+
+    def test_stopword_only_overlap_rejected(self):
+        # Shares "la" with the trigger but no content word (accendi/luce).
+        triggers = [_trigger("accendi la luce")]
+        assert match_trigger("chiudi la finestra", triggers) is None
+
+    def test_content_word_present_matches(self):
+        triggers = [_trigger("accendi la luce")]
+        assert match_trigger("accendi la luce adesso", triggers) is not None
+
+    def test_content_word_phonetic_variant_matches(self):
+        # "accendere"/"luce" are phonetic/inflected variants of the content
+        # words; the floor is satisfied via prefix-anchored phonetic matching.
+        triggers = [_trigger("accendi la luce")]
+        assert match_trigger("puoi accendere la luce", triggers) is not None
+
+    def test_short_only_phrase_skips_floor(self):
+        # "si" has no content word (phonetic length < 3) → floor skipped, falls
+        # through to the short-phrase exact-match guard.
+        triggers = [_trigger("si")]
+        assert match_trigger("si", triggers) is not None
+        assert match_trigger("no", triggers) is None
+
+
 # ── existing registry tests ───────────────────────────────────────────────────
 
 
@@ -111,9 +145,12 @@ async def test_action_registry_registration():
 
 @pytest.mark.asyncio
 async def test_action_registry_unknown_action():
-    registry = ActionRegistry()
-    # Should not raise exception, just log warning
-    await registry.execute("unknown")
+    from alexa_custom.actions import ActionError
+
+    reg = ActionRegistry()
+    # Unknown action types raise ActionError so _run_action can notify the UI.
+    with pytest.raises(ActionError, match="unknown action type"):
+        await reg.execute("unknown")
 
 
 @pytest.mark.asyncio
@@ -192,8 +229,64 @@ class TestConfigurableMatching:
             assert match_trigger("si", triggers, algorithm=algo) is not None
             # Inflected or different words must fail
             assert match_trigger("se", triggers, algorithm=algo) is None
-            # Extra words must fail even for token_set_ratio!
-            assert match_trigger("si grazie", triggers, algorithm=algo) is None
+            # An extra word alongside an exact word-level hit must still
+            # match: free-vocabulary backends (sherpa-onnx) have no grammar
+            # constraint on ask replies, so a short "sì"/"no" answer often
+            # picks up a trailing captured word before the transcript is
+            # matched. No fuzzy/prefix leniency though — only a whole-word
+            # phonetic hit counts, "sissignore" (one word) still must not.
+            assert match_trigger("si grazie", triggers, algorithm=algo) is not None
+            assert match_trigger("sissignore", triggers, algorithm=algo) is None
+
+    def test_trigger_phrases_uses_commands(self):
+        from alexa_custom.actions import _trigger_phrases
+
+        t = Trigger(commands=["si", "sì", "va bene", "ok"], phrase="si", actions=[])
+        assert _trigger_phrases(t) == ["si", "sì", "va bene", "ok"]
+
+    def test_trigger_phrases_falls_back_to_phrase_and_aliases(self):
+        from alexa_custom.actions import _trigger_phrases
+
+        t = Trigger(commands=[], phrase="si", actions=[], aliases=["va bene"])
+        assert _trigger_phrases(t) == ["si", "va bene"]
+
+    @pytest.mark.asyncio
+    async def test_ask_grammar_includes_reply_aliases(self):
+        from alexa_custom.actions import handle_ask
+
+        # The Vosk grammar handed to listen_fn must contain every command/alias
+        # the matcher accepts; otherwise the recognizer physically cannot emit
+        # the alias on real hardware and the reply could never match.
+        on_reply = [
+            Trigger(
+                commands=["si", "sì", "va bene", "certo"],
+                phrase="si",
+                actions=[],
+                with_wake=True,
+            ),
+            Trigger(
+                commands=["no", "annulla"], phrase="no", actions=[], with_wake=True
+            ),
+        ]
+        action = ActionEntry(type="ask", params={"text": "vuoi?", "timeout": 1.0})
+        action.on_reply = on_reply
+
+        mock_listen_fn = AsyncMock(return_value="")  # empty → no reply matching
+        _ctx = ActionContext(telegram_client=MagicMock(), listen_fn=mock_listen_fn)
+        with patch("alexa_custom.tts.get_engine"):
+            await handle_ask(
+                action,
+                ctx=_ctx,
+                listen_fn=mock_listen_fn,
+                mqtt_client=None,
+                on_stt_event=None,
+                actions_config=None,
+            )
+
+        mock_listen_fn.assert_called_once()
+        passed = mock_listen_fn.call_args.kwargs.get("phrases") or []
+        for expected in ("si", "va bene", "certo", "no", "annulla"):
+            assert expected in passed, f"{expected!r} missing from grammar: {passed}"
 
     @pytest.mark.asyncio
     async def test_reply_matching_independence(self):
@@ -558,6 +651,35 @@ class TestGlobPatternMatching:
         t = _pattern_trigger("luci", ["accend* * luci"])
         assert not _trigger_matches_patterns(t, "luci accendi")
 
+    # 4.7 implicit gap cap — regression for conf/history.jsonl 2026-07-13
+    # (a ~250-word ambient-broadcast transcript spuriously matched "chiam*
+    # assistenza" via unbounded adjacent-token distance, dispatching a real
+    # sos action). See _MAX_IMPLICIT_GAP_WORDS in actions.py.
+    def test_sos_pattern_matches_real_command(self):
+        assert _match_glob_pattern("chiam* assistenza", "chiama assistenza")
+
+    def test_sos_pattern_tolerates_small_insertion(self):
+        assert _match_glob_pattern("chiam* assistenza", "chiama pure assistenza")
+
+    def test_sos_pattern_rejects_distant_words_in_long_transcript(self):
+        # Reproduces the false positive verbatim: "chiamava" (matches "chiam*")
+        # and "assistenza"-adjacent content far apart in an unrelated transcript.
+        transcript = (
+            "la piazzetta chiamava tanto a cui batterta da un approccio elega "
+            "anche la storia rimane nelle nostre vite di giorno quindi e una "
+            "questione che non poteva male a chiuso il ferro ci sono quindi "
+            "dario edoardo igor a entrare subito in chiesa la prima morte "
+            "roperta la quale ha dedicato una delle can della musica italiana "
+            "e che oggi ricorda cosi il loro grande amore assistenza"
+        )
+        assert not _match_glob_pattern("chiam* assistenza", transcript)
+
+    def test_explicit_wildcard_still_unbounded(self):
+        # An author-opted-in '*' must keep its full-transcript reach —
+        # only the implicit (no-'*') adjacency case is capped.
+        far_apart = "accendi " + "per favore " * 10 + "le luci"
+        assert _match_glob_pattern("accend* * luci", far_apart)
+
     def test_trigger_no_patterns_false(self):
         t = _trigger("chiama")
         assert not _trigger_matches_patterns(t, "chiama")
@@ -793,6 +915,7 @@ async def test_restart_action():
 
 
 @pytest.mark.asyncio
+@patch("alexa_custom.tts.get_engine")
 @patch("alexa_custom.stt_gating.resolve_capture_source")
 @patch("alexa_custom.audio_ops.record_wav_file")
 @patch("alexa_custom.audio_ops.play_wav_file")
@@ -802,7 +925,11 @@ async def test_record_and_playback_action(
     mock_play_wav,
     mock_record_wav,
     mock_resolve_capture_source,
+    mock_get_engine,
 ):
+    mock_engine = MagicMock()
+    mock_get_engine.return_value = mock_engine
+
     mock_resolve_capture_source.return_value = ("mock_source", 2)
 
     action = ActionEntry(type="record_and_playback", params={"duration": 7.5})
@@ -831,9 +958,13 @@ async def test_record_and_playback_action(
     assert args[2] == "mock_source"
     assert args[3] == 2
 
-    # Verify that play_wav_file was called
+    # Verify that play_wav_file was called with the raw recorded wav
     mock_play_wav.assert_called_once()
     assert mock_play_wav.call_args[0][0] == args[0]
+
+    # Verify that say was called to announce the calculated RMS score (fallback/empty file -> score 1)
+    mock_engine.say.assert_called_once()
+    assert "1 su dieci" in mock_engine.say.call_args[0][0]
 
 
 @pytest.mark.asyncio
@@ -864,3 +995,118 @@ async def test_register_and_playback_action(
     # Defaults to 7.0 seconds
     args, kwargs = mock_record_wav.call_args
     assert args[1] == 7.0
+
+
+# ── action error notification ────────────────────────────────────────────────
+
+
+class TestActionErrorNotification:
+    """A problematic action must notify the UI via an ``action_error`` event
+    without aborting the trigger's remaining actions."""
+
+    def _ctx_with_recorder(self, **kwargs):
+        events: list[tuple[str, dict]] = []
+        ctx = ActionContext(
+            telegram_client=MagicMock(),
+            on_stt_event=lambda e, d: events.append((e, d)),
+            **kwargs,
+        )
+        return ctx, events
+
+    @pytest.mark.asyncio
+    async def test_mqtt_publish_no_client_notifies_ui(self):
+        ctx, events = self._ctx_with_recorder(mqtt_client=None)
+        action = ActionEntry(type="mqtt_publish", params={"topic": "x", "payload": "y"})
+
+        await _run_action(action, ctx)
+
+        errors = [d for e, d in events if e == "action_error"]
+        assert len(errors) == 1
+        assert errors[0]["action"] == "mqtt_publish"
+        assert "no mqtt_client available" in errors[0]["message"]
+
+    @pytest.mark.asyncio
+    async def test_mqtt_publish_no_topic_notifies_ui(self):
+        ctx, events = self._ctx_with_recorder(mqtt_client=AsyncMock())
+        action = ActionEntry(type="mqtt_publish", params={"payload": "y"})
+
+        await _run_action(action, ctx)
+
+        errors = [d for e, d in events if e == "action_error"]
+        assert len(errors) == 1
+        assert "no topic provided" in errors[0]["message"]
+
+    @pytest.mark.asyncio
+    async def test_unknown_action_type_notifies_ui(self):
+        ctx, events = self._ctx_with_recorder()
+        action = ActionEntry(type="does_not_exist", params={})
+
+        await _run_action(action, ctx)
+
+        errors = [d for e, d in events if e == "action_error"]
+        assert len(errors) == 1
+        assert "does_not_exist" in errors[0]["message"]
+
+    @pytest.mark.asyncio
+    async def test_unexpected_exception_notifies_ui(self):
+        ctx, events = self._ctx_with_recorder()
+
+        @registry.register("_boom_test")
+        async def _boom(**_):
+            raise RuntimeError("kaboom")
+
+        try:
+            await _run_action(ActionEntry(type="_boom_test", params={}), ctx)
+        finally:
+            registry._handlers.pop("_boom_test", None)
+
+        errors = [d for e, d in events if e == "action_error"]
+        assert len(errors) == 1
+        assert "kaboom" in errors[0]["message"]
+
+    @pytest.mark.asyncio
+    async def test_successful_action_does_not_notify(self):
+        ctx, events = self._ctx_with_recorder()
+        action = ActionEntry(type="log", params={"message": "hi"})
+
+        await _run_action(action, ctx)
+
+        assert not [e for e, _ in events if e == "action_error"]
+
+    @pytest.mark.asyncio
+    async def test_failing_action_does_not_abort_remaining_actions(self):
+        ctx, events = self._ctx_with_recorder(mqtt_client=None)
+        ran: list[str] = []
+
+        @registry.register("_marker_test")
+        async def _marker(action, **_):
+            ran.append(action.params.get("id", ""))
+
+        trigger = Trigger(
+            commands=["x"],
+            phrase="x",
+            actions=[
+                ActionEntry(type="mqtt_publish", params={"topic": "t"}),
+                ActionEntry(type="_marker_test", params={"id": "second"}),
+            ],
+        )
+        try:
+            await dispatch(trigger, ctx)
+        finally:
+            registry._handlers.pop("_marker_test", None)
+
+        # The mqtt failure was reported, and the action after it still ran.
+        assert [d for e, d in events if e == "action_error"]
+        assert ran == ["second"]
+
+    def test_action_error_event_emits_toast(self):
+        """web.py must turn an action_error event into an error toast."""
+        from alexa_custom.web import WebServer
+
+        srv = WebServer()
+        sent: list[tuple[str, dict]] = []
+        srv._enqueue = lambda event_type, data: sent.append((event_type, data))
+
+        srv.on_stt_event("action_error", {"action": "mqtt_publish", "message": "boom"})
+
+        assert ("toast", {"message": "boom", "level": "error"}) in sent

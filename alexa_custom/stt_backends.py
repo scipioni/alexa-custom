@@ -3,19 +3,42 @@ from __future__ import annotations
 import json
 import logging
 import os
-import numpy as np
 import vosk
 from abc import ABC, abstractmethod
+from collections import deque
 
-from alexa_custom.config import STTStage1Config, STTStage2Config, WakeWordGroup, Trigger
+import numpy as np
+
+from alexa_custom.config import (
+    STTConfig,
+    WakeWordGroup,
+)
 
 from alexa_custom.actions import normalize_text
-from alexa_custom.stt_gating import _rms_level
 
 logger = logging.getLogger(__name__)
 
 _MODEL_PATH = os.environ.get("VOSK_MODEL_PATH", "models/it")
-_SHERPA_MODEL_PATH = os.environ.get("SHERPA_ONNX_PATH", "models/it/kroko_128l")
+
+# sherpa-onnx backend (Kroko Zipformer + Silero VAD) — see docs/asr-plan.md.
+_SHERPA_ONNX_MODEL_PATH = os.environ.get(
+    "SHERPA_ONNX_MODEL_PATH", "models/it/kroko_64l"
+)
+_SHERPA_ONNX_VAD_PATH = os.environ.get(
+    "SILERO_VAD_MODEL_PATH", "models/vad/silero_vad.onnx"
+)
+_SHERPA_ONNX_SAMPLE_RATE = 16000
+# Zipformer's own trailing right-context/lookahead requirement — see
+# docs/asr-plan.md "Troncamento dell'ultima parola". Without this many samples
+# of real (or, as a fallback, zero-padded) trailing audio before
+# input_finished(), the last word(s) of an utterance get truncated.
+_SHERPA_ONNX_RIGHT_CONTEXT_SAMPLES = int(0.66 * _SHERPA_ONNX_SAMPLE_RATE)
+# Pre-roll budget in SAMPLES, never chunks: capture backends deliver anywhere
+# from ~320 B to 4 KB per read (same lesson as the byte-budgeted trigger-dump
+# buffer — see CLAUDE.md), so a chunk-count budget would shrink to ~60 ms on
+# GStreamer's small buffers and clip the first phoneme. 200 ms covers Silero's
+# 100 ms onset debounce plus detection latency (docs/asr-plan.md sizing).
+_SHERPA_ONNX_PRE_ROLL_SAMPLES = int(0.2 * _SHERPA_ONNX_SAMPLE_RATE)
 
 
 class STTBackend(ABC):
@@ -47,6 +70,15 @@ class VoskSTT(STTBackend):
         self._model = model
         self._sample_rate = sample_rate
         self._grammar = grammar
+        # Grammar passed at construction is the "base" the recognizer returns to
+        # after a phrase-restricted capture (see restore_base). For free-text it
+        # is None; for the always-on grammar loop it is the wake/command grammar.
+        self._base_grammar = grammar
+        # Last parsed Result()/FinalResult() dict, kept so callers can read the
+        # per-word acoustic confidences (result[].conf) alongside the text. Reset
+        # only replaces the recognizer, never clears this — read it right after
+        # text()/finalize().
+        self._last_result: dict = {}
         self._rec = (
             vosk.KaldiRecognizer(model, sample_rate, grammar)
             if grammar
@@ -58,11 +90,16 @@ class VoskSTT(STTBackend):
     def model(self) -> vosk.Model:
         return self._model
 
+    @property
+    def base_grammar(self) -> str | None:
+        return self._base_grammar
+
     def accept_waveform(self, data: bytes) -> bool:
         return self._rec.AcceptWaveform(data)
 
     def text(self) -> str:
-        return json.loads(self._rec.Result()).get("text", "").strip()
+        self._last_result = json.loads(self._rec.Result())
+        return self._last_result.get("text", "").strip()
 
     def partial_text(self) -> str:
         return json.loads(self._rec.PartialResult()).get("partial", "").strip()
@@ -74,7 +111,23 @@ class VoskSTT(STTBackend):
         lookahead buffer, so the tail of an utterance can be dropped when the
         software VAD force-finalizes mid-command. FinalResult() flushes.
         """
-        return json.loads(self._rec.FinalResult()).get("text", "").strip()
+        self._last_result = json.loads(self._rec.FinalResult())
+        return self._last_result.get("text", "").strip()
+
+    def last_words(self) -> list[dict]:
+        """Per-word data (``word``/``conf``/timing) from the last text()/finalize()."""
+        return self._last_result.get("result", [])
+
+    def last_confidence(self, mode: str = "first", n_words: int | None = None) -> float:
+        """Aggregate acoustic confidence of the last result.
+
+        ``n_words`` limits aggregation to the first N words (e.g. the wake-word
+        portion of a longer transcript); ``None`` uses every word.
+        """
+        words = self.last_words()
+        if n_words is not None:
+            words = words[:n_words]
+        return _vosk_confidence(words, mode)
 
     def reset(self) -> None:
         self._rec.Reset()
@@ -89,409 +142,272 @@ class VoskSTT(STTBackend):
             )
             self._rec.SetWords(True)
 
+    def restore_base(self) -> None:
+        """Return the recognizer to the grammar it was constructed with.
 
-def _write_bpe_vocab(tokens_path: str) -> str:
-    """Write a bpe.vocab temp file from tokens.txt for ssentencepiece Viterbi tokenization.
-
-    Each token gets score = len(token)^2 (unicode char count).  The quadratic
-    weighting ensures greedy longest-match behaviour: a 2-char token beats two
-    1-char tokens (4 > 1+1), a 4-char token beats two 2-char tokens (16 > 4+4),
-    etc.  This produces tokenization consistent with the BPE model's actual output.
-    """
-    import tempfile
-
-    lines: list[str] = []
-    try:
-        with open(tokens_path) as f:
-            for line in f:
-                parts = line.strip().split()
-                if len(parts) >= 2:
-                    token = parts[0]
-                    score = len(token) ** 2
-                    lines.append(f"{token}\t{score}")
-    except OSError as e:
-        raise RuntimeError(f"Cannot read tokens.txt at {tokens_path!r}: {e}") from e
-
-    tf = tempfile.NamedTemporaryFile(
-        mode="w", suffix=".vocab", delete=False, prefix="alexa_bpevocab_"
-    )
-    tf.write("\n".join(lines) + "\n")
-    tf.close()
-    return tf.name
+        Phrase-restricted captures (stt_capture) recreate() with a command
+        grammar and call this in their ``finally`` so the always-on loop keeps
+        its base grammar (free-text ``None``, or the wake/command grammar when
+        ``stt.vosk_grammar`` is enabled) instead of being left free-text.
+        """
+        self.recreate(self._base_grammar)
 
 
 class SherpaOnnxSTT(STTBackend):
-    def __init__(
-        self,
-        model_dir: str = _SHERPA_MODEL_PATH,
-        hotwords: list[str] | None = None,
-        hotwords_score: float = 1.5,
-        num_threads: int = 2,
-    ):
-        import sherpa_onnx
-        import tempfile
+    """Kroko Zipformer streaming transducer (sherpa-onnx) with an internal
+    Silero VAD gate.
 
-        if not os.path.isdir(model_dir):
-            raise RuntimeError(
-                f"sherpa-onnx model not found at {model_dir!r}. Run 'alexa-setup --sherpa-onnx' to download it."
-            )
-        tokens = os.path.join(model_dir, "tokens.txt")
-        encoder = os.path.join(model_dir, "encoder.onnx")
-        decoder = os.path.join(model_dir, "decoder.onnx")
-        joiner = os.path.join(model_dir, "joiner.onnx")
-        encoder_int8 = os.path.join(model_dir, "encoder.int8.onnx")
-        decoder_int8 = os.path.join(model_dir, "decoder.int8.onnx")
-        joiner_int8 = os.path.join(model_dir, "joiner.int8.onnx")
-
-        model_onnx = os.path.join(model_dir, "model.onnx")
-
-        # Build hotwords temp file using modeling_unit="bpe" so Sherpa's ssentencepiece
-        # tokenizes each phrase word-by-word, adding ▁ boundaries and running Viterbi.
-        # This avoids the cjkchar SplitUtf8+MergeCharactersIntoWords path which splits
-        # off ▁ and re-merges ASCII letters into strings not found in the symbol table.
-        self._hotwords_tmp: str | None = None
-        self._bpe_vocab_tmp: str | None = None
-        hotwords_file = ""
-        bpe_vocab_file = ""
-        if hotwords:
-            kw_lines = [normalize_text(p) for p in hotwords if normalize_text(p)]
-            if kw_lines:
-                bpe_vocab_file = _write_bpe_vocab(tokens)
-                self._bpe_vocab_tmp = bpe_vocab_file
-                tf = tempfile.NamedTemporaryFile(
-                    mode="w", suffix=".txt", delete=False, prefix="alexa_hw_"
-                )
-                tf.write("\n".join(kw_lines) + "\n")
-                tf.close()
-                self._hotwords_tmp = tf.name
-                hotwords_file = tf.name
-                logger.info(
-                    "sherpa-hotwords: %d phrases registered (score=%.1f)\n%s",
-                    len(kw_lines),
-                    hotwords_score,
-                    "\n".join(f"  {p!r}" for p in sorted(kw_lines)),
-                )
-
-        # modified_beam_search is required when hotwords_file is provided.
-        decoding_method = "modified_beam_search" if hotwords_file else "greedy_search"
-
-        if os.path.exists(joiner) or os.path.exists(joiner_int8):
-            self._delegate = sherpa_onnx.OnlineRecognizer.from_transducer(
-                tokens=tokens,
-                encoder=encoder_int8 if os.path.exists(encoder_int8) else encoder,
-                decoder=decoder_int8 if os.path.exists(decoder_int8) else decoder,
-                joiner=joiner_int8 if os.path.exists(joiner_int8) else joiner,
-                num_threads=num_threads,
-                decoding_method=decoding_method,
-                hotwords_file=hotwords_file,
-                hotwords_score=hotwords_score if hotwords_file else 0.0,
-                modeling_unit="bpe" if hotwords_file else "cjkchar",
-                bpe_vocab=bpe_vocab_file if hotwords_file else "",
-                sample_rate=16000,
-                feature_dim=80,
-                provider="cpu",
-                enable_endpoint_detection=True,
-                rule1_min_trailing_silence=2.4,
-                rule2_min_trailing_silence=1.2,
-                rule3_min_utterance_length=20,
-            )
-        elif os.path.exists(model_onnx):
-            if hasattr(sherpa_onnx.OnlineRecognizer, "from_zipformer2_ctc"):
-                self._delegate = sherpa_onnx.OnlineRecognizer.from_zipformer2_ctc(
-                    tokens=tokens,
-                    model=model_onnx,
-                    num_threads=num_threads,
-                    sample_rate=16000,
-                    feature_dim=80,
-                    provider="cpu",
-                    enable_endpoint_detection=True,
-                    rule1_min_trailing_silence=2.4,
-                    rule2_min_trailing_silence=1.2,
-                    rule3_min_utterance_length=20,
-                )
-            else:
-                logger.warning(
-                    "sherpa-onnx: model.onnx found but from_zipformer2_ctc not available "
-                    "in installed version — falling back to from_paraformer"
-                )
-                self._delegate = sherpa_onnx.OnlineRecognizer.from_paraformer(
-                    tokens=tokens,
-                    encoder=encoder,
-                    decoder=decoder,
-                )
-        else:
-            self._delegate = sherpa_onnx.OnlineRecognizer.from_paraformer(
-                tokens=tokens,
-                encoder=encoder,
-                decoder=decoder,
-            )
-        self._stream = self._delegate.create_stream()
-        self._last_partial: str = ""
-
-    def __del__(self) -> None:
-        for tmp in (self._hotwords_tmp, self._bpe_vocab_tmp):
-            if tmp:
-                try:
-                    os.unlink(tmp)
-                except OSError:
-                    pass
-
-    def accept_waveform(self, data: bytes) -> bool:
-        samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
-        self._stream.accept_waveform(sample_rate=16000, waveform=samples)
-        while self._delegate.is_ready(self._stream):
-            self._delegate.decode_stream(self._stream)
-        endpoint = self._delegate.is_endpoint(self._stream)
-        # RMS is only used for the debug logs below; skip the reduction entirely
-        # when debug logging is off (this runs on every chunk, always-on).
-        _debug = logger.isEnabledFor(logging.DEBUG)
-        partial = self._delegate.get_result(self._stream)
-        partial = partial.strip() if isinstance(partial, str) else partial.text.strip()
-        if partial != self._last_partial:
-            if _debug:
-                rms = float(np.sqrt(np.mean(samples**2)))
-                logger.debug("sherpa partial: %r  rms=%.4f", partial, rms)
-            self._last_partial = partial
-        if endpoint and _debug:
-            rms = float(np.sqrt(np.mean(samples**2)))
-            logger.debug("sherpa endpoint fired: %r  rms=%.4f", partial, rms)
-        return endpoint
-
-    def text(self) -> str:
-        result = self._delegate.get_result(self._stream)
-        text = result.strip() if isinstance(result, str) else result.text.strip()
-        logger.debug("sherpa text(): %r", text)
-        return text
-
-    def partial_text(self) -> str:
-        result = self._delegate.get_result(self._stream)
-        return result.strip() if isinstance(result, str) else result.text.strip()
-
-    def finalize(self) -> str:
-        """Force the transducer to emit its buffered output, then reset the stream."""
-        try:
-            self._stream.input_finished()
-        except Exception:
-            pass
-        while self._delegate.is_ready(self._stream):
-            self._delegate.decode_stream(self._stream)
-        result = self._delegate.get_result(self._stream)
-        text = result.strip() if isinstance(result, str) else result.text.strip()
-        logger.debug("sherpa finalize(): %r", text)
-        self._last_partial = ""
-        self._stream = self._delegate.create_stream()
-        return text
-
-    def reset(self) -> None:
-        logger.debug("sherpa reset() last_partial=%r", self._last_partial)
-        self._last_partial = ""
-        self._delegate.reset(self._stream)
-
-
-def _load_token_vocab(tokens_path: str) -> dict[str, str]:
-    """Read tokens.txt and return {symbol: token_string} for keyword tokenisation."""
-    vocab: dict[str, str] = {}
-    try:
-        with open(tokens_path) as f:
-            for line in f:
-                parts = line.strip().split()
-                if len(parts) >= 2:
-                    sym = parts[0]
-                    vocab[sym] = sym
-                    stripped = sym.lstrip("▁")
-                    if stripped and stripped != sym:
-                        vocab.setdefault(stripped, sym)
-    except OSError as e:
-        logger.warning("Could not read tokens.txt at %r: %s", tokens_path, e)
-    return vocab
-
-
-def _tokenize_keyword(word: str, vocab: dict[str, str]) -> str:
-    """Tokenize a keyword string using greedy longest-match against the model vocab."""
-    _BOUNDARY = "▁"
-    result_tokens: list[str] = []
-
-    for w in word.split():
-        remaining = w
-        word_tokens: list[str] = []
-        first = True
-        while remaining:
-            matched = False
-            for length in range(len(remaining), 0, -1):
-                candidate = remaining[:length]
-                if first:
-                    prefixed = _BOUNDARY + candidate
-                    if prefixed in vocab:
-                        word_tokens.append(vocab[prefixed])
-                        remaining = remaining[length:]
-                        matched = True
-                        first = False
-                        break
-                if candidate in vocab:
-                    token = vocab[candidate]
-                    # Mid-word positions must not use a word-boundary token
-                    # (▁-prefixed). vocab[stripped] may resolve to the ▁ form
-                    # when no standalone entry exists — using it mid-word injects
-                    # a boundary marker that the acoustic model never emits there,
-                    # causing the KWS to score the sequence at zero.
-                    if not first and token.startswith(_BOUNDARY):
-                        continue
-                    word_tokens.append(token)
-                    remaining = remaining[length:]
-                    matched = True
-                    first = False
-                    break
-            if not matched:
-                logger.warning(
-                    "KWS: character %r in %r not in model vocab — skipping",
-                    remaining[0],
-                    w,
-                )
-                remaining = remaining[1:]
-                first = False
-        result_tokens.extend(word_tokens)
-
-    return " ".join(result_tokens)
-
-
-class SherpaKeywordSpotter(STTBackend):
-    """Stage-1 backend using sherpa_onnx.KeywordSpotter."""
+    Endpoint timing is deliberately NOT owned by this backend — accept_waveform()
+    always returns False, so stt.py's existing RMS-based vad_fire/finalize()
+    stays the single, backend-agnostic endpoint mechanism (see design.md
+    "Reuse the existing RMS-based endpoint loop"). Silero VAD here is purely a
+    CPU-saving gate: skip feeding the (expensive) Zipformer encoder while no
+    speech is detected, matching the whole point of the docs/asr-plan.md
+    proposal. A short pre-roll ring buffer prevents losing the onset phoneme
+    when VAD flips from silence to speech.
+    """
 
     def __init__(
         self,
         model_dir: str,
-        keywords: list[str],
-        keywords_score: float = 1.0,
-        keywords_threshold: float = 0.25,
+        vad_model_path: str,
         num_threads: int = 2,
-    ) -> None:
+        vad_threshold: float = 0.5,
+        vad_min_speech_ms: int = 100,
+        vad_min_silence_ms: int = 400,
+        sample_rate: int = _SHERPA_ONNX_SAMPLE_RATE,
+    ):
         import sherpa_onnx
-        import tempfile
 
-        if not os.path.isdir(model_dir):
-            raise RuntimeError(
-                f"sherpa-onnx model not found at {model_dir!r}. Run 'alexa-setup --sherpa-onnx' to download it."
-            )
+        self._sherpa_onnx = sherpa_onnx
+        self._sample_rate = sample_rate
 
-        tokens = os.path.join(model_dir, "tokens.txt")
-        encoder = os.path.join(model_dir, "encoder.onnx")
-        decoder = os.path.join(model_dir, "decoder.onnx")
-        joiner = os.path.join(model_dir, "joiner.onnx")
-        encoder_int8 = os.path.join(model_dir, "encoder.int8.onnx")
-        decoder_int8 = os.path.join(model_dir, "decoder.int8.onnx")
-        joiner_int8 = os.path.join(model_dir, "joiner.int8.onnx")
-
-        vocab = _load_token_vocab(tokens)
-        kw_lines: list[str] = []
-        kw_log: list[str] = []
-        for kw in keywords:
-            norm = normalize_text(kw)
-            line = _tokenize_keyword(norm, vocab)
-            if line:
-                kw_lines.append(line)
-                kw_log.append(f"{kw!r} -> [{line}]")
-            else:
-                logger.warning(
-                    "KWS: keyword %r produced empty token sequence — skipped", kw
-                )
-        if not kw_lines:
-            raise RuntimeError(
-                "KWS: no valid keywords could be tokenised from the wake word list"
-            )
-        logger.info(
-            "KWS keywords: %d registered\n%s",
-            len(kw_lines),
-            "\n".join(f"  {entry}" for entry in sorted(kw_log)),
-        )
-
-        self._kw_file = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".txt", delete=False, prefix="alexa_kws_"
-        )
-        self._kw_file.write("\n".join(kw_lines) + "\n")
-        self._kw_file.close()
-
-        self._spotter = sherpa_onnx.KeywordSpotter(
-            tokens=tokens,
-            encoder=encoder_int8 if os.path.exists(encoder_int8) else encoder,
-            decoder=decoder_int8 if os.path.exists(decoder_int8) else decoder,
-            joiner=joiner_int8 if os.path.exists(joiner_int8) else joiner,
-            keywords_file=self._kw_file.name,
+        self._recognizer = sherpa_onnx.OnlineRecognizer.from_transducer(
+            tokens=os.path.join(model_dir, "tokens.txt"),
+            encoder=os.path.join(model_dir, "encoder.int8.onnx"),
+            decoder=os.path.join(model_dir, "decoder.int8.onnx"),
+            joiner=os.path.join(model_dir, "joiner.int8.onnx"),
             num_threads=num_threads,
-            sample_rate=16000,
+            sample_rate=sample_rate,
             feature_dim=80,
-            keywords_score=keywords_score,
-            keywords_threshold=keywords_threshold,
+            decoding_method="greedy_search",
             provider="cpu",
         )
-        self._stream = self._spotter.create_stream()
-        self._last_keyword: str = ""
 
-        # Audio dump for debugging: set STT_AUDIO_DUMP=1 to record all audio
-        # fed to the KWS to /tmp/kws_audio_dump.wav for offline inspection.
-        _dump_path = os.environ.get("STT_AUDIO_DUMP")
-        if _dump_path:
-            import wave as _wave
+        vad_config = sherpa_onnx.VadModelConfig()
+        vad_config.silero_vad.model = vad_model_path
+        vad_config.silero_vad.threshold = vad_threshold
+        # Onset debounce. sherpa-onnx's own default (250ms) misses short
+        # commands — see docs/asr-plan.md "Comandi brevi non rilevati".
+        vad_config.silero_vad.min_speech_duration = vad_min_speech_ms / 1000.0
+        vad_config.silero_vad.min_silence_duration = vad_min_silence_ms / 1000.0
+        vad_config.silero_vad.window_size = 512
+        vad_config.sample_rate = sample_rate
+        self._vad = sherpa_onnx.VoiceActivityDetector(
+            vad_config, buffer_size_in_seconds=10
+        )
 
-            self._dump_wav = _wave.open(_dump_path, "wb")
-            self._dump_wav.setnchannels(1)
-            self._dump_wav.setsampwidth(2)
-            self._dump_wav.setframerate(16000)
-            logger.info("KWS audio dump enabled → %s", _dump_path)
-        else:
-            self._dump_wav = None
-
-    def __del__(self) -> None:
-        try:
-            if hasattr(self, "_kw_file") and os.path.exists(self._kw_file.name):
-                os.unlink(self._kw_file.name)
-        except Exception:
-            pass
-        try:
-            if getattr(self, "_dump_wav", None):
-                self._dump_wav.close()
-        except Exception:
-            pass
+        self._stream = self._recognizer.create_stream()
+        self._pre_roll: deque = deque()
+        self._pre_roll_samples = 0
+        self._was_speaking = False
+        # Countdown of real trailing audio still owed to the encoder after
+        # Silero flips off (Zipformer's right-context lookahead). Refilled on
+        # every speech chunk; finalize() zero-pads whatever remains unfed.
+        self._tail_remaining = 0
 
     def accept_waveform(self, data: bytes) -> bool:
-        if self._dump_wav:
-            self._dump_wav.writeframes(data)
+        data = data[: len(data) & ~1]  # np.int16 needs an even byte count
+        if not data:
+            return False
         samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
-        self._stream.accept_waveform(sample_rate=16000, waveform=samples)
-        while self._spotter.is_ready(self._stream):
-            self._spotter.decode_stream(self._stream)
-        result = self._spotter.get_result(self._stream)
-        keyword = (
-            result.keyword.strip()
-            if hasattr(result, "keyword")
-            else str(result).strip()
-        )
-        if keyword:
-            self._last_keyword = keyword
-            self._spotter.reset_stream(self._stream)
-            return True
+
+        self._vad.accept_waveform(samples)
+        while not self._vad.empty():
+            self._vad.pop()
+
+        speaking = self._vad.is_speech_detected()
+
+        if speaking:
+            if not self._was_speaking:
+                for buffered in self._pre_roll:
+                    self._stream.accept_waveform(self._sample_rate, buffered)
+                self._pre_roll.clear()
+                self._pre_roll_samples = 0
+            self._stream.accept_waveform(self._sample_rate, samples)
+            while self._recognizer.is_ready(self._stream):
+                self._recognizer.decode_stream(self._stream)
+            self._tail_remaining = _SHERPA_ONNX_RIGHT_CONTEXT_SAMPLES
+        elif self._tail_remaining > 0:
+            # Just past speech end: still inside the right-context window —
+            # keep feeding real audio to the encoder (a quiet trailing
+            # syllable Silero missed may still be in here; substituting
+            # zeros would discard it).
+            self._stream.accept_waveform(self._sample_rate, samples)
+            while self._recognizer.is_ready(self._stream):
+                self._recognizer.decode_stream(self._stream)
+            self._tail_remaining -= len(samples)
+        else:
+            # Genuinely idle: skip feeding the encoder (the CPU-saving gate),
+            # keep a sample-budgeted pre-roll for the next onset instead.
+            self._pre_roll.append(samples)
+            self._pre_roll_samples += len(samples)
+            while (
+                self._pre_roll_samples > _SHERPA_ONNX_PRE_ROLL_SAMPLES
+                and len(self._pre_roll) > 1
+            ):
+                self._pre_roll_samples -= len(self._pre_roll.popleft())
+
+        self._was_speaking = speaking
         return False
 
     def text(self) -> str:
-        return self._last_keyword
+        return self._recognizer.get_result(self._stream).strip()
 
     def partial_text(self) -> str:
-        return ""
-
-    def reset(self) -> None:
-        self._stream = self._spotter.create_stream()
-        self._last_keyword = ""
+        return self._recognizer.get_result(self._stream).strip()
 
     def finalize(self) -> str:
-        return ""
+        if self._tail_remaining > 0:
+            self._stream.accept_waveform(
+                self._sample_rate,
+                np.zeros(self._tail_remaining, dtype=np.float32),
+            )
+        self._stream.input_finished()
+        while self._recognizer.is_ready(self._stream):
+            self._recognizer.decode_stream(self._stream)
+        text = self._recognizer.get_result(self._stream).strip()
+        # A finished OnlineStream must never be fed again (sherpa-onnx can
+        # abort), and not every caller resets afterwards — stt_capture's
+        # window finalizes and hands the same backend straight back to the
+        # always-on loop. Self-reset so the contract is safe by construction;
+        # stt.py's own reset-after-finalize becomes a harmless no-op repeat.
+        self.reset()
+        return text
+
+    def reset(self) -> None:
+        self._stream = self._recognizer.create_stream()
+        # Clear Silero's trigger/hangover state too — a reset during TTS-echo
+        # drain must not leave the gate latched open on stale audio.
+        self._vad.reset()
+        self._was_speaking = False
+        self._tail_remaining = 0
+        self._pre_roll.clear()
+        self._pre_roll_samples = 0
+
+
+def _check_sherpa_onnx_files(model_dir: str, vad_model_path: str) -> None:
+    required = [
+        os.path.join(model_dir, f)
+        for f in (
+            "tokens.txt",
+            "encoder.int8.onnx",
+            "decoder.int8.onnx",
+            "joiner.int8.onnx",
+        )
+    ]
+    missing = [f for f in required if not os.path.isfile(f)]
+    if missing:
+        raise RuntimeError(
+            f"sherpa-onnx model files missing: {missing}. "
+            f"Run 'serena-setup --sherpa-onnx-model 64l' to download them."
+        )
+    if not os.path.isfile(vad_model_path):
+        raise RuntimeError(
+            f"Silero VAD model not found at {vad_model_path!r}. "
+            f"Run 'serena-setup --sherpa-onnx-model 64l' to download it."
+        )
 
 
 def _load_model(model_path: str = _MODEL_PATH) -> vosk.Model:
     if not os.path.isdir(model_path):
         raise RuntimeError(
-            f"Vosk model not found at {model_path!r}. Run 'alexa-setup' to download it."
+            f"Vosk model not found at {model_path!r}. Run 'serena-setup' to download it."
         )
     vosk.SetLogLevel(-1)
     return vosk.Model(model_path)
+
+
+def _vosk_confidence(words: list[dict], mode: str = "first") -> float:
+    """Aggregate per-token acoustic confidences from a Vosk ``result`` list.
+
+    In grammar mode the recognizer is forced to snap every utterance onto the
+    closest grammar phrase, so the *only* signal distinguishing a real match
+    from one snapped out of background noise is the per-word ``conf``. ``mode``
+    selects the aggregation: ``"min"`` (strictest — weakest word dominates),
+    ``"mean"``, or ``"first"`` (default — the wake word is usually first).
+    """
+    if not words:
+        return 0.0
+    confs = [w.get("conf", 0.0) for w in words]
+    if mode == "min":
+        return min(confs)
+    if mode == "mean":
+        return sum(confs) / len(confs)
+    return confs[0]  # "first" (default)
+
+
+def _vosk_check_result(
+    trigger_chunk: bytes,
+    result: dict,
+    alias_map: dict,
+    confidence: float,
+    confidence_mode: str,
+    rms_threshold: float,
+    wake_match_threshold: float = 0.5,
+) -> tuple["WakeWordGroup | None", str]:
+    """Gate a Vosk result on wake match + acoustic confidence + RMS.
+
+    Returns ``(matched WakeWordGroup, inline_command)`` when the transcript
+    matches a wake word *and* the wake-word portion clears the confidence and
+    RMS thresholds; ``(None, "")`` otherwise. Used by the eval harness and as
+    the shared confidence-gate primitive.
+
+    ``wake_match_threshold`` is the fraction of the wake phrase's significant
+    tokens that must appear in the transcript (mirrors ``stt.wake_match_threshold``
+    in production): 0.5 fires on one of two words, 1.0 requires the full phrase.
+    """
+    # Imported lazily to avoid an import cycle (phonetics/gating import actions,
+    # which is imported here at module load).
+    from alexa_custom.stt_phonetics import (
+        _approx_wake_match,
+        _match_wake_word,
+        _wake_token_count,
+    )
+    from alexa_custom.stt_gating import _rms_level
+
+    text = result.get("text", "").strip()
+    words = result.get("result", [])
+    if not text:
+        return None, ""
+
+    group = _approx_wake_match(text, alias_map, threshold=wake_match_threshold)
+    if group is None:
+        return None, ""
+
+    wake_phrases = [group.word] + group.aliases
+    _, inline_cmd = _match_wake_word(text, wake_phrases, threshold=wake_match_threshold)
+
+    # Confidence of the wake-word portion only (transcript minus the inline
+    # command), so a low-confidence trailing command can't sink a clear wake.
+    wake_word_count = _wake_token_count(text, inline_cmd)
+    conf = _vosk_confidence(words[:wake_word_count], confidence_mode)
+    logger.debug(
+        "Wake result: %r conf=%.2f (mode=%s, thr=%.2f)",
+        text,
+        conf,
+        confidence_mode,
+        confidence,
+    )
+
+    if conf < confidence:
+        return None, ""
+
+    if rms_threshold > 0.0 and _rms_level(trigger_chunk) < rms_threshold:
+        logger.debug("RMS gate rejected %r (quiet chunk)", text)
+        return None, ""
+
+    return group, inline_cmd
 
 
 def _phrases_to_grammar(phrases: list[str], label: str = "grammar") -> str:
@@ -521,136 +437,36 @@ def _grammar_json(groups: list[WakeWordGroup], label: str = "grammar") -> str:
     return _phrases_to_grammar(phrases, label=label)
 
 
-def _grammar_json_all(
-    wake_words: list[WakeWordGroup],
-    triggers: list["Trigger"],
-    direct_triggers: list["Trigger"] | None = None,
-    include_wake_gated: bool = True,
-    label: str = "grammar",
-) -> str:
-    """Build a grammar string encompassing wake words and action triggers.
-
-    ``include_wake_gated`` controls whether command phrases that only fire
-    *after* a wake word (per-group scoped triggers and global triggers) are
-    injected. These are needed in stage-1 only to support single-breath
-    "wake + command" partial matching; with ``partial_matching`` disabled they
-    serve no purpose in stage-1 and only widen the false-positive surface, so
-    pass ``False`` to keep the grammar to wake words + direct-match triggers.
-    """
-    phrases = []
-    # Add wake words and (only when wake-gated phrases are wanted) their
-    # scoped triggers
-    for g in wake_words:
-        phrases.append(g.word)
-        phrases.extend(g.aliases)
-        if include_wake_gated:
-            for t in g.triggers:
-                phrases.append(t.phrase)
-                phrases.extend(t.aliases)
-
-    # Add global triggers (active after any wake word)
-    if include_wake_gated:
-        for t in triggers:
-            phrases.append(t.phrase)
-            phrases.extend(t.aliases)
-
-    # Add direct-match triggers (wake_words: []) — these fire from stage-1
-    # without a wake word, so they are always required in the grammar.
-    for t in direct_triggers or []:
-        phrases.append(t.phrase)
-        phrases.extend(t.aliases)
-
-    phrases = list(set(phrases))
-    return _phrases_to_grammar(phrases, label=label)
-
-
 def get_stt_backend(
-    cfg: STTStage1Config | STTStage2Config,
+    cfg: STTConfig,
     keywords: list[str] | None = None,
     grammar: str | None = None,
 ) -> STTBackend:
-    if cfg.backend == "sherpa-hotwords":
-        model_path = cfg.model_path or _SHERPA_MODEL_PATH
-        if not keywords:
-            raise RuntimeError(
-                "sherpa-hotwords requires at least one wake word in config"
-            )
-        return SherpaOnnxSTT(
-            model_dir=model_path,
-            hotwords=keywords,
-            hotwords_score=cfg.hotwords_score
-            if isinstance(cfg, STTStage1Config)
-            else 1.5,
-            num_threads=cfg.num_threads,
-        )
+    """Build a free-vocabulary STT backend from the given config.
+
+    keywords is accepted but ignored for the single-model design (kept for
+    call-site compatibility); grammar restricts the recognizer when set.
+    """
     if cfg.backend == "sherpa-onnx":
-        model_path = cfg.model_path or _SHERPA_MODEL_PATH
-        if isinstance(cfg, STTStage1Config) and cfg.keyword_spotter:
-            if not keywords:
-                raise RuntimeError(
-                    "keyword_spotter=true requires at least one wake word in config"
-                )
-            return SherpaKeywordSpotter(
-                model_dir=model_path,
-                keywords=keywords,
-                keywords_score=cfg.keywords_score,
-                keywords_threshold=cfg.keywords_threshold,
-                num_threads=cfg.num_threads,
+        if grammar is not None:
+            logger.warning(
+                "stt.vosk_grammar has no effect with backend sherpa-onnx — "
+                "the recognizer is always free-vocabulary"
             )
-        return SherpaOnnxSTT(model_path, num_threads=cfg.num_threads)
+        model_dir = cfg.model_path or _SHERPA_ONNX_MODEL_PATH
+        _check_sherpa_onnx_files(model_dir, _SHERPA_ONNX_VAD_PATH)
+        try:
+            return SherpaOnnxSTT(
+                model_dir=model_dir,
+                vad_model_path=_SHERPA_ONNX_VAD_PATH,
+                num_threads=cfg.num_threads,
+                vad_threshold=cfg.sherpa_vad_threshold,
+                vad_min_speech_ms=cfg.sherpa_vad_min_speech_ms,
+                vad_min_silence_ms=cfg.sherpa_vad_min_silence_ms,
+            )
+        except ModuleNotFoundError as e:
+            raise RuntimeError("sherpa-onnx is not installed. Run: uv sync") from e
+
+    # vosk (default)
     vosk_path = cfg.model_path or _MODEL_PATH
     return VoskSTT(_load_model(vosk_path), grammar=grammar)
-
-
-def _vosk_confidence(words: list[dict], mode: str) -> float:
-    """Aggregate per-token confidences from a Vosk result according to ``mode``."""
-    if not words:
-        return 0.0
-    confs = [w.get("conf", 0.0) for w in words]
-    if mode == "min":
-        return min(confs)
-    if mode == "mean":
-        return sum(confs) / len(confs)
-    return confs[0]  # "first" (default)
-
-
-def _vosk_check_result(
-    trigger_chunk: bytes,
-    result: dict,
-    alias_map: dict,
-    confidence: float,
-    confidence_mode: str,
-    rms_threshold: float,
-) -> tuple["WakeWordGroup | None", str]:
-    """Process a Vosk stage-1 result and return (matched WakeWordGroup, inline_cmd)."""
-    text = result.get("text", "").strip()
-    words = result.get("result", [])
-
-    from alexa_custom.stt import _extract_wake_command
-
-    wake_match, inline_cmd = (
-        _extract_wake_command(text, alias_map, fuzzy=False) if text else (None, "")
-    )
-
-    if not wake_match:
-        return None, ""
-
-    # We only care about the confidence of the wake word part.
-    # The wake word text is text minus inline_cmd.
-    wake_text_len = len(text) - len(inline_cmd)
-    wake_text = text[:wake_text_len].strip()
-    wake_word_count = len(wake_text.split())
-
-    wake_words_data = words[:wake_word_count] if words else []
-    conf = _vosk_confidence(wake_words_data, confidence_mode)
-
-    logger.debug("Stage1 result: %r conf=%.2f (mode=%s)", text, conf, confidence_mode)
-
-    if conf < confidence:
-        return None, ""
-
-    if _rms_level(trigger_chunk) < rms_threshold:
-        logger.debug("Stage1 RMS gate rejected %r (quiet chunk)", text)
-        return None, ""
-
-    return wake_match, inline_cmd

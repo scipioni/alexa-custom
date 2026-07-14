@@ -1,11 +1,11 @@
-"""Unit tests for stage-1 Vosk wake-detection helpers.
+"""Unit tests for wake-detection helpers in the single-model design.
 
 Tests cover:
-- _vosk_confidence: per-token confidence aggregation modes
-- _vosk_check_result: RMS pre-gate and multi-token confidence gating
-- Config parsing: confidence_mode validation
-- build_intent_map: intent map construction from wake phrases × triggers
-- _match_full_intent: exact partial-transcript intent matching
+- _rms_level: RMS amplitude calculation
+- _match_wake_word: new flat-list wake-word matching helper
+- _approx_wake_match: fuzzy WakeWordGroup-based matching (eval harness path)
+- _parse_stt_config / _parse_recognition_config: config field parsing
+- match_trigger_with_score: per-trigger min_word_overlap override
 """
 
 from __future__ import annotations
@@ -18,24 +18,18 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from alexa_custom.stt import (
-    _rms_level,
-    _vosk_confidence,
-    _vosk_check_result,
-    _match_full_intent,
-    _extract_wake_command,
-)
+from alexa_custom.stt import _rms_level
 from alexa_custom.stt_phonetics import (
-    build_intent_map,
-    _build_alias_map,
+    _match_wake_word,
     _approx_wake_match,
+    _build_alias_map,
 )
 from alexa_custom.config import (
     WakeWordGroup,
     Trigger,
-    _parse_stt_stage1_config,
+    _parse_stt_config,
     _parse_recognition_config,
-)  # noqa: F401
+)
 
 
 # ---------------------------------------------------------------------------
@@ -44,151 +38,14 @@ from alexa_custom.config import (
 
 
 def _make_pcm(rms_target: float, n_samples: int = 4096) -> bytes:
-    """Return s16le PCM with approximately the given normalised RMS level."""
     amplitude = int(rms_target * 32768)
     amplitude = max(0, min(32767, amplitude))
     samples = np.full(n_samples, amplitude, dtype=np.int16)
     return samples.tobytes()
 
 
-def _make_alias_map(words: list[str]) -> dict:
-    from alexa_custom.stt import _build_alias_map
-
-    return _build_alias_map([WakeWordGroup(word=w) for w in words])
-
-
 # ---------------------------------------------------------------------------
-# _vosk_confidence
-# ---------------------------------------------------------------------------
-
-
-class TestVoskConfidence:
-    def _words(self, confs: list[float]) -> list[dict]:
-        return [{"word": f"w{i}", "conf": c} for i, c in enumerate(confs)]
-
-    def test_empty_words_returns_zero(self):
-        assert _vosk_confidence([], "first") == 0.0
-        assert _vosk_confidence([], "min") == 0.0
-        assert _vosk_confidence([], "mean") == 0.0
-
-    def test_first_mode_returns_first_token(self):
-        words = self._words([0.9, 0.3, 0.7])
-        assert _vosk_confidence(words, "first") == pytest.approx(0.9)
-
-    def test_first_mode_single_token(self):
-        words = self._words([0.75])
-        assert _vosk_confidence(words, "first") == pytest.approx(0.75)
-
-    def test_min_mode_returns_minimum(self):
-        words = self._words([0.9, 0.3, 0.7])
-        assert _vosk_confidence(words, "min") == pytest.approx(0.3)
-
-    def test_mean_mode_returns_average(self):
-        words = self._words([0.9, 0.3, 0.6])
-        assert _vosk_confidence(words, "mean") == pytest.approx(0.6)
-
-    def test_unknown_mode_falls_back_to_first(self):
-        words = self._words([0.8, 0.2])
-        assert _vosk_confidence(words, "unknown") == pytest.approx(0.8)
-
-    def test_min_catches_weak_discriminative_token(self):
-        # Simulates "ehi" (conf=0.95) + "galileo" (conf=0.20): min rejects it
-        words = self._words([0.95, 0.20])
-        assert _vosk_confidence(words, "first") == pytest.approx(0.95)  # passes
-        assert _vosk_confidence(words, "min") == pytest.approx(
-            0.20
-        )  # would fail threshold
-
-
-# ---------------------------------------------------------------------------
-# _vosk_check_result
-# ---------------------------------------------------------------------------
-
-
-@pytest.fixture()
-def alias_map():
-    return _make_alias_map(["ehi galileo", "assistente"])
-
-
-def _result(text: str, confs: list[float]) -> dict:
-    words = [
-        {"word": w, "conf": c, "start": i * 0.3, "end": (i + 1) * 0.3}
-        for i, (w, c) in enumerate(zip(text.split(), confs))
-    ]
-    return {"text": text, "result": words}
-
-
-class TestVoskCheckResult:
-    def test_basic_wake_detected(self, alias_map):
-        chunk = _make_pcm(0.05)
-        result = _result("ehi galileo", [0.9, 0.9])
-        match, _ = _vosk_check_result(chunk, result, alias_map, 0.65, "first", 0.02)
-        assert match is not None
-        assert match.word == "ehi galileo"
-
-    def test_rms_gate_rejects_quiet_chunk(self, alias_map):
-        chunk = _make_pcm(0.005)  # below threshold 0.02
-        result = _result("ehi galileo", [0.9, 0.9])
-        match, _ = _vosk_check_result(chunk, result, alias_map, 0.65, "first", 0.02)
-        assert match is None
-
-    def test_rms_gate_disabled_at_zero(self, alias_map):
-        chunk = _make_pcm(0.0)  # zero RMS
-        result = _result("ehi galileo", [0.9, 0.9])
-        match = _vosk_check_result(chunk, result, alias_map, 0.65, "first", 0.0)
-        assert match is not None
-
-    def test_first_mode_ignores_weak_second_token(self, alias_map):
-        chunk = _make_pcm(0.05)
-        result = _result("ehi galileo", [0.90, 0.10])
-        match, _ = _vosk_check_result(chunk, result, alias_map, 0.65, "first", 0.02)
-        assert match is not None  # first mode: 0.90 >= 0.65 → passes
-
-    def test_min_mode_rejects_weak_discriminative_token(self, alias_map):
-        chunk = _make_pcm(0.05)
-        result = _result("ehi galileo", [0.90, 0.10])
-        match, _ = _vosk_check_result(chunk, result, alias_map, 0.65, "min", 0.02)
-        assert match is None  # min mode: min(0.90, 0.10) = 0.10 < 0.65 → rejected
-
-    def test_mean_mode_rejects_average_below_threshold(self, alias_map):
-        chunk = _make_pcm(0.05)
-        result = _result("ehi galileo", [0.90, 0.30])  # mean = 0.60 < 0.65
-        match, _ = _vosk_check_result(chunk, result, alias_map, 0.65, "mean", 0.02)
-        assert match is None
-
-    def test_mean_mode_accepts_average_above_threshold(self, alias_map):
-        chunk = _make_pcm(0.05)
-        result = _result("ehi galileo", [0.90, 0.50])  # mean = 0.70 >= 0.65
-        match, _ = _vosk_check_result(chunk, result, alias_map, 0.65, "mean", 0.02)
-        assert match is not None
-
-    def test_non_wake_text_returns_none(self, alias_map):
-        chunk = _make_pcm(0.05)
-        result = _result("buongiorno", [0.95])
-        match, _ = _vosk_check_result(chunk, result, alias_map, 0.65, "first", 0.02)
-        assert match is None
-
-    def test_empty_text_returns_none(self, alias_map):
-        chunk = _make_pcm(0.05)
-        result = {"text": "", "result": []}
-        match, _ = _vosk_check_result(chunk, result, alias_map, 0.65, "first", 0.02)
-        assert match is None
-
-    def test_confidence_exactly_at_threshold_passes(self, alias_map):
-        chunk = _make_pcm(0.05)
-        result = _result("ehi galileo", [0.65, 0.65])
-        match, _ = _vosk_check_result(chunk, result, alias_map, 0.65, "min", 0.02)
-        assert match is not None
-
-    def test_confidence_just_below_threshold_rejected(self, alias_map):
-        chunk = _make_pcm(0.05)
-        result = _result("ehi galileo", [0.64, 0.64])
-        match, _ = _vosk_check_result(chunk, result, alias_map, 0.65, "min", 0.02)
-        assert match is None
-
-
-# ---------------------------------------------------------------------------
-# RMS level helper
+# _rms_level
 # ---------------------------------------------------------------------------
 
 
@@ -211,214 +68,102 @@ class TestRmsLevel:
 
 
 # ---------------------------------------------------------------------------
-# Config parsing: confidence_mode
+# _match_wake_word (new single-model helper)
 # ---------------------------------------------------------------------------
 
 
-class TestConfidenceModeConfig:
-    def _base(self, **kwargs) -> dict:
-        return {"backend": "vosk", **kwargs}
+class TestMatchWakeWord:
+    def test_exact_prefix_match(self):
+        phrase, residual = _match_wake_word("ehi galileo che ore sono", ["ehi galileo"])
+        assert phrase == "ehi galileo"
+        assert residual == "che ore sono"
 
-    def test_default_is_first(self):
-        cfg = _parse_stt_stage1_config(self._base())
-        assert cfg.confidence_mode == "first"
-
-    def test_explicit_min(self):
-        cfg = _parse_stt_stage1_config(self._base(confidence_mode="min"))
-        assert cfg.confidence_mode == "min"
-
-    def test_explicit_mean(self):
-        cfg = _parse_stt_stage1_config(self._base(confidence_mode="mean"))
-        assert cfg.confidence_mode == "mean"
-
-    def test_invalid_raises(self):
-        from alexa_custom.config import ConfigError
-
-        with pytest.raises(ConfigError, match="confidence_mode"):
-            _parse_stt_stage1_config(self._base(confidence_mode="max"))
-
-
-# ---------------------------------------------------------------------------
-# build_intent_map
-# ---------------------------------------------------------------------------
-
-
-def _make_trigger(phrase: str, aliases: list[str] | None = None) -> Trigger:
-    return Trigger(phrase=phrase, actions=[], aliases=aliases or [])
-
-
-def _make_group_with_triggers(
-    word: str, triggers: list[Trigger], aliases: list[str] | None = None
-) -> WakeWordGroup:
-    return WakeWordGroup(word=word, aliases=aliases or [], triggers=triggers)
-
-
-class TestBuildIntentMap:
-    def _alias_map(self, groups):
-        from alexa_custom.stt_phonetics import _build_alias_map
-
-        return _build_alias_map(groups)
-
-    def test_basic_combo(self):
-        t = _make_trigger("chiama stefano")
-        group = _make_group_with_triggers("ehi galileo", [t])
-        am = self._alias_map([group])
-        intent_map = build_intent_map(am, [])
-        assert "ehi galileo chiama stefano" in intent_map
-        assert intent_map["ehi galileo chiama stefano"] == (group, t)
-
-    def test_wake_alias_included(self):
-        t = _make_trigger("accendi")
-        group = _make_group_with_triggers("ehi galileo", [t], aliases=["galileo"])
-        am = self._alias_map([group])
-        intent_map = build_intent_map(am, [])
-        assert "galileo accendi" in intent_map
-        assert "ehi galileo accendi" in intent_map
-
-    def test_trigger_alias_included(self):
-        t = _make_trigger("chiama stefano", aliases=["telefona stefano"])
-        group = _make_group_with_triggers("galileo", [t])
-        am = self._alias_map([group])
-        intent_map = build_intent_map(am, [])
-        assert "galileo chiama stefano" in intent_map
-        assert "galileo telefona stefano" in intent_map
-
-    def test_per_group_triggers_shadow_globals(self):
-        local_t = _make_trigger("comando locale")
-        global_t = _make_trigger("comando globale")
-        group = _make_group_with_triggers("galileo", [local_t])
-        am = self._alias_map([group])
-        intent_map = build_intent_map(am, [global_t])
-        # Both per-group and global appear (resolve_triggers appends global)
-        assert "galileo comando locale" in intent_map
-        assert "galileo comando globale" in intent_map
-
-    def test_global_triggers_used_when_no_per_group(self):
-        global_t = _make_trigger("chiama")
-        group = WakeWordGroup(word="galileo")
-        am = self._alias_map([group])
-        intent_map = build_intent_map(am, [global_t])
-        assert "galileo chiama" in intent_map
-
-    def test_empty_triggers_returns_empty(self):
-        group = WakeWordGroup(word="galileo")
-        am = self._alias_map([group])
-        intent_map = build_intent_map(am, [])
-        assert intent_map == {}
-
-
-# ---------------------------------------------------------------------------
-# _match_full_intent
-# ---------------------------------------------------------------------------
-
-
-class TestMatchFullIntent:
-    def _setup(self):
-        chiama = _make_trigger("chiama stefano")
-        accendi = _make_trigger("accendi le luci", aliases=["illumina"])
-        group = _make_group_with_triggers(
-            "ehi galileo", [chiama, accendi], aliases=["galileo"]
-        )
-        from alexa_custom.stt_phonetics import _build_alias_map
-
-        am = _build_alias_map([group])
-        intent_map = build_intent_map(am, [])
-        return am, intent_map, group, chiama, accendi
-
-    def test_full_match_returns_tuple(self):
-        am, intent_map, group, chiama, _ = self._setup()
-        result = _match_full_intent("ehi galileo chiama stefano", am, intent_map)
-        assert result is not None
-        assert result[0] is group
-        assert result[1] is chiama
-        assert result[2] == "chiama stefano"
-
-    def test_wake_only_returns_none(self):
-        am, intent_map, _, _, _ = self._setup()
-        assert _match_full_intent("ehi galileo", am, intent_map) is None
-
-    def test_unknown_command_returns_none(self):
-        am, intent_map, _, _, _ = self._setup()
-        assert _match_full_intent("ehi galileo dimmi il meteo", am, intent_map) is None
-
-    def test_trigger_alias_matched(self):
-        am, intent_map, group, _, accendi = self._setup()
-        result = _match_full_intent("ehi galileo illumina", am, intent_map)
-        assert result is not None
-        assert result[1] is accendi
-
-    def test_wake_alias_matched(self):
-        am, intent_map, group, chiama, _ = self._setup()
-        result = _match_full_intent("galileo chiama stefano", am, intent_map)
-        assert result is not None
-        assert result[1] is chiama
-
-    def test_fuzzy_not_applied(self):
-        am, intent_map, _, _, _ = self._setup()
-        # "ei galileo" is not in alias_map (fuzzy would catch it, exact doesn't)
-        assert _match_full_intent("ei galileo chiama stefano", am, intent_map) is None
-
-    def test_empty_partial_returns_none(self):
-        am, intent_map, _, _, _ = self._setup()
-        assert _match_full_intent("", am, intent_map) is None
-
-
-# ---------------------------------------------------------------------------
-# _extract_wake_command
-# ---------------------------------------------------------------------------
-
-
-class TestExtractWakeCommand:
-    def _alias_map(self):
-        group = WakeWordGroup(word="aiuto", aliases=["aiutami"])
-        return _build_alias_map([group]), group
-
-    def test_alias_prefix_of_word_not_consumed(self):
-        # "aiutami" starts with "aiuto" but must match the alias exactly,
-        # not yield "mi" as an inline command.
-        am, group = self._alias_map()
-        matched, cmd = _extract_wake_command("aiutami", am, fuzzy=False)
-        assert matched is group
-        assert cmd == ""
-
-    def test_wake_word_alone(self):
-        am, group = self._alias_map()
-        matched, cmd = _extract_wake_command("aiuto", am, fuzzy=False)
-        assert matched is group
-        assert cmd == ""
-
-    def test_wake_word_with_command(self):
-        am, group = self._alias_map()
-        matched, cmd = _extract_wake_command("aiuto fermati", am, fuzzy=False)
-        assert matched is group
-        assert cmd == "fermati"
-
-    def test_alias_with_command(self):
-        am, group = self._alias_map()
-        matched, cmd = _extract_wake_command("aiutami fermati", am, fuzzy=False)
-        assert matched is group
-        assert cmd == "fermati"
+    def test_exact_wake_word_only(self):
+        phrase, residual = _match_wake_word("ehi galileo", ["ehi galileo"])
+        assert phrase == "ehi galileo"
+        assert residual == ""
 
     def test_no_match_returns_none(self):
-        am, _ = self._alias_map()
-        matched, cmd = _extract_wake_command("ciao mondo", am, fuzzy=False)
-        assert matched is None
-        assert cmd == ""
+        phrase, residual = _match_wake_word("buongiorno", ["ehi galileo"])
+        assert phrase is None
+        assert residual == ""
 
-    def test_vosk_path_uses_exact_matching(self):
-        # Vosk stage-1 calls _extract_wake_command with fuzzy=False.
-        # "ascolta assistente" shares a content word with "ascoltami assistente"
-        # but must NOT match — Vosk transcribes accurately so fuzzy is wrong here.
-        from alexa_custom.stt_phonetics import _build_alias_map as bam
+    def test_isolated_keyword_wakes_but_embedded_does_not(self):
+        # The distinctive keyword said ALONE is an intentional address → wake
+        # (corpus: truncated-wake recall). The same keyword embedded in longer
+        # speech is conversation → all phrase words are required → no match.
+        phrase, _ = _match_wake_word("galileo", ["ehi galileo"], threshold=0.5)
+        assert phrase == "ehi galileo"
+        phrase, _ = _match_wake_word("il galileo", ["ehi galileo"], threshold=0.5)
+        assert phrase is None
 
-        group = WakeWordGroup(word="ascoltami assistente")
-        am = bam([group])
-        matched, cmd = _extract_wake_command("ascolta assistente", am, fuzzy=False)
-        assert matched is None
+    def test_serena_false_positive_rejected(self):
+        # "serena" alone in a multi-word transcript must NOT fire "ehi serena".
+        # This was the observed false-positive: 6/9 char score passed 0.5 but
+        # "ehi" was never present.
+        phrase, _ = _match_wake_word(
+            "a ogni tanto controlliamo serena standard", ["ehi serena"]
+        )
+        assert phrase is None
+
+    def test_fuzzy_both_words_match(self):
+        # Both words present → match.
+        phrase, _ = _match_wake_word("ehi serena", ["ehi serena"], threshold=0.5)
+        assert phrase == "ehi serena"
+
+    def test_ehi_transcribed_as_e(self):
+        # Vosk (Italian) commonly emits the single vowel "e" for the interjection
+        # "ehi". The per-word gate must accept this truncation so that "e serena"
+        # still wakes on "ehi serena". Regression for b857c79.
+        phrase, _ = _match_wake_word("e serena", ["ehi serena"], threshold=0.5)
+        assert phrase == "ehi serena"
+
+    def test_prefix_boundary_not_consumed_mid_word(self):
+        # "aiuto" prefix of "aiutami" — should NOT match because no word boundary
+        phrase, cmd = _match_wake_word("aiutami fermati", ["aiuto"])
+        assert phrase is None or cmd != "fermati"
+
+    def test_multiple_wake_words_first_exact_wins(self):
+        phrase, residual = _match_wake_word(
+            "assistente che ore sono", ["ehi galileo", "assistente"]
+        )
+        assert phrase == "assistente"
+        assert residual == "che ore sono"
+
+    def test_residual_stripping(self):
+        phrase, residual = _match_wake_word(
+            "ascolta assistente accendi la luce", ["ascolta assistente"]
+        )
+        assert phrase == "ascolta assistente"
+        assert residual == "accendi la luce"
+
+    def test_phonetic_variant_matches(self):
+        # STT spells the wake word phonetically ("kiave" for "chiave"); the
+        # phonetic-aware matcher accepts it where raw substring matching missed.
+        phrase, _ = _match_wake_word("kiave apri", ["chiave"])
+        assert phrase == "chiave"
+
+    def test_esistente_ascolta_assistente_match(self):
+        phrase, residual = _match_wake_word(
+            "ascolta esistente attiva microfono normale", ["ascolta assistente"]
+        )
+        assert phrase == "ascolta assistente"
+        assert residual == "attiva microfono normale"
+
+    def test_midword_occurrence_no_longer_false_wakes(self):
+        # "galileo" buried mid-word must NOT fire the wake word — prefix-anchored
+        # matching rejects substring-anywhere hits that used to leak through.
+        phrase, _ = _match_wake_word("scartagalileozzo", ["ehi galileo"])
+        assert phrase is None
+
+    def test_prefix_truncation_with_all_words(self):
+        # STT truncation ("galile" for "galileo") recognised when "ehi" is also present.
+        phrase, _ = _match_wake_word("ehi galile", ["ehi galileo"], threshold=0.5)
+        assert phrase == "ehi galileo"
 
 
 # ---------------------------------------------------------------------------
-# _approx_wake_match configurable threshold
+# _approx_wake_match (WakeWordGroup-based fuzzy, backward compat)
 # ---------------------------------------------------------------------------
 
 
@@ -426,91 +171,28 @@ class TestApproxWakeMatchThreshold:
     def _alias_map(self, word: str) -> dict:
         return _build_alias_map([WakeWordGroup(word=word)])
 
-    def test_single_word_of_two_word_phrase_matches_at_default(self):
-        # "galileo" alone scores 1/2 = 0.5 for "ehi galileo" → matches default 0.5
+    def test_single_word_of_two_word_phrase_no_longer_matches(self):
+        # "galileo" alone is no longer enough — "ehi" must also be present.
         am = self._alias_map("ehi galileo")
-        assert _approx_wake_match("il galileo", am, threshold=0.5) is not None
+        assert _approx_wake_match("il galileo", am, threshold=0.5) is None
 
-    def test_single_word_of_two_word_phrase_rejected_at_higher_threshold(self):
-        # 1/2 = 0.5 < 0.7 → no match
+    def test_both_words_required_for_fuzzy_match(self):
+        # Both "ehi" and "galileo" present → match; missing either → no match.
         am = self._alias_map("ehi galileo")
-        assert _approx_wake_match("il galileo", am, threshold=0.7) is None
+        assert _approx_wake_match("ehi galileo accendi", am, threshold=0.5) is not None
+        assert _approx_wake_match("il galileo", am, threshold=0.5) is None
+        assert _approx_wake_match("ehi come stai", am, threshold=0.5) is None
+
+    def test_short_component_alone_does_not_wake(self):
+        # The short filler "ehi" (3 of 10 chars = 0.3) must not fire the wake on
+        # its own at the default threshold — the key false-wake class.
+        am = self._alias_map("ehi galileo")
+        assert _approx_wake_match("ehi come stai", am, threshold=0.5) is None
 
     def test_both_words_always_match(self):
         am = self._alias_map("ehi galileo")
         assert _approx_wake_match("ehi galileo", am, threshold=0.7) is not None
         assert _approx_wake_match("ehi galileo", am, threshold=1.0) is not None
-
-    def test_extract_wake_command_passes_threshold(self):
-        am = self._alias_map("ehi galileo")
-        # At threshold=0.7, one-word transcript should not match
-        matched, _ = _extract_wake_command(
-            "il galileo ciao", am, fuzzy=True, wake_match_threshold=0.7
-        )
-        assert matched is None
-        # At threshold=0.5, it should match
-        matched, _ = _extract_wake_command(
-            "il galileo ciao", am, fuzzy=True, wake_match_threshold=0.5
-        )
-        assert matched is not None
-
-
-# ---------------------------------------------------------------------------
-# New config fields: wake_match_threshold, max_partial_words, min_word_overlap
-# ---------------------------------------------------------------------------
-
-
-class TestNewConfigFields:
-    def _stage1_base(self, **kwargs) -> dict:
-        return {"backend": "vosk", **kwargs}
-
-    def _recognition_base(self, **kwargs) -> dict:
-        return {**kwargs}
-
-    def test_wake_match_threshold_default(self):
-        cfg = _parse_stt_stage1_config(self._stage1_base())
-        assert cfg.wake_match_threshold == 0.5
-
-    def test_wake_match_threshold_explicit(self):
-        cfg = _parse_stt_stage1_config(self._stage1_base(wake_match_threshold=0.7))
-        assert cfg.wake_match_threshold == pytest.approx(0.7)
-
-    def test_max_partial_words_default_is_8(self):
-        cfg = _parse_stt_stage1_config(self._stage1_base())
-        assert cfg.max_partial_words == 8
-
-    def test_max_partial_words_explicit_zero_disables(self):
-        cfg = _parse_stt_stage1_config(self._stage1_base(max_partial_words=0))
-        assert cfg.max_partial_words == 0
-
-    def test_min_word_overlap_default(self):
-        cfg = _parse_recognition_config(self._recognition_base())
-        assert cfg.min_word_overlap == pytest.approx(0.0)
-
-    def test_min_word_overlap_explicit(self):
-        cfg = _parse_recognition_config(self._recognition_base(min_word_overlap=0.5))
-        assert cfg.min_word_overlap == pytest.approx(0.5)
-
-    def test_keywords_threshold_default_is_0_35(self):
-        cfg = _parse_stt_stage1_config(self._stage1_base())
-        assert cfg.keywords_threshold == pytest.approx(0.35)
-
-    def test_post_dispatch_cooldown_default(self):
-        cfg = _parse_recognition_config(self._recognition_base())
-        assert cfg.post_dispatch_cooldown_ms == 800
-
-    def test_min_cmd_words_default(self):
-        cfg = _parse_recognition_config(self._recognition_base())
-        assert cfg.min_cmd_words == 1
-
-    def test_min_cmd_words_explicit(self):
-        cfg = _parse_recognition_config(self._recognition_base(min_cmd_words=2))
-        assert cfg.min_cmd_words == 2
-
-
-# ---------------------------------------------------------------------------
-# _approx_wake_match reverse-substring tightening
-# ---------------------------------------------------------------------------
 
 
 class TestApproxWakeMatchSubstring:
@@ -518,18 +200,95 @@ class TestApproxWakeMatchSubstring:
         return _build_alias_map([WakeWordGroup(word=word)])
 
     def test_short_fragment_does_not_trigger_via_reverse_substring(self):
-        # "gali" is 4 chars but only 4/7 = 57% of "galileo" — below 70% threshold
         am = self._alias_map("galileo")
         assert _approx_wake_match("gali", am) is None
 
     def test_long_enough_fragment_still_matches(self):
-        # "galile" is 6/7 = 86% of "galileo" — above 70% threshold
         am = self._alias_map("galileo")
         assert _approx_wake_match("galile", am) is not None
 
     def test_exact_word_always_matches(self):
         am = self._alias_map("galileo")
         assert _approx_wake_match("galileo", am) is not None
+
+    def test_midword_occurrence_does_not_match(self):
+        # "galileo" embedded inside an unrelated word no longer matches via the
+        # old substring-anywhere rule.
+        am = self._alias_map("galileo")
+        assert _approx_wake_match("exgalileox", am) is None
+
+    def test_phonetic_variant_matches(self):
+        # "chiave" → phonetic "kiave"; an STT "kiave" now matches.
+        am = self._alias_map("chiave")
+        assert _approx_wake_match("kiave", am) is not None
+
+
+# ---------------------------------------------------------------------------
+# Config parsing: STTConfig and RecognitionConfig fields
+# ---------------------------------------------------------------------------
+
+
+class TestSttConfigParsing:
+    def test_defaults(self):
+        cfg = _parse_stt_config({})
+        assert cfg.backend == "vosk"
+        assert cfg.vad_silence_ms == 900
+        assert cfg.rms_threshold == pytest.approx(0.02)
+        assert cfg.adaptive_rms is True
+        assert cfg.wake_match_threshold == pytest.approx(0.5)
+
+    def test_explicit_backend(self):
+        cfg = _parse_stt_config({"backend": "vosk"})
+        assert cfg.backend == "vosk"
+
+    def test_explicit_vad_silence_ms(self):
+        cfg = _parse_stt_config({"vad_silence_ms": 700})
+        assert cfg.vad_silence_ms == 700
+
+    def test_explicit_wake_match_threshold(self):
+        cfg = _parse_stt_config({"wake_match_threshold": 0.7})
+        assert cfg.wake_match_threshold == pytest.approx(0.7)
+
+    def test_invalid_backend_raises(self):
+        from alexa_custom.config import ConfigError
+
+        with pytest.raises(ConfigError, match="stt.backend"):
+            _parse_stt_config({"backend": "unknown"})
+
+    def test_sherpa_onnx_backend_accepted(self):
+        # sherpa-onnx became a valid stt.backend value in
+        # openspec/changes/archive/2026-07-12-add-sherpa-onnx-stt-backend
+        cfg = _parse_stt_config({"backend": "sherpa-onnx"})
+        assert cfg.backend == "sherpa-onnx"
+
+
+class TestRecognitionConfigParsing:
+    def test_defaults(self):
+        cfg = _parse_recognition_config({})
+        assert cfg.wake_window == pytest.approx(8.0)
+        assert cfg.follow_up is False
+        assert cfg.follow_up_timeout == pytest.approx(4.0)
+        assert cfg.follow_up_max_turns == 5
+        assert cfg.follow_up_tone == "info"
+        assert cfg.post_dispatch_cooldown_ms == 800
+        assert cfg.min_cmd_words == 1
+        assert cfg.min_word_overlap == pytest.approx(0.0)
+
+    def test_explicit_wake_window(self):
+        cfg = _parse_recognition_config({"wake_window": 12.0})
+        assert cfg.wake_window == pytest.approx(12.0)
+
+    def test_explicit_follow_up_fields(self):
+        cfg = _parse_recognition_config(
+            {"follow_up": True, "follow_up_timeout": 3.0, "follow_up_max_turns": 4}
+        )
+        assert cfg.follow_up is True
+        assert cfg.follow_up_timeout == pytest.approx(3.0)
+        assert cfg.follow_up_max_turns == 4
+
+    def test_explicit_min_cmd_words(self):
+        cfg = _parse_recognition_config({"min_cmd_words": 2})
+        assert cfg.min_cmd_words == 2
 
 
 # ---------------------------------------------------------------------------
@@ -543,32 +302,33 @@ class TestPerTriggerMinWordOverlap:
         from alexa_custom.config import ActionEntry
 
         tight = Trigger(
+            commands=["chiama stefano"],
             phrase="chiama stefano",
             actions=[ActionEntry(type="livekit_join", params={})],
             min_word_overlap=1.0,
         )
         loose = Trigger(
+            commands=["test"],
             phrase="test",
             actions=[ActionEntry(type="speak", params={})],
             min_word_overlap=None,
         )
 
-        # "ciao" shares no phonetic tokens with "chiama stefano" → tight trigger blocked
         trig, _ = match_trigger_with_score(
             "ciao", [tight, loose], threshold=50.0, min_word_overlap=0.0
         )
-        assert trig is loose or trig is None  # tight must not win
+        assert trig is loose or trig is None
 
-    def test_per_trigger_override_None_uses_global(self):
+    def test_per_trigger_override_none_uses_global(self):
         from alexa_custom.actions import match_trigger_with_score
         from alexa_custom.config import ActionEntry
 
         t = Trigger(
+            commands=["che ora e"],
             phrase="che ora e",
             actions=[ActionEntry(type="speak", params={})],
             min_word_overlap=None,
         )
-        # global min_word_overlap=1.0, no phonetic tokens of trigger in "ciao" → blocked
         trig, _ = match_trigger_with_score(
             "ciao", [t], threshold=50.0, min_word_overlap=1.0
         )

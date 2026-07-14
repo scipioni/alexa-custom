@@ -6,7 +6,7 @@ import logging
 import os
 import re
 import unicodedata
-from typing import Awaitable, Callable, TYPE_CHECKING
+from typing import Any, Awaitable, Callable, Coroutine, TYPE_CHECKING
 
 import httpx
 
@@ -19,6 +19,14 @@ from rapidfuzz import fuzz as _fuzz
 from rapidfuzz.distance import Levenshtein as _lev
 
 logger = logging.getLogger(__name__)
+
+
+class ActionError(Exception):
+    """Raised by an action handler when it cannot complete (e.g. a required
+    dependency like the MQTT client is unavailable, or a mandatory param is
+    missing). Caught centrally in _run_action, which logs it and notifies the
+    UI via an ``action_error`` event — it does not abort the remaining actions
+    in the trigger."""
 
 
 @dataclasses.dataclass
@@ -74,7 +82,59 @@ def italian_phonetic(text: str) -> str:
     t = re.sub(r"gh([ei])", r"g\1", t)
     # 8. qu → k
     t = t.replace("qu", "k")
+    # 9. esist -> asist (align 'esistente' / 'assistente' etc. acoustically)
+    t = t.replace("esist", "asist")
+    # 10. silent 'h' (ch/gh already consumed above) — "ehi" and "ei" must compare
+    # equal since Italian h is never pronounced (ho, hai, ehi, ohi, ...).
+    t = t.replace("h", "")
     return t
+
+
+def _word_token_match(pw: str, tw: str) -> bool:
+    """Return True if transcript word ``tw`` is an acoustic match for word ``pw``.
+
+    Compares Italian phonetic forms (so ``che``/``ke`` etc. compare equal) and
+    accepts only *prefix-anchored* relationships, which is how STT actually
+    mangles words:
+    - exact phonetic equality
+    - ``pw`` is a phonetic prefix of ``tw``  → inflection ("accendi" → "accendimi")
+    - ``tw`` is a phonetic prefix of ``pw``  → truncation ("galile" → "galileo",
+      "assiste" → "assistente"), but only when ``tw`` covers ≥60% of ``pw`` so
+      short fragments ("gali", 4/7=57%) do not match a longer word.
+
+    This is deliberately stricter than substring-anywhere matching: a fragment
+    buried mid-word or in a suffix ("casa" inside "scocciacasa") does not match.
+    """
+    pp = italian_phonetic(pw)
+    tp = italian_phonetic(tw)
+    if not pp or not tp:
+        return False
+    if pp == tp:
+        return True
+    if len(pp) >= 3 and tp.startswith(pp):
+        return True
+    if len(tp) >= 3 and len(tp) >= len(pp) * 0.6 and pp.startswith(tp):
+        return True
+    # Short interjections (≤3 phonetic chars, e.g. "ehi"): Vosk often emits just
+    # the initial vowel ("e"). Accept when tp is a single char that is a phonetic
+    # prefix of pp — e.g. "e" matching "ehi". The 70%-coverage guard above already
+    # blocks longer words so this branch only fires for very short phrase words.
+    if len(pp) <= 3 and len(tp) == 1 and pp.startswith(tp):
+        return True
+    return False
+
+
+def _trigger_phrases(trigger: "Trigger") -> list[str]:
+    """All recognizable phrases for a trigger.
+
+    Single source of truth for both fuzzy matching (match_trigger_with_score)
+    and Vosk grammar construction (handle_ask reply window). Keeping these in
+    sync matters: if the grammar omits an alias the recognizer physically cannot
+    emit it, so the alias would never match no matter how lenient the scorer is.
+    """
+    return (
+        trigger.commands if trigger.commands else ([trigger.phrase] + trigger.aliases)
+    )
 
 
 class TelegramClient:
@@ -110,8 +170,28 @@ def get_similarity_score(a: str, b: str, algorithm: str) -> float:
         return (1.0 - (_lev.distance(a, b) / max_len)) * 100.0
     elif algorithm == "ratio":
         return _fuzz.ratio(a, b)
+    elif algorithm == "token_sort_ratio":
+        # Order-independent but length-aware: sorts tokens then does a full-string
+        # ratio. Unlike token_set_ratio it does NOT collapse to 100 when the
+        # transcript is a subset of the phrase, so a single word ("sono") cannot
+        # falsely match a longer command ("che ore sono").
+        return _fuzz.token_sort_ratio(a, b)
     else:  # "token_set_ratio"
         return _fuzz.token_set_ratio(a, b)
+
+
+# Two pattern tokens with no explicit '*' between them are meant to be read
+# together (e.g. "chiam* assistenza" as one short phrase) — the walk below
+# tolerates a couple of filler words ("chiama pure assistenza") but must NOT
+# let them match arbitrarily far apart. Without this cap, a single word
+# starting with "chiam" anywhere in a long free-vocabulary transcript
+# followed, at any distance, by anything phonetically near "assistenza"
+# satisfies the pattern — confirmed 2026-07-13 in conf/history.jsonl: a
+# ~250-word ambient-TV/radio transcript spuriously matched the `sos`-tagged,
+# with_wake:false "chiama assistenza" trigger this way and dispatched a real
+# action. An explicit standalone '*' still grants an unbounded gap — that is
+# an intentional, author-opted-in wildcard (see "accend* * luci").
+_MAX_IMPLICIT_GAP_WORDS = 3
 
 
 def _match_glob_pattern(
@@ -128,6 +208,10 @@ def _match_glob_pattern(
                           with the phonetic prefix of ``foo``
     - literal token     : matches a transcript word above the phonetic similarity
                           threshold (via italian_phonetic + get_similarity_score)
+
+    Adjacent tokens with no explicit ``*`` between them may only match within
+    ``_MAX_IMPLICIT_GAP_WORDS`` transcript words of each other — see
+    ``_MAX_IMPLICIT_GAP_WORDS`` docstring for why this cap exists.
     """
     p_tokens = pattern.split()
     t_tokens = [italian_phonetic(w) for w in transcript.split()]
@@ -136,10 +220,14 @@ def _match_glob_pattern(
         if p_tok.endswith("*"):
             prefix = italian_phonetic(p_tok[:-1])
             return t_phon.startswith(prefix)
-        return (
-            get_similarity_score(italian_phonetic(p_tok), t_phon, algorithm)
-            >= threshold
-        )
+        p_phon = italian_phonetic(p_tok)
+        # Short pattern tokens (≤3 phonetic chars) always score ≥75% against any
+        # word sharing their characters via SequenceMatcher's multi-block matching,
+        # making the configured threshold irrelevant.  Require exact phonetic match
+        # instead: "ore" must match "ore", not "forze"/"amore"/"cuore".
+        if len(p_phon) <= 3:
+            return t_phon == p_phon
+        return get_similarity_score(p_phon, t_phon, algorithm) >= threshold
 
     # Recursive ordered-subsequence walk with memoisation.
     from functools import lru_cache
@@ -156,8 +244,16 @@ def _match_glob_pattern(
                 if _walk(pi + 1, skip):
                     return True
             return False
-        # literal or glob token: find the next transcript word that satisfies it
-        for ti2 in range(ti, len(t_tokens)):
+        # literal or glob token: find the next transcript word that satisfies
+        # it. Only an explicit '*' just consumed grants an unbounded search —
+        # otherwise cap how far ahead we're willing to look.
+        preceded_by_star = pi > 0 and p_tokens[pi - 1] == "*"
+        search_end = (
+            len(t_tokens)
+            if preceded_by_star
+            else min(len(t_tokens), ti + 1 + _MAX_IMPLICIT_GAP_WORDS)
+        )
+        for ti2 in range(ti, search_end):
             if _token_matches(tok, t_tokens[ti2]):
                 if _walk(pi + 1, ti2 + 1):
                     return True
@@ -198,34 +294,63 @@ def match_trigger_with_score(
     best: Trigger | None = None
     best_score = 0.0
     t_phon = italian_phonetic(transcript)
-    _t_tokens: set[str] | None = None
+    _t_words: list[str] | None = None
+    _t_word_phons: list[str] | None = None
     for trigger in triggers:
-        phrases = [trigger.phrase] + trigger.aliases
-        # Word-overlap guard: at least eff_overlap fraction of each phrase's
-        # phonetic tokens must appear verbatim in the transcript token set.
-        # Per-trigger min_word_overlap overrides the call-site global when set.
+        phrases = _trigger_phrases(trigger)
+        # Word-overlap guard. Each phrase's *content* words (phonetic length ≥ 3,
+        # i.e. excluding stopwords like "la"/"di"/"che") are matched against the
+        # transcript words via _word_token_match (phonetic, prefix-anchored —
+        # tolerant of STT inflection/truncation). Two gates:
+        #   - floor: at least one content word must appear. This kills
+        #     token_set_ratio hits driven purely by shared stopwords, and is
+        #     recall-safe because a genuine command always carries its content
+        #     words. Phrases with no content words (e.g. "si") skip the floor
+        #     and rely on the short-phrase exact-match guard below.
+        #   - eff_overlap: optional stricter fraction (per-trigger override of
+        #     the call-site global) for triggers that need tighter gating.
         eff_overlap = (
             trigger.min_word_overlap
             if trigger.min_word_overlap is not None
             else min_word_overlap
         )
-        if eff_overlap > 0.0:
-            if _t_tokens is None:
-                _t_tokens = set(t_phon.split())
-            overlap_ok = False
-            for p in phrases:
-                p_words = italian_phonetic(p).split()
-                matched = sum(1 for w in p_words if w in _t_tokens)
-                if matched / len(p_words) >= eff_overlap:
-                    overlap_ok = True
-                    break
-            if not overlap_ok:
-                continue
+        if _t_words is None:
+            _t_words = transcript.split()
+        overlap_ok = False
+        for p in phrases:
+            content = [
+                w for w in normalize_text(p).split() if len(italian_phonetic(w)) >= 3
+            ]
+            if not content:
+                overlap_ok = True  # short-only phrase: defer to exact-match guard
+                break
+            matched = sum(
+                1 for w in content if any(_word_token_match(w, tw) for tw in _t_words)
+            )
+            if matched >= 1 and matched / len(content) >= eff_overlap:
+                overlap_ok = True
+                break
+        if not overlap_ok:
+            continue
         scores = []
         for p in phrases:
             p_phon = italian_phonetic(p)
             if len(p_phon) < 4:
-                score = 100.0 if t_phon == p_phon else 0.0
+                # Word-level exact match, not whole-transcript: with free-
+                # vocabulary backends (sherpa-onnx has no grammar constraint —
+                # see stt_capture.capture_transcript), a short reply like
+                # "sì"/"no" often picks up an extra captured word (noise,
+                # trailing filler) before the vad-silence endpoint fires,
+                # which used to zero out the whole-transcript comparison and
+                # drop an otherwise-clear answer. Matching if ANY transcript
+                # word is an exact phonetic hit keeps the "no partial credit"
+                # guard (still no fuzzy/prefix leniency) while tolerating
+                # surrounding words.
+                if _t_word_phons is None:
+                    if _t_words is None:
+                        _t_words = transcript.split()
+                    _t_word_phons = [italian_phonetic(w) for w in _t_words]
+                score = 100.0 if p_phon in _t_word_phons else 0.0
             else:
                 score = get_similarity_score(t_phon, p_phon, algorithm)
             scores.append(score)
@@ -295,7 +420,7 @@ class ActionRegistry:
         if handler:
             await handler(**kwargs)
         else:
-            logger.warning(f"Unknown action type '{action_type}' — skipping")
+            raise ActionError(f"unknown action type '{action_type}'")
 
 
 registry = ActionRegistry()
@@ -312,10 +437,7 @@ async def handle_telegram(action: ActionEntry, telegram_client: TelegramClient, 
     chat_id = action.params.get("chat_id") or os.environ.get("TELEGRAM_CHAT_ID", "")
     text = action.params.get("text", "")
     if not chat_id:
-        logger.error(
-            "telegram action: no chat_id in action or TELEGRAM_CHAT_ID env var"
-        )
-        return
+        raise ActionError("no chat_id in action or TELEGRAM_CHAT_ID env var")
     if "<room>" in text:
         from alexa_custom.client import browser_join_url
 
@@ -346,13 +468,25 @@ async def _render_text(text: str) -> str:
 
     async def _run(cmd: str) -> str:
         try:
+            logger.debug("Executing template command: %r", cmd)
             proc = await asyncio.create_subprocess_shell(
                 cmd,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
             )
-            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=5.0)
-            return stdout.decode().strip()
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+            code = proc.returncode
+            if code != 0:
+                logger.warning(
+                    "Template command %r exited with code %s. Stderr: %r",
+                    cmd,
+                    code,
+                    stderr.decode().strip(),
+                )
+                return ""
+            out_str = stdout.decode().strip()
+            logger.debug("Template command %r returned: %r", cmd, out_str)
+            return out_str
         except Exception as e:
             logger.warning("say template command failed %r: %s", cmd, e)
             return ""
@@ -391,7 +525,7 @@ async def handle_say(action: ActionEntry, mqtt_client: MQTTClient | None, **_):
 async def handle_ask(
     action: ActionEntry,
     ctx: ActionContext,
-    listen_fn: Callable[[float], Awaitable[str]] | None,
+    listen_fn: Callable[..., Coroutine[Any, Any, str]] | None,
     mqtt_client: MQTTClient | None,
     on_stt_event: Callable[[str, dict], None] | None,
     actions_config=None,
@@ -419,8 +553,10 @@ async def handle_ask(
             )
         return
 
-    # Use constrained grammar if triggers are defined to improve accuracy (e.g., 'si' vs 'se')
-    phrases = [t.phrase for t in action.on_reply]
+    # Use constrained grammar if triggers are defined to improve accuracy (e.g., 'si' vs 'se').
+    # Must include every command/alias the matcher accepts — a Vosk grammar
+    # restricts what the recognizer can emit, so an omitted alias is unmatchable.
+    phrases = [p for t in action.on_reply for p in _trigger_phrases(t)]
 
     if text and mqtt_client:
         await mqtt_client.publish(
@@ -469,8 +605,16 @@ async def handle_ask(
                     "matched",
                     {
                         "transcript": transcript,
-                        "trigger": reply_trigger.phrase,
+                        # Same schema as command matches in stt.py (the web
+                        # dashboard reads "phrase"); a reply is a match too.
+                        "phrase": reply_trigger.commands[0]
+                        if reply_trigger.commands
+                        else reply_trigger.phrase,
                         "score": reply_score,
+                        "actions": [
+                            {"type": a.type, "params": a.params}
+                            for a in reply_trigger.actions
+                        ],
                     },
                 )
             await dispatch(
@@ -608,21 +752,19 @@ async def handle_shell(action: ActionEntry, **_):
 @registry.register("mqtt_publish")
 async def handle_mqtt_publish(action: ActionEntry, mqtt_client: MQTTClient | None, **_):
     if mqtt_client is None:
-        logger.warning("mqtt_publish action: no mqtt_client available")
-        return
+        raise ActionError("no mqtt_client available")
     topic = action.params.get("topic")
     payload = action.params.get("payload", "")
     retain = action.params.get("retain", False)
     if not topic:
-        logger.error("mqtt_publish action: no topic provided")
-        return
+        raise ActionError("no topic provided")
     await mqtt_client.publish(topic, payload, retain=retain)
 
 
 @registry.register("llm_chat")
 async def handle_llm_chat(
     action: ActionEntry,
-    listen_fn: Callable[[float], Awaitable[str]] | None,
+    listen_fn: Callable[..., Coroutine[Any, Any, str]] | None,
     mqtt_client: MQTTClient | None,
     on_stt_event: Callable[[str, dict], None] | None = None,
     actions_config=None,
@@ -713,7 +855,7 @@ async def handle_llm_chat(
 @registry.register("llm_learn")
 async def handle_llm_learn(
     action: ActionEntry,
-    listen_fn: Callable[[float], Awaitable[str]] | None,
+    listen_fn: Callable[..., Coroutine[Any, Any, str]] | None,
     mqtt_client: MQTTClient | None,
     actions_config=None,
     wake_word: str | None = None,
@@ -750,6 +892,56 @@ async def handle_llm_learn(
         wake_word=wake_word,
     )
     await wizard.run(listen_fn, say_fn)
+
+
+@registry.register("say-with-llm")
+async def handle_say_with_llm(
+    action: ActionEntry,
+    actions_config=None,
+    **_,
+):
+    from alexa_custom.llm import _UNREACHABLE, get_engine as get_llm_engine
+    from alexa_custom.tts import get_engine as get_tts
+
+    prompt = await _render_text(action.params.get("prompt", ""))
+    file_path = action.params.get("file")
+    lang = action.params.get("lang", "it-IT")
+    max_chars = int(action.params.get("max_chars", 4000))
+    model_override = action.params.get("model")
+
+    file_content = ""
+    if file_path:
+        try:
+            with open(file_path, encoding="utf-8") as fh:
+                file_content = fh.read(max_chars)
+        except OSError as e:
+            logger.warning("say-with-llm: cannot read file %r: %s", file_path, e)
+
+    parts = [p for p in [file_content.strip(), prompt.strip()] if p]
+    user_text = "\n\n".join(parts)
+
+    if not user_text:
+        return
+
+    async def _say(text: str) -> None:
+        await asyncio.to_thread(get_tts().say, text, lang)
+
+    if actions_config is None or actions_config.llm is None:
+        logger.info("say-with-llm: LLM not configured, speaking text literally")
+        await _say(user_text)
+        return
+
+    cfg = actions_config.llm
+    if model_override:
+        cfg = dataclasses.replace(cfg, model=model_override)
+
+    engine = get_llm_engine(cfg, lang)
+    reply = await engine.reply_streaming(user_text, _say)
+
+    if reply == _UNREACHABLE:
+        fallback = prompt.strip() or user_text
+        if fallback:
+            await _say(fallback)
 
 
 ITALIAN_CITIES: dict[str, tuple[float, float]] = {
@@ -1213,6 +1405,61 @@ def _calibration_round2_gains(
     return [max(0.0, winner - half_step), winner + half_step]
 
 
+async def _run_gain_calibration(
+    action: ActionEntry,
+    listen_fn: Callable[[float], Awaitable[str]],
+    announcer: Callable[[str], Awaitable[None]],
+) -> tuple[float, dict[float, float]]:
+    """Run Stage 1 gain calibration; return (best_gain, per-gain scores)."""
+    from alexa_custom.audio_hw import set_input_gain
+
+    sentence = action.params.get("sentence", "uno due tre quattro cinque")
+    gain_low = float(action.params.get("gain_low", 0.4))
+    gain_mid = float(action.params.get("gain_mid", 0.7))
+    gain_high = float(action.params.get("gain_high", 1.2))
+    listen_timeout = float(action.params.get("listen_timeout", 6.0))
+    settle_ms = float(action.params.get("settle_ms", 500))
+    settle_s = settle_ms / 1000.0
+
+    scores: dict[float, float] = {}
+    probe_num = 0
+
+    async def _probe(gain: float) -> None:
+        nonlocal probe_num
+        probe_num += 1
+        label = f"prova {probe_num} di 5: {sentence}"
+        logger.info("calibrate_input_gain: probe %d gain=%.2f", probe_num, gain)
+        await asyncio.to_thread(set_input_gain, None, None, gain)
+        await asyncio.sleep(settle_s)
+        await announcer(label)
+        transcript = await listen_fn(listen_timeout)
+        score = get_similarity_score(
+            normalize_text(transcript or ""),
+            normalize_text(sentence),
+            "levenshtein",
+        )
+        logger.info(
+            "calibrate_input_gain: gain=%.2f score=%.1f transcript=%r",
+            gain,
+            score,
+            transcript,
+        )
+        scores[gain] = score
+
+    # Round 1 — bracket
+    for g in [gain_low, gain_mid, gain_high]:
+        await _probe(g)
+
+    r1_winner = _calibration_winner(scores)
+
+    # Round 2 — zoom
+    for g in _calibration_round2_gains(r1_winner, gain_low, gain_high):
+        await _probe(g)
+
+    best_gain = _calibration_winner(scores)
+    return best_gain, scores
+
+
 @registry.register("calibrate_input_gain")
 async def handle_calibrate_input_gain(
     action: ActionEntry,
@@ -1241,64 +1488,19 @@ async def handle_calibrate_input_gain(
         logger.warning("calibrate_input_gain: no listen_fn available — skipping")
         return
 
-    sentence = action.params.get("sentence", "uno due tre quattro cinque")
-    gain_low = float(action.params.get("gain_low", 0.4))
-    gain_mid = float(action.params.get("gain_mid", 0.7))
-    gain_high = float(action.params.get("gain_high", 1.2))
-    listen_timeout = float(action.params.get("listen_timeout", 6.0))
-    settle_ms = float(action.params.get("settle_ms", 500))
-    settle_s = settle_ms / 1000.0
-
-    scores: dict[float, float] = {}
-    probe_num = 0
-
-    logger.info("calibrate_input_gain: starting calibration (sentence=%r)", sentence)
+    logger.info("calibrate_input_gain: starting calibration")
     await asyncio.to_thread(
         get_engine().say,
         "Iniziamo la calibrazione. Ripeti ogni frase che sento.",
         "it-IT",
     )
 
-    async def _probe(gain: float) -> None:
-        nonlocal probe_num
-        probe_num += 1
-        label = f"prova {probe_num} di 5: {sentence}"
-        logger.info("calibrate_input_gain: probe %d gain=%.2f", probe_num, gain)
-        await asyncio.to_thread(set_input_gain, None, None, gain)
-        await asyncio.sleep(settle_s)
-        await asyncio.to_thread(get_engine().say, label, "it-IT")
-        transcript = await listen_fn(listen_timeout)
-        score = get_similarity_score(
-            normalize_text(transcript or ""),
-            normalize_text(sentence),
-            "levenshtein",
-        )
-        logger.info(
-            "calibrate_input_gain: gain=%.2f score=%.1f transcript=%r",
-            gain,
-            score,
-            transcript,
-        )
-        scores[gain] = score
+    async def _announce(text: str) -> None:
+        await asyncio.to_thread(get_engine().say, text, "it-IT")
 
-    # Round 1 — bracket
-    for g in [gain_low, gain_mid, gain_high]:
-        await _probe(g)
+    best_gain, _ = await _run_gain_calibration(action, listen_fn, _announce)
 
-    r1_winner = _calibration_winner(scores)
-
-    # Round 2 — zoom
-    for g in _calibration_round2_gains(r1_winner, gain_low, gain_high):
-        await _probe(g)
-
-    best_gain = _calibration_winner(scores)
-    logger.info(
-        "calibrate_input_gain: best gain=%.2f (score=%.1f), all scores=%s",
-        best_gain,
-        scores[best_gain],
-        {f"{g:.2f}": f"{s:.1f}" for g, s in sorted(scores.items())},
-    )
-
+    logger.info("calibrate_input_gain: best gain=%.2f", best_gain)
     await asyncio.to_thread(set_input_gain, None, None, best_gain)
     save_input_gain_config(best_gain)
 
@@ -1307,6 +1509,292 @@ async def handle_calibrate_input_gain(
         get_engine().say,
         f"Calibrazione completata. Guadagno impostato a {pct} percento.",
         "it-IT",
+    )
+
+
+# Keys the Stage-2 sweep varies (and the only ones it persists — everything
+# else stays owned by the named device profile).
+_GST_SWEEP_KEYS = ("noise_suppression", "noise_suppression_level", "agc")
+
+_DEFAULT_CONDITION = "parla a voce normale, vicino al dispositivo"
+
+
+def _aggregate_scores(values: list[float], mode: str) -> float:
+    """Combine per-condition scores: 'min' (worst-case, default) or 'mean'."""
+    if not values:
+        return 0.0
+    if mode == "mean":
+        return sum(values) / len(values)
+    return min(values)
+
+
+def _gst_calibration_candidates(base_params: dict, allow_agc: bool) -> list[dict]:
+    """Stage-2 candidate param sets, simplest first.
+
+    Each candidate carries the FULL resolved active-profile params so
+    device-critical settings (source, highpass_cutoff_hz, ...) stay in force
+    while probing — only the sweep keys vary. Simplest-first ordering makes
+    score ties resolve toward trusting the hardware DSP.
+
+    No candidate enables WebRTC AGC unless allow_agc is set: on hardware-DSP
+    speakerphones AGC winds its gain up during idle silence and garbles the
+    first command after idle (see AGENTS.md, verified on Yealink BT51).
+    """
+    variants = [
+        {"noise_suppression": False, "agc": False},  # trust the hardware DSP
+        {"noise_suppression": True, "noise_suppression_level": 1, "agc": False},
+        {"noise_suppression": True, "noise_suppression_level": 2, "agc": False},
+    ]
+    if allow_agc:
+        variants.append({"noise_suppression": False, "agc": True})
+    return [{**base_params, **v} for v in variants]
+
+
+@registry.register("calibrate_microphone_complete")
+async def handle_calibrate_microphone_complete(
+    action: ActionEntry,
+    listen_fn: Callable[[float], Awaitable[str]] | None = None,
+    *,
+    actions_config=None,
+    **_,
+):
+    """Complete gain + GStreamer calibration across listening conditions.
+
+    Real-world settings are a compromise between near speech, far speech,
+    and room noise (TV, ...), so every winner is scored across ALL configured
+    conditions, not a single quiet near-field probe:
+
+    - Stage 1 sweeps the hardware input gain on the first condition, then
+      validates the two best gains under every additional condition.
+    - Stage 2 sweeps GStreamer NS/AGC variants built ON TOP of the active
+      device profile (device-critical params like highpass_cutoff_hz are
+      preserved) under every condition.
+
+    The winner maximises the worst-case score across conditions (or the mean
+    with aggregate: mean). AGC candidates are excluded unless allow_agc: true
+    (WebRTC AGC garbles the first command after idle on hardware-DSP devices).
+
+    Example YAML:
+        - type: calibrate_microphone_complete
+          sentence: "uno due tre quattro cinque"
+          conditions:
+            - "parla a voce normale, vicino al dispositivo"
+            - "adesso parla da lontano, dall'altra parte della stanza"
+          aggregate: min       # min (worst-case, default) | mean
+          allow_agc: false
+          listen_timeout: 6.0
+          settle_ms: 500
+    """
+    from alexa_custom.audio_hw import (
+        get_active_gst_profile,
+        get_input_gain,
+        set_active_gst_profile,
+        set_input_gain,
+    )
+
+    if listen_fn is None:
+        logger.warning(
+            "calibrate_microphone_complete: no listen_fn available — skipping"
+        )
+        return
+
+    if actions_config is None:
+        logger.warning(
+            "calibrate_microphone_complete: no actions_config available — skipping"
+        )
+        return
+
+    # Snapshot state so an interruption (dispatch timeout, error) restores it
+    # — otherwise the daemon is left with a probe gain or the temporary
+    # "calibration" profile active.
+    orig_profile = get_active_gst_profile() or "normal"
+    orig_gain = get_input_gain()
+    completed = False
+    try:
+        await _run_complete_calibration(action, listen_fn, actions_config, orig_profile)
+        completed = True
+    finally:
+        if not completed:
+            logger.warning(
+                "calibrate_microphone_complete: interrupted — restoring gain=%.2f profile=%s",
+                orig_gain,
+                orig_profile,
+            )
+            # Synchronous calls: an interrupted coroutine may not get another
+            # await, so restoration must not suspend.
+            set_input_gain(None, None, orig_gain)
+            set_active_gst_profile(orig_profile)
+
+
+async def _run_complete_calibration(
+    action: ActionEntry,
+    listen_fn: Callable[[float], Awaitable[str]],
+    actions_config,
+    orig_profile: str,
+) -> None:
+    """Implementation of calibrate_microphone_complete (see the handler)."""
+    import dataclasses
+
+    from alexa_custom.audio_hw import (
+        set_active_gst_profile,
+        save_input_gain_config,
+        set_input_gain,
+        save_gstreamer_overrides,
+    )
+    from alexa_custom.config import get_gst_profile_stt_overrides, resolve_gst_profile
+    from alexa_custom.tts import get_engine
+
+    sentence = action.params.get("sentence", "uno due tre quattro cinque")
+    listen_timeout = float(action.params.get("listen_timeout", 6.0))
+    settle_ms = float(action.params.get("settle_ms", 500))
+    settle_s = settle_ms / 1000.0
+    raw_conditions = action.params.get("conditions")
+    conditions = (
+        [str(c) for c in raw_conditions] if raw_conditions else [_DEFAULT_CONDITION]
+    )
+    aggregate = str(action.params.get("aggregate", "min"))
+    allow_agc = bool(action.params.get("allow_agc", False))
+
+    # Ensure calibration profile slot exists
+    if not hasattr(actions_config.audio.gstreamer, "profiles"):
+        actions_config.audio.gstreamer.profiles = {}
+
+    logger.info(
+        "calibrate_microphone_complete: starting (profile=%s conditions=%d aggregate=%s allow_agc=%s)",
+        orig_profile,
+        len(conditions),
+        aggregate,
+        allow_agc,
+    )
+
+    async def _announce(text: str) -> None:
+        await asyncio.to_thread(get_engine().say, text, "it-IT")
+
+    def _score(transcript: str | None) -> float:
+        return get_similarity_score(
+            normalize_text(transcript or ""),
+            normalize_text(sentence),
+            "levenshtein",
+        )
+
+    # --- STAGE 1: Gain Calibration ---
+    await _announce(
+        "Iniziamo la prima fase della calibrazione: regolazione del guadagno. Ripeti ogni frase che sento.",
+    )
+    if len(conditions) > 1:
+        await _announce(f"Prima condizione: {conditions[0]}")
+
+    best_gain, gain_scores = await _run_gain_calibration(action, listen_fn, _announce)
+
+    if len(conditions) > 1:
+        # Validate the two best gains under every remaining condition: the
+        # gain that wins near-field can clip or starve at distance, so the
+        # final pick maximises the aggregated (worst-case) score.
+        finalists = sorted(gain_scores, key=lambda g: gain_scores[g], reverse=True)[:2]
+        combined: dict[float, list[float]] = {g: [gain_scores[g]] for g in finalists}
+        for cond in conditions[1:]:
+            await _announce(f"Adesso: {cond}")
+            for g in finalists:
+                await asyncio.to_thread(set_input_gain, None, None, g)
+                await asyncio.sleep(settle_s)
+                await _announce(f"ripeti: {sentence}")
+                transcript = await listen_fn(listen_timeout)
+                score = _score(transcript)
+                combined[g].append(score)
+                logger.info(
+                    "calibrate_microphone_complete: gain=%.2f condition=%r score=%.1f transcript=%r",
+                    g,
+                    cond,
+                    score,
+                    transcript,
+                )
+        best_gain = max(
+            finalists, key=lambda g: _aggregate_scores(combined[g], aggregate)
+        )
+
+    logger.info("calibrate_microphone_complete: Stage 1 winning gain=%.2f", best_gain)
+    await asyncio.to_thread(set_input_gain, None, None, best_gain)
+
+    # --- STAGE 2: GStreamer Filter Calibration ---
+    await _announce(
+        "Seconda fase: ottimizzazione dei filtri audio digitali. Continua a ripetere."
+    )
+
+    # Build candidates over the RESOLVED active profile so device-critical
+    # params (source, highpass_cutoff_hz, ...) and the profile's STT keys
+    # stay in force during probes.
+    resolved = resolve_gst_profile(actions_config.audio.gstreamer, orig_profile)
+    base_params = {
+        f.name: getattr(resolved, f.name)
+        for f in dataclasses.fields(resolved)
+        if f.name != "profiles"
+    }
+    base_params.update(
+        get_gst_profile_stt_overrides(actions_config.audio.gstreamer, orig_profile)
+    )
+    candidates = _gst_calibration_candidates(base_params, allow_agc)
+
+    cand_scores: list[list[float]] = [[] for _ in candidates]
+    probe_n = 0
+    total = len(candidates) * len(conditions)
+
+    for cond in conditions:
+        if len(conditions) > 1:
+            await _announce(f"Adesso: {cond}")
+        for i, cand in enumerate(candidates):
+            probe_n += 1
+            logger.info(
+                "calibrate_microphone_complete: Stage 2 probe %d/%d condition=%r sweep=%s",
+                probe_n,
+                total,
+                cond,
+                {k: cand[k] for k in _GST_SWEEP_KEYS if k in cand},
+            )
+            actions_config.audio.gstreamer.profiles["calibration"] = dict(cand)
+            await asyncio.to_thread(set_active_gst_profile, "calibration")
+            await asyncio.sleep(settle_s + 0.3)  # allow pipeline rebuild
+
+            await _announce(f"prova {probe_n} di {total}: {sentence}")
+            transcript = await listen_fn(listen_timeout)
+            score = _score(transcript)
+            cand_scores[i].append(score)
+            logger.info(
+                "calibrate_microphone_complete: probe %d score=%.1f transcript=%r",
+                probe_n,
+                score,
+                transcript,
+            )
+
+    # Restore the original profile so GStreamer returns to normal operation
+    await asyncio.to_thread(set_active_gst_profile, orig_profile)
+
+    aggregated = [_aggregate_scores(s, aggregate) for s in cand_scores]
+    # max() keeps the FIRST index on ties — candidates are ordered simplest
+    # first, so ties resolve toward trusting the hardware DSP.
+    best_idx = max(range(len(candidates)), key=lambda i: aggregated[i])
+    winning_params = {k: candidates[best_idx][k] for k in _GST_SWEEP_KEYS}
+    logger.info(
+        "calibrate_microphone_complete: winner index=%d %s (scores=%s aggregated=%.1f)",
+        best_idx,
+        winning_params,
+        [round(a, 1) for a in aggregated],
+        aggregated[best_idx],
+    )
+
+    # Persist Stage 1 & Stage 2 winners to conf/state.yaml. Only the sweep
+    # keys are persisted — start_capture applies them ON TOP of the named
+    # profile, so device-critical profile params remain profile-owned.
+    save_input_gain_config(best_gain)
+    save_gstreamer_overrides(winning_params)
+
+    # Re-apply the winning configuration globally
+    for k, v in winning_params.items():
+        if hasattr(actions_config.audio.gstreamer, k):
+            setattr(actions_config.audio.gstreamer, k, v)
+
+    pct = int(round(best_gain * 100))
+    await _announce(
+        f"Calibrazione completata. Guadagno {pct} percento. Configurazione ottimizzata salvata.",
     )
 
 
@@ -1352,13 +1840,106 @@ async def handle_record_and_playback(
 
     try:
         await asyncio.to_thread(record_wav_file, tmp_wav, duration, source, channels)
+
         logger.info("record_and_playback: playing back recorded sample")
         await asyncio.to_thread(play_wav_file, tmp_wav)
+
+        import wave
+        import numpy as np
+        from alexa_custom.stt_gating import _apply_input_gain, _downmix_to_mono
+
+        rms_val = 0.0
+        try:
+            with wave.open(tmp_wav, "rb") as wf:
+                raw_data = wf.readframes(wf.getnframes())
+            # Apply same gain/downmix as STT pipeline so RMS reflects what Vosk hears
+            processed = _apply_input_gain(_downmix_to_mono(raw_data, channels))
+            samples = np.frombuffer(processed, dtype=np.int16)
+            n = len(samples)
+            if n > 0:
+                rms_val = float(np.linalg.norm(samples)) / (32768.0 * n**0.5)
+        except Exception as e:
+            logger.warning(
+                "record_and_playback: could not read recorded wav file for RMS calculation: %s",
+                e,
+            )
+
+        rms_score = int(round(rms_val * 100))
+        rms_score = max(1, min(10, rms_score))
+
+        logger.info(
+            "record_and_playback: calculated RMS value is %f, mapped score is %d/10",
+            rms_val,
+            rms_score,
+        )
+
+        from alexa_custom.tts import get_engine
+
+        lang = action.params.get("lang", "it-IT")
+        if lang.startswith("it"):
+            text = f"Il valore R M S calcolato per il messaggio registrato è {rms_score} su dieci."
+        else:
+            text = f"The calculated R M S value of the recorded message is {rms_score} out of ten."
+
+        await asyncio.to_thread(get_engine().say, text, lang)
     finally:
         try:
             os.unlink(tmp_wav)
         except OSError:
             pass
+
+
+@registry.register("set_audio_profile")
+async def handle_set_audio_profile(
+    action: ActionEntry, *, actions_config=None, **_
+) -> None:
+    """Switch the active GStreamer audio capture profile.
+
+    Params:
+      profile: str — name of a profile defined under audio.gstreamer.profiles
+                     in config.yaml (e.g. "normal", "sensitive").
+    """
+    from alexa_custom.audio_hw import set_active_gst_profile, set_profile_stt_overrides
+    from alexa_custom.tts import get_engine
+
+    profile = action.params.get("profile", "")
+    if not profile:
+        raise ActionError("set_audio_profile: 'profile' param is required")
+
+    set_active_gst_profile(profile)
+
+    stt_overrides: dict = {}
+    if actions_config is not None:
+        from alexa_custom.config import get_gst_profile_stt_overrides
+
+        stt_overrides = get_gst_profile_stt_overrides(
+            actions_config.audio.gstreamer, profile
+        )
+    set_profile_stt_overrides(stt_overrides)
+
+    logger.info(
+        "Audio profile set to %r%s",
+        profile,
+        f" (STT overrides: {stt_overrides})" if stt_overrides else "",
+    )
+
+    confirm = action.params.get("say", "")
+    if confirm:
+        lang = action.params.get("lang", "it-IT")
+        await asyncio.to_thread(get_engine().say, confirm, lang)
+
+
+def _notify_action_error(ctx: ActionContext, action_type: str, message: str) -> None:
+    """Surface an action problem to the web UI as a transient toast."""
+    if not ctx.on_stt_event:
+        return
+    try:
+        ctx.on_stt_event(
+            "action_error",
+            {"action": action_type, "message": f"{action_type}: {message}"},
+        )
+    except Exception:
+        pass
 
 
 async def _run_action(
@@ -1368,17 +1949,28 @@ async def _run_action(
     wake_word: str | None = None,
     transcript: str | None = None,
 ) -> None:
-    await registry.execute(
-        action.type,
-        action=action,
-        ctx=ctx,
-        telegram_client=ctx.telegram_client,
-        livekit_connect_fn=ctx.livekit_connect_fn,
-        livekit_connected=ctx.livekit_connected,
-        listen_fn=ctx.listen_fn,
-        mqtt_client=ctx.mqtt_client,
-        on_stt_event=ctx.on_stt_event,
-        actions_config=ctx.actions_config,
-        wake_word=wake_word,
-        transcript=transcript,
-    )
+    try:
+        await registry.execute(
+            action.type,
+            action=action,
+            ctx=ctx,
+            telegram_client=ctx.telegram_client,
+            livekit_connect_fn=ctx.livekit_connect_fn,
+            livekit_connected=ctx.livekit_connected,
+            listen_fn=ctx.listen_fn,
+            mqtt_client=ctx.mqtt_client,
+            on_stt_event=ctx.on_stt_event,
+            actions_config=ctx.actions_config,
+            wake_word=wake_word,
+            transcript=transcript,
+        )
+    except ActionError as e:
+        # Expected, recoverable failure — log and notify the UI, but let the
+        # rest of the trigger's actions run.
+        logger.warning("Action %r failed: %s", action.type, e)
+        _notify_action_error(ctx, action.type, str(e))
+    except Exception as e:
+        # Unexpected crash inside a handler — same UI notification, plus a full
+        # traceback in the logs.
+        logger.exception("Action %r raised an unexpected error", action.type)
+        _notify_action_error(ctx, action.type, str(e) or e.__class__.__name__)

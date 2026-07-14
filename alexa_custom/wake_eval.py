@@ -5,7 +5,7 @@ no microphone, no PortAudio, no parec subprocess. Feeds 16 kHz mono
 s16le WAV clips through the same Vosk/KWS decision helpers used in
 production and reports false-positives-per-hour and miss-rate.
 
-CLI: ``alexa-wake-eval --help``
+CLI: ``serena-wake-eval --help``
 
 Corpus layout
 -------------
@@ -28,6 +28,7 @@ import argparse
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -40,7 +41,7 @@ import numpy as np
 import vosk
 import yaml
 
-from alexa_custom.config import STTStage1Config, WakeWordGroup
+from alexa_custom.config import STTConfig, WakeWordGroup
 from alexa_custom.stt import (
     _CHUNK,
     _build_alias_map,
@@ -154,11 +155,33 @@ def generate_corpus(
     piper_bin: str,
     piper_voice: str,
     force: bool = False,
+    positive_texts: list[str] | None = None,
 ) -> dict:
-    """Generate the eval corpus from Piper TTS and return a manifest dict."""
-    manifest: dict = {"positive": [], "negative": []}
+    """Generate the eval corpus from Piper TTS and return a manifest dict.
 
-    for label, texts in [("positive", _POSITIVE_TEXTS), ("negative", _NEGATIVE_TEXTS)]:
+    ``positive_texts`` are the phrases that SHOULD wake — pass the live config's
+    wake words so the corpus matches what the daemon actually listens for.
+    Falls back to the built-in defaults when omitted.
+    """
+    manifest: dict = {"positive": [], "negative": []}
+    pos_texts = positive_texts or _POSITIVE_TEXTS
+
+    # Preserve previously-ingested real recordings (source: real) so a TTS
+    # regeneration doesn't wipe them; drop any whose file has gone missing.
+    existing_path = corpus_dir / "manifest.yaml"
+    preserved_real: list[dict] = []
+    if existing_path.exists():
+        try:
+            old = yaml.safe_load(existing_path.read_text()) or {}
+            preserved_real = [
+                e
+                for e in old.get("negative", [])
+                if e.get("source") == "real" and (corpus_dir / e["file"]).exists()
+            ]
+        except Exception as e:
+            logger.warning("Could not read existing manifest to preserve reals: %s", e)
+
+    for label, texts in [("positive", pos_texts), ("negative", _NEGATIVE_TEXTS)]:
         for text in texts:
             slug = text.replace(" ", "_")
             base_wav = corpus_dir / label / f"{slug}_0db.wav"
@@ -176,13 +199,85 @@ def generate_corpus(
                     if not dst.exists() or force:
                         _attenuate_wav(base_wav, dst, db)
                 rel = str(dst.relative_to(corpus_dir))
-                entry = {"file": rel, "text": text, "attenuation_db": db}
+                entry = {
+                    "file": rel,
+                    "text": text,
+                    "attenuation_db": db,
+                    "source": "tts",
+                }
                 manifest[label].append(entry)
+
+    if preserved_real:
+        manifest["negative"].extend(preserved_real)
+        logger.info("Preserved %d real negative clip(s)", len(preserved_real))
 
     manifest_path = corpus_dir / "manifest.yaml"
     with open(manifest_path, "w") as f:
         yaml.dump(manifest, f, allow_unicode=True)
     logger.info("Corpus manifest written to %s", manifest_path)
+    return manifest
+
+
+_AUDIO_EXTS = {".wav", ".flac", ".ogg", ".oga", ".opus", ".mp3", ".m4a", ".aac"}
+
+
+def add_negatives(corpus_dir: Path, src_dir: Path) -> dict:
+    """Ingest real recorded audio from ``src_dir`` as negative clips.
+
+    Real ambient/cross-talk recordings are the only way to measure grammar
+    mode's true false-positive rate — synthesised TTS negatives lack the noise
+    and acoustic near-misses that trip a constrained recognizer. Each file is
+    transcoded to 16 kHz mono s16le under ``corpus_dir/negative/`` and appended
+    to the manifest tagged ``source: real`` so ``--gen-corpus`` preserves it.
+    """
+    if not _FFMPEG:
+        raise RuntimeError("ffmpeg not found — required to ingest real recordings")
+    if not src_dir.is_dir():
+        raise FileNotFoundError(f"--add-negatives directory not found: {src_dir}")
+
+    manifest_path = corpus_dir / "manifest.yaml"
+    manifest = load_manifest(corpus_dir) if manifest_path.exists() else {}
+    manifest.setdefault("positive", [])
+    manifest.setdefault("negative", [])
+    by_file = {e["file"]: e for e in manifest["negative"]}
+
+    added = 0
+    for src in sorted(src_dir.iterdir()):
+        if src.suffix.lower() not in _AUDIO_EXTS:
+            continue
+        slug = "real_" + re.sub(r"[^\w\-]", "_", src.stem)[:48]
+        dst = corpus_dir / "negative" / f"{slug}.wav"
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            subprocess.run(
+                [_FFMPEG, "-y", "-i", str(src), "-ar", "16000", "-ac", "1", str(dst)],
+                check=True,
+                capture_output=True,
+            )
+        except subprocess.CalledProcessError as e:
+            logger.warning("Could not transcode %s: %s", src, e)
+            continue
+        rel = str(dst.relative_to(corpus_dir))
+        entry = {
+            "file": rel,
+            "text": f"(real) {src.name}",
+            "attenuation_db": 0,
+            "source": "real",
+        }
+        if rel in by_file:
+            by_file[rel].update(entry)  # refresh in place (re-ingest)
+        else:
+            manifest["negative"].append(entry)
+            by_file[rel] = entry
+            added += 1
+
+    with open(manifest_path, "w") as f:
+        yaml.dump(manifest, f, allow_unicode=True)
+    total_real = sum(1 for e in manifest["negative"] if e.get("source") == "real")
+    print(
+        f"Ingested {added} new real negative clip(s) from {src_dir} "
+        f"({total_real} real negatives total) → {manifest_path}"
+    )
     return manifest
 
 
@@ -249,15 +344,25 @@ class EvalConfig:
     confidence: float = 0.65
     confidence_mode: str = "first"
     rms_threshold: float = 0.02
+    wake_match_threshold: float = 0.5
     wake_words: list[str] = field(default_factory=lambda: ["ehi galileo", "assistente"])
+    # Recognizer vocabulary. ``free_text`` reproduces production free-text mode
+    # (no grammar). Otherwise ``grammar`` (when set) is the exact production
+    # grammar string — wake words + every trigger phrase, via stt._loop_grammar —
+    # so the eval snaps onto the same vocabulary the daemon does. When both are
+    # unset the harness falls back to a wake-words-only grammar (legacy default
+    # for --no-config runs).
+    grammar: str | None = None
+    free_text: bool = False
 
 
-def _make_stage1_config(ec: EvalConfig) -> STTStage1Config:
-    return STTStage1Config(
+def _make_stage1_config(ec: EvalConfig) -> STTConfig:
+    return STTConfig(
         backend="vosk",
         confidence=ec.confidence,
         confidence_mode=ec.confidence_mode,
         rms_threshold=ec.rms_threshold,
+        wake_match_threshold=ec.wake_match_threshold,
     )
 
 
@@ -265,7 +370,7 @@ def _score_clip_vosk(
     pcm: bytes,
     recognizer: "vosk.KaldiRecognizer",
     alias_map: dict,
-    stage1_cfg: STTStage1Config,
+    stage1_cfg: STTConfig,
 ) -> bool:
     """Feed ``pcm`` through ``recognizer`` in production chunk sizes and return True if a wake fires.
 
@@ -291,6 +396,7 @@ def _score_clip_vosk(
                 stage1_cfg.confidence,
                 stage1_cfg.confidence_mode,
                 stage1_cfg.rms_threshold,
+                stage1_cfg.wake_match_threshold,
             )
             if match is not None:
                 return True
@@ -305,6 +411,7 @@ def _score_clip_vosk(
             stage1_cfg.confidence,
             stage1_cfg.confidence_mode,
             0.0,
+            stage1_cfg.wake_match_threshold,
         )
         if match is not None:
             return True
@@ -380,7 +487,14 @@ def run_eval(
         raise FileNotFoundError(f"Vosk model not found at {model_path}")
     vosk.SetLogLevel(-1)
     vosk_model = vosk.Model(model_path)
-    grammar = _grammar_json(wake_words)
+    # Match the production recognizer vocabulary: free-text, the exact loop
+    # grammar from the live config, or (legacy) a wake-words-only grammar.
+    if ec.free_text:
+        grammar = None
+    elif ec.grammar is not None:
+        grammar = ec.grammar
+    else:
+        grammar = _grammar_json(wake_words)
 
     manifest = load_manifest(corpus_dir)
     result = EvalResult()
@@ -400,7 +514,11 @@ def run_eval(
                 continue
 
             # Fresh recognizer per clip so state doesn't bleed between clips
-            recognizer = vosk.KaldiRecognizer(vosk_model, 16000, grammar)
+            recognizer = (
+                vosk.KaldiRecognizer(vosk_model, 16000, grammar)
+                if grammar
+                else vosk.KaldiRecognizer(vosk_model, 16000)
+            )
             recognizer.SetWords(True)
 
             woke = _score_clip_vosk(pcm, recognizer, alias_map, stage1_cfg)
@@ -441,7 +559,8 @@ def print_report(ec: EvalConfig, result: EvalResult, label: str = "") -> None:
     header = f"=== Eval Report{': ' + label if label else ''} ==="
     print(header)
     print(
-        f"  confidence={ec.confidence}  mode={ec.confidence_mode}  rms_threshold={ec.rms_threshold}"
+        f"  confidence={ec.confidence}  mode={ec.confidence_mode}  "
+        f"rms_threshold={ec.rms_threshold}  wake_match_threshold={ec.wake_match_threshold}"
     )
     print()
     print(f"  Positive clips : {result.true_positives + result.misses}")
@@ -467,9 +586,9 @@ def print_sweep_table(rows: list[tuple[EvalConfig, EvalResult, str]]) -> None:
     print(f"{'Config':<50}  {'FP/hr':>7}  {'Miss%':>7}  {'FPs':>4}  {'Misses':>6}")
     print("-" * 80)
     for ec, res, label in rows:
-        name = (
-            label
-            or f"conf={ec.confidence} mode={ec.confidence_mode} rms={ec.rms_threshold}"
+        name = label or (
+            f"conf={ec.confidence} mode={ec.confidence_mode} "
+            f"rms={ec.rms_threshold} wmt={ec.wake_match_threshold}"
         )
         fp_h = f"{res.fp_per_hour:.2f}" if res.total_negative_s > 0 else "N/A"
         miss = f"{res.miss_rate:.1%}"
@@ -489,6 +608,7 @@ def save_baseline(path: Path, ec: EvalConfig, result: EvalResult) -> None:
         "confidence": ec.confidence,
         "confidence_mode": ec.confidence_mode,
         "rms_threshold": ec.rms_threshold,
+        "wake_match_threshold": ec.wake_match_threshold,
         "fp_per_hour": result.fp_per_hour,
         "miss_rate": result.miss_rate,
     }
@@ -546,6 +666,13 @@ def main() -> None:
         "--force", action="store_true", help="Re-generate existing corpus clips."
     )
     parser.add_argument(
+        "--add-negatives",
+        metavar="DIR",
+        help="Ingest real recorded audio files from DIR as negative clips "
+        "(transcoded to 16 kHz mono, tagged source:real, kept across --gen-corpus). "
+        "Use real room noise / cross-talk to measure true false-positive rate.",
+    )
+    parser.add_argument(
         "--piper-bin", default=_DEFAULT_PIPER_BIN, help="Path to piper binary."
     )
     parser.add_argument(
@@ -557,27 +684,49 @@ def main() -> None:
         help="Path to Vosk model directory.",
     )
     parser.add_argument(
+        "--config",
+        default="conf/config.yaml",
+        help="Live config to analyze: wake words come from it + conf/actions/*, and "
+        "the recognizer reproduces its grammar (stt.vosk_grammar + every trigger "
+        "phrase). confidence/mode/rms/wake-match default to its stt.* values. "
+        "(default: conf/config.yaml)",
+    )
+    parser.add_argument(
+        "--no-config",
+        action="store_true",
+        help="Ignore the live config; use --wake-words with a wake-words-only grammar.",
+    )
+    parser.add_argument(
         "--confidence",
         type=float,
-        default=0.65,
-        help="Vosk acceptance confidence threshold.",
+        default=None,
+        help="Vosk acceptance confidence threshold (default: config stt.confidence, else 0.65).",
     )
     parser.add_argument(
         "--confidence-mode",
         choices=["first", "min", "mean"],
-        default="first",
-        help="How to aggregate per-token confidence (default: first).",
+        default=None,
+        help="How to aggregate wake-token confidence (default: config stt.confidence_mode, else first).",
     )
     parser.add_argument(
         "--rms-threshold",
         type=float,
-        default=0.02,
-        help="RMS energy pre-gate threshold.",
+        default=None,
+        help="RMS energy pre-gate threshold (default: config stt.rms_threshold, else 0.02).",
+    )
+    parser.add_argument(
+        "--wake-match-threshold",
+        type=float,
+        default=None,
+        help="Fraction of wake-phrase tokens required to match: 0.5 fires on one "
+        "of two words, 1.0 requires the full phrase "
+        "(default: config stt.wake_match_threshold, else 0.5).",
     )
     parser.add_argument(
         "--sweep",
         action="store_true",
-        help="Run a sweep over confidence, confidence-mode, and rms-threshold values.",
+        help="Run a sweep over confidence, confidence-mode, rms-threshold, and "
+        "wake-match-threshold values.",
     )
     parser.add_argument(
         "--save-baseline",
@@ -592,8 +741,9 @@ def main() -> None:
     parser.add_argument(
         "--wake-words",
         nargs="+",
-        default=["ehi galileo", "assistente"],
-        help="Wake words to score against (space-separated, quote multi-word phrases).",
+        default=None,
+        help="Wake words to score against (space-separated, quote multi-word "
+        "phrases). Overrides the words loaded from --config.",
     )
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args()
@@ -605,43 +755,116 @@ def main() -> None:
 
     corpus_dir = Path(args.corpus_dir)
 
+    # --- Resolve effective settings from the live config (unless --no-config) ---
+    # A bare `serena-wake-eval` then analyzes exactly what the daemon runs: the
+    # wake words from conf/config.yaml + conf/actions/*, and the same recognizer
+    # vocabulary (free-text or the full wake+trigger grammar).
+    app_config = None
+    if not args.no_config:
+        try:
+            from alexa_custom.config import load_config
+
+            app_config = load_config(args.config)
+        except Exception as e:
+            print(f"warning: could not load {args.config}: {e}")
+        if app_config is None:
+            print(
+                f"warning: {args.config} not found — falling back to "
+                "wake-words-only grammar and built-in defaults."
+            )
+
+    grammar: str | None = None
+    free_text = False
+    if app_config is not None:
+        from alexa_custom.stt import _loop_grammar
+
+        cfg_wake = list(app_config.wake_words)
+        cfg_conf = app_config.stt.confidence
+        cfg_mode = app_config.stt.confidence_mode
+        cfg_rms = app_config.stt.rms_threshold
+        cfg_wmt = app_config.stt.wake_match_threshold
+        if app_config.stt.vosk_grammar:
+            grammar = _loop_grammar(app_config)  # wake words + every trigger phrase
+        else:
+            free_text = True  # production free-text recognizer
+    else:
+        cfg_wake = ["ehi galileo", "assistente"]
+        cfg_conf, cfg_mode, cfg_rms, cfg_wmt = 0.65, "first", 0.02, 0.5
+
+    eff_wake = args.wake_words if args.wake_words is not None else cfg_wake
+    eff_conf = args.confidence if args.confidence is not None else cfg_conf
+    eff_mode = args.confidence_mode if args.confidence_mode is not None else cfg_mode
+    eff_rms = args.rms_threshold if args.rms_threshold is not None else cfg_rms
+    eff_wmt = (
+        args.wake_match_threshold
+        if args.wake_match_threshold is not None
+        else cfg_wmt
+    )
+
+    if app_config is not None:
+        vocab = "free-text" if free_text else "grammar (wake words + triggers)"
+        print(
+            f"Config: {args.config}  wake_words={eff_wake}  "
+            f"triggers={len(app_config.triggers)}  recognizer={vocab}"
+        )
+
     if args.gen_corpus:
-        print(f"Generating corpus in {corpus_dir} …")
-        generate_corpus(corpus_dir, args.piper_bin, args.piper_voice, force=args.force)
+        print(f"Generating corpus in {corpus_dir} for wake words {eff_wake} …")
+        generate_corpus(
+            corpus_dir,
+            args.piper_bin,
+            args.piper_voice,
+            force=args.force,
+            positive_texts=eff_wake,
+        )
+
+    if args.add_negatives:
+        add_negatives(corpus_dir, Path(args.add_negatives))
 
     if args.sweep:
         sweep_rows = []
         confidences = [0.5, 0.65, 0.75, 0.85]
         modes = ["first", "min", "mean"]
         rms_vals = [0.0, 0.01, 0.02, 0.04]
+        # 0.5 fires on one wake-phrase word, 1.0 requires the full phrase — the
+        # main lever once confidence/rms have plateaued.
+        wmt_vals = [0.5, 1.0]
         print(
-            f"Running sweep ({len(confidences)} × {len(modes)} × {len(rms_vals)} = "
-            f"{len(confidences) * len(modes) * len(rms_vals)} configs) …"
+            f"Running sweep ({len(confidences)} × {len(modes)} × {len(rms_vals)} × "
+            f"{len(wmt_vals)} = "
+            f"{len(confidences) * len(modes) * len(rms_vals) * len(wmt_vals)} configs) …"
         )
         for conf in confidences:
             for mode in modes:
                 for rms in rms_vals:
-                    ec = EvalConfig(
-                        vosk_model_path=args.vosk_model,
-                        confidence=conf,
-                        confidence_mode=mode,
-                        rms_threshold=rms,
-                        wake_words=args.wake_words,
-                    )
-                    res = run_eval(corpus_dir, ec)
-                    label = f"conf={conf} mode={mode} rms={rms}"
-                    sweep_rows.append((ec, res, label))
+                    for wmt in wmt_vals:
+                        ec = EvalConfig(
+                            vosk_model_path=args.vosk_model,
+                            confidence=conf,
+                            confidence_mode=mode,
+                            rms_threshold=rms,
+                            wake_match_threshold=wmt,
+                            wake_words=eff_wake,
+                            grammar=grammar,
+                            free_text=free_text,
+                        )
+                        res = run_eval(corpus_dir, ec)
+                        label = f"conf={conf} mode={mode} rms={rms} wmt={wmt}"
+                        sweep_rows.append((ec, res, label))
         print_sweep_table(sweep_rows)
         return
 
     ec = EvalConfig(
         vosk_model_path=args.vosk_model,
-        confidence=args.confidence,
-        confidence_mode=args.confidence_mode,
-        rms_threshold=args.rms_threshold,
-        wake_words=args.wake_words,
+        confidence=eff_conf,
+        confidence_mode=eff_mode,
+        rms_threshold=eff_rms,
+        wake_match_threshold=eff_wmt,
+        wake_words=eff_wake,
+        grammar=grammar,
+        free_text=free_text,
     )
-    result = run_eval(corpus_dir, ec, wake_word_strs=args.wake_words)
+    result = run_eval(corpus_dir, ec, wake_word_strs=eff_wake)
     print_report(ec, result)
 
     if args.save_baseline:

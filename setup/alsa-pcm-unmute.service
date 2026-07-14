@@ -1,31 +1,20 @@
 [Unit]
-Description=Restore NewPie PCM volume and routing after PipeWire fully initialises
+Description=Restore USB audio profile, routing and mixer levels after PipeWire initialises
 After=wireplumber.service
-Requires=wireplumber.service
 
 [Service]
 Type=oneshot
-# Wait for NewPie to appear, set routing, then keep correcting PCM for 20s to
-# catch WirePlumber's late ACP profile init which resets PCM to 0 after we set it.
-ExecStart=/bin/bash -c '\
-  for i in $(seq 1 30); do \
-    if wpctl status 2>/dev/null | grep -q "NewPie"; then \
-      break; \
-    fi; \
-    sleep 1; \
-  done; \
-  pactl set-card-profile alsa_card.usb-0a12_NewPie_SABINESMICDFU-00 output:analog-stereo+input:analog-stereo 2>/dev/null || true; \
-  sleep 2; \
-  pw-metadata -n default 0 default.configured.audio.sink \
-    '"'"'{"name":"alsa_output.usb-0a12_NewPie_SABINESMICDFU-00.analog-stereo"}'"'"' "Spa:String:JSON"; \
-  pw-metadata -n default 0 default.configured.audio.source \
-    '"'"'{"name":"alsa_input.usb-0a12_NewPie_SABINESMICDFU-00.analog-stereo"}'"'"' "Spa:String:JSON"; \
-  for i in $(seq 1 10); do \
-    amixer -c 0 sset PCM 100%%; \
-    sleep 2; \
-  done'
-RemainAfterExit=yes
-TimeoutStartSec=55
+# Device-agnostic restore: waits for any USB audio card (NewPie, Yealink,
+# EMEET, ...), applies the persisted/best card profile, polls for the source
+# node (Bluetooth-dongle devices can take minutes to link after a reboot),
+# forces default routing via pw-metadata, and re-applies 100%/unmute to all
+# volume-capable ALSA mixer controls for 20 s to catch WirePlumber's late ACP
+# profile reset. Full logic lives in the script (installed by `task audio:setup`).
+ExecStart=%h/.local/bin/serena-usb-audio-restore
+# No RemainAfterExit: the unit must return to inactive after each run so the
+# udev SYSTEMD_USER_WANTS trigger (99-usb-audio-no-autosuspend.rules) can
+# start it again when the device is replugged mid-session.
+TimeoutStartSec=360
 
 [Install]
 WantedBy=default.target
