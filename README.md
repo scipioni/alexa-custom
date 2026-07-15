@@ -49,6 +49,17 @@ No subscription. No account. No "sorry, something went wrong" from a server acro
 > **User:** *Galileo, che ore sono?*
 > **Serena:** *Sono le 15 e 42.*
 
+### Speech models
+
+Serena ships pinned to Italian by default, but both the STT and TTS engines have ready-made models for English too:
+
+| | STT — [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) (Kroko Zipformer) | TTS — [Piper](https://github.com/rhasspy/piper) |
+|---|---|---|
+| 🇮🇹 Italian | [`it/kroko_64l`](https://huggingface.co/hudaiapa88/sherpa-stt-onnx/tree/main/it) | [`it_IT-paola-medium`](https://huggingface.co/rhasspy/piper-voices/tree/main/it/it_IT/paola/medium) |
+| 🇬🇧 English | [`en/kroko_64l`](https://huggingface.co/hudaiapa88/sherpa-stt-onnx/tree/main/en) | [`en_US-amy-medium`](https://huggingface.co/rhasspy/piper-voices/tree/main/en/en_US/amy/medium) |
+
+`serena-setup` downloads the Italian pair automatically; point `stt.model_path` / `tts.voice` at the English models above to run Serena in English instead.
+
 ---
 
 ## 🚀 Quick Start
