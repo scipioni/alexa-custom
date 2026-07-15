@@ -10,7 +10,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Python_3.13-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.13">
   <img src="https://img.shields.io/badge/Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux">
-  <img src="https://img.shields.io/badge/Vosk-blueviolet?style=for-the-badge" alt="Vosk">
+  <img src="https://img.shields.io/badge/sherpa--onnx-blueviolet?style=for-the-badge" alt="sherpa-onnx">
   <img src="https://img.shields.io/badge/Piper--TTS-success?style=for-the-badge" alt="Piper TTS">
   <img src="https://img.shields.io/badge/Home_Assistant-41BDF5?style=for-the-badge&logo=homeassistant&logoColor=white" alt="Home Assistant">
   <img src="https://img.shields.io/badge/Apache_2.0-D22128?style=for-the-badge&logo=apache&logoColor=white" alt="Apache 2.0">
@@ -24,7 +24,7 @@ You know the drill: you buy a smart speaker, and in return it ships every word s
 
 **Serena flips that deal.** Take a cheap Linux board (an Arduino Uno Q), plug in any USB speakerphone, and you get an Italian-speaking voice assistant where everything that matters happens **on the device**:
 
-- 👂 **Listening** — Vosk speech-to-text runs locally, always on, no audio ever leaves the room
+- 👂 **Listening** — sherpa-onnx speech-to-text runs locally, always on, no audio ever leaves the room
 - 🗣️ **Speaking** — Piper neural TTS synthesizes natural Italian voices offline
 - 🧠 **Understanding** — wake words and commands are matched with Italian phonetic fuzzy matching, in plain YAML you control
 - 🏠 **Acting** — lights, shutters, heating via MQTT and Home Assistant auto-discovery; shell commands; Telegram alerts; voice calls via LiveKit
@@ -37,7 +37,7 @@ No subscription. No account. No "sorry, something went wrong" from a server acro
 
 | | |
 |---|---|
-| 🧠 **Always-on local STT** | One free-vocabulary Vosk model transcribes continuously — wake word and command detection in a single pass, low latency. |
+| 🧠 **Always-on local STT** | One free-vocabulary sherpa-onnx model transcribes continuously — wake word and command detection in a single pass, low latency. |
 | ⚡ **One-breath commands** | *"Serena, accendi la luce"* — wake word and command in a single utterance, matched instantly. |
 | 🗣️ **Neural Italian TTS** | Piper speaks with natural intonation, fully offline, zero API fees. |
 | 🏠 **Home Assistant native** | Auto-registers via MQTT Discovery — point it at your broker and you're done. |
@@ -62,7 +62,7 @@ sudo apt install -y libgstreamer1.0-dev gstreamer1.0-plugins-bad gstreamer1.0-to
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e .[gstreamer]
 
-# 3. Download speech models (Vosk, Piper)
+# 3. Download speech models (sherpa-onnx, Piper)
 serena-setup
 
 # 4. Audio routing (run once)
