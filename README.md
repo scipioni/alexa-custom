@@ -1,7 +1,8 @@
-<div style="display: flex; align-items: center; justify-content: center; gap: 48px; flex-wrap: wrap;">
-  <h1 style="margin: 0; font-size: 4em; font-weight: 900; letter-spacing: -2px;"><span style="background: linear-gradient(135deg, #4ade80, #60a5fa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;">Serena</span></h1>
-  <img src="docs/logo_serena.png" alt="Serena" style="height: 120px;">
-</div>
+<p align="center">
+  <span style="font-size: 3.5em; font-weight: 900; letter-spacing: -2px; vertical-align: middle; background: linear-gradient(135deg, #4ade80, #60a5fa); -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;">Serena</span>
+  &nbsp;&nbsp;&nbsp;&nbsp;
+  <img src="docs/logo_serena.png" alt="Serena" height="120" align="middle">
+</p>
 
 <p align="center">
   <em>The voice assistant that answers to you — not to a data center.</em>
