@@ -67,7 +67,7 @@ Serena ships pinned to Italian by default, but both the STT and TTS engines have
 
 ```bash
 # 1. System dependencies (Debian 13)
-sudo apt install -y python3-venv pipewire pulseaudio-utils alsa-utils libportaudio2 task
+sudo apt install -y python3-venv pipewire pulseaudio-utils alsa-utils libportaudio2 task mosquitto-clients
 sudo apt install -y libgstreamer1.0-dev gstreamer1.0-plugins-bad gstreamer1.0-tools gstreamer1.0-pipewire python3-gst-1.0
 
 # 2. Python environment + install

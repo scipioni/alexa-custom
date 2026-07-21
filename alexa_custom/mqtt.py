@@ -151,28 +151,27 @@ class MQTTClient:
         """Listen for incoming MQTT messages."""
         if not self.client:
             return
-        async with self.client.messages() as messages:
-            async for message in messages:
-                topic = str(message.topic)
-                payload = (
-                    message.payload.decode()
-                    if isinstance(message.payload, bytes)
-                    else str(message.payload)
-                )
+        async for message in self.client.messages:
+            topic = str(message.topic)
+            payload = (
+                message.payload.decode()
+                if isinstance(message.payload, bytes)
+                else str(message.payload)
+            )
 
-                logger.debug(f"Received MQTT message on {topic}: {payload}")
+            logger.debug(f"Received MQTT message on {topic}: {payload}")
 
-                if self._on_command_callback:
-                    if topic.endswith("/tts/set"):
-                        await self._on_command_callback(
-                            {"type": "say", "params": {"text": payload}}
-                        )
-                    elif topic.endswith("/action/run"):
-                        try:
-                            action_data = json.loads(payload)
-                            await self._on_command_callback(action_data)
-                        except json.JSONDecodeError:
-                            logger.error(f"Invalid JSON action payload: {payload}")
+            if self._on_command_callback:
+                if topic.endswith("/tts/set"):
+                    await self._on_command_callback(
+                        {"type": "say", "params": {"text": payload}}
+                    )
+                elif topic.endswith("/action/run"):
+                    try:
+                        action_data = json.loads(payload)
+                        await self._on_command_callback(action_data)
+                    except json.JSONDecodeError:
+                        logger.error(f"Invalid JSON action payload: {payload}")
 
     async def publish(self, topic: str, payload: str, retain: bool = False) -> None:
         """Queue a message for publication, dropping the oldest on overflow."""

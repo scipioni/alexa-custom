@@ -330,6 +330,30 @@ def _recognition_loop(
         actions_config=config,
     )
 
+    async def _on_mqtt_command(action_data: dict) -> None:
+        # Runs on the MQTT client's own asyncio loop (the main loop), not
+        # dispatch_loop — dispatch_loop is only pumped via run_until_complete
+        # from inside this worker thread on a voice-trigger match, so
+        # scheduling onto it from another thread would sit unprocessed until
+        # the next voice trigger happens to run it. dispatch()/_run_action()
+        # are plain coroutines with no loop affinity, so awaiting them
+        # directly on the caller's loop is both simpler and race-free.
+        action_type = action_data.get("type")
+        if not action_type:
+            logger.warning("MQTT command missing 'type': %r", action_data)
+            return
+        _ctx.livekit_connected = livekit_connected_flag.is_set()
+        trigger = Trigger(
+            commands=[],
+            actions=[
+                ActionEntry(type=action_type, params=action_data.get("params") or {})
+            ],
+        )
+        await dispatch(trigger, _ctx, wake_word="", transcript="")
+
+    if mqtt_client:
+        mqtt_client.set_on_command(_on_mqtt_command)
+
     def woken() -> bool:
         return time.monotonic() < wake_deadline
 
