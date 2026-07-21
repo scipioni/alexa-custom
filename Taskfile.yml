@@ -230,9 +230,12 @@ tasks:
           sudo sed -i '/^# *it_IT.UTF-8/s/^# *//' /etc/locale.gen
           sudo locale-gen it_IT.UTF-8
           sudo timedatectl set-timezone Europe/Rome
+          # Disable GUI/desktop-oriented services not used by a headless voice assistant
+          sudo systemctl disable lightdm accounts-daemon blueman-mechanism ModemManager udisks2
           mkdir -p ~/.config/systemd/user
           cp setup/serena.service ~/.config/systemd/user/serena.service
           systemctl --user daemon-reload
+          systemctl --user disable mpris-proxy obex
           systemctl --user enable serena
         fi
       - |
