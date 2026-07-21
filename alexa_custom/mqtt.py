@@ -34,6 +34,7 @@ class MQTTClient:
         ) = None
         self._run_task: asyncio.Task | None = None
         self._stopping = False
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     def set_on_command(
         self, callback: Callable[[dict[str, Any]], Awaitable[None]]
@@ -43,6 +44,7 @@ class MQTTClient:
     async def run(self) -> None:
         """Background loop for MQTT connection and message processing."""
         self._run_task = asyncio.current_task()
+        self._loop = asyncio.get_running_loop()
         while not self._stopping:
             try:
                 async with aiomqtt.Client(hostname=self.host, port=self.port) as client:
@@ -58,6 +60,9 @@ class MQTTClient:
                     )
                     await client.subscribe(
                         f"{self.topic_prefix}/{self.node_id}/action/run"
+                    )
+                    await client.subscribe(
+                        f"{self.topic_prefix}/{self.node_id}/trigger/run"
                     )
 
                     # 3. Start publisher and subscriber tasks.
@@ -172,6 +177,8 @@ class MQTTClient:
                         await self._on_command_callback(action_data)
                     except json.JSONDecodeError:
                         logger.error(f"Invalid JSON action payload: {payload}")
+                elif topic.endswith("/trigger/run"):
+                    await self._on_command_callback({"command": payload})
 
     async def publish(self, topic: str, payload: str, retain: bool = False) -> None:
         """Queue a message for publication, dropping the oldest on overflow."""
@@ -221,9 +228,18 @@ class MQTTClient:
     ) -> None:
         """Thread-safe way to queue a message for publication."""
         if loop is None:
+            # Most callers run on a worker thread with no loop of its own, so
+            # asyncio.get_running_loop() only ever succeeds for a caller that
+            # happens to run on the MQTT client's own loop already — the
+            # common case is the opposite. Fall back to the loop run()
+            # actually executes on (captured when it started) before giving
+            # up, so callers don't all need to thread a loop reference
+            # through every layer just to reach this.
             try:
                 loop = asyncio.get_running_loop()
             except RuntimeError:
+                loop = self._loop
+            if loop is None:
                 logger.error("No running event loop found for threadsafe publish")
                 return
 

@@ -441,64 +441,60 @@ tasks:
           echo "mosquitto_pub/mosquitto_sub not found — install with: sudo apt-get install -y mosquitto-clients"
           exit 1
         fi
-        eval "$(PYTHONPATH={{.PYTHONPATH}} python3 -c '
-        import socket
-        import yaml
-        cfg = yaml.safe_load(open("conf/config.yaml")) or {}
-        mqtt = cfg.get("mqtt") or {}
-        if not mqtt.get("host"):
-            print("echo \"MQTT is not configured (no mqtt.host in conf/config.yaml)\"; exit 1")
-        else:
-            host = mqtt.get("host")
-            port = mqtt.get("port", 1883)
-            prefix = mqtt.get("topic_prefix", "alexa")
-            node_id = mqtt.get("node_id") or socket.gethostname()
-            print(f"HOST={host!r}")
-            print(f"PORT={port}")
-            print(f"TTS_TOPIC={prefix}/{node_id}/tts/set")
-            print(f"STATE_TOPIC={prefix}/{node_id}/state")
-        ')"
+        MQTT_BLOCK=$(awk '/^mqtt:/{flag=1; next} /^[^ ]/{flag=0} flag' conf/config.yaml)
+        HOST=$(echo "$MQTT_BLOCK" | grep -E '^\s*host:' | sed -E 's/^\s*host:\s*//; s/\s*#.*//; s/["'"'"']//g')
+        if [ -z "$HOST" ]; then
+          echo "MQTT is not configured (no mqtt.host in conf/config.yaml)"
+          exit 1
+        fi
+        PORT=$(echo "$MQTT_BLOCK" | grep -E '^\s*port:' | sed -E 's/^\s*port:\s*//; s/\s*#.*//; s/["'"'"']//g')
+        PREFIX=$(echo "$MQTT_BLOCK" | grep -E '^\s*topic_prefix:' | sed -E 's/^\s*topic_prefix:\s*//; s/\s*#.*//; s/["'"'"']//g')
+        NODE_ID=$(echo "$MQTT_BLOCK" | grep -E '^\s*node_id:' | sed -E 's/^\s*node_id:\s*//; s/\s*#.*//; s/["'"'"']//g')
+        PORT=${PORT:-1883}
+        PREFIX=${PREFIX:-alexa}
+        NODE_ID=${NODE_ID:-$(hostname)}
+        TTS_TOPIC="${PREFIX}/${NODE_ID}/tts/set"
+        STATE_TOPIC="${PREFIX}/${NODE_ID}/state"
         MSG={{.CLI_ARGS}}
         [ -z "$MSG" ] && MSG="il sistema funziona"
-        echo "Publishing to ${TTS_TOPIC}: ${MSG}"
         timeout 8 mosquitto_sub -h "$HOST" -p "$PORT" -t "$STATE_TOPIC" -v &
         sleep 1
+        echo "+ mosquitto_pub -h $HOST -p $PORT -t $TTS_TOPIC -m \"$MSG\""
         mosquitto_pub -h "$HOST" -p "$PORT" -t "$TTS_TOPIC" -m "$MSG"
         wait
         echo "Done — check 'journalctl --user -fu serena' for the TTS (Piper/...) log line to confirm it spoke."
 
-  mqtt:trigger-assistenza:
-    desc: 'Fire the "chiama assistenza" trigger via MQTT action/run (mirrors the "ask" action in conf/actions/user.yaml)'
+  mqtt:trigger:
+    desc: 'Fire a configured trigger from conf/actions/user.yaml by command phrase via MQTT trigger/run (task mqtt:trigger -- "chiama assistenza")'
     cmds:
       - |
         if ! command -v mosquitto_pub &>/dev/null || ! command -v mosquitto_sub &>/dev/null; then
           echo "mosquitto_pub/mosquitto_sub not found — install with: sudo apt-get install -y mosquitto-clients"
           exit 1
         fi
-        eval "$(PYTHONPATH={{.PYTHONPATH}} python3 -c '
-        import socket
-        import yaml
-        cfg = yaml.safe_load(open("conf/config.yaml")) or {}
-        mqtt = cfg.get("mqtt") or {}
-        if not mqtt.get("host"):
-            print("echo \"MQTT is not configured (no mqtt.host in conf/config.yaml)\"; exit 1")
-        else:
-            host = mqtt.get("host")
-            port = mqtt.get("port", 1883)
-            prefix = mqtt.get("topic_prefix", "alexa")
-            node_id = mqtt.get("node_id") or socket.gethostname()
-            print(f"HOST={host!r}")
-            print(f"PORT={port}")
-            print(f"ACTION_TOPIC={prefix}/{node_id}/action/run")
-            print(f"STATE_TOPIC={prefix}/{node_id}/state")
-        ')"
-        PAYLOAD='{"type": "ask", "params": {"text": "Vuoi chiamare assistenza ?"}}'
-        echo "Publishing to ${ACTION_TOPIC}: ${PAYLOAD}"
-        timeout 10 mosquitto_sub -h "$HOST" -p "$PORT" -t "$STATE_TOPIC" -v &
+        MQTT_BLOCK=$(awk '/^mqtt:/{flag=1; next} /^[^ ]/{flag=0} flag' conf/config.yaml)
+        HOST=$(echo "$MQTT_BLOCK" | grep -E '^\s*host:' | sed -E 's/^\s*host:\s*//; s/\s*#.*//; s/["'"'"']//g')
+        if [ -z "$HOST" ]; then
+          echo "MQTT is not configured (no mqtt.host in conf/config.yaml)"
+          exit 1
+        fi
+        PORT=$(echo "$MQTT_BLOCK" | grep -E '^\s*port:' | sed -E 's/^\s*port:\s*//; s/\s*#.*//; s/["'"'"']//g')
+        PREFIX=$(echo "$MQTT_BLOCK" | grep -E '^\s*topic_prefix:' | sed -E 's/^\s*topic_prefix:\s*//; s/\s*#.*//; s/["'"'"']//g')
+        NODE_ID=$(echo "$MQTT_BLOCK" | grep -E '^\s*node_id:' | sed -E 's/^\s*node_id:\s*//; s/\s*#.*//; s/["'"'"']//g')
+        PORT=${PORT:-1883}
+        PREFIX=${PREFIX:-alexa}
+        NODE_ID=${NODE_ID:-$(hostname)}
+        TRIGGER_TOPIC="${PREFIX}/${NODE_ID}/trigger/run"
+        STATE_TOPIC="${PREFIX}/${NODE_ID}/state"
+        COMMAND_TOPIC="${PREFIX}/${NODE_ID}/command"
+        PHRASE={{.CLI_ARGS}}
+        [ -z "$PHRASE" ] && PHRASE="chiama assistenza"
+        timeout 10 mosquitto_sub -h "$HOST" -p "$PORT" -t "$STATE_TOPIC" -t "$COMMAND_TOPIC" -v &
         sleep 1
-        mosquitto_pub -h "$HOST" -p "$PORT" -t "$ACTION_TOPIC" -m "$PAYLOAD"
+        echo "+ mosquitto_pub -h $HOST -p $PORT -t $TRIGGER_TOPIC -m \"$PHRASE\""
+        mosquitto_pub -h "$HOST" -p "$PORT" -t "$TRIGGER_TOPIC" -m "$PHRASE"
         wait
-        echo "Done — check 'journalctl --user -fu serena' to confirm the ask/livekit_join flow ran."
+        echo "Done — check 'journalctl --user -fu serena' to confirm the trigger's own actions ran."
 
   ha:setup:
     desc: Install Home Assistant Core venv and enable user service (takes 10–20 min on first install — aarch64 builds native wheels)

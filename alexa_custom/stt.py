@@ -332,31 +332,76 @@ def _recognition_loop(
         actions_config=config,
     )
 
-    # Actions triggered externally (MQTT action/run) must not run concurrently
-    # with this thread's own continuous capture — anything using listen_fn
-    # (e.g. "ask") reaches into the same VAD/STT backend object the
+    # Actions triggered externally (MQTT action/run, trigger/run) must not run
+    # concurrently with this thread's own continuous capture — anything using
+    # listen_fn (e.g. "ask") reaches into the same VAD/STT backend object the
     # recognition loop below is feeding audio into, and the two are not
     # reentrant: running both at once corrupts the backend's internal state
     # (observed as "RuntimeError: NULL input supplied for input h"). So
-    # external requests are queued here and actually dispatched from inside
-    # the main for-loop below, on this same thread, using the identical
+    # external requests are queued here as zero-arg jobs and actually run from
+    # inside the main for-loop below, on this same thread, using the same
     # dispatch_loop.run_until_complete() mechanism a matched voice trigger
     # uses — never from the MQTT callback's own (different) asyncio loop.
     _external_actions: queue.SimpleQueue = queue.SimpleQueue()
 
     async def _on_mqtt_command(action_data: dict) -> None:
-        action_type = action_data.get("type")
-        if not action_type:
-            logger.warning("MQTT command missing 'type': %r", action_data)
-            return
-        trigger = Trigger(
-            commands=[],
-            actions=[
-                ActionEntry(type=action_type, params=action_data.get("params") or {})
-            ],
-        )
         result_future: concurrent.futures.Future = concurrent.futures.Future()
-        _external_actions.put((trigger, result_future))
+
+        if "command" in action_data:
+            # trigger/run: match against conf/actions/user.yaml exactly like a
+            # real recognized transcript, so on_reply/on_else/patterns/tag all
+            # behave the same as when the phrase is actually spoken.
+            text = str(action_data.get("command") or "").strip()
+            if not text:
+                logger.warning("MQTT trigger/run: empty command")
+                return
+            trig, score = match_trigger_with_score(
+                text,
+                config.triggers,
+                algorithm=config.recognition.matching_algorithm,
+                threshold=config.recognition.matching_threshold,
+                min_word_overlap=config.recognition.min_word_overlap,
+            )
+            if trig is None:
+                logger.warning(
+                    "MQTT trigger/run: no trigger matched %r (score=%.0f)",
+                    text,
+                    score,
+                )
+                return
+
+            def _job_trigger(
+                trig=trig, text=text, score=score, fut=result_future
+            ) -> None:
+                try:
+                    _dispatch_trigger(trig, None, text, score)
+                finally:
+                    if not fut.done():
+                        fut.set_result(None)
+
+            job = _job_trigger
+        else:
+            action_type = action_data.get("type")
+            if not action_type:
+                logger.warning(
+                    "MQTT command missing 'type'/'command': %r", action_data
+                )
+                return
+            trigger = Trigger(
+                commands=[],
+                actions=[
+                    ActionEntry(
+                        type=action_type, params=action_data.get("params") or {}
+                    )
+                ],
+            )
+
+            def _job_action(trigger=trigger, fut=result_future) -> None:
+                _dispatch_external_action(trigger, fut)
+
+            job = _job_action
+
+        _external_actions.put(job)
         await asyncio.wrap_future(result_future)
 
     if mqtt_client:
@@ -538,10 +583,10 @@ def _recognition_loop(
 
         while True:
             try:
-                _ext_trigger, _ext_future = _external_actions.get_nowait()
+                _ext_job = _external_actions.get_nowait()
             except queue.Empty:
                 break
-            _dispatch_external_action(_ext_trigger, _ext_future)
+            _ext_job()
 
         if livekit_connected_flag.is_set():
             if not was_gated:
