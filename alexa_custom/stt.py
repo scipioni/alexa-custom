@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import concurrent.futures
 import json
 import logging
 import os
+import queue
 import subprocess
 import threading
 import time
@@ -330,26 +332,32 @@ def _recognition_loop(
         actions_config=config,
     )
 
+    # Actions triggered externally (MQTT action/run) must not run concurrently
+    # with this thread's own continuous capture — anything using listen_fn
+    # (e.g. "ask") reaches into the same VAD/STT backend object the
+    # recognition loop below is feeding audio into, and the two are not
+    # reentrant: running both at once corrupts the backend's internal state
+    # (observed as "RuntimeError: NULL input supplied for input h"). So
+    # external requests are queued here and actually dispatched from inside
+    # the main for-loop below, on this same thread, using the identical
+    # dispatch_loop.run_until_complete() mechanism a matched voice trigger
+    # uses — never from the MQTT callback's own (different) asyncio loop.
+    _external_actions: queue.SimpleQueue = queue.SimpleQueue()
+
     async def _on_mqtt_command(action_data: dict) -> None:
-        # Runs on the MQTT client's own asyncio loop (the main loop), not
-        # dispatch_loop — dispatch_loop is only pumped via run_until_complete
-        # from inside this worker thread on a voice-trigger match, so
-        # scheduling onto it from another thread would sit unprocessed until
-        # the next voice trigger happens to run it. dispatch()/_run_action()
-        # are plain coroutines with no loop affinity, so awaiting them
-        # directly on the caller's loop is both simpler and race-free.
         action_type = action_data.get("type")
         if not action_type:
             logger.warning("MQTT command missing 'type': %r", action_data)
             return
-        _ctx.livekit_connected = livekit_connected_flag.is_set()
         trigger = Trigger(
             commands=[],
             actions=[
                 ActionEntry(type=action_type, params=action_data.get("params") or {})
             ],
         )
-        await dispatch(trigger, _ctx, wake_word="", transcript="")
+        result_future: concurrent.futures.Future = concurrent.futures.Future()
+        _external_actions.put((trigger, result_future))
+        await asyncio.wrap_future(result_future)
 
     if mqtt_client:
         mqtt_client.set_on_command(_on_mqtt_command)
@@ -471,6 +479,46 @@ def _recognition_loop(
             on_stt_event("listening", {"wake_words": config.wake_words})
         _publish_state("idle")
 
+    def _dispatch_external_action(
+        trigger: Trigger, result_future: concurrent.futures.Future
+    ) -> None:
+        """Run an MQTT-triggered action on this thread, via dispatch_loop —
+        mirrors _dispatch_trigger's dispatch mechanics minus the voice-match
+        bookkeeping (trigger dump, matched event, command topic publish,
+        follow-up wake window), which don't apply to an external request."""
+        _timeout = config.recognition.dispatch_timeout
+
+        async def _dispatch_with_heartbeat() -> None:
+            async def _stamp_periodically() -> None:
+                while True:
+                    await asyncio.sleep(5.0)
+                    _stt_heartbeat[0] = time.monotonic()
+
+            stamp_task = asyncio.ensure_future(_stamp_periodically())
+            try:
+                await dispatch(trigger, _ctx, wake_word="", transcript="")
+            finally:
+                stamp_task.cancel()
+
+        try:
+            _ctx.livekit_connected = livekit_connected_flag.is_set()
+            dispatch_loop.run_until_complete(
+                asyncio.wait_for(_dispatch_with_heartbeat(), timeout=_timeout)
+            )
+        except Exception as e:
+            logger.error("MQTT-triggered action dispatch failed: %s", e)
+            if not result_future.done():
+                result_future.set_exception(e)
+        else:
+            if not result_future.done():
+                result_future.set_result(None)
+        finally:
+            _drain_pipe(proc)
+            backend.reset()
+            _reset_vad()
+            _dispatch_ended_at[0] = time.monotonic()
+            _publish_state("idle")
+
     if on_stt_event:
         on_stt_event("listening", {"wake_words": config.wake_words})
     _publish_state("idle")
@@ -487,6 +535,13 @@ def _recognition_loop(
         capture_stall_secs=config.stt.capture_stall_secs,
     ):
         _stt_heartbeat[0] = time.monotonic()
+
+        while True:
+            try:
+                _ext_trigger, _ext_future = _external_actions.get_nowait()
+            except queue.Empty:
+                break
+            _dispatch_external_action(_ext_trigger, _ext_future)
 
         if livekit_connected_flag.is_set():
             if not was_gated:
