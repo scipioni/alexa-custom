@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.1] - 2026-07-22
+
+### Added
+- add trigger/run topic to fire configured triggers by phrase
+
+### Fixed
+- recognize short "sì"/"no" ask replies on sherpa-onnx backend
+- stop leaking sherpa-onnx OnlineStream objects each utterance
+- explicitly bind mosquitto listener to 0.0.0.0
+- serialize MQTT-triggered actions with the recognition loop's own thread
+- wire up MQTT command dispatch and fix aiomqtt subscriber crash
+- final back 3mm and front 5mm
+- handle curated and missing unreleased sections in changelog
+
+
 ## 0.4.0 - 2026-07-14
 
 ### Added
