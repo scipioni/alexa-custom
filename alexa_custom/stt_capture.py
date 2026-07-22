@@ -33,11 +33,13 @@ logger = logging.getLogger(__name__)
 _VAD_SILENCE_MS = int(os.environ.get("STT_VAD_SILENCE_MS", "500"))
 
 # RMS energy floor (0..1) for the reply/command window's speech gate — see
-# SherpaOnnxSTT.set_rms_gate. On-board diagnostics showed real replies capture at
-# mic_peak ~0.07-0.12 while true silence sits at mic_mean ~0.005, so a floor here
-# feeds the decoder on a real answer yet ignores silence. Env-overridable for
-# quick field tuning without a code edit; no effect on the vosk backend.
-_REPLY_RMS_GATE = float(os.environ.get("STT_REPLY_RMS_GATE", "0.015"))
+# SherpaOnnxSTT.set_rms_gate. Feeds the decoder on a real answer yet ignores
+# silence/ambient noise. 0.03 chosen after the NewPie switched to the `normal`
+# profile lifted capture ~10x (replies now peak 0.3-0.45): at 0.015 the louder
+# ambient floor was fed continuously, producing spurious partials that deferred
+# the silence endpoint (a matched reply ran the full 5s window). Env-overridable
+# for quick field tuning without a code edit; no effect on the vosk backend.
+_REPLY_RMS_GATE = float(os.environ.get("STT_REPLY_RMS_GATE", "0.03"))
 
 
 def _make_listen_fn(
@@ -192,6 +194,18 @@ def _capture_loop(
     _mean_rms_sum = 0.0
     _rms_n = 0
     _ended_by = "timeout"
+    # Response-timing diagnostics: how long playback held the gate (when the user
+    # could first answer) and how much decodable energy landed in that answerable
+    # window afterward. Distinguishes "answered during playback → nothing in-window"
+    # (fed≈0) from "energy was there but the decoder dropped it" (fed large,
+    # speech NEVER). Frames at/above the reply RMS gate are the ones fed to the
+    # sherpa decoder — mirror that count here from the same per-frame RMS.
+    _play_peak_rms = (
+        0.0  # peak energy WHILE playback held the gate (echo + any barge-in)
+    )
+    _fed_frames = 0
+    _first_fed: float | None = None
+    _last_fed: float | None = None
     if _diag:
         logger.debug(
             "Reply window open: timeout=%.1fs start_after_playback=%s grammar=%s",
@@ -216,6 +230,13 @@ def _capture_loop(
 
         if is_playback_active():
             was_playing = True
+            if _diag:
+                # Energy captured while the gate is up (dropped, not decoded).
+                # Dominated by TTS echo, but a spike well above the echo floor
+                # here + an empty result is the "answered during playback" tell.
+                _play_peak_rms = max(
+                    _play_peak_rms, _rms_level(_downmix_to_mono(raw_data, channels))
+                )
             continue
 
         if was_playing:
@@ -230,6 +251,18 @@ def _capture_loop(
             last_activity = time.monotonic()
             got_speech = False
             _capture_begin = time.monotonic()
+            # Playback re-armed mid-window (e.g. clause-split TTS): the capture
+            # window restarts here, so reset the per-window diagnostic trackers
+            # too. Without this, first_fed/speech carry stale pre-arm times and
+            # render negative against the new _capture_begin. _play_peak_rms is
+            # intentionally kept (it accumulates across all playback periods).
+            _speech_first = None
+            _peak_rms = 0.0
+            _mean_rms_sum = 0.0
+            _rms_n = 0
+            _fed_frames = 0
+            _first_fed = None
+            _last_fed = None
             if _diag:
                 # An answer spoken during/right-at TTS end lands in `drained` and
                 # is lost — a large drain here alongside an empty finalize is the
@@ -248,6 +281,12 @@ def _capture_loop(
             _peak_rms = max(_peak_rms, _rms)
             _mean_rms_sum += _rms
             _rms_n += 1
+            if _rms >= _REPLY_RMS_GATE:
+                _now = time.monotonic()
+                _fed_frames += 1
+                if _first_fed is None:
+                    _first_fed = _now
+                _last_fed = _now
         if on_stt_event:
             on_stt_event("level", {"mic": _rms})
 
@@ -344,19 +383,40 @@ def _capture_loop(
             if _speech_first is not None
             else "NEVER"
         )
-        # raw=finalize() output (what the backend actually decoded) vs result=the
-        # joined transcript handed to the matcher. speech=NEVER + empty/punctuation
-        # raw ⇒ nothing reached the encoder (VAD gate or silence); speech seen but
-        # junk raw ⇒ mis-transcription; large early drain (logged above) + NEVER ⇒
-        # answered too early.
+        _armed_after = (_capture_begin - _t_start) * 1000  # playback-gate hold
+        _first_fed_at = (
+            f"{(_first_fed - _capture_begin) * 1000:.0f}ms"
+            if _first_fed is not None
+            else "-"
+        )
+        _last_fed_at = (
+            f"{(_last_fed - _capture_begin) * 1000:.0f}ms"
+            if _last_fed is not None
+            else "-"
+        )
+        # Interpreting a failed ("" / punctuation raw) window:
+        #  fed≈0            → no decodable energy after the gate opened → the
+        #                     answer landed during playback (barge-in) or wasn't
+        #                     spoken. Cross-check play_peak: a spike there means
+        #                     you answered while the question was still playing.
+        #  fed large + speech NEVER → real energy reached the decoder but it
+        #                     produced nothing → decode/segmentation issue.
+        #  armed_after      → ms the playback gate held before answering was
+        #                     possible; anything said before this was discarded.
         logger.debug(
-            "Reply window done: ended=%s elapsed=%.1fs speech@%s "
-            "mic_peak=%.3f mic_mean=%.3f raw=%r result=%r",
+            "Reply window done: ended=%s elapsed=%.1fs armed_after=%.0fms "
+            "speech@%s fed=%d first_fed@%s last_fed@%s "
+            "mic_peak=%.3f mic_mean=%.3f play_peak=%.3f raw=%r result=%r",
             _ended_by,
             time.monotonic() - _capture_begin,
+            _armed_after,
             _speech_at,
+            _fed_frames,
+            _first_fed_at,
+            _last_fed_at,
             _peak_rms,
             _mean_rms,
+            _play_peak_rms,
             final_text,
             result,
         )

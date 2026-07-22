@@ -260,6 +260,12 @@ class PiperTTS(TTSBackend):
         """Stream synthesis chunks to paplay stdin sentence-by-sentence."""
         samplerate: int | None = None
         proc: subprocess.Popen | None = None
+        # Playback-timing diagnostics: how long the mic gate is held vs the actual
+        # audio duration. A large paplay_wall - audio gap is dead-time in which a
+        # fast reply is discarded (the ask-reply barge-in investigation).
+        _diag = logger.isEnabledFor(logging.DEBUG)
+        _t_gate_set = 0.0
+        _samples_written = 0
 
         try:
             for arr, chunk_rate in self._synthesize(text):
@@ -267,6 +273,7 @@ class PiperTTS(TTSBackend):
                     samplerate = chunk_rate
 
                 if proc is None:
+                    _t_gate_set = time.monotonic()
                     proc = subprocess.Popen(
                         [
                             paplay,
@@ -293,6 +300,7 @@ class PiperTTS(TTSBackend):
                 scaled_arr = np.clip(arr * volume, -32768, 32767).astype(np.int16)
                 proc.stdin.write(scaled_arr.tobytes())
                 n = len(scaled_arr)
+                _samples_written += n
                 if n:
                     # Compute in float64: norm() on int16 squares samples in
                     # int16 and overflows (e.g. 32000² wraps), giving garbage.
@@ -314,6 +322,17 @@ class PiperTTS(TTSBackend):
                 )
                 proc.kill()
                 proc.wait()
+            if _diag and samplerate:
+                _wall = time.monotonic() - _t_gate_set
+                _audio = _samples_written / samplerate + self._preroll_ms / 1000.0
+                logger.debug(
+                    "TTS playback: audio=%.2fs paplay_wall=%.2fs overhead=%.2fs "
+                    "(paplay drain/latency); +post_playback=%dms held after",
+                    _audio,
+                    _wall,
+                    _wall - _audio,
+                    get_post_playback_ms(),
+                )
             post_ms = get_post_playback_ms()
             if post_ms > 0:
                 time.sleep(post_ms / 1000.0)
