@@ -285,6 +285,20 @@ class TestClientUtils(unittest.TestCase):
         assert "liveKitUrl=http%3A%2F%2Ftest.url" in url
         assert "token=" in url
 
+    @patch.dict(
+        os.environ,
+        {
+            "LIVEKIT_API_KEY": "test_key",
+            "LIVEKIT_API_SECRET": "test_secret",
+            "LIVEKIT_ROOM": "test_room",
+            "LIVEKIT_URL": "http://test.url",
+            "LIVEKIT_MEET_URL": "https://meet.example.com/",
+        },
+    )
+    def test_browser_join_url_custom_meet_base(self):
+        url = browser_join_url("test-user")
+        assert url.startswith("https://meet.example.com/custom/?")
+
 
 class TestClientCLI(unittest.TestCase):
     @patch("alexa_custom.client.ensure_setup")

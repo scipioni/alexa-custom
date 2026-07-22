@@ -330,6 +330,7 @@ class LiveKitSecretsConfig:
     api_key: str = ""
     api_secret: str = ""
     room: str = ""
+    meet_url: str = ""
 
 
 @dataclass
@@ -1096,6 +1097,7 @@ def load_secrets(path: str | Path = "conf/secrets.yaml") -> SecretsConfig:
         api_key=str(lk_raw.get("api_key", "")),
         api_secret=str(lk_raw.get("api_secret", "")),
         room=str(lk_raw.get("room", "")),
+        meet_url=str(lk_raw.get("meet_url", "")),
     )
     tg_raw = raw.get("telegram") or {}
     tg = TelegramSecretsConfig(
@@ -1131,6 +1133,9 @@ def load_secrets(path: str | Path = "conf/secrets.yaml") -> SecretsConfig:
     if lk.room:
         os.environ["LIVEKIT_ROOM"] = lk.room
         env_updates.append("LIVEKIT_ROOM")
+    if lk.meet_url:
+        os.environ["LIVEKIT_MEET_URL"] = lk.meet_url
+        env_updates.append("LIVEKIT_MEET_URL")
     if tg.bot_token:
         os.environ["TELEGRAM_BOT_TOKEN"] = tg.bot_token
         env_updates.append("TELEGRAM_BOT_TOKEN")

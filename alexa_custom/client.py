@@ -103,14 +103,19 @@ def make_browser_token(identity: str = "browser-user") -> str:
 
 
 def browser_join_url(identity: str = "browser-user") -> str:
-    """Return the meet.livekit.io URL a browser can open to join the same room."""
+    """Return the meet URL a browser can open to join the same room.
+
+    Defaults to meet.livekit.io; override with LIVEKIT_MEET_URL
+    (conf/secrets.yaml -> livekit.meet_url) for a self-hosted meet frontend.
+    """
     import urllib.parse
 
     token = make_browser_token(identity)
     room_url = require_env("LIVEKIT_URL")
     require_env("LIVEKIT_ROOM")
+    meet_base = os.environ.get("LIVEKIT_MEET_URL", "").strip().rstrip("/") or "https://meet.livekit.io"
     params = urllib.parse.urlencode({"liveKitUrl": room_url, "token": token})
-    return f"https://meet.livekit.io/custom/?{params}"
+    return f"{meet_base}/custom/?{params}"
 
 
 class LiveKitSessionManager:

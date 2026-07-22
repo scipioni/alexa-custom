@@ -29,6 +29,9 @@ livekit:
   api_key: YOUR_KEY
   api_secret: YOUR_SECRET
   room: your-room
+  # meet_url: https://meet.livekit.io  # optional — base URL for the browser join
+  #                                    # link (self-hosted meet frontend); defaults
+  #                                    # to meet.livekit.io if omitted
 
 telegram:
   bot_token: "123456:TOKEN"
