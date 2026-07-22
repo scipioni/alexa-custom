@@ -273,20 +273,28 @@ class SherpaOnnxSTT(STTBackend):
                 self._sample_rate,
                 np.zeros(self._tail_remaining, dtype=np.float32),
             )
-        self._stream.input_finished()
         while self._recognizer.is_ready(self._stream):
             self._recognizer.decode_stream(self._stream)
         text = self._recognizer.get_result(self._stream).strip()
-        # A finished OnlineStream must never be fed again (sherpa-onnx can
-        # abort), and not every caller resets afterwards — stt_capture's
-        # window finalizes and hands the same backend straight back to the
-        # always-on loop. Self-reset so the contract is safe by construction;
-        # stt.py's own reset-after-finalize becomes a harmless no-op repeat.
+        # Not every caller resets afterwards — stt_capture's window finalizes
+        # and hands the same backend straight back to the always-on loop.
+        # Self-reset so the contract is safe by construction; stt.py's own
+        # reset-after-finalize becomes a harmless no-op repeat.
         self.reset()
         return text
 
     def reset(self) -> None:
-        self._stream = self._recognizer.create_stream()
+        # Reuse the same OnlineStream via the recognizer's own reset() rather
+        # than create_stream()+input_finished(): sherpa-onnx never frees a
+        # stream's underlying buffers when it is dropped and replaced (see
+        # k2-fsa/sherpa-onnx#2265, #1939, #309) — recreating one per
+        # utterance leaked ~700MB/hour and eventually got the process OOM
+        # killed. input_finished() also permanently marks a stream unfeedable
+        # (its own feature extractor's finished flag is never cleared by
+        # Reset()), which is why the old code had to discard it. reset() is
+        # the library's documented mechanism for reusing one stream across
+        # utterance boundaries in a continuous loop like this one.
+        self._recognizer.reset(self._stream)
         # Clear Silero's trigger/hangover state too — a reset during TTS-echo
         # drain must not leave the gate latched open on stale audio.
         self._vad.reset()

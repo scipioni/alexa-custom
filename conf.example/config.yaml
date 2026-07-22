@@ -228,7 +228,7 @@ llm:
 # mqtt:
 #   host: 127.0.0.1        # broker hostname; required to enable MQTT
 #   port: 1883
-#   topic_prefix: alexa
+#   topic_prefix: serena
 #   node_id: living_room   # defaults to system hostname
 #   queue_max: 200         # max queued outgoing messages while broker is unreachable
 
