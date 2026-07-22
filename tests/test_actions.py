@@ -1110,3 +1110,76 @@ class TestActionErrorNotification:
         srv.on_stt_event("action_error", {"action": "mqtt_publish", "message": "boom"})
 
         assert ("toast", {"message": "boom", "level": "error"}) in sent
+
+
+# ── match_short_reply_fallback() ─────────────────────────────────────────────
+
+
+class TestShortReplyFallback:
+    """The closed-set rescue for short 'sì'/'no' answers a free-vocabulary
+    backend (sherpa-onnx) mis-transcribes and the strict matcher scores 0."""
+
+    def _yes_no(self):
+        yes = Trigger(
+            commands=["si", "sì", "va bene", "certo", "ok", "dai"],
+            phrase="si",
+            actions=[],
+        )
+        no = Trigger(commands=["no", "no no", "annulla"], phrase="no", actions=[])
+        return [yes, no]
+
+    def test_exact_yes(self):
+        from alexa_custom.actions import match_short_reply_fallback
+
+        trig, score = match_short_reply_fallback("si", self._yes_no())
+        assert trig is not None and trig.phrase == "si"
+        assert score == 100.0
+
+    def test_exact_no(self):
+        from alexa_custom.actions import match_short_reply_fallback
+
+        trig, _ = match_short_reply_fallback("no", self._yes_no())
+        assert trig is not None and trig.phrase == "no"
+
+    @pytest.mark.parametrize("heard", ["se", "sei"])
+    def test_near_miss_yes(self, heard):
+        # sherpa's typical mis-transcriptions of "sì" resolve to the yes group.
+        from alexa_custom.actions import match_short_reply_fallback
+
+        trig, _ = match_short_reply_fallback(heard, self._yes_no())
+        assert trig is not None and trig.phrase == "si", f"{heard!r} should be yes"
+
+    def test_near_miss_no(self):
+        from alexa_custom.actions import match_short_reply_fallback
+
+        trig, _ = match_short_reply_fallback("non", self._yes_no())
+        assert trig is not None and trig.phrase == "no"
+
+    def test_short_word_with_trailing_filler(self):
+        # Free-vocab capture often appends a stray word before the endpoint fires.
+        from alexa_custom.actions import match_short_reply_fallback
+
+        trig, _ = match_short_reply_fallback("sì grazie", self._yes_no())
+        assert trig is not None and trig.phrase == "si"
+
+    def test_ambiguous_falls_through(self):
+        # "so" is equidistant from "sì" and "no" — do not guess; let on_else run.
+        from alexa_custom.actions import match_short_reply_fallback
+
+        trig, _ = match_short_reply_fallback("so", self._yes_no())
+        assert trig is None
+
+    def test_unrelated_word_rejected(self):
+        from alexa_custom.actions import match_short_reply_fallback
+
+        trig, _ = match_short_reply_fallback("accendi la luce", self._yes_no())
+        assert trig is None
+
+    def test_long_only_reply_not_loosened(self):
+        # A group with no short phrase is left to the strict matcher/threshold —
+        # the fallback must never rescue multi-word replies.
+        from alexa_custom.actions import match_short_reply_fallback
+
+        triggers = [Trigger(commands=["chiama"], phrase="chiama", actions=[])]
+        trig, _ = match_short_reply_fallback("chiamare", triggers)
+        assert trig is None

@@ -107,9 +107,13 @@ stt:
   # mechanism — that's still vad_silence_ms/fast_vad_ms above). NOT part of
   # the backend-reload key: changing these takes effect on the next
   # model_path/num_threads change or daemon restart, not immediately.
-  # sherpa_vad_threshold: 0.5       # Silero speech-probability threshold
-  # sherpa_vad_min_speech_ms: 100   # onset debounce (sherpa-onnx's own 250ms
-  #   default misses short commands like "accendi le luci" — see docs/asr-plan.md)
+  sherpa_vad_threshold: 0.35        # Silero speech-probability threshold. Lowered
+  #   from 0.5 so quiet monosyllabic replies ("sì"/"no" in ask windows) still trip
+  #   the VAD gate and reach the Zipformer encoder — at 0.5 a short/quiet answer
+  #   could fail to flag speech, leaving finalize() empty and forcing on_else.
+  sherpa_vad_min_speech_ms: 60      # onset debounce (sherpa-onnx's own 250ms
+  #   default misses short commands like "accendi le luci" — see docs/asr-plan.md).
+  #   Lowered from 100 to 60 so single-syllable "sì"/"no" clear the onset debounce.
   # sherpa_vad_min_silence_ms: 400  # internal VAD-gate hangover before the
   #   CPU-saving gate closes
   # flush_ms: 300            # audio discarded after wake beep (absorbs speaker echo)

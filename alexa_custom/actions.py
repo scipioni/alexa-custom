@@ -364,6 +364,72 @@ def match_trigger_with_score(
     return None, best_score
 
 
+# Closed-set reply fallback (ask windows only) — floor a candidate must clear and
+# the margin by which it must beat the runner-up group. Deliberately permissive
+# because the ask reply is a tiny CLOSED set with an on_else safety net, so the
+# decision is "which of these two-or-three answers is nearest?", not "is this a
+# command at all?". A 2-char answer with a single-phoneme STT error scores 50
+# (e.g. "se"→"si"), which the always-on matcher's <4-char exact rule floors to 0.
+_REPLY_FALLBACK_FLOOR = 50.0
+_REPLY_FALLBACK_MARGIN = 20.0
+
+
+def match_short_reply_fallback(
+    transcript: str,
+    triggers: list[Trigger],
+    algorithm: str = "levenshtein",
+) -> tuple[Trigger | None, float]:
+    """Rescue a short ask reply the strict matcher dropped.
+
+    On a free-vocabulary backend (sherpa-onnx) the reply grammar bias is
+    discarded (see stt_capture.capture_transcript), so a monosyllabic "sì"/"no"
+    is transcribed phonetically-near but not exact ("se", "sei", "non", "ho").
+    match_trigger_with_score then scores it 0 via its <4-char exact-word rule.
+
+    This fallback classifies the transcript against the CLOSED on_reply set by
+    nearest phonetic neighbour, but ONLY through each group's short phrases
+    (phonetic length < 4). Longer phrases are left entirely to the strict matcher
+    and its configured threshold, so this never loosens matching for multi-word
+    replies. A candidate wins only if it clears _REPLY_FALLBACK_FLOOR *and* beats
+    the runner-up group by _REPLY_FALLBACK_MARGIN — ambiguous cases (e.g. "so",
+    equidistant from "sì" and "no") fall through to on_else rather than guess.
+
+    Intended as a fallback after match_trigger_with_score returns no match.
+    """
+    t_word_phons = [italian_phonetic(w) for w in transcript.split()]
+    t_word_phons = [w for w in t_word_phons if w]
+    if not t_word_phons:
+        return None, 0.0
+
+    scored: list[tuple[float, Trigger]] = []
+    for trigger in triggers:
+        best_p = 0.0
+        has_short = False
+        for phrase in _trigger_phrases(trigger):
+            p_phon = italian_phonetic(phrase)
+            if len(p_phon) >= 4 or not p_phon:
+                continue  # long phrases stay the strict matcher's responsibility
+            has_short = True
+            best_p = max(
+                [best_p]
+                + [get_similarity_score(p_phon, tw, algorithm) for tw in t_word_phons]
+            )
+        if has_short:
+            scored.append((best_p, trigger))
+
+    if not scored:
+        return None, 0.0
+
+    scored.sort(key=lambda s: s[0], reverse=True)
+    best_score, best_trigger = scored[0]
+    runner_up = scored[1][0] if len(scored) > 1 else 0.0
+    if best_score >= _REPLY_FALLBACK_FLOOR and (best_score - runner_up) >= (
+        _REPLY_FALLBACK_MARGIN
+    ):
+        return best_trigger, best_score
+    return None, best_score
+
+
 def match_trigger(
     transcript: str,
     triggers: list[Trigger],
@@ -598,6 +664,23 @@ async def handle_ask(
             threshold=threshold,
             algorithm=algo,
         )
+        if reply_trigger is None:
+            # Free-vocabulary backends (sherpa-onnx) get no reply grammar bias, so
+            # short "sì"/"no" answers arrive phonetically-near but not exact and
+            # the strict matcher's <4-char exact rule scores them 0. Rescue them by
+            # nearest-neighbour over the closed on_reply set (short phrases only).
+            fb_trigger, fb_score = match_short_reply_fallback(
+                transcript, action.on_reply, algorithm=algo
+            )
+            if fb_trigger is not None:
+                logger.info(
+                    "Reply closed-set fallback matched '%s' (score=%.0f) "
+                    "after strict miss on %r",
+                    fb_trigger.phrase,
+                    fb_score,
+                    transcript,
+                )
+                reply_trigger, reply_score = fb_trigger, fb_score
         if reply_trigger:
             logger.info(f"Matched reply trigger: '{reply_trigger.phrase}'")
             if on_stt_event:
