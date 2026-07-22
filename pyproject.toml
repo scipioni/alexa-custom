@@ -78,7 +78,6 @@ calibrate = [
 
 [dependency-groups]
 dev = [
-    "headroom-ai[mcp,proxy]>=0.20.15",
     "pytest>=9.0.3",
     "pytest-asyncio>=1.4.0",
     "pyright>=1.1.390",

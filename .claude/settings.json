@@ -1,9 +1,5 @@
 {
   "mcpServers": {
-    "headroom": {
-      "command": "headroom",
-      "args": ["mcp", "serve"]
-    },
     "serena-calibrate": {
       "command": "uv",
       "args": ["run", "--active", "--extra", "calibrate", "--extra", "gstreamer", "serena-calibrate-mcp"],

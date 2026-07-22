@@ -296,7 +296,7 @@ kernel/             kernel build scripts/configs for the board
 setup/              systemd units, udev rules, usb-audio-restore.sh
 tests/eval/         corpus.yaml — labelled matching corpus (task eval regression gate)
 .claude/
-  settings.json     MCP server registration (serena-calibrate, headroom)
+  settings.json     MCP server registration (serena-calibrate)
   skills/           agent skills (calibrate-gstreamer, …)
 ```
 
