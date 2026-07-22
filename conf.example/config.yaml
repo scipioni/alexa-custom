@@ -107,15 +107,28 @@ stt:
   # mechanism — that's still vad_silence_ms/fast_vad_ms above). NOT part of
   # the backend-reload key: changing these takes effect on the next
   # model_path/num_threads change or daemon restart, not immediately.
-  sherpa_vad_threshold: 0.35        # Silero speech-probability threshold. Lowered
+  sherpa_vad_threshold: 0.25        # Silero speech-probability threshold. Lowered
   #   from 0.5 so quiet monosyllabic replies ("sì"/"no" in ask windows) still trip
-  #   the VAD gate and reach the Zipformer encoder — at 0.5 a short/quiet answer
-  #   could fail to flag speech, leaving finalize() empty and forcing on_else.
-  sherpa_vad_min_speech_ms: 60      # onset debounce (sherpa-onnx's own 250ms
+  #   the VAD gate and reach the Zipformer encoder. An e2e sweep on synthesized
+  #   "sì"/"no" showed 0.5 misses "sì" entirely (its fricative /s/ onset has low
+  #   speech-probability) and 0.35 is marginal (drops shorter/quieter clips);
+  #   0.25 recognized every clip. Trade-off: the gate opens more readily on
+  #   background noise (more encoder runs on non-speech) — bounded by the closed
+  #   reply set + on_else and the phonetic match on the always-on wake path.
+  sherpa_vad_min_speech_ms: 40      # onset debounce (sherpa-onnx's own 250ms
   #   default misses short commands like "accendi le luci" — see docs/asr-plan.md).
-  #   Lowered from 100 to 60 so single-syllable "sì"/"no" clear the onset debounce.
+  #   Lowered to 40 so single-syllable "sì"/"no" (~200ms voiced) clear the debounce.
   # sherpa_vad_min_silence_ms: 400  # internal VAD-gate hangover before the
   #   CPU-saving gate closes
+  sherpa_decoding_method: modified_beam_search  # Zipformer decoding. Beam search
+  #   (not the library's greedy_search default) because reply-window diagnostics
+  #   showed greedy collapses ~200ms monosyllabic replies ("sì") to bare '.'
+  #   ~half the time — the audio reaches the encoder fine (VAD confirmed firing),
+  #   greedy just drops the short word. Beam search keeps alternatives and
+  #   recovers it. Set greedy_search to revert. NOT in the backend-reload key —
+  #   needs a daemon restart to take effect.
+  sherpa_max_active_paths: 4        # beam width (higher = better short-word recall,
+  #   more CPU). Only used by modified_beam_search.
   # flush_ms: 300            # audio discarded after wake beep (absorbs speaker echo)
   # mono_capture: false      # force parec to capture mono (--channels=1) so PipeWire
   #   handles stereo→mono in the driver. Eliminates the Python-side max-abs downmix.

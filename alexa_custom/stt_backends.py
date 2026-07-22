@@ -62,6 +62,23 @@ class STTBackend(ABC):
         """Force-complete the current utterance and return recognized text."""
         return self.text()
 
+    def set_rms_gate(self, floor: float | None) -> None:
+        """Swap the internal speech gate for a simple RMS energy gate.
+
+        ``floor`` is an RMS threshold in [0,1] (same scale as stt_gating._rms_level):
+        while set, frames at/above it are treated as speech and fed to the decoder,
+        below it as silence. ``None`` restores the backend's default gate.
+
+        Only SherpaOnnxSTT has an internal gate (its CPU-saving Silero VAD); for
+        other backends this is a no-op. Used during bounded reply/command captures
+        (stt_capture): Silero's neural classifier can reject a quiet-but-real answer
+        (e.g. a nasal "no" thinned by a highpass filter) even when the mic clearly
+        captured energy — an energy gate feeds that audio to the decoder while still
+        ignoring true silence, so it neither drops the answer nor feeds noise like a
+        blind bypass would. The always-on loop keeps Silero (floor stays None).
+        """
+        return None
+
 
 class VoskSTT(STTBackend):
     def __init__(
@@ -176,6 +193,8 @@ class SherpaOnnxSTT(STTBackend):
         vad_min_speech_ms: int = 100,
         vad_min_silence_ms: int = 400,
         sample_rate: int = _SHERPA_ONNX_SAMPLE_RATE,
+        decoding_method: str = "modified_beam_search",
+        max_active_paths: int = 4,
     ):
         import sherpa_onnx
 
@@ -190,8 +209,14 @@ class SherpaOnnxSTT(STTBackend):
             num_threads=num_threads,
             sample_rate=sample_rate,
             feature_dim=80,
-            decoding_method="greedy_search",
+            decoding_method=decoding_method,
+            max_active_paths=max_active_paths,
             provider="cpu",
+        )
+        logger.info(
+            "sherpa-onnx decoding: method=%s max_active_paths=%d",
+            decoding_method,
+            max_active_paths,
         )
 
         vad_config = sherpa_onnx.VadModelConfig()
@@ -215,6 +240,22 @@ class SherpaOnnxSTT(STTBackend):
         # Silero flips off (Zipformer's right-context lookahead). Refilled on
         # every speech chunk; finalize() zero-pads whatever remains unfed.
         self._tail_remaining = 0
+        # When set (reply-window capture), an RMS energy threshold replaces the
+        # Silero gate below — see set_rms_gate().
+        self._rms_gate_floor: float | None = None
+
+    def set_rms_gate(self, floor: float | None) -> None:
+        """Replace the Silero speech gate with an RMS energy gate.
+
+        Silero's neural classifier can reject a quiet-but-real reply (a nasal "no"
+        thinned by the 220 Hz HPF stays below its speech threshold even at mic_peak
+        ~0.12), silently dropping the answer. An energy gate feeds those frames to
+        the beam-search decoder while still ignoring true silence — unlike a blind
+        bypass, which feeds pre-speech noise and hallucinates leading tokens. The
+        shared pre-roll/tail machinery below is reused as-is; only the ``speaking``
+        decision changes. stt_capture sets this for the window and clears it after.
+        """
+        self._rms_gate_floor = floor
 
     def accept_waveform(self, data: bytes) -> bool:
         data = data[: len(data) & ~1]  # np.int16 needs an even byte count
@@ -222,11 +263,16 @@ class SherpaOnnxSTT(STTBackend):
             return False
         samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32768.0
 
-        self._vad.accept_waveform(samples)
-        while not self._vad.empty():
-            self._vad.pop()
-
-        speaking = self._vad.is_speech_detected()
+        if self._rms_gate_floor is not None:
+            # Reply-window energy gate (see set_rms_gate): a real reply that
+            # clears the floor feeds the decoder even when Silero would veto it.
+            rms = float(np.sqrt(np.mean(samples**2))) if samples.size else 0.0
+            speaking = rms >= self._rms_gate_floor
+        else:
+            self._vad.accept_waveform(samples)
+            while not self._vad.empty():
+                self._vad.pop()
+            speaking = self._vad.is_speech_detected()
 
         if speaking:
             if not self._was_speaking:
@@ -471,6 +517,8 @@ def get_stt_backend(
                 vad_threshold=cfg.sherpa_vad_threshold,
                 vad_min_speech_ms=cfg.sherpa_vad_min_speech_ms,
                 vad_min_silence_ms=cfg.sherpa_vad_min_silence_ms,
+                decoding_method=cfg.sherpa_decoding_method,
+                max_active_paths=cfg.sherpa_max_active_paths,
             )
         except ModuleNotFoundError as e:
             raise RuntimeError("sherpa-onnx is not installed. Run: uv sync") from e

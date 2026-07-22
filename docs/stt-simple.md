@@ -366,9 +366,11 @@ stt:
   #     NOT the endpoint mechanism (still vad_silence_ms above). Not part of the
   #     backend-reload key — changing these needs a model_path/num_threads change
   #     or daemon restart to take effect, not just a config hot-reload.
-  sherpa_vad_threshold: 0.5         # Silero speech-probability threshold
-  sherpa_vad_min_speech_ms: 100     # onset debounce (sherpa-onnx's own 250ms default misses short commands)
+  sherpa_vad_threshold: 0.25        # Silero speech-probability threshold (0.5 misses monosyllabic "sì"/"no")
+  sherpa_vad_min_speech_ms: 40      # onset debounce (sherpa-onnx's own 250ms default misses short commands)
   sherpa_vad_min_silence_ms: 400    # internal VAD-gate hangover before the CPU-saving gate closes
+  sherpa_decoding_method: modified_beam_search  # greedy_search | modified_beam_search (beam recovers short "sì" greedy drops)
+  sherpa_max_active_paths: 4        # beam width for modified_beam_search
 
 recognition:
   wake_window: 8.0                  # command window duration (seconds)

@@ -217,13 +217,26 @@ class STTConfig:
     # sherpa_onnx backend only: tune the internal Silero VAD gate that decides
     # whether to feed audio to the Kroko Zipformer encoder at all (a CPU-saving
     # optimization — see docs/asr-plan.md). No effect when backend is vosk.
-    # Lower than sherpa-onnx's own 250ms default: evaluation showed the default
-    # misses short commands (words can end before the debounce confirms).
-    sherpa_vad_min_speech_ms: int = 100
+    # Well below sherpa-onnx's own 250ms default: an e2e VAD sweep on synthesized
+    # "sì"/"no" showed 100ms silently gates out monosyllabic ask replies
+    # (finalize() empty → on_else); 40ms clears them with headroom.
+    sherpa_vad_min_speech_ms: int = 40
     # Silero's own hangover before the gate closes — independent of the outer
     # vad_silence_ms/fast_vad_ms above, which decide when stt.py finalizes.
     sherpa_vad_min_silence_ms: int = 400
-    sherpa_vad_threshold: float = 0.5
+    # Lowered from Silero's 0.5 default: the same sweep showed 0.5 misses "sì"
+    # entirely (fricative /s/ onset has low speech-probability) and 0.35 is on
+    # the boundary (drops shorter/quieter clips); 0.25 held up on every clip.
+    sherpa_vad_threshold: float = 0.25
+    # sherpa_onnx Zipformer decoding. Default modified_beam_search (not the
+    # library's greedy_search default): reply-window diagnostics showed the
+    # greedy decoder collapses ~200ms monosyllabic replies ("sì") to bare
+    # punctuation ('.') ~half the time — the audio reaches the encoder fine
+    # (VAD confirmed firing), greedy just drops the short word. Beam search
+    # keeps alternative hypotheses and recovers it. max_active_paths bounds the
+    # beam (higher = better recall, more CPU). No effect when backend is vosk.
+    sherpa_decoding_method: str = "modified_beam_search"
+    sherpa_max_active_paths: int = 4
 
 
 @dataclass
@@ -829,9 +842,13 @@ def _parse_stt_config(raw: dict) -> STTConfig:
         confidence=_get_float(raw, "confidence", 0.0),
         confidence_mode=str(raw.get("confidence_mode", "first")),
         capture_stall_secs=_get_float(raw, "capture_stall_secs", 30.0),
-        sherpa_vad_min_speech_ms=_get_int(raw, "sherpa_vad_min_speech_ms", 100),
+        sherpa_vad_min_speech_ms=_get_int(raw, "sherpa_vad_min_speech_ms", 40),
         sherpa_vad_min_silence_ms=_get_int(raw, "sherpa_vad_min_silence_ms", 400),
-        sherpa_vad_threshold=_get_float(raw, "sherpa_vad_threshold", 0.5),
+        sherpa_vad_threshold=_get_float(raw, "sherpa_vad_threshold", 0.25),
+        sherpa_decoding_method=str(
+            raw.get("sherpa_decoding_method", "modified_beam_search")
+        ),
+        sherpa_max_active_paths=_get_int(raw, "sherpa_max_active_paths", 4),
     )
 
 

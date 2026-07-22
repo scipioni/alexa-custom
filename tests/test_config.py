@@ -434,8 +434,10 @@ stt:
 
         result = load_config(cfg_path)
         assert result is not None
-        assert result.stt.sherpa_vad_threshold == 0.5
-        assert result.stt.sherpa_vad_min_speech_ms == 100
+        # Optimal defaults from the e2e VAD sweep on synthesized "sì"/"no":
+        # 0.5/100ms silently gate out monosyllabic ask replies (see config.py).
+        assert result.stt.sherpa_vad_threshold == 0.25
+        assert result.stt.sherpa_vad_min_speech_ms == 40
         assert result.stt.sherpa_vad_min_silence_ms == 400
 
 

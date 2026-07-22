@@ -383,9 +383,7 @@ def _recognition_loop(
         else:
             action_type = action_data.get("type")
             if not action_type:
-                logger.warning(
-                    "MQTT command missing 'type'/'command': %r", action_data
-                )
+                logger.warning("MQTT command missing 'type'/'command': %r", action_data)
                 return
             trigger = Trigger(
                 commands=[],
@@ -987,6 +985,16 @@ def run_stt_worker(
         source or "default",
         channels,
     )
+    if current_config.stt.backend == "sherpa-onnx":
+        # No other startup line records these, and they're not in the
+        # backend-reload key — log them so we can confirm a restart actually
+        # picked up a config change (see the "sì"/"no" ask-reply VAD tuning).
+        logger.info(
+            "STT sherpa VAD gate: threshold=%.2f min_speech_ms=%d min_silence_ms=%d",
+            current_config.stt.sherpa_vad_threshold,
+            current_config.stt.sherpa_vad_min_speech_ms,
+            current_config.stt.sherpa_vad_min_silence_ms,
+        )
     _log_activation_phrases(current_config)
 
     if mqtt_client:

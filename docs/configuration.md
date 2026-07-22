@@ -104,9 +104,11 @@ stt:
   wake_match_threshold: 0.5            # fraction of wake-phrase tokens required
   mono_capture: false                  # force parec mono capture
   capture_backend: "parec"             # parec (default) | gstreamer
-  sherpa_vad_threshold: 0.5            # sherpa-onnx only: internal Silero VAD gate threshold
-  sherpa_vad_min_speech_ms: 100        # sherpa-onnx only: VAD onset debounce
+  sherpa_vad_threshold: 0.25           # sherpa-onnx only: internal Silero VAD gate threshold
+  sherpa_vad_min_speech_ms: 40         # sherpa-onnx only: VAD onset debounce
   sherpa_vad_min_silence_ms: 400       # sherpa-onnx only: VAD gate hangover
+  sherpa_decoding_method: modified_beam_search  # sherpa-onnx only: greedy_search | modified_beam_search
+  sherpa_max_active_paths: 4           # sherpa-onnx only: beam width (modified_beam_search)
 ```
 
 ### Text-to-Speech — `tts`

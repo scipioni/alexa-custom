@@ -32,6 +32,13 @@ logger = logging.getLogger(__name__)
 # Idle ms after last speech before the command window closes (overridable per call).
 _VAD_SILENCE_MS = int(os.environ.get("STT_VAD_SILENCE_MS", "500"))
 
+# RMS energy floor (0..1) for the reply/command window's speech gate — see
+# SherpaOnnxSTT.set_rms_gate. On-board diagnostics showed real replies capture at
+# mic_peak ~0.07-0.12 while true silence sits at mic_mean ~0.005, so a floor here
+# feeds the decoder on a real answer yet ignores silence. Env-overridable for
+# quick field tuning without a code edit; no effect on the vosk backend.
+_REPLY_RMS_GATE = float(os.environ.get("STT_REPLY_RMS_GATE", "0.015"))
+
 
 def _make_listen_fn(
     proc: subprocess.Popen,
@@ -117,6 +124,13 @@ def capture_transcript(
         backend.recreate(grammar)
     else:
         backend.reset()
+    # Bounded reply/command window: swap Silero's neural gate for an RMS energy
+    # gate (no-op for Vosk). Silero drops quiet-but-real answers here — e.g. "no"
+    # thinned by the 220 Hz HPF, captured at mic_peak ~0.12 yet classified as
+    # non-speech — so feed the decoder on energy instead for the window, and
+    # restore Silero in the finally. reset() does not clear it, so it survives
+    # the mid-window playback-drain resets.
+    backend.set_rms_gate(_REPLY_RMS_GATE)
     try:
         return _capture_loop(
             proc,
@@ -133,6 +147,7 @@ def capture_transcript(
             confidence_mode=confidence_mode,
         )
     finally:
+        backend.set_rms_gate(None)
         if grammar is not None and isinstance(backend, VoskSTT):
             # Restore the recognizer's base grammar (free-text None, or the
             # always-on wake/command grammar) — not unconditionally free-text.
@@ -165,6 +180,26 @@ def _capture_loop(
     last_activity = time.monotonic()
     got_speech = False
 
+    # --- Reply-window diagnostics (see the "sì"/"no" ask-reply investigation) ---
+    # A reply window emits no other journal lines, so without these we cannot tell
+    # a VAD-gated / silent window ('?'/'.' finalize) apart from an answer spoken too
+    # early (drained on the playback-gate drop) or a mis-transcription.
+    _diag = logger.isEnabledFor(logging.DEBUG)
+    _t_start = time.monotonic()
+    _capture_begin = _t_start  # advances to the playback-gate drop, if any
+    _speech_first: float | None = None
+    _peak_rms = 0.0
+    _mean_rms_sum = 0.0
+    _rms_n = 0
+    _ended_by = "timeout"
+    if _diag:
+        logger.debug(
+            "Reply window open: timeout=%.1fs start_after_playback=%s grammar=%s",
+            timeout,
+            start_after_playback,
+            phrases if phrases else "(free)",
+        )
+
     while not stop_event.is_set() and time.monotonic() < deadline:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -184,7 +219,7 @@ def _capture_loop(
             continue
 
         if was_playing:
-            _drain_pipe(proc)
+            drained = _drain_pipe(proc)
             backend.reset()
             was_playing = False
             if start_after_playback:
@@ -194,12 +229,27 @@ def _capture_loop(
             last_partial = ""
             last_activity = time.monotonic()
             got_speech = False
+            _capture_begin = time.monotonic()
+            if _diag:
+                # An answer spoken during/right-at TTS end lands in `drained` and
+                # is lost — a large drain here alongside an empty finalize is the
+                # signature of "answered too early".
+                logger.debug(
+                    "Reply capture armed after playback (drained %d B ~%.0fms)",
+                    drained,
+                    drained / (16000 * channels * 2) * 1000,
+                )
             continue
 
         data = _apply_input_gain(_downmix_to_mono(raw_data, channels))
 
+        _rms = _rms_level(data)
+        if _diag:
+            _peak_rms = max(_peak_rms, _rms)
+            _mean_rms_sum += _rms
+            _rms_n += 1
         if on_stt_event:
-            on_stt_event("level", {"mic": _rms_level(data)})
+            on_stt_event("level", {"mic": _rms})
 
         if backend.accept_waveform(data):
             text = backend.text()
@@ -244,6 +294,15 @@ def _capture_loop(
                         full = " ".join(transcript_parts + [partial])
                         on_stt_event("partial", {"text": full})
 
+        if got_speech and _speech_first is None:
+            _speech_first = time.monotonic()
+            if _diag:
+                logger.debug(
+                    "Reply speech detected %.0fms into capture (partial=%r)",
+                    (_speech_first - _capture_begin) * 1000,
+                    last_partial or (transcript_parts[-1] if transcript_parts else ""),
+                )
+
         if got_speech and hard_deadline is not None:
             deadline = min(hard_deadline, max(deadline, last_activity + timeout))
 
@@ -254,7 +313,11 @@ def _capture_loop(
             got_speech
             and (time.monotonic() - last_activity) * 1000 >= _effective_vad_ms
         ):
+            _ended_by = "endpoint"
             break
+
+    if stop_event.is_set():
+        _ended_by = "stop"
 
     final_text = backend.finalize()
     if final_text:
@@ -273,7 +336,31 @@ def _capture_loop(
         else:
             transcript_parts.append(final_text)
 
-    return " ".join(transcript_parts).strip()
+    result = " ".join(transcript_parts).strip()
+    if _diag:
+        _mean_rms = _mean_rms_sum / _rms_n if _rms_n else 0.0
+        _speech_at = (
+            f"{(_speech_first - _capture_begin) * 1000:.0f}ms"
+            if _speech_first is not None
+            else "NEVER"
+        )
+        # raw=finalize() output (what the backend actually decoded) vs result=the
+        # joined transcript handed to the matcher. speech=NEVER + empty/punctuation
+        # raw ⇒ nothing reached the encoder (VAD gate or silence); speech seen but
+        # junk raw ⇒ mis-transcription; large early drain (logged above) + NEVER ⇒
+        # answered too early.
+        logger.debug(
+            "Reply window done: ended=%s elapsed=%.1fs speech@%s "
+            "mic_peak=%.3f mic_mean=%.3f raw=%r result=%r",
+            _ended_by,
+            time.monotonic() - _capture_begin,
+            _speech_at,
+            _peak_rms,
+            _mean_rms,
+            final_text,
+            result,
+        )
+    return result
 
 
 def _play_timeout() -> None:
