@@ -1,4 +1,4 @@
-"""Tests for llm.py: OllamaClient, ConversationEngine, ActionsFileStore, LearnWizard."""
+"""Tests for llm.py: LLMClient, ConversationEngine, ActionsFileStore, LearnWizard."""
 
 from __future__ import annotations
 
@@ -12,8 +12,8 @@ from alexa_custom.llm import (
     ActionsFileStore,
     ConversationEngine,
     LearnWizard,
-    OllamaClient,
-    OllamaUnreachable,
+    LLMClient,
+    LLMUnreachable,
     _UNREACHABLE,
     _split_sentences,
     get_engine,
@@ -139,21 +139,21 @@ class TestGetEngineCache:
 
 
 # ---------------------------------------------------------------------------
-# OllamaClient tests
+# LLMClient tests
 # ---------------------------------------------------------------------------
 
 
-class TestOllamaClient:
+class TestLLMClient:
     @pytest.mark.asyncio
     async def test_successful_chat(self):
-        client = OllamaClient("http://localhost:11434", timeout=5.0)
+        client = LLMClient("http://localhost:11434", timeout=5.0)
         client.chat_stream = _fake_stream("Ciao!")
         result = await client.chat([{"role": "user", "content": "ciao"}], "llama3.2")
         assert result == "Ciao!"
 
     @pytest.mark.asyncio
     async def test_chat_concatenates_tokens(self):
-        client = OllamaClient("http://localhost:11434", timeout=5.0)
+        client = LLMClient("http://localhost:11434", timeout=5.0)
 
         async def multi_token(messages, model):
             yield "Ci"
@@ -166,56 +166,59 @@ class TestOllamaClient:
 
     @pytest.mark.asyncio
     async def test_connect_error_raises_unreachable(self):
-        client = OllamaClient("http://localhost:11434", timeout=5.0)
-        client.chat_stream = _failing_stream(OllamaUnreachable("refused"))
-        with pytest.raises(OllamaUnreachable):
+        client = LLMClient("http://localhost:11434", timeout=5.0)
+        client.chat_stream = _failing_stream(LLMUnreachable("refused"))
+        with pytest.raises(LLMUnreachable):
             await client.chat([], "llama3.2")
 
     @pytest.mark.asyncio
     async def test_timeout_raises_unreachable(self):
-        client = OllamaClient("http://localhost:11434", timeout=5.0)
-        client.chat_stream = _failing_stream(OllamaUnreachable("timeout"))
-        with pytest.raises(OllamaUnreachable):
+        client = LLMClient("http://localhost:11434", timeout=5.0)
+        client.chat_stream = _failing_stream(LLMUnreachable("timeout"))
+        with pytest.raises(LLMUnreachable):
             await client.chat([], "llama3.2")
 
     @pytest.mark.asyncio
     async def test_non_2xx_raises_unreachable(self):
-        client = OllamaClient("http://localhost:11434", timeout=5.0)
-        client.chat_stream = _failing_stream(OllamaUnreachable("HTTP 500"))
-        with pytest.raises(OllamaUnreachable):
+        client = LLMClient("http://localhost:11434", timeout=5.0)
+        client.chat_stream = _failing_stream(LLMUnreachable("HTTP 500"))
+        with pytest.raises(LLMUnreachable):
             await client.chat([], "llama3.2")
 
     @pytest.mark.asyncio
-    @patch("alexa_custom.llm.httpx.AsyncClient")
-    async def test_chat_stream_handles_httpx_timeout(self, mock_client_class):
+    async def test_chat_stream_handles_timeout(self):
+        # LLMClient now speaks the openai SDK, not httpx directly: a request
+        # timeout surfaces as openai.APITimeoutError, which chat_stream maps to
+        # LLMUnreachable.
         import httpx
-        from unittest.mock import MagicMock
+        import openai
 
-        mock_client = MagicMock()
-        mock_client.stream.side_effect = httpx.TimeoutException("mocked timeout")
-        mock_client_class.return_value.__aenter__.return_value = mock_client
-
-        client = OllamaClient("http://localhost:11434", timeout=5.0)
-        with pytest.raises(OllamaUnreachable) as exc_info:
+        client = LLMClient("http://localhost:11434", timeout=5.0)
+        req = httpx.Request("POST", "http://localhost:11434/v1/chat/completions")
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=openai.APITimeoutError(request=req)
+        )
+        with pytest.raises(LLMUnreachable) as exc_info:
             async for _ in client.chat_stream([], "model"):
                 pass
-        assert "Ollama timeout" in str(exc_info.value)
+        assert "timeout" in str(exc_info.value).lower()
 
     @pytest.mark.asyncio
-    @patch("alexa_custom.llm.httpx.AsyncClient")
-    async def test_chat_stream_handles_httpx_http_error(self, mock_client_class):
+    async def test_chat_stream_handles_http_error(self):
+        # A non-2xx response surfaces as openai.APIStatusError → LLMUnreachable.
         import httpx
-        from unittest.mock import MagicMock
+        import openai
 
-        mock_client = MagicMock()
-        mock_client.stream.side_effect = httpx.HTTPError("mocked http error")
-        mock_client_class.return_value.__aenter__.return_value = mock_client
-
-        client = OllamaClient("http://localhost:11434", timeout=5.0)
-        with pytest.raises(OllamaUnreachable) as exc_info:
+        client = LLMClient("http://localhost:11434", timeout=5.0)
+        req = httpx.Request("POST", "http://localhost:11434/v1/chat/completions")
+        resp = httpx.Response(500, request=req)
+        client._client.chat.completions.create = AsyncMock(
+            side_effect=openai.APIStatusError("server error", response=resp, body=None)
+        )
+        with pytest.raises(LLMUnreachable) as exc_info:
             async for _ in client.chat_stream([], "model"):
                 pass
-        assert "Ollama HTTP error" in str(exc_info.value)
+        assert "HTTP 500" in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------
@@ -302,7 +305,7 @@ class TestConversationEngine:
     @pytest.mark.asyncio
     async def test_unreachable_returns_sentinel(self):
         engine = self._make_engine()
-        engine._client.chat_stream = _failing_stream(OllamaUnreachable("down"))
+        engine._client.chat_stream = _failing_stream(LLMUnreachable("down"))
         result = await engine.reply_streaming("ciao", _noop_say)
         assert result == _UNREACHABLE
 
@@ -452,7 +455,7 @@ class TestLearnWizard:
             return next(listened, "")
 
         with patch(
-            "alexa_custom.llm.OllamaClient.chat",
+            "alexa_custom.llm.LLMClient.chat",
             new=AsyncMock(return_value="say"),
         ):
             wizard = LearnWizard(
@@ -479,7 +482,7 @@ class TestLearnWizard:
             return next(listened, "")
 
         with patch(
-            "alexa_custom.llm.OllamaClient.chat",
+            "alexa_custom.llm.LLMClient.chat",
             new=AsyncMock(return_value="say"),
         ):
             wizard = LearnWizard(cfg, lang="it-IT", actions_file_path=af)
