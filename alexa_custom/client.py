@@ -113,7 +113,10 @@ def browser_join_url(identity: str = "browser-user") -> str:
     token = make_browser_token(identity)
     room_url = require_env("LIVEKIT_URL")
     require_env("LIVEKIT_ROOM")
-    meet_base = os.environ.get("LIVEKIT_MEET_URL", "").strip().rstrip("/") or "https://meet.livekit.io"
+    meet_base = (
+        os.environ.get("LIVEKIT_MEET_URL", "").strip().rstrip("/")
+        or "https://meet.livekit.io"
+    )
     params = urllib.parse.urlencode({"liveKitUrl": room_url, "token": token})
     return f"{meet_base}/custom/?{params}"
 
@@ -1118,6 +1121,25 @@ def main() -> None:
             stt_gated_flag=livekit_connected_flag,
             preroll_ms=config.tts.preroll_ms,
         )
+
+        # Pre-warm the TTS cache with the configured ask prompts/responses in a
+        # background thread, so their first playback is a cache hit instead of a
+        # ~0.7s mid-conversation Piper synthesis stall. Non-blocking: startup
+        # continues immediately and prompts warm within a few seconds.
+        try:
+            from alexa_custom.actions import collect_prompt_texts
+            from alexa_custom.tts import get_engine as _get_engine
+
+            _prompts = collect_prompt_texts(config)
+            if _prompts:
+                threading.Thread(
+                    target=lambda: _get_engine().prewarm(_prompts),
+                    name="tts-prewarm",
+                    daemon=True,
+                ).start()
+                logger.info("TTS prewarm: %d configured prompts queued", len(_prompts))
+        except Exception as e:
+            logger.debug("TTS prewarm scheduling failed: %s", e)
 
         async def _livekit_connect_fn_web() -> None:
             assert connect_trigger is not None

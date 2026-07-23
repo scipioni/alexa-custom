@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 import time
 import wave
+from collections.abc import Iterable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -37,6 +38,16 @@ class TTSBackend(abc.ABC):
     def say(self, text: str, lang: str = "it-IT") -> None:
         """Speak the given text in the specified language."""
         pass
+
+    def prewarm(self, texts: "Iterable[str]") -> None:
+        """Pre-synthesize the given texts so their first playback is instant.
+
+        Default is a no-op; backends with a synthesis cache (PiperTTS) override
+        this to populate it. Used at startup to warm the configured ask
+        prompts/responses, which otherwise pay ~0.7s of Piper synthesis latency
+        the first time they are spoken.
+        """
+        return None
 
 
 _CLAUSE_RE = re.compile(r"[^.!?;:,]+[.!?;:,]*")
@@ -243,6 +254,35 @@ class PiperTTS(TTSBackend):
             self._cache[text] = chunks
             while len(self._cache) > self._CACHE_MAX_ENTRIES:
                 self._cache.popitem(last=False)
+
+    def prewarm(self, texts: Iterable[str]) -> None:
+        """Synthesize each text once so it lands in the LRU cache.
+
+        Called at startup with the configured ask prompts/responses so their
+        first playback is a cache hit (instant time-to-first-audio) instead of
+        paying Piper's ~0.7s synthesis latency mid-conversation. Skips texts
+        already cached or too long to cache. Best-effort: a synth failure for
+        one text is logged and skipped, never raised.
+        """
+        _saved = os.dup(2)
+        _devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(_devnull, 2)
+        os.close(_devnull)
+        try:
+            for text in texts:
+                if not text or text in self._cache:
+                    continue
+                if len(text) > self._CACHE_MAX_TEXT_LEN:
+                    continue
+                try:
+                    for _ in self._synthesize(text):
+                        pass
+                    logger.debug("TTS prewarmed: %r", text)
+                except Exception as e:
+                    logger.debug("TTS prewarm failed for %r: %s", text, e)
+        finally:
+            os.dup2(_saved, 2)
+            os.close(_saved)
 
     def say(self, text: str, lang: str = "it-IT") -> None:
         if not text:

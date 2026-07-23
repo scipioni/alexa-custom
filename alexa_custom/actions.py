@@ -59,6 +59,49 @@ def normalize_text(text: str) -> str:
     return unicodedata.normalize("NFC", stripped).strip()
 
 
+def collect_prompt_texts(config) -> list[str]:
+    """Collect every static TTS prompt/response text configured in the actions.
+
+    Walks all triggers (and on_startup) gathering the ``text`` param of ``ask``
+    and ``say`` actions, recursing through ask ``on_reply``/``on_else``. Used to
+    pre-warm the TTS cache at startup so these phrases (e.g. "Chiamata
+    annullata") don't pay Piper's synthesis latency the first time they play.
+    Returns de-duplicated texts in first-seen order.
+    """
+    texts: list[str] = []
+
+    def _visit(actions: list[ActionEntry]) -> None:
+        for a in actions:
+            if a.type in ("ask", "say"):
+                t = a.params.get("text")
+                # Skip shell/template-expanded texts ("$(date ...)", `cmd`,
+                # ${var}): the literal is never spoken (the expansion is), so
+                # caching it wastes a slot and never hits.
+                if (
+                    isinstance(t, str)
+                    and t.strip()
+                    and "$(" not in t
+                    and "${" not in t
+                    and "`" not in t
+                ):
+                    texts.append(t)
+            for trig in a.on_reply or []:
+                _visit(trig.actions)
+            _visit(a.on_else or [])
+
+    for trig in config.triggers:  # flat superset (includes with_wake=False)
+        _visit(trig.actions)
+    _visit(config.on_startup)
+
+    seen: set[str] = set()
+    out: list[str] = []
+    for t in texts:
+        if t not in seen:
+            seen.add(t)
+            out.append(t)
+    return out
+
+
 def italian_phonetic(text: str) -> str:
     """Reduce Italian text to a rough phoneme representation for fuzzy matching.
 
