@@ -129,6 +129,12 @@ stt:
   #   needs a daemon restart to take effect.
   sherpa_max_active_paths: 4        # beam width (higher = better short-word recall,
   #   more CPU). Only used by modified_beam_search.
+  reply_rms_gate: 0.0               # ask/command reply window: RMS energy floor
+  #   (0..1) gating which captured frames reach the decoder. 0.0 = no gate, feed
+  #   the full waveform. Any positive floor (0.02/0.03) starved kroko_64l on quiet
+  #   replies (fed only the loud vowel core → empty); feeding everything decodes
+  #   them. Fast endpoint keeps latency low; minor "no no" doubling is absorbed by
+  #   reply matching. Raise only if room noise causes false decodes. Vosk: n/a.
   # flush_ms: 300            # audio discarded after wake beep (absorbs speaker echo)
   # mono_capture: false      # force parec to capture mono (--channels=1) so PipeWire
   #   handles stereo→mono in the driver. Eliminates the Python-side max-abs downmix.
@@ -158,7 +164,7 @@ audio:
   # keep_sink_alive: false  # silent stream keeping the sink awake: false (default) | true | auto (USB output detected)
   output_volume: 0.5       # speaker volume 0.0–1.0 (set via wpctl, persisted by WirePlumber)
   input_gain: 1.0           # microphone gain multiplier (raise for quiet preamps, e.g. 3.0 = 300% PulseAudio source)
-  post_playback_ms: 300    # STT gate hold after playback ends (lets echo decay)
+  post_playback_ms: 150    # STT gate hold after playback ends (lets echo decay)
   tone_preroll_ms: 50      # silence before tones/beeps (covers PipeWire cold-start)
   sample_rates:
     usb: 48000

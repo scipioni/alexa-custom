@@ -32,14 +32,19 @@ logger = logging.getLogger(__name__)
 # Idle ms after last speech before the command window closes (overridable per call).
 _VAD_SILENCE_MS = int(os.environ.get("STT_VAD_SILENCE_MS", "500"))
 
-# RMS energy floor (0..1) for the reply/command window's speech gate — see
-# SherpaOnnxSTT.set_rms_gate. Feeds the decoder on a real answer yet ignores
-# silence/ambient noise. 0.03 chosen after the NewPie switched to the `normal`
-# profile lifted capture ~10x (replies now peak 0.3-0.45): at 0.015 the louder
-# ambient floor was fed continuously, producing spurious partials that deferred
-# the silence endpoint (a matched reply ran the full 5s window). Env-overridable
-# for quick field tuning without a code edit; no effect on the vosk backend.
-_REPLY_RMS_GATE = float(os.environ.get("STT_REPLY_RMS_GATE", "0.03"))
+# Fallback RMS energy floor (0..1) for the reply/command window's speech gate —
+# see SherpaOnnxSTT.set_rms_gate. The live daemon passes stt.reply_rms_gate from
+# config; this constant is only the default for direct callers/tests and the env
+# override. 0.0 = no gate (feed every captured frame to the decoder): offline
+# replay on kroko_64l showed any positive floor (0.02/0.03) starved the decoder
+# on quiet replies (empty), while feeding the full waveform decodes them. No
+# effect on the vosk backend.
+_REPLY_RMS_GATE = float(os.environ.get("STT_REPLY_RMS_GATE", "0.0"))
+
+# Minimum peak RMS for a reply window to be worth dumping (independent of the
+# gate floor, which may be 0.0): skips writing WAVs for silent / no-answer
+# windows when a dump dir is configured.
+_DUMP_MIN_PEAK = 0.02
 
 
 def _make_listen_fn(
@@ -52,6 +57,8 @@ def _make_listen_fn(
     confidence: float = 0.0,
     confidence_mode: str = "first",
     fast_vad_ms: int = 0,
+    dump_dir: str | None = None,
+    rms_gate: float = _REPLY_RMS_GATE,
 ) -> Callable:
     """Return an async listen function closed over the given capture context."""
 
@@ -81,6 +88,8 @@ def _make_listen_fn(
             confidence=confidence,
             confidence_mode=confidence_mode,
             fast_vad_ms=fast_vad_ms,
+            dump_dir=dump_dir,
+            rms_gate=rms_gate,
         )
 
     return _listen_fn
@@ -101,6 +110,8 @@ def capture_transcript(
     confidence: float = 0.0,
     confidence_mode: str = "first",
     fast_vad_ms: int = 0,
+    dump_dir: str | None = None,
+    rms_gate: float = _REPLY_RMS_GATE,
 ) -> str:
     """Capture audio for a set duration and return the transcribed text.
 
@@ -135,13 +146,14 @@ def capture_transcript(
         backend.recreate(grammar)
     else:
         backend.reset()
-    # Bounded reply/command window: swap Silero's neural gate for an RMS energy
-    # gate (no-op for Vosk). Silero drops quiet-but-real answers here — e.g. "no"
-    # thinned by the 220 Hz HPF, captured at mic_peak ~0.12 yet classified as
-    # non-speech — so feed the decoder on energy instead for the window, and
-    # restore Silero in the finally. reset() does not clear it, so it survives
-    # the mid-window playback-drain resets.
-    backend.set_rms_gate(_REPLY_RMS_GATE)
+    # Bounded reply/command window: replace Silero's neural gate with the RMS
+    # energy gate at `rms_gate` (no-op for Vosk). Silero drops quiet-but-real
+    # answers here (a nasal "no" thinned by the HPF reads as non-speech); the
+    # default rms_gate=0.0 disables gating entirely and feeds the full waveform
+    # to the decoder, which kroko_64l needs to decode quiet monosyllables. A
+    # positive floor re-enables energy gating. Restored to Silero in the finally;
+    # reset() does not clear it, so it survives mid-window playback-drain resets.
+    backend.set_rms_gate(rms_gate)
     try:
         return _capture_loop(
             proc,
@@ -157,6 +169,8 @@ def capture_transcript(
             confidence=confidence,
             confidence_mode=confidence_mode,
             fast_vad_ms=fast_vad_ms,
+            dump_dir=dump_dir,
+            rms_gate=rms_gate,
         )
     finally:
         backend.set_rms_gate(None)
@@ -180,6 +194,8 @@ def _capture_loop(
     confidence: float = 0.0,
     confidence_mode: str = "first",
     fast_vad_ms: int = 0,
+    dump_dir: str | None = None,
+    rms_gate: float = _REPLY_RMS_GATE,
 ) -> str:
     # Closed-reply fast endpoint: normalized phrase set the partial is matched
     # against so a recognised complete reply can end the window early. Empty for
@@ -228,6 +244,12 @@ def _capture_loop(
     _fed_frames = 0
     _first_fed: float | None = None
     _last_fed: float | None = None
+    # Reply-audio capture for offline analysis (dump_dir set, e.g. from
+    # config.dump_triggers_dir): buffer the post-arm mono frames and, if speech
+    # was present, write a WAV at window end labelled with the outcome — so a
+    # "No" the decoder dropped can be replayed through other models/settings.
+    _dump_frames: list[bytes] = []
+    _dump_peak = 0.0
     if _diag:
         logger.debug(
             "Reply window open: timeout=%.1fs start_after_playback=%s grammar=%s",
@@ -285,6 +307,8 @@ def _capture_loop(
             _fed_frames = 0
             _first_fed = None
             _last_fed = None
+            _dump_frames = []
+            _dump_peak = 0.0
             if _diag:
                 # An answer spoken during/right-at TTS end lands in `drained` and
                 # is lost — a large drain here alongside an empty finalize is the
@@ -303,12 +327,15 @@ def _capture_loop(
             _peak_rms = max(_peak_rms, _rms)
             _mean_rms_sum += _rms
             _rms_n += 1
-            if _rms >= _REPLY_RMS_GATE:
+            if _rms >= rms_gate:
                 _now = time.monotonic()
                 _fed_frames += 1
                 if _first_fed is None:
                     _first_fed = _now
                 _last_fed = _now
+        if dump_dir is not None:
+            _dump_frames.append(data)
+            _dump_peak = max(_dump_peak, _rms)
         if on_stt_event:
             on_stt_event("level", {"mic": _rms})
 
@@ -407,6 +434,14 @@ def _capture_loop(
             transcript_parts.append(final_text)
 
     result = " ".join(transcript_parts).strip()
+
+    # Dump the captured reply audio (when a dump dir is configured and real
+    # speech was present) so a dropped reply can be replayed offline. Labelled
+    # with the outcome: MISS for an empty result, else the decoded text.
+    if dump_dir is not None and _dump_peak >= _DUMP_MIN_PEAK:
+        _label = f"MISS_peak{int(_dump_peak * 1000)}" if not result else result
+        _dump_reply_wav(_dump_frames, dump_dir, _label)
+
     if _diag:
         _mean_rms = _mean_rms_sum / _rms_n if _rms_n else 0.0
         _speech_at = (
@@ -452,6 +487,35 @@ def _capture_loop(
             result,
         )
     return result
+
+
+def _dump_reply_wav(frames: list[bytes], dump_dir: str, label: str) -> None:
+    """Write captured reply-window mono s16le audio to a WAV for offline replay.
+
+    Frames are post-downmix, post-input-gain mono at 16 kHz — exactly what the
+    decoder received — so the WAV can be fed back through serena-stt --play or a
+    different model/settings to reproduce a dropped reply.
+    """
+    import re
+    import wave
+    from datetime import datetime
+
+    if not frames:
+        return
+    try:
+        os.makedirs(dump_dir, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        safe = re.sub(r"[^\w\-]", "_", label)[:48]
+        path = os.path.join(dump_dir, f"reply_{ts}_{safe}.wav")
+        with wave.open(path, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(16000)
+            for f in frames:
+                wf.writeframes(f)
+        logger.info("Reply dump: %s", path)
+    except Exception as e:
+        logger.warning("Reply dump failed: %s", e)
 
 
 def _play_timeout() -> None:

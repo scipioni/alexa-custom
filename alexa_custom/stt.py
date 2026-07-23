@@ -322,6 +322,8 @@ def _recognition_loop(
         confidence=config.stt.confidence,
         confidence_mode=config.stt.confidence_mode,
         fast_vad_ms=_fast_vad_ms,
+        dump_dir=config.dump_triggers_dir,
+        rms_gate=config.stt.reply_rms_gate,
     )
     _ctx = ActionContext(
         telegram_client=telegram_client,

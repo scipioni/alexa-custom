@@ -371,6 +371,7 @@ stt:
   sherpa_vad_min_silence_ms: 400    # internal VAD-gate hangover before the CPU-saving gate closes
   sherpa_decoding_method: modified_beam_search  # greedy_search | modified_beam_search (beam recovers short "sì" greedy drops)
   sherpa_max_active_paths: 4        # beam width for modified_beam_search
+  reply_rms_gate: 0.0               # ask-reply window RMS floor feeding the decoder; 0.0 = no gate (a positive floor starves kroko_64l on quiet replies)
 
 recognition:
   wake_window: 8.0                  # command window duration (seconds)

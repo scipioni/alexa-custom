@@ -354,6 +354,7 @@ class PiperTTS(TTSBackend):
 
             assert proc.stdin is not None
             proc.stdin.close()
+            _t_wait_start = time.monotonic()
             try:
                 proc.wait(timeout=60.0)
             except subprocess.TimeoutExpired:
@@ -363,12 +364,23 @@ class PiperTTS(TTSBackend):
                 proc.kill()
                 proc.wait()
             if _diag and samplerate:
-                _wall = time.monotonic() - _t_gate_set
+                _t_wait_end = time.monotonic()
+                _wall = _t_wait_end - _t_gate_set
                 _audio = _samples_written / samplerate + self._preroll_ms / 1000.0
+                # Split the wall into: write = synth + stdin writes (should be ~0
+                # on a cache hit), wait = time blocked in proc.wait() (paplay
+                # stream drain + process exit + GIL re-acquire). Standalone this
+                # is ~audio+0.25s; if wait balloons only under the concurrent
+                # reply capture, the extra is scheduling/GIL contention, not
+                # paplay itself.
+                _write = _t_wait_start - _t_gate_set
+                _wait = _t_wait_end - _t_wait_start
                 logger.debug(
-                    "TTS playback: audio=%.2fs paplay_wall=%.2fs overhead=%.2fs "
-                    "(paplay drain/latency); +post_playback=%dms held after",
+                    "TTS playback: audio=%.2fs write=%.2fs wait=%.2fs "
+                    "paplay_wall=%.2fs overhead=%.2fs; +post_playback=%dms held after",
                     _audio,
+                    _write,
+                    _wait,
                     _wall,
                     _wall - _audio,
                     get_post_playback_ms(),

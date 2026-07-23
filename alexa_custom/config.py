@@ -237,6 +237,17 @@ class STTConfig:
     # beam (higher = better recall, more CPU). No effect when backend is vosk.
     sherpa_decoding_method: str = "modified_beam_search"
     sherpa_max_active_paths: int = 4
+    # Ask/command reply window only: RMS energy floor (0..1) gating which
+    # captured frames are fed to the decoder (replaces Silero's neural VAD for
+    # the bounded reply). 0.0 disables the gate — feed every captured frame to
+    # the decoder. Default 0.0: any positive floor (tried 0.02/0.03) starved the
+    # kroko_64l decoder on quiet replies (fed only the loud vowel core → empty
+    # results), while feeding the full continuous waveform decodes them; the
+    # streaming Zipformer needs the whole utterance, not just supra-threshold
+    # frames. The fast endpoint keeps latency low; minor token doubling ("no no")
+    # is absorbed by reply matching. Raise only if ambient noise in a quiet room
+    # causes false decodes. No effect on the vosk backend.
+    reply_rms_gate: float = 0.0
 
 
 @dataclass
@@ -849,6 +860,7 @@ def _parse_stt_config(raw: dict) -> STTConfig:
             raw.get("sherpa_decoding_method", "modified_beam_search")
         ),
         sherpa_max_active_paths=_get_int(raw, "sherpa_max_active_paths", 4),
+        reply_rms_gate=_get_float(raw, "reply_rms_gate", 0.0),
     )
 
 

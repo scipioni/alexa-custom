@@ -109,6 +109,7 @@ stt:
   sherpa_vad_min_silence_ms: 400       # sherpa-onnx only: VAD gate hangover
   sherpa_decoding_method: modified_beam_search  # sherpa-onnx only: greedy_search | modified_beam_search
   sherpa_max_active_paths: 4           # sherpa-onnx only: beam width (modified_beam_search)
+  reply_rms_gate: 0.0                  # ask-reply window: RMS floor feeding the decoder; 0.0 = no gate (sherpa only)
 ```
 
 ### Text-to-Speech — `tts`
