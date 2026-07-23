@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import html
 import logging
 import os
 import re
@@ -184,14 +185,23 @@ class TelegramClient:
     def __init__(self) -> None:
         self._token: str | None = os.environ.get("TELEGRAM_BOT_TOKEN")
 
-    async def send_message(self, chat_id: str, text: str) -> None:
+    async def send_message(
+        self, chat_id: str, text: str, parse_mode: str | None = None
+    ) -> None:
         if not self._token:
             logger.error("TELEGRAM_BOT_TOKEN not set — telegram action skipped")
             return
         url = f"https://api.telegram.org/bot{self._token}/sendMessage"
+        payload: dict[str, Any] = {
+            "chat_id": chat_id,
+            "text": text,
+            "disable_web_page_preview": True,
+        }
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.post(url, json={"chat_id": chat_id, "text": text})
+                resp = await client.post(url, json=payload)
                 resp.raise_for_status()
         except Exception as e:
             logger.error(f"Telegram send_message failed: {e}")
@@ -541,17 +551,28 @@ async def handle_log(action: ActionEntry, **_):
     logger.info(f"[log action] {message}")
 
 
+_ROOM_LINK_PLACEHOLDER = "\0ROOM_LINK\0"
+
+
 @registry.register("telegram")
 async def handle_telegram(action: ActionEntry, telegram_client: TelegramClient, **_):
     chat_id = action.params.get("chat_id") or os.environ.get("TELEGRAM_CHAT_ID", "")
     text = action.params.get("text", "")
     if not chat_id:
         raise ActionError("no chat_id in action or TELEGRAM_CHAT_ID env var")
+    parse_mode = None
     if "<room>" in text:
         from alexa_custom.client import browser_join_url
 
-        text = text.replace("<room>", browser_join_url())
-    await telegram_client.send_message(chat_id, text)
+        href = html.escape(browser_join_url(), quote=True)
+        # Escape the surrounding text (it may contain "&"/"<"/">") before
+        # dropping in the raw anchor tag, so Telegram's HTML parser doesn't
+        # choke on unrelated characters in the configured message.
+        text = html.escape(
+            text.replace("<room>", _ROOM_LINK_PLACEHOLDER)
+        ).replace(_ROOM_LINK_PLACEHOLDER, f'<a href="{href}">chiamata</a>')
+        parse_mode = "HTML"
+    await telegram_client.send_message(chat_id, text, parse_mode=parse_mode)
 
 
 @registry.register("livekit_join")
