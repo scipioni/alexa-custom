@@ -570,7 +570,7 @@ async def handle_telegram(action: ActionEntry, telegram_client: TelegramClient, 
         # choke on unrelated characters in the configured message.
         text = html.escape(
             text.replace("<room>", _ROOM_LINK_PLACEHOLDER)
-        ).replace(_ROOM_LINK_PLACEHOLDER, f'<a href="{href}">chiamata</a>')
+        ).replace(_ROOM_LINK_PLACEHOLDER, f'<a href="{href}">collegati</a>')
         parse_mode = "HTML"
     await telegram_client.send_message(chat_id, text, parse_mode=parse_mode)
 

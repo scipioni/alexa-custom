@@ -371,7 +371,7 @@ triggers:
                 text: "Sto chiamando l'assistenza"
               - type: livekit_join
               - type: telegram
-                text: "Collegati con casa <room>"
+                text: "Chiamata in corso: <room>"
           - commands: ["no", "no no", "no grazie", "annulla"]
             actions:
               - type: say
