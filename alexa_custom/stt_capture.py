@@ -51,6 +51,7 @@ def _make_listen_fn(
     vad_silence_ms: int | None,
     confidence: float = 0.0,
     confidence_mode: str = "first",
+    fast_vad_ms: int = 0,
 ) -> Callable:
     """Return an async listen function closed over the given capture context."""
 
@@ -79,6 +80,7 @@ def _make_listen_fn(
             vad_silence_ms=vad_silence_ms,
             confidence=confidence,
             confidence_mode=confidence_mode,
+            fast_vad_ms=fast_vad_ms,
         )
 
     return _listen_fn
@@ -98,6 +100,7 @@ def capture_transcript(
     hard_timeout: float | None = None,
     confidence: float = 0.0,
     confidence_mode: str = "first",
+    fast_vad_ms: int = 0,
 ) -> str:
     """Capture audio for a set duration and return the transcribed text.
 
@@ -105,6 +108,12 @@ def capture_transcript(
     speech to start and — when `hard_timeout` is set — slides forward while
     speech continues, so the user is not cut off mid-sentence. `hard_timeout`
     is the absolute cap on the whole capture.
+
+    `fast_vad_ms` (>0, closed `phrases` set only): once the partial transcript
+    already fully matches a complete reply phrase, end after this much silence
+    instead of the full `vad_silence_ms` — so a recognised "sì"/"no" advances
+    the ask immediately instead of waiting out the window (mirrors the wake
+    loop's fast endpoint).
     """
     assert proc.stdout is not None
     drained = _drain_pipe(proc)
@@ -147,6 +156,7 @@ def capture_transcript(
             hard_timeout=hard_timeout,
             confidence=confidence,
             confidence_mode=confidence_mode,
+            fast_vad_ms=fast_vad_ms,
         )
     finally:
         backend.set_rms_gate(None)
@@ -169,7 +179,19 @@ def _capture_loop(
     hard_timeout: float | None = None,
     confidence: float = 0.0,
     confidence_mode: str = "first",
+    fast_vad_ms: int = 0,
 ) -> str:
+    # Closed-reply fast endpoint: normalized phrase set the partial is matched
+    # against so a recognised complete reply can end the window early. Empty for
+    # free-text captures (fast path disabled). normalize_text folds accents and
+    # punctuation ("sì"/". Sì" -> "si"), matching how replies are matched later.
+    _norm_phrases: set[str] = set()
+    _normalize = None
+    if phrases and fast_vad_ms > 0:
+        from alexa_custom.actions import normalize_text as _normalize
+
+        _norm_phrases = {n for p in phrases if (n := _normalize(p))}
+
     deadline = time.monotonic() + timeout
     hard_deadline = (
         time.monotonic() + hard_timeout
@@ -348,6 +370,15 @@ def _capture_loop(
         _effective_vad_ms = (
             vad_silence_ms if vad_silence_ms is not None else _VAD_SILENCE_MS
         )
+        # Fast endpoint: when the running transcript already fully matches a
+        # complete reply phrase, don't wait out the full silence window — a
+        # recognised "sì"/"no" should advance the ask right away. Kept as a
+        # short silence (fast_vad_ms) rather than an instant return so a prefix
+        # like "no" can still grow into "no grazie" before committing.
+        if _norm_phrases and _normalize is not None and got_speech:
+            _cur = " ".join(transcript_parts + ([last_partial] if last_partial else []))
+            if _normalize(_cur) in _norm_phrases:
+                _effective_vad_ms = min(_effective_vad_ms, fast_vad_ms)
         if (
             got_speech
             and (time.monotonic() - last_activity) * 1000 >= _effective_vad_ms
