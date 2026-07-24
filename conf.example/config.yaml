@@ -250,12 +250,12 @@ llm:
 # MQTT / Home Assistant
 # ---------------------------------------------------------------------------
 # Omit this section to disable MQTT entirely.
-# mqtt:
-#   host: 127.0.0.1        # broker hostname; required to enable MQTT
-#   port: 1883
-#   topic_prefix: serena
-#   node_id: living_room   # unique identifier for this board (defaults to system hostname). Use distinct IDs for multi-device setups.
-#   queue_max: 200         # max queued outgoing messages while broker is unreachable
+mqtt:
+  host: 127.0.0.1          # STESSO broker di ONVIF_SUA (usa l'IP del broker se su host diversi)
+  port: 1883
+  topic_prefix: alexa      # = serena.topic_prefix in ONVIF_SUA/settings.yaml
+  node_id: galileo         # = serena.node_id in ONVIF_SUA/settings.yaml
+  queue_max: 200           # max queued outgoing messages while broker is unreachable
 
 # ---------------------------------------------------------------------------
 # Web dashboard
