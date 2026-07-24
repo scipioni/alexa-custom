@@ -1,0 +1,39 @@
+services:
+  onvif-events:
+    build: .
+    network_mode: "host"
+    volumes:
+      # Mount ONLY the package source read-only. The image installs onvif_sua
+      # EDITABLE (Dockerfile: uv sync), so this bind-mount is the code that runs —
+      # edits take effect on `docker compose restart` with NO rebuild. Do NOT mount
+      # over /app: that would hide /app/.venv (the interpreter) and
+      # /app/pyproject.toml (editable-install metadata) and break startup.
+      - ./onvif_sua:/app/onvif_sua:ro
+      # settings.yaml is the single config file (MQTT, scan, web password AND the
+      # static camera list) — writable so the GUI can persist changes (NOT :ro).
+      - ./settings.yaml:/app/settings.yaml
+      - ./data:/data
+    # Secrets (camera / scan / web GUI passwords) live in .env — git-ignored, loaded
+    # here for Docker and by python-dotenv for native `uv run`. See .env.example.
+    env_file:
+      - .env
+    environment:
+      # Only process/path settings live here now. All behaviour tuning (liveness,
+      # heartbeat, rule-check, keepalive, save interval, web port, scan concurrency)
+      # and MQTT/scan/cameras moved to settings.yaml — one config surface shared by
+      # the native (uv) and Docker run modes. See settings.yaml.example.
+      - TZ=Europe/Rome
+      - PYTHONUNBUFFERED=1
+      # Absolute in-container paths (native mode uses CWD-relative defaults instead).
+      - SETTINGS_FILE=/app/settings.yaml   # single config file (MQTT, scan, tuning, web, cameras)
+      - RESULTS_FILE=/data/events.json
+      - ALARM_FILE=/data/alarm.json
+    # CPU priority: relative weight (default 1024). 256 = yields the CPU to
+    # higher-priority containers under contention, but still uses idle cycles.
+    cpu_shares: 256
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"

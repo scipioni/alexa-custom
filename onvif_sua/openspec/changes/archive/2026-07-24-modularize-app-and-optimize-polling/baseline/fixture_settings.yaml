@@ -1,0 +1,25 @@
+# Fixed baseline fixture — DO NOT edit by hand; used by capture.py to make the
+# before/after refactor diff reproducible. Contains a valid PBKDF2 web password
+# hash (password "Admin123") so loading it never rewrites the file.
+mqtt:
+  host: ''
+  port: 1883
+  user: ''
+  pass: ''
+  prefix: onvif
+scan:
+  subnet: 192.168.110.0/24
+  credentials:
+  - user: admin
+    pass: secret
+cameras:
+  credentials:
+    user: admin
+    pass: secret
+    port: 80
+  list:
+  - ip: 192.168.110.50
+    name: valigetta1
+web:
+  password: pbkdf2:sha256:260000:0000000000000000000000000000000000000000000000000000000000000000:0000000000000000000000000000000000000000000000000000000000000000
+  asset_version: '1'

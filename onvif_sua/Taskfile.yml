@@ -1,0 +1,172 @@
+# go-task (https://taskfile.dev) — single command surface for both run modes.
+# It only shells out to the same uv/docker commands documented in the README, so
+# the two modes stay identical to running the commands by hand.
+version: '3'
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+    silent: true
+
+  # ── Native (uv) ──────────────────────────────────────────────────────────
+  setup:
+    desc: "Native: create the Python 3.13 venv and install the frozen lockfile"
+    cmds:
+      # Same lock-frozen verb as every other install path (NOT `uv pip install -e .`),
+      # so this can never silently re-resolve dependency ranges.
+      - uv venv --python 3.13
+      - uv sync --frozen
+
+  run:
+    desc: "Native: run the service (uv-managed .venv)"
+    cmds:
+      - uv run onvif-sua
+
+  test:
+    desc: "Run the pytest suite"
+    cmds:
+      - uv run --frozen pytest
+
+  lint:
+    desc: "Ruff check (correctness ruleset — see pyproject [tool.ruff])"
+    cmds:
+      - uv run --frozen ruff check onvif_sua tests
+
+  fix:
+    desc: "Ruff auto-fix + test"
+    cmds:
+      - uv run --frozen ruff check --fix onvif_sua tests
+      - uv run --frozen pytest
+
+  clean:
+    desc: "Native: remove the local virtualenv"
+    cmds:
+      - rm -rf .venv
+
+  # ── Packaging (wheel + pinned constraints) ──────────────────────────────────
+  build:
+    desc: "Build the wheel + sdist into dist/ and refresh the pinned requirements.lock"
+    cmds:
+      # Pin the exact dependency graph from uv.lock (project excluded — the wheel
+      # provides it) so `pip install <wheel> -c requirements.lock` on the target
+      # reproduces the same versions the venv/Docker resolve.
+      - uv export --frozen --no-emit-project --no-dev --no-hashes -o requirements.lock
+      # Build the distributables into dist/ (the wheel ships templates + static).
+      - uv build
+
+  install:
+    desc: "Install the built wheel into the uv-managed venv (pinned by requirements.lock)"
+    cmds:
+      # Installs the newest wheel from dist/ (run `task build` first). Pinned by
+      # requirements.lock so it resolves the same versions as setup/Docker.
+      - |
+        set -e
+        WHEEL=$(ls -t dist/onvif_sua-*.whl 2>/dev/null | head -1)
+        if [ -z "$WHEEL" ]; then
+          echo "!! No wheel in dist/ — run 'task build' first." >&2
+          exit 1
+        fi
+        echo ">> Installing $WHEEL"
+        uv pip install --upgrade "$WHEEL" -c requirements.lock
+
+  remove:
+    desc: "Uninstall the package from the uv-managed venv"
+    cmds:
+      - uv pip uninstall onvif-sua
+
+  install:systemd:
+    desc: "Install a pre-built wheel as a systemd service (needs sudo; run on the target). Vars: PREFIX, SVC_USER, PY"
+    vars:
+      PREFIX: '{{.PREFIX | default "/opt/onvif-sua"}}'
+      SVC_USER: '{{.SVC_USER | default "onvif"}}'
+      PY: '{{.PY | default "python3.13"}}'
+    cmds:
+      # NB: this does NOT depend on `build` — the target may not have uv. It installs
+      # the wheel already present in dist/ (built + copied from the packaging machine).
+      - |
+        set -e
+        WHEEL=$(ls -t dist/onvif_sua-*.whl 2>/dev/null | head -1)
+        if [ -z "$WHEEL" ]; then
+          echo "!! No wheel in dist/ — run 'task build' on the packaging machine and copy dist/ + requirements.lock here." >&2
+          exit 1
+        fi
+        if [ ! -f requirements.lock ]; then
+          echo "!! requirements.lock missing — copy it from the packaging machine (produced by 'task build')." >&2
+          exit 1
+        fi
+        echo ">> Installing $WHEEL into {{.PREFIX}} (user: {{.SVC_USER}}, python: {{.PY}})"
+        # 1) dedicated service user + dirs (idempotent)
+        id {{.SVC_USER}} >/dev/null 2>&1 || sudo useradd --system --home {{.PREFIX}} --shell /usr/sbin/nologin {{.SVC_USER}}
+        sudo mkdir -p {{.PREFIX}}/data
+        # 2) venv + wheel pinned by requirements.lock (--upgrade so re-running updates)
+        [ -x {{.PREFIX}}/.venv/bin/python ] || sudo {{.PY}} -m venv {{.PREFIX}}/.venv
+        sudo {{.PREFIX}}/.venv/bin/pip install --upgrade "$WHEEL" -c requirements.lock
+        # 3) config + secrets — cp -n NEVER clobbers an existing .env/settings.yaml
+        sudo cp -n settings.yaml {{.PREFIX}}/settings.yaml
+        sudo cp -n .env.example  {{.PREFIX}}/.env
+        sudo chmod 600 {{.PREFIX}}/.env
+        sudo chown -R {{.SVC_USER}}:{{.SVC_USER}} {{.PREFIX}}
+        # 4) unit — sed the committed file so PREFIX/SVC_USER overrides are honored
+        sed -e 's#/opt/onvif-sua#{{.PREFIX}}#g' \
+            -e 's#^User=onvif$#User={{.SVC_USER}}#' \
+            -e 's#^Group=onvif$#Group={{.SVC_USER}}#' \
+            onvif-sua.service | sudo tee /etc/systemd/system/onvif-sua.service >/dev/null
+        sudo systemctl daemon-reload
+        echo
+        echo ">> Installed. NOT started yet — set the real passwords first:"
+        echo "   1) sudo -e {{.PREFIX}}/.env        # CAMERA_PASSWORD, GUI_PASSWORD, ..."
+        echo "   2) sudo systemctl enable --now onvif-sua"
+        echo "   3) journalctl -u onvif-sua -f"
+
+  uninstall:systemd:
+    desc: "Remove the systemd service (needs sudo). Keeps config/data unless PURGE=true. Vars: PREFIX, SVC_USER, PURGE"
+    vars:
+      PREFIX: '{{.PREFIX | default "/opt/onvif-sua"}}'
+      SVC_USER: '{{.SVC_USER | default "onvif"}}'
+      PURGE: '{{.PURGE | default "false"}}'
+    cmds:
+      - |
+        set -e
+        echo ">> Stopping + disabling onvif-sua"
+        # `|| true`: succeed even if the service was never enabled/installed.
+        sudo systemctl disable --now onvif-sua 2>/dev/null || true
+        sudo rm -f /etc/systemd/system/onvif-sua.service
+        sudo systemctl daemon-reload
+        sudo systemctl reset-failed onvif-sua 2>/dev/null || true
+        echo ">> Service removed."
+        if [ "{{.PURGE}}" = "true" ]; then
+          echo "!! PURGE=true — deleting {{.PREFIX}} (config, .env SECRETS, data) and user {{.SVC_USER}}"
+          sudo rm -rf {{.PREFIX}}
+          sudo userdel {{.SVC_USER}} 2>/dev/null || true
+          echo ">> Purged {{.PREFIX}} and user {{.SVC_USER}}."
+        else
+          echo ">> Kept {{.PREFIX}} (config/.env/data). Re-run with PURGE=true to delete it too."
+        fi
+
+  # ── Docker ─────────────────────────────────────────────────────────────────
+  docker:build:
+    desc: "Docker: build the image"
+    cmds:
+      - docker compose build
+
+  docker:up:
+    desc: "Docker: start the container (detached)"
+    cmds:
+      - docker compose up -d
+
+  docker:down:
+    desc: "Docker: stop and remove the container"
+    cmds:
+      - docker compose down
+
+  docker:logs:
+    desc: "Docker: follow container logs"
+    cmds:
+      - docker compose logs -f
+
+  docker:restart:
+    desc: "Docker: restart (picks up code edits via the bind-mount, no rebuild)"
+    cmds:
+      - docker compose restart

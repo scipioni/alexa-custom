@@ -1,0 +1,65 @@
+# systemd unit for running onvif-sua at boot WITHOUT Docker.
+#
+# Assumes this recommended layout on the target host:
+#   /opt/onvif-sua/
+#   ├── .venv/          Python 3.13 venv with the wheel installed (pip install …whl -c requirements.lock)
+#   ├── settings.yaml   config (MQTT, scan, cameras) — no secrets
+#   ├── .env            secrets (CAMERA_PASSWORD / GUI_PASSWORD / …) — chmod 600
+#   └── data/           runtime state (events.json, alarm.json)
+#
+# Install: see the "Avvio automatico al boot senza Docker (systemd)" section of README.md.
+
+[Unit]
+Description=ONVIF/Dahua fall-detection event bridge (onvif-sua)
+# Cameras + MQTT are on the LAN; wait until the network is actually up.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# Run as a dedicated non-root user (create it once — see README). No privileged
+# ports are used (web UI is 8081), so root is NOT required.
+User=onvif
+Group=onvif
+
+# The app resolves settings.yaml / data/ RELATIVE to this directory. python-dotenv
+# also loads .env by walking up from the installed package, so in this layout (.env
+# is an ancestor of .venv) it is found automatically — this MUST be the install dir.
+WorkingDirectory=/opt/onvif-sua
+
+# Robustness: if the venv is NOT nested under this dir (e.g. a system-wide install),
+# python-dotenv's walk-up won't find .env. Uncomment to let systemd inject the
+# secrets directly. Requires plain KEY=value lines (the .env.example format); quote
+# any value containing spaces. The `-` makes it optional (no failure if absent).
+# EnvironmentFile=-/opt/onvif-sua/.env
+
+# Entry point installed by the wheel into the venv.
+ExecStart=/opt/onvif-sua/.venv/bin/onvif-sua
+# --- Alternative: native uv install (repo checkout instead of a wheel) ---
+# WorkingDirectory=/opt/onvif-sua        # the repo dir (contains pyproject.toml)
+# ExecStart=/usr/local/bin/uv run --frozen onvif-sua   # use `which uv` for the path
+
+# Match the Docker setup's timezone (timestamps use local time). Adjust as needed.
+Environment=TZ=Europe/Rome
+Environment=PYTHONUNBUFFERED=1
+
+# Auto-restart on crash; keep restarting across reboots.
+Restart=on-failure
+RestartSec=5
+
+# Logs go to the journal: `journalctl -u onvif-sua -f`.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=onvif-sua
+
+# --- Sandbox hardening (optional; safe with the /opt layout above) ---
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+# /opt/onvif-sua must stay writable (the GUI saves settings.yaml, data/ is written).
+ReadWritePaths=/opt/onvif-sua
+
+[Install]
+WantedBy=multi-user.target

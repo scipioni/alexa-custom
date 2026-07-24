@@ -1,0 +1,73 @@
+## 1. Baseline & scaffolding
+
+- [x] 1.1 Capture **reproducible** pre-refactor baselines to diff against later, using fixed inputs so the capture can be re-run identically (not a one-off manual snapshot). Commit all baselines as fixtures under the change/test dir so the before/after diff is repeatable by anyone:
+  - **Fixed config:** use a committed fixed `settings.yaml` fixture (`SETTINGS_FILE` pointed at it) so `_cfg` is identical across every run.
+  - **Pages:** the `_html_login()`/`_html_settings()`/`_html()` builders return static raw strings (no server-side data interpolation — all dynamic data loads client-side via `/api/*`), so page HTML is deterministic by construction. Capture the exact bytes of `/`, `/login`, `/settings` via FastAPI `TestClient` — the authenticated pages with a fixed injected session, plus the unauthenticated `/login` — and commit them.
+  - **MQTT:** replace the paho `mqtt.Client` with a stub that records every `.publish(topic, payload, qos, retain)` call instead of connecting to a broker; drive the `_mqtt_*` discovery + state functions for ONE fixed camera (fixed name + the fixed `_cfg` prefix/settings) and commit the recorded ordered list of `(topic, payload)` calls as the MQTT baseline.
+- [x] 1.2 Create the `onvif_sua/` package skeleton: `__init__.py`, `__main__.py`, `config.py`, `mqtt.py`, `scan.py`, `connect.py` (ONVIF connection module — a plain module at the package root, NOT an `onvif/` subpackage, to avoid shadowing the third-party `onvif` library), `web/__init__.py`, `web/app.py`, `web/routes.py`, `web/templates/`, `web/static/`.
+- [x] 1.3 Decide and create the home for shared runtime globals (camera registry, `_active_pullpoints`, alarm state) as a leaf module so no import cycles form.
+
+## 2. Move core (non-web) modules
+
+- [x] 2.1 Move config into `config.py`: `SETTINGS_FILE`, env vars, `_load_settings_yaml`/`_save_settings_yaml`, `_cfg`, `_get_cred_fallbacks`, `_load_static_cameras`, password helpers.
+- [x] 2.1a Add the static-asset cache-busting version to config: load `web.asset_version` (string) from `settings.yaml` in `_load_settings_yaml()` into `_cfg["asset_version"]`, defaulting to `"1"` when the key is absent; ensure `_save_settings_yaml()` writes `web.asset_version` back (round-trip, so a GUI save does not drop it). Add `web.asset_version` to `settings.yaml.example` with a comment explaining operators bump it after editing CSS/JS.
+- [x] 2.2 Move ONVIF connection code into `connect.py`: `_try_connect`, `_get_services`, `_safe_close`, `_safe_unsubscribe` (plus `_SubLimitError`, `_namespaces_to_labels`, `_get_analytics_rules` as needed). Preserve the WSDL-path resolution `__import__("onvif").__file__` verbatim — it must still resolve the third-party `onvif` library, which is exactly why this module is not named `onvif`.
+- [x] 2.3 Move scanning into `scan.py`: `_probe_ip`, `_subnet_scan_once`, `_tcp_probe`.
+- [x] 2.4 Move MQTT into `mqtt.py`: discovery + publish for device/detect/detection_ok/keepalive (`_mqtt_*`, `_compute_detection_ok`, `_refresh_detection_ok`), moved verbatim to preserve topics/payloads.
+- [x] 2.5 Move remaining runtime pieces (camera worker, Dahua CGI/keepalive threads, rule check, alarm/event recording, save/keepalive/republish loops, `_main_loop_coro`) into their appropriate modules and fix imports.
+
+## 3. Web layer
+
+- [x] 3.1 Create the FastAPI instance and auth (`_valid_session`, HMAC session helpers) in `web/app.py`; mount `StaticFiles` for `web/static/`; wire `Jinja2Templates` for `web/templates/`. Resolve both directories from the package location — `Path(__file__).resolve().parent / "web" / "static"` and `.../ "web" / "templates"` (or `importlib.resources.files("onvif_sua.web")`) — never CWD-relative. Leave the `/static` mount ungated by the per-route `_valid_session` check — it is a separate `StaticFiles` sub-app that is unauthenticated by default, so no session guard is added (assets contain no secrets and the login page needs its stylesheet). Register the config's `asset_version` (see 2.1a) as a `Jinja2Templates` global so every template can reference `{{ asset_version }}` for cache-busting (see 3.4).
+- [x] 3.2 Move all `/api/*` and page routes into `web/routes.py` and register them on the app.
+- [x] 3.3 Extract `_html_login()` → `templates/login.html`, `_html_settings()` → `templates/settings.html`, `_html()` → `templates/index.html`, converting f-string interpolation to Jinja2 variables.
+- [x] 3.4 Extract each page's inline blocks into its **own** static pair (verbatim, no merging across pages): `login.html`'s `<style>`/`<script>` → `static/login.css`/`static/login.js`; `settings.html`'s → `static/settings.css`/`static/settings.js`; `index.html`'s → `static/index.css`/`static/index.js`. Each template references ONLY its own pair. Do NOT create a shared `app.css`/`app.js` (the pages share no JS — `apiFetch`/pollers are dashboard-only — so a shared JS file would run dashboard pollers on `/login` and `/settings`). Cache-busting: expose the config's `asset_version` (from `settings.yaml` `web.asset_version`, see 2.1a) to Jinja2 as a template global named `asset_version`, and append `?v={{ asset_version }}` to EVERY `/static/*` reference in all three templates (e.g. `/static/index.js?v={{ asset_version }}`, `/static/login.css?v={{ asset_version }}`).
+- [x] 3.5 Diff rendered `/`, `/login`, `/settings` (re-captured via the same `TestClient` + fixed session/`settings.yaml` fixture as 1.1) against the 1.1 baselines and resolve differences until parity holds. Note the HTML is NOT byte-identical after extraction (an inline `<style>`/`<script>` block becomes an external `<link>`/`<script src="...?v=...">` reference), so verify parity as: (a) each extracted `static/*.css`/`*.js` file's content is byte-identical to the original inline block it was moved from, and (b) the page HTML matches the baseline except for each moved block being replaced by its asset reference — plus the intentional polling/`asset_version` deltas. Additionally — because a DOM diff cannot see runtime JS problems — load `/login` and `/settings` in a browser (or headless) and confirm ZERO JavaScript console errors and NO `/api/*` polling requests originating from those pages (i.e. dashboard pollers are not running there).
+
+## 4. Entrypoint & packaging
+
+- [x] 4.1 Put the startup sequence in a `main()` function (e.g. in `__main__.py`): `_load_settings_yaml`, `_load_alarm_file`, `_mqtt_init`, start web thread + save thread, `asyncio.run(_main_loop_coro())`, and the SIGTERM/SIGINT graceful-shutdown handlers; have `__main__.py`'s `if __name__ == "__main__"` call `main()`.
+- [x] 4.2 Add `pyproject.toml`: `requires-python = ">=3.13"`, **setuptools** build backend (not hatchling), dependencies (fastapi, uvicorn, onvif-zeep-async, requests, paho-mqtt, PyYAML), and `[project.scripts]` `onvif-sua = "onvif_sua.__main__:main"`. Declare package discovery and the templates/static package data explicitly so the wheel ships them:
+  ```toml
+  [build-system]
+  requires = ["setuptools>=68"]
+  build-backend = "setuptools.build_meta"
+
+  [tool.setuptools.packages.find]
+  include = ["onvif_sua*"]
+
+  [tool.setuptools.package-data]
+  "onvif_sua" = ["web/templates/*.html", "web/static/*"]
+  ```
+  Do NOT rely on `MANIFEST.in`/VCS-based inclusion — the explicit `package-data` globs are the mechanism. Add a comment noting the `>=3.13` floor is required for shared operation with the companion 3.13 software.
+- [x] 4.2a Confirm the `>=3.13` floor is viable BEFORE bumping the Docker base image: install the full dependency set into a Python 3.13 venv (`uv venv --python 3.13 && uv pip install .`) and verify each runtime dependency — notably `onvif-zeep-async`/`zeep` — resolves to a 3.13-compatible wheel/build and imports cleanly (`python -c "import fastapi, uvicorn, onvifzeep... , requests, paho.mqtt.client, yaml"`). If any dependency lacks 3.13 support, resolve it (pin a compatible version / patch / replace) and record the resolution; do not lower the floor.
+- [x] 4.3 Generate and commit `uv.lock` as the reproducibility source of truth: run `uv lock` to pin every runtime + transitive dependency to an exact version; keep dependency *ranges* in `pyproject.toml`. Remove `requirements.txt` (superseded by `uv.lock`). Commit `uv.lock` to git; do NOT gitignore it. Update `README.md` native install instructions to the uv workflow (`uv venv --python 3.13`, `uv sync --frozen`, `uv run onvif-sua`); add `.venv/` to `.gitignore`.
+- [x] 4.4 Verify native mode with uv, installing from the lockfile (`uv venv --python 3.13 && uv sync --frozen`), then confirm both `uv run onvif-sua` and `uv run python -m onvif_sua` load settings, connect MQTT, serve the dashboard, and enter the main loop.
+- [x] 4.5 Packaging validation (NOT a run mode — the run/setup verb everywhere is `uv sync --frozen`): prove the built wheel ships `web/templates/*` and `web/static/*` as package data. Do a NON-editable install with no source bind-mount — `uv pip install .` (not `-e`) — then run `onvif-sua` from a different working directory and confirm the template pages render and `/static/*` assets are served (resolved from the installed package location — no `TemplateNotFound` / `Directory ... does not exist`). This guards package-data correctness independently of the editable dev workflow.
+
+## 5. Polling changes (web-dashboard-polling)
+
+- [x] 5.1 In `static/index.js`, change `setInterval(refresh, 4000)` → `15000` and `setInterval(refreshAlarms, 3000)` → `12000`.
+- [x] 5.2 Add a `visibilitychange` listener backed by a dedicated auto-pause flag (separate from the manual `paused` flag) that stops BOTH `refresh` and `refreshAlarms` while `document.hidden` is true and, on becoming visible, calls `refresh()` + `refreshAlarms()` once immediately. Guard both loops on this auto-pause flag (note: today only `refresh()` is guarded and `refreshAlarms()` has none — add the auto-pause guard to `refreshAlarms()` as part of this change).
+- [x] 5.3 Keep the manual Pause button independent of auto-pause so a manual pause is not overridden by visibility changes. The manual `paused` flag SHALL continue to gate ONLY `refresh()` (status + events); it SHALL NOT gate `refreshAlarms()` — alarm polling keeps running while manually paused, matching the current `app.py` behavior. Consequently, on becoming visible the immediate `refresh()` is suppressed when manually paused, but the immediate `refreshAlarms()` still runs.
+
+## 6. Deployment (Docker mode)
+
+- [x] 6.1 Update `Dockerfile`: base `python:3.11-slim` → `python:3.13-slim`, copy `pyproject.toml` + the committed `uv.lock` + the package, replace `pip install -r requirements.txt` + `COPY app.py` with `uv sync --frozen` (installs frozen deps from the lockfile AND the project **editable** into `/app/.venv`, pinning the exact same versions as the native venv), and set `CMD ["uv", "run", "--frozen", "onvif-sua"]` (or put `/app/.venv/bin` on `PATH` and use `CMD ["onvif-sua"]`). Do NOT use a non-editable `pip install .` — it would install into site-packages and defeat the no-rebuild bind-mount in 6.2.
+- [x] 6.2 Update `docker-compose.yml`: replace the `./app.py:/app/app.py:ro` mount with the package source mount `./onvif_sua:/app/onvif_sua:ro` so the editable install (6.1) imports the bind-mounted source and code edits take effect on `docker compose restart` with no rebuild. Keep `settings.yaml`, `./data`, and all env vars unchanged. The mount MUST cover only the package source (plus `settings.yaml`/`./data`) — do NOT mount over `/app`, or it would hide `/app/.venv` (the interpreter) and `/app/pyproject.toml` (editable-install metadata) and break startup.
+- [x] 6.3 Deploy and verify Docker mode: container installs via `uv sync --frozen`, boots via `onvif-sua`, MQTT discovery/state match the 1.1 baseline, and the dashboard loads with the new polling behavior.
+- [x] 6.3a Verify the no-rebuild dev loop: with the image already built once, edit a source file under `onvif_sua/` (e.g. a polling constant in `web/static/index.js` and a string in a Python module), run `docker compose restart` (NOT rebuild), and confirm the running container serves the edited code. Confirm the editable install + bind-mount is what makes this work (no `docker compose build` in between).
+- [x] 6.4 Document the static-asset cache-revalidation approach in the deploy steps (`README.md`/compose notes): the version token is the `web.asset_version` value in `settings.yaml`, exposed as `?v=<asset_version>` on every `/static/*` URL. Instruct operators to bump `web.asset_version` and restart after editing CSS/JS so long-running kiosks re-fetch; note that without a bump a kiosk may keep serving the cached asset until a manual hard reload.
+
+## 7. Taskfile
+
+- [x] 7.1 Add `Taskfile.yml` at the repo root with native (uv) tasks: `setup` (`uv venv --python 3.13` + `uv sync --frozen` — the same lock-frozen verb as every other install path; NOT `uv pip install -e .`, so the Taskfile cannot silently re-resolve dependency ranges), `run` (`uv run onvif-sua`), and optional `clean` (remove `.venv`).
+- [x] 7.2 Add Docker tasks to the Taskfile: `docker:build`, `docker:up`, `docker:down`, `docker:logs`, `docker:restart` (mapping to the `docker compose` commands).
+- [x] 7.3 Verify `task --list` shows all tasks and that `task setup && task run` and `task docker:up` each start the service; document the Taskfile in `README.md`.
+
+## 8. Cleanup & verification
+
+- [x] 8.1 Remove `app.py` once the package is confirmed working.
+- [x] 8.2 Verify the polling scenarios in a browser: slower cadence (15s/12s); hidden tab does zero polling (both `refresh` and `refreshAlarms` stop); immediate refresh on becoming visible; manual pause stops only `refresh` while `refreshAlarms` keeps polling; and on becoming visible while manually paused, `refreshAlarms` runs immediately but `refresh` stays suppressed.
+- [x] 8.3 Verify MQTT payload/topic parity by re-running the 1.1 recording-stub capture (same fixed camera + `settings.yaml` fixture) and diffing the recorded `(topic, payload)` list against the committed MQTT baseline (must be identical), and dashboard/endpoint parity against the 1.1 page baselines per 3.5; confirm both run modes (native `onvif-sua` and Docker) produce identical behavior — including that both installed from the committed lockfile and resolved to the same dependency versions (e.g. compare `uv pip freeze` in the venv vs. inside the container); ensure `README.md` documents both.
+- [x] 8.4 Verify the unauthenticated login page loads its stylesheet: with no session, request `/login` and its referenced `/static` asset and confirm the asset returns 200 (not a 302 redirect to `/login`), so the login form is styled.

@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ONVIF Events</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
+<link rel="stylesheet" href="/static/index.css?v={{ asset_version }}">
+</head>
+<body>
+<div class="container-fluid py-3">
+  <div class="d-flex align-items-center mb-3 gap-3">
+    <h1 class="mb-0">📡 ONVIF Events</h1>
+    <span class="small" style="color:#fff" id="last-update">-</span>
+    <span class="badge bg-secondary ms-2" id="subnet-badge">-</span>
+    <a href="/settings" class="btn btn-sm btn-outline-secondary ms-auto">⚙️ Impostazioni</a>
+    <button class="btn btn-sm btn-outline-secondary" id="btn-stop-scan" onclick="stopScan()" disabled>⏹ Ferma scan</button>
+    <button class="btn btn-sm btn-outline-warning" id="btn-rescan" onclick="triggerRescan()">🔍 Rescan subnet</button>
+  </div>
+
+  <div class="row g-2 mb-3">
+    <div class="col-auto"><div class="card px-3 py-2"><div class="small" style="color:#fff">Trovate</div><div class="fs-4" style="color:#c9d1d9" id="s-total">-</div></div></div>
+    <div class="col-auto"><div class="card px-3 py-2"><div class="small" style="color:#fff">Connesse</div><div class="fs-4 text-success" id="s-conn">-</div></div></div>
+    <div class="col-auto"><div class="card px-3 py-2"><div class="small" style="color:#fff">No ONVIF</div><div class="fs-4" style="color:#adbac7" id="s-noonvif">-</div></div></div>
+    <div class="col-auto"><div class="card px-3 py-2"><div class="small" style="color:#fff">Errore</div><div class="fs-4 text-danger" id="s-err">-</div></div></div>
+    <div class="col-auto"><div class="card px-3 py-2"><div class="small" style="color:#fff">Eventi totali</div><div class="fs-4 text-info" id="s-evts">-</div></div></div>
+    <div class="col-auto"><div class="card px-3 py-2"><div class="small" style="color:#fff">Topic unici</div><div class="fs-4" style="color:#c9d1d9" id="s-topics">-</div></div></div>
+    <div class="col-auto ms-auto d-flex align-items-center">
+      <button class="btn btn-outline-warning btn-sm" onclick="clearLog()" title="Azzera log eventi e contatori per tutte le telecamere">🗑 Azzera contatori</button>
+    </div>
+  </div>
+
+  <div class="card mb-3" id="config-warning-card" style="display:none!important">
+    <div class="card-header" style="background:#3d2d00;border-color:#6e5000">
+      <span style="color:#e3b341">⚠️ Password da configurare</span>
+    </div>
+    <div class="card-body" id="config-warning-body"></div>
+  </div>
+
+  <div class="card mb-3" id="auth-warning-card" style="display:none!important">
+    <div class="card-header" style="background:#2d0000;border-color:#6e0000">
+      <span style="color:#ff4444">⛔ Login telecamera fallito — cambia la password</span>
+    </div>
+    <div class="card-body" id="auth-warning-body"></div>
+  </div>
+
+  <div class="card mb-3" id="alarms-card" style="display:none!important">
+    <div class="card-header" style="background:#2d0000;border-color:#6e0000">
+      <span style="color:#ff4444">🚨 Allarmi attivi</span>
+    </div>
+    <div class="card-body" id="alarms-body"></div>
+  </div>
+
+  <div class="card mb-3">
+    <div class="card-header d-flex align-items-center">
+      <span>📷 Telecamere scoperte — breakdown eventi</span>
+      <input class="form-control form-control-sm ms-auto w-auto" style="max-width:200px"
+             placeholder="Filtra IP / nome" oninput="filterCams(this.value)" id="cam-filter">
+    </div>
+    <div class="card-body p-0">
+      <table class="table table-sm table-dark mb-0">
+        <thead><tr>
+          <th style="width:130px;color:#c9d1d9">IP</th>
+          <th style="width:50px;color:#c9d1d9">Porta</th>
+          <th style="width:180px;color:#c9d1d9">Nome</th>
+          <th style="width:110px;color:#c9d1d9">Stato</th>
+          <th style="width:90px;color:#c9d1d9">Config</th>
+          <th style="width:180px;color:#c9d1d9">Servizi ONVIF</th>
+          <th style="color:#c9d1d9">Breakdown eventi</th>
+          <th style="width:120px;color:#c9d1d9">Azioni</th>
+          <th style="width:80px;color:#c9d1d9" title="Simula presenza + caduta per test Home Assistant senza telecamera reale">Simula</th>
+        </tr></thead>
+        <tbody id="cam-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div class="d-flex align-items-center gap-2 flex-wrap mb-2">
+        <span>📋 Log eventi live</span>
+        <input class="form-control form-control-sm" style="max-width:160px"
+               placeholder="Filtra IP / nome" oninput="filterLog()" id="log-filter">
+        <input class="form-control form-control-sm" style="max-width:180px"
+               placeholder="Filtra topic libero" oninput="filterLog()" id="log-topic-filter">
+        <button class="btn btn-sm btn-outline-danger ms-auto" onclick="clearLog()">🗑 Pulisci</button>
+      </div>
+      <div class="d-flex gap-1 flex-wrap" id="cat-toggles"></div>
+    </div>
+    <div class="card-body p-2" id="event-log"></div>
+  </div>
+</div>
+
+<script src="/static/index.js?v={{ asset_version }}"></script>
+</body>
+</html>

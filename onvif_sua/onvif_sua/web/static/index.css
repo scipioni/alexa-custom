@@ -1,0 +1,28 @@
+
+  body{background:#0d1117;color:#c9d1d9;font-family:monospace}
+  .card{background:#161b22;border:1px solid #30363d}
+  .card-header{background:#21262d;border-bottom:1px solid #30363d;color:#c9a227}
+  h1{color:#58a6ff}
+  .badge-connected{background:#238636}
+  .badge-connecting{background:#9e6a03}
+  .badge-error{background:#da3633}
+  .badge-no_onvif{background:#6e7681}
+  .badge-sub_limit{background:#6f42c1}
+  .badge-auth_failed{background:#da3633;color:#fff}
+  .evt-row:nth-child(odd){background:#0d1117}
+  .evt-row:nth-child(even){background:#161b22}
+  #event-log{height:420px;overflow-y:auto;font-size:.78rem}
+  .ts{color:#adbac7;min-width:180px;display:inline-block}
+  .cam-name{color:#f0883e;font-weight:bold}
+  .ev-pill{display:inline-flex;align-items:center;gap:4px;font-size:.72rem;
+           padding:2px 7px;border-radius:10px;margin:2px;border:1px solid transparent;
+           white-space:nowrap}
+  .ev-pill .cnt{font-weight:700;font-size:.8rem}
+  .total-evt{font-size:.8rem;color:#adbac7}
+  td.topics-cell{min-width:280px}
+  .text-muted{color:#adbac7!important}
+  code{color:#79c0ff}
+  ::placeholder{color:#8b949e!important;opacity:1}
+  .table-dark{--bs-table-bg:transparent;color:#c9d1d9}
+  .btn-outline-secondary{color:#adbac7;border-color:#57606a}
+  .btn-outline-secondary:hover{color:#fff;background:#30363d;border-color:#57606a}

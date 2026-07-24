@@ -1,0 +1,7 @@
+# Secrets — camera / scan / web GUI passwords. Only .env.example is committed.
+.env
+.claude
+.opencode
+.venv
+data/alarm.json
+data/events.json

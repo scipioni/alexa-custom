@@ -1,0 +1,67 @@
+# Single packaging source of truth (replaces requirements.txt). Dependency RANGES
+# express maintained intent; the committed uv.lock pins the exact resolved graph so
+# the native venv and the Docker image install identical versions (uv sync --frozen).
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "onvif-sua"
+version = "1.0.0"
+description = "ONVIF/Dahua fall-detection event bridge: subnet scan, MQTT/Home Assistant publishing, and a web dashboard."
+readme = "README.md"
+# The >=3.13 floor is REQUIRED for shared operation with the companion 3.13
+# software on the deployment host; do not lower it.
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "onvif-zeep-async>=4.0",
+    "requests>=2.31",
+    "paho-mqtt>=2.0",
+    "PyYAML>=6.0",
+    # jinja2 is required by the web layer (FastAPI Jinja2Templates); it was not a
+    # dependency of the old inline-HTML monolith.
+    "jinja2>=3.1",
+    # python-dotenv loads the .env secret file (camera/scan/web passwords) at
+    # startup so native `uv run` matches Docker's env_file behaviour.
+    "python-dotenv>=1.0",
+]
+
+[project.scripts]
+onvif-sua = "onvif_sua.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["onvif_sua*"]
+
+# The explicit package-data globs are what ship the extracted templates/static in
+# the built wheel (setuptools otherwise packages only .py files). This does NOT
+# rely on MANIFEST.in or VCS state.
+[tool.setuptools.package-data]
+"onvif_sua" = ["web/templates/*.html", "web/static/*"]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "ruff>=0.16.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 110
+
+[tool.ruff.lint]
+# Correctness-focused set (pycodestyle errors/warnings + pyflakes). The codebase
+# predates ruff and deliberately uses broad try/except for fault isolation and long
+# explanatory comments, so the opinionated style groups (BLE/S/DTZ/UP/I) are not
+# enabled here; E/F/W still catch real defects (undefined names, unused imports).
+select = ["E", "F", "W"]
+ignore = [
+    "E402",   # config.py deliberately runs load_dotenv before some imports
+    "E501",   # long explanatory comments are intentional throughout
+    "E701",   # config.py uses one-line `if key in x: _cfg[...] = ...` blocks
+    "E741",   # single-char loop vars in a few existing spots
+]

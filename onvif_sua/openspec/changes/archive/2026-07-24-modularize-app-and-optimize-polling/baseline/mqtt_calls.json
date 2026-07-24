@@ -1,0 +1,50 @@
+[
+  {
+    "topic": "homeassistant/binary_sensor/onvif_fall_valigetta1/config",
+    "payload": "{\"name\": \"Rilevamento caduta\", \"object_id\": \"rilevamento_caduta\", \"unique_id\": \"onvif_fall_valigetta1\", \"device_class\": \"safety\", \"icon\": \"mdi:account-injury\", \"state_topic\": \"onvif/valigetta1/alarms/fall\", \"payload_on\": \"on\", \"payload_off\": \"off\", \"expire_after\": 120, \"device\": {\"identifiers\": [\"onvif_fall_valigetta1\"], \"name\": \"valigetta1\", \"model\": \"Fall Detection\", \"manufacturer\": \"Dahua ONVIF\"}}",
+    "qos": 1,
+    "retain": true
+  },
+  {
+    "topic": "onvif/valigetta1/alarms/fall",
+    "payload": "on",
+    "qos": 1,
+    "retain": true
+  },
+  {
+    "topic": "onvif/valigetta1/alarms/fall",
+    "payload": "off",
+    "qos": 1,
+    "retain": true
+  },
+  {
+    "topic": "homeassistant/binary_sensor/onvif_detect_ok_valigetta1/config",
+    "payload": "{\"name\": \"Rilevamento attivo\", \"object_id\": \"rilevamento_attivo\", \"unique_id\": \"onvif_detect_ok_valigetta1\", \"device_class\": \"connectivity\", \"icon\": \"mdi:shield-check\", \"state_topic\": \"onvif/valigetta1/camera_status/fall_sensor_online\", \"json_attributes_topic\": \"onvif/valigetta1/camera_status/fall_sensor_online/attrs\", \"payload_on\": \"on\", \"payload_off\": \"off\", \"expire_after\": 120, \"device\": {\"identifiers\": [\"onvif_fall_valigetta1\"], \"name\": \"valigetta1\", \"model\": \"Fall Detection\", \"manufacturer\": \"Dahua ONVIF\"}}",
+    "qos": 1,
+    "retain": true
+  },
+  {
+    "topic": "onvif/valigetta1/camera_status/fall_sensor_online",
+    "payload": "on",
+    "qos": 1,
+    "retain": true
+  },
+  {
+    "topic": "onvif/valigetta1/camera_status/fall_sensor_online/attrs",
+    "payload": "{\"stream_alive\": true, \"rule_enabled\": true, \"liveness_mode\": \"heartbeat\"}",
+    "qos": 1,
+    "retain": true
+  },
+  {
+    "topic": "onvif/valigetta1/camera_status/fall_sensor_online",
+    "payload": "off",
+    "qos": 1,
+    "retain": true
+  },
+  {
+    "topic": "onvif/valigetta1/camera_status/fall_sensor_online/attrs",
+    "payload": "{\"stream_alive\": false, \"rule_enabled\": \"unknown\", \"liveness_mode\": \"heartbeat\"}",
+    "qos": 1,
+    "retain": true
+  }
+]

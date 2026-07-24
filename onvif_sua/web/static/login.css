@@ -1,0 +1,11 @@
+
+  body{background:#0d1117;color:#c9d1d9;font-family:monospace;display:flex;align-items:center;justify-content:center;min-height:100vh}
+  .card{background:#161b22;border:1px solid #30363d;width:100%;max-width:340px}
+  .card-header{background:#21262d;border-bottom:1px solid #30363d;color:#58a6ff}
+  .form-control{background:#0d1117;color:#c9d1d9;border-color:#30363d}
+  .form-control:focus{background:#0d1117;color:#c9d1d9;border-color:#58a6ff;box-shadow:0 0 0 .2rem #58a6ff33}
+  .btn-primary{background:#1f6feb;border-color:#1f6feb}
+  .text-muted{color:#adbac7!important}
+  .btn-outline-secondary{color:#adbac7;border-color:#57606a}
+  .btn-outline-secondary:hover{color:#fff;background:#30363d;border-color:#57606a}
+  ::placeholder{color:#8b949e!important;opacity:1}
