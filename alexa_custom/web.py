@@ -752,6 +752,21 @@ class WebServer:
         try:
             data = await request.json()
 
+            # Intercept and pop node_id to save in state.yaml instead of config.yaml
+            node_id_val = data.pop("node_id", None)
+            if node_id_val is not None:
+                node_id_val = str(node_id_val).strip()
+                try:
+                    from alexa_custom.audio_hw import _load_state_file, _save_state_file
+                    state_data = _load_state_file() or {}
+                    if node_id_val:
+                        state_data["node_id"] = node_id_val
+                    else:
+                        state_data.pop("node_id", None)
+                    _save_state_file(state_data)
+                except Exception as e:
+                    logger.error("Failed to write node_id to state.yaml: %s", e)
+
             is_valid, error_msg = self._validate_config(data)
             if not is_valid:
                 return web.json_response({"error": error_msg}, status=400)
@@ -801,6 +816,21 @@ class WebServer:
         temp_path = self._conf_dir / "config.yaml.tmp"
         try:
             data = await request.json()
+
+            # Intercept and pop node_id to save in state.yaml instead of config.yaml
+            node_id_val = data.pop("node_id", None)
+            if node_id_val is not None:
+                node_id_val = str(node_id_val).strip()
+                try:
+                    from alexa_custom.audio_hw import _load_state_file, _save_state_file
+                    state_data = _load_state_file() or {}
+                    if node_id_val:
+                        state_data["node_id"] = node_id_val
+                    else:
+                        state_data.pop("node_id", None)
+                    _save_state_file(state_data)
+                except Exception as e:
+                    logger.error("Failed to write node_id to state.yaml: %s", e)
 
             is_valid, error_msg = self._validate_config(data)
             if not is_valid:
@@ -1293,6 +1323,20 @@ class WebServer:
                 "host": display_host,
                 "fallback": config.llm.fallback_on_no_match,
             }
+
+        # Read local state.yaml override for node_id if present
+        local_node_id = ""
+        try:
+            from pathlib import Path
+            state_path = Path(self._conf_dir / "state.yaml")
+            if state_path.exists():
+                with state_path.open() as sf:
+                    state_data = yaml.safe_load(sf)
+                    if isinstance(state_data, dict) and "node_id" in state_data:
+                        local_node_id = state_data["node_id"]
+        except Exception:
+            pass
+        result["node_id"] = local_node_id
 
         return result
 

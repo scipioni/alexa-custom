@@ -127,6 +127,7 @@
             <label>Matching Algorithm</label>
             <select id="input-matching-algorithm">
               <option value="token_set_ratio">token_set_ratio</option>
+              <option value="token_sort_ratio">token_sort_ratio</option>
               <option value="levenshtein">levenshtein</option>
               <option value="ratio">ratio</option>
             </select>
@@ -136,6 +137,7 @@
             <select id="input-reply-matching-algorithm">
               <option value="levenshtein">levenshtein</option>
               <option value="token_set_ratio">token_set_ratio</option>
+              <option value="token_sort_ratio">token_sort_ratio</option>
               <option value="ratio">ratio</option>
             </select>
           </div>
@@ -224,6 +226,17 @@
         </div>
       `;
 
+      container.innerHTML += `
+        <div class="form-section">
+          <h3>MQTT & Identificazione</h3>
+          <div class="form-group">
+            <label>Node ID (Identificativo Univoco)</label>
+            <input type="text" id="input-node-id" placeholder="es. salone_casa_mare" style="padding: 8px 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: 14px; width: 100%; box-sizing: border-box;">
+            <span class="form-hint">ID univoco per questa board (lasciare vuoto per usare l'hostname di sistema)</span>
+          </div>
+        </div>
+      `;
+
       document.getElementById('input-wake-window').value = config.recognition?.wake_window ?? '';
       document.getElementById('input-matching-threshold').value = config.recognition?.matching_threshold ?? '';
       document.getElementById('input-matching-algorithm').value = config.recognition?.matching_algorithm || 'token_set_ratio';
@@ -239,6 +252,7 @@
       document.getElementById('input-input-gain').value = config.audio?.input_gain ?? '';
       document.getElementById('input-tts-backend').value = config.tts?.backend || 'piper';
       document.getElementById('input-tts-voice').value = config.tts?.voice || '';
+      document.getElementById('input-node-id').value = config.node_id ?? '';
     }
 
     function addWakeWord() {
@@ -299,6 +313,8 @@
           voice: document.getElementById('input-tts-voice').value
         };
       }
+
+      result.node_id = document.getElementById('input-node-id').value.trim();
 
       return result;
     }

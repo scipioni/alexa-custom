@@ -925,11 +925,25 @@ def _parse_mqtt_config(raw: dict) -> MQTTConfig | None:
     host = raw.get("host")
     if not host:
         return None
+
+    # Load local state.yaml override for node_id if present
+    node_id = raw.get("node_id")
+    try:
+        from pathlib import Path
+        state_path = Path("conf/state.yaml")
+        if state_path.exists():
+            with state_path.open() as sf:
+                state_data = yaml.safe_load(sf)
+                if isinstance(state_data, dict) and "node_id" in state_data:
+                    node_id = state_data["node_id"]
+    except Exception:
+        pass
+
     return MQTTConfig(
         host=str(host),
         port=int(raw.get("port", 1883)),
         topic_prefix=str(raw.get("topic_prefix", "alexa")),
-        node_id=str(raw.get("node_id")) if raw.get("node_id") else None,
+        node_id=str(node_id) if node_id else None,
         queue_max=int(raw.get("queue_max", 200)),
     )
 

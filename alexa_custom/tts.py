@@ -321,6 +321,7 @@ class PiperTTS(TTSBackend):
                             f"--rate={samplerate}",
                             "--channels=1",
                             "--format=s16le",
+                            "--latency-msec=20",
                         ],
                         stdin=subprocess.PIPE,
                         stderr=subprocess.DEVNULL,

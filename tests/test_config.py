@@ -214,6 +214,43 @@ class TestLoadConfig:
         assert result is not None
         assert result.web.history_max_entries == 100
 
+    def test_state_yaml_node_id_override(self, tmp_path, monkeypatch):
+        cfg_path = self._make_config(
+            tmp_path,
+            MINIMAL_CONFIG + "mqtt:\n  host: 127.0.0.1\n  node_id: original_id\n",
+        )
+        
+        # Write a mock state.yaml with a node_id override
+        state_dir = tmp_path / "conf"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        state_file = state_dir / "state.yaml"
+        with open(state_file, "w") as sf:
+            sf.write("node_id: overridden_id_from_state_yaml\n")
+            
+        # Mock Path in alexa_custom/config.py to look at our temporary state.yaml
+        from pathlib import Path
+        original_exists = Path.exists
+        original_open = Path.open
+        
+        def mock_exists(self_path):
+            if "state.yaml" in str(self_path):
+                return True
+            return original_exists(self_path)
+            
+        def mock_open(self_path, *args, **kwargs):
+            if "state.yaml" in str(self_path):
+                return open(state_file, *args, **kwargs)
+            return original_open(self_path, *args, **kwargs)
+            
+        monkeypatch.setattr(Path, "exists", mock_exists)
+        monkeypatch.setattr(Path, "open", mock_open)
+        
+        from alexa_custom.config import load_config
+        result = load_config(cfg_path)
+        assert result is not None
+        assert result.mqtt is not None
+        assert result.mqtt.node_id == "overridden_id_from_state_yaml"
+
     def test_wake_word_parsed_as_string(self, tmp_path):
         cfg_path = self._make_config(tmp_path)
         from alexa_custom.config import load_config

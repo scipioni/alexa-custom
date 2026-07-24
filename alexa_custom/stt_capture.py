@@ -405,6 +405,13 @@ def _capture_loop(
         if _norm_phrases and _normalize is not None and got_speech:
             _cur = " ".join(transcript_parts + ([last_partial] if last_partial else []))
             if _normalize(_cur) in _norm_phrases:
+                if _diag and _effective_vad_ms != fast_vad_ms:
+                    logger.debug(
+                        "Fast VAD triggered: reducing silence timeout from %dms to %dms for phrase %r",
+                        _effective_vad_ms,
+                        fast_vad_ms,
+                        _cur,
+                    )
                 _effective_vad_ms = min(_effective_vad_ms, fast_vad_ms)
         if (
             got_speech
