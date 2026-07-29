@@ -5,7 +5,7 @@ import json
 from typing import Optional
 
 from . import config
-from .config import _cfg, _serena_voice_name
+from .config import _cfg, _serena_trigger_name, _serena_voice_name
 from .state import _lock, _cameras
 
 
@@ -282,7 +282,7 @@ def _mqtt_publish_serena_trigger(cam_name: str):
         return
     try:
         topic  = _serena_trigger_topic()
-        phrase = _cfg["serena_command_template"].format(cam_name=_serena_voice_name(cam_name))
+        phrase = _cfg["serena_command_template"].format(cam_name=_serena_trigger_name(cam_name))
         # (B) Emit-time connectivity check: log (don't skip) when disconnected — the
         # QoS-1 publish is buffered and will flush on reconnect.
         if not _mqtt_client.is_connected():

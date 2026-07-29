@@ -76,6 +76,8 @@ pip install -e .[gstreamer]
 
 # 3. Download speech models (sherpa-onnx, Piper)
 serena-setup
+serena-setup --sherpa-onnx-model 64l
+task mqtt:setup 
 
 # 4. Audio routing (run once)
 task audio:setup

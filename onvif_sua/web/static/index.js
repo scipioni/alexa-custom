@@ -47,6 +47,9 @@ const TOPIC_MAP = [
   { k:'Media/ProfileChanged',        label:'Profilo chg',  bg:'#21262d', fg:'#8b949e' },
   { k:'ImageTooBlurry',              label:'Sfocatura',    bg:'#21262d', fg:'#8b949e' },
   { k:'ImageTooDark',                label:'Buio',         bg:'#21262d', fg:'#8b949e' },
+  // Not a camera event: the automatic rescan found a camera the operator removed and
+  // deliberately did not re-add it. Yellow like the other "operator should know" rows.
+  { k:'Scanner/RemovedNotReadded',   label:'⏭ Non riaggiunta', bg:'#2d2d00', fg:'#e3b341' },
 ];
 
 const SVC_HIGHLIGHT = {
@@ -218,15 +221,29 @@ async function refresh(force){
   }catch(e){}
 }
 
+function hintToHtml(hint){
+  // The hint comes from the server as plain text (with `backticked` commands) and is
+  // injected via innerHTML — escape it, then render the backticks as <code>.
+  const s=String(hint).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+                      .replace(/"/g,'&quot;');
+  const cap=s.charAt(0).toUpperCase()+s.slice(1);
+  return cap.replace(/`([^`]+)`/g,'<code>$1</code>')+'.';
+}
+
 function renderConfigWarning(pw){
   window._pwWarn = pw;
   const card=document.getElementById('config-warning-card');
   const body=document.getElementById('config-warning-body');
   const msgs=[];
   if(pw.cameras){
+    // `pw.hint` names where the placeholder actually came from: an exported variable
+    // wins over .env, so "modifica .env" alone would be wrong advice in that case.
+    const hint = pw.hint
+      ? hintToHtml(pw.hint)
+      : 'Modifica <code>CAMERA_PASSWORD</code> in <code>.env</code> e riavvia.';
     msgs.push('La <b>password comune telecamere</b> è ancora <code>default_to_change</code>: '
       +'le telecamere <b>non vengono connesse</b> (per evitare il blocco anti-intrusione Dahua). '
-      +'Modifica <code>CAMERA_PASSWORD</code> in <code>.env</code> e riavvia.');
+      +hint);
   }
   if(pw.scan){
     msgs.push('La <b>password di scansione</b> è ancora <code>default_to_change</code>: '

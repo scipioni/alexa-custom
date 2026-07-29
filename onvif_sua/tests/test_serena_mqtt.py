@@ -19,13 +19,13 @@ def test_trigger_emits_when_enabled(fake_mqtt):
     assert len(calls) == 1
     topic, payload, qos, retain = calls[0]
     assert topic == "alexa/serena/trigger/run"
-    assert payload == "caduta cucina"
+    assert payload == "caduta_cucina"
     assert qos == 1 and retain is False
 
 
 def test_trigger_renders_normalized_name(fake_mqtt):
     mqtt._mqtt_publish_serena_trigger("Salotto-1")
-    assert _trigger_calls(fake_mqtt)[0][1] == "caduta salotto 1"
+    assert _trigger_calls(fake_mqtt)[0][1] == "caduta_salotto_1"
 
 
 def test_trigger_noop_when_disabled(fake_mqtt):
@@ -62,7 +62,7 @@ def test_trigger_swallows_publish_exception(fake_mqtt):
 
 
 def test_trigger_swallows_template_exception(fake_mqtt):
-    config._cfg["serena_command_template"] = "caduta {cam_name} {oops}"  # bad at render
+    config._cfg["serena_command_template"] = "caduta_{cam_name} {oops}"  # bad at render
     mqtt._mqtt_publish_serena_trigger("cucina")   # must not raise
     assert _trigger_calls(fake_mqtt) == []
 

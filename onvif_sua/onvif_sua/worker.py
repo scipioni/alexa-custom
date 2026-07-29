@@ -55,6 +55,10 @@ def _new_cam(ip: str, name: str = "", user: str = "", pwd: str = "", port: int =
         "last_event_ts": None,
         "sub_addr":      "",
         "name_verified": True,
+        # ONVIF hostname the device reported (scan probe / configured entry), "" when
+        # unknown. Read by the save path to persist a `hostname:` entry instead of a
+        # static `ip:` one, so a later DHCP lease change is followed automatically.
+        "onvif_hostname": "",
         # ── detection-liveness state (guarded by _lock) ──
         "last_seen":     0.0,        # ts of last heartbeat/event (or keepalive probe)
         "stream_alive":  False,      # attach-stream liveness
@@ -116,6 +120,10 @@ async def _camera_worker(info: dict):
             return   # già gestita
         _cameras[ip] = _new_cam(ip, name, user, pwd, port)
         _cameras[ip]["_static"] = static
+        # Preserve the ONVIF hostname the caller knows about: the scan probe's
+        # GetHostname() reading for a discovered camera, or the configured hostname for
+        # a hostname-resolved one. Absent for a static-`ip` camera.
+        _cameras[ip]["onvif_hostname"] = str(info.get("hostname", "") or "").strip()
 
     # Liveness (attach stream + rule check) runs INDEPENDENTLY of the ONVIF
     # connection (task 3.5 / spec "Liveness stream runs independently of ONVIF").
@@ -322,18 +330,42 @@ def _load_alarm_file():
         # Only prune when the configured set is non-empty, so a transient config-parse
         # hiccup (empty set) can't nuke a legitimate in-progress alarm.
         configured = config._configured_camera_names()
+        # Freshness gate on the persisted state, using the SAME window as the Serena
+        # startup adoption below (serena_startup_alarm_max_age_s, normalized on every
+        # config load so it is available even with the bridge disabled).
+        #
+        # An "on" is only meaningful while the fall it describes could still be in
+        # progress. Without this gate a week-old "on" for a still-configured camera was
+        # loaded verbatim and republished to MQTT at the first connect, showing the fall
+        # alarm ACTIVE in Home Assistant with nothing able to clear it: _fire_stop only
+        # runs off a real `Stop` event, and that Start/Stop pair is long gone. The alarm
+        # latched until the next genuine fall completed. It also contradicted the Serena
+        # gate, which correctly stayed silent for the same state — so the alarm was on
+        # while the voice bridge denied it.
+        max_age = float(_cfg.get("serena_startup_alarm_max_age_s", 300.0))
+        fresh = _alarm_saved_at > 0 and (time.time() - _alarm_saved_at) <= max_age
         loaded = 0
+        stale_on: list[str] = []
         with _lock:
-            for cam_name, state in data.items():
+            for cam_name, cam_state in data.items():
                 if configured and cam_name not in configured:
                     print(f"[alarm] ignoro stato persistito per '{cam_name}' "
                           f"(telecamera non più configurata)", flush=True)
                     continue
-                _cam_alarms[cam_name] = state
+                if cam_state == "on" and not fresh:
+                    stale_on.append(cam_name)
+                    cam_state = "off"
+                _cam_alarms[cam_name] = cam_state
                 loaded += 1
             if _cam_alarms:
                 any_on = any(v == "on" for v in _cam_alarms.values())
                 _alarms["Alarm uomo a terra"] = "on" if any_on else "off"
+        if stale_on:
+            when = (f"{time.time() - _alarm_saved_at:.0f}s fa" if _alarm_saved_at > 0
+                    else "senza timestamp valido")
+            print(f"[alarm] stato 'on' scartato per {', '.join(stale_on)}: salvato {when} "
+                  f"(limite {max_age:.0f}s) — una caduta più vecchia del limite non è più "
+                  f"in corso e non deve restare attiva in Home Assistant", flush=True)
         print(f"[alarm] caricato {loaded}/{len(data)} voci da {ALARM_FILE}", flush=True)
     except FileNotFoundError:
         pass
@@ -976,11 +1008,10 @@ def _save_loop():
                     "saved_at":        datetime.now().isoformat(timespec="seconds"),
                     "scan_subnet":     SCAN_SUBNET,
                     "alarms":          dict(_alarms),
-                    "cameras":         {
-                        ip: {k: v for k, v in cam.items()
-                             if k not in ("last_events", "_analytics_queried")}
-                        for ip, cam in _cameras.items()
-                    },
+                    # Credential-redacted: see state._CAM_PRIVATE_KEYS. This file is a
+                    # plain-text dump an operator reads by hand; it must not carry the
+                    # camera password.
+                    "cameras":         _state._public_cameras(_cameras),
                     "event_log_last200": _event_log[-200:],
                 }
             tmp = RESULTS_FILE + ".tmp"
@@ -1037,7 +1068,10 @@ def _serena_fault_tick(now: float):
     interval = float(_cfg.get("serena_announce_fault_interval_s", 300.0))
     grace    = float(_cfg.get("serena_announce_fault_grace_s", 60.0))
     for cam_cfg in list(config._static_cameras):
-        ip = cam_cfg.get("ip")
+        # A hostname-configured camera is addressed by its resolved IP; one that has
+        # never resolved has no runtime row either, so it is skipped here just as it
+        # was before this change.
+        ip = _resolved_static_ip(cam_cfg)
         if not ip:
             continue
         working = _camera_working(ip)
@@ -1082,6 +1116,181 @@ def _serena_fault_tick(now: float):
                         cam["serena_fault_announced"] = True
 
 
+# ── hostname → IP resolution (cameras configured by ONVIF hostname) ─────────────
+# Fixed cadence: not per-camera configurable by design. The first sweep runs
+# immediately at boot so a hostname camera does not wait a full interval to start.
+HOSTNAME_RESOLVE_INTERVAL = 600.0
+
+
+def _hostname_cameras() -> list[dict]:
+    """The configured cameras addressed by `hostname` instead of a static `ip`, in
+    `cameras.list` order (that order breaks a two-hostnames-one-IP collision)."""
+    return [c for c in list(config._static_cameras) if c.get("hostname")]
+
+
+def _resolved_static_ip(cam_cfg: dict) -> Optional[str]:
+    """The IP a configured camera is reachable at right now: its static `ip`, or the
+    last-resolved IP of its `hostname` (None when it has never resolved)."""
+    ip = str(cam_cfg.get("ip", "") or "").strip()
+    if ip:
+        return ip
+    hn = cam_cfg.get("hostname")
+    return _state._resolved_ip(hn) if hn else None
+
+
+async def _apply_hostname_resolution(resolved: dict, quiet_unresolved: bool = False) -> set:
+    """Attach every hostname-configured camera to the IP it currently answers on.
+
+    `resolved` maps canonical hostname → IP. Spawns a worker for a hostname that just
+    resolved, MIGRATES one whose IP changed (teardown on the old IP, respawn on the new,
+    preserving `name`), and does NOTHING for a hostname absent from `resolved` — that
+    covers both "no match" and "ambiguous", where the last known IP is kept and a running
+    worker is never torn down, so a scan blip or a duplicate device cannot drop a working
+    camera.
+
+    Returns the set of IPs now owned by hostname-configured cameras, so a caller that also
+    discovers cameras (`_subnet_scan_once`) can skip them instead of spawning a SECOND,
+    non-static worker for a device it just migrated — which is how one physical camera
+    ended up as two dashboard rows after an address change.
+    """
+    cams = _hostname_cameras()
+    owned: set = set()
+    if not cams:
+        return owned
+    cred = config._COMMON_CRED
+    if config._is_placeholder_pw(cred.get("pass", "")):
+        return owned   # no workers are started at all in this state (see _main_loop_coro)
+
+    # IPs that are NOT available to a hostname camera: those pinned by a static entry.
+    static_ips = {str(c["ip"]).strip() for c in config._static_cameras if c.get("ip")}
+
+    for cam_cfg in cams:
+        hostname = cam_cfg["hostname"]
+        key      = _state._hostname_key(hostname)
+        name     = cam_cfg["name"]
+        new_ip   = resolved.get(key)
+        old_ip   = _state._resolved_ip(key)
+        if not new_ip:
+            # Unresolved or ambiguous → treated identically: keep the last known IP.
+            if old_ip is None and not quiet_unresolved:
+                print(f"[hostname] '{hostname}' ({name}) non risolto — nessun worker, "
+                      f"riprovo tra {int(HOSTNAME_RESOLVE_INTERVAL)}s", flush=True)
+            if old_ip:
+                owned.add(old_ip)
+            continue
+        owned.add(new_ip)
+        running_ip = old_ip if old_ip in _worker_tasks else None
+        if running_ip == new_ip:
+            continue   # already running on the right IP — no-op
+        if new_ip in static_ips:
+            print(f"[hostname] '{hostname}' ({name}) risolve a {new_ip}, già configurato "
+                  f"come ip statico di un'altra voce — ignorato", flush=True)
+            continue
+        if running_ip:
+            print(f"[hostname] '{hostname}' ({name}) cambiata IP: {running_ip} → {new_ip} "
+                  f"— sostituisco il worker", flush=True)
+            await _teardown_camera(running_ip)
+        elif old_ip and old_ip != new_ip:
+            # No live worker on the stale IP, but a stale row/CGI thread may linger from
+            # before (e.g. the worker died while the address was changing). Tear it down
+            # so the dashboard does not keep a second row for this camera.
+            await _teardown_camera(old_ip)
+        _state._set_resolved_ip(key, new_ip)
+        if new_ip in _worker_tasks:
+            continue   # another camera already occupies this IP at runtime
+        if not running_ip:
+            print(f"[hostname] '{hostname}' ({name}) risolto a {new_ip} — avvio worker", flush=True)
+        _spawn_worker({
+            "ip":       new_ip,
+            "name":     name,
+            "hostname": hostname,
+            "user":     cred["user"],
+            "pass":     cred["pass"],
+            "port":     cred["port"],
+            "static":   True,
+        })
+    return owned
+
+
+async def _hostname_resolve_tick():
+    """One resolution pass over every hostname-configured camera: its own subnet sweep,
+    then the shared attach/migrate step."""
+    cams = _hostname_cameras()
+    if not cams:
+        return
+    if config._is_placeholder_pw(config._COMMON_CRED.get("pass", "")):
+        return
+
+    from . import scan   # local: scan imports _spawn_worker from this module
+
+    resolved = await scan._resolve_hostnames([c["hostname"] for c in cams])
+    await _apply_hostname_resolution(resolved)
+
+
+async def _hostname_resolve_loop():
+    """Periodic host for _hostname_resolve_tick: one sweep immediately at boot, then
+    every HOSTNAME_RESOLVE_INTERVAL seconds for the lifetime of the process."""
+    while True:
+        try:
+            await _hostname_resolve_tick()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print(f"[hostname] errore nel giro di risoluzione: {e}", flush=True)
+        await asyncio.sleep(HOSTNAME_RESOLVE_INTERVAL)
+
+
+# ── automatic periodic rescan (opt-in via scan.rescan_time_interval) ─────────────
+# Poll cadence for the due-check. Deliberately much shorter than any sane interval so a
+# change to rescan_time_interval (settings reload or POST /api/config) takes effect
+# promptly, and the "elapsed since the last scan" test has decent resolution.
+AUTO_RESCAN_TICK = 30.0
+
+
+def _auto_rescan_due(now: float) -> bool:
+    """True when an automatic subnet rescan should start now.
+
+    Three gates, in order: the feature is enabled (interval > 0), no scan is already
+    running (a manual rescan in progress must not be doubled), and at least one full
+    interval has elapsed SINCE THE LAST SCAN — manual or automatic. Measuring from the
+    last scan rather than from a fixed tick is what makes a manual rescan push the next
+    automatic one a full interval out, instead of one firing seconds later."""
+    from . import scan   # local: scan imports _spawn_worker from this module
+
+    interval = config._rescan_interval()
+    if interval <= 0:
+        return False
+    if scan._scan_active:
+        return False
+    return (now - scan._last_scan_ts) >= interval
+
+
+async def _auto_rescan_loop():
+    """Periodic host for the automatic rescan. Dormant (a bare poll) while
+    `scan.rescan_time_interval` is 0, which is the default — the scanner then runs only
+    when the operator asks, exactly as before this feature."""
+    from . import scan
+
+    # Count the first interval from process start, not from epoch 0: with no scan yet,
+    # an unset timestamp would otherwise read as "infinitely overdue" and sweep the
+    # subnet at boot, which the service has never done.
+    if scan._last_scan_ts == 0.0:
+        scan._last_scan_ts = time.time()
+    while True:
+        interval = config._rescan_interval()
+        await asyncio.sleep(min(AUTO_RESCAN_TICK, interval) if interval > 0 else AUTO_RESCAN_TICK)
+        try:
+            if _auto_rescan_due(time.time()):
+                print(f"[scanner] rescan automatico: sono passati "
+                      f"{config._rescan_interval():.0f}s dall'ultimo scan", flush=True)
+                await scan._subnet_scan_once(automatic=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print(f"[scanner] rescan automatico fallito: {e}", flush=True)
+            scan._last_scan_ts = time.time()   # don't retry in a tight loop
+
+
 async def _serena_fault_driver_loop():
     """Periodic host for _serena_fault_tick. Tick cadence tracks the configured
     interval (bounded 5..60 s) so the interval/grace gates have adequate resolution."""
@@ -1111,6 +1320,17 @@ async def _main_loop_coro():
     asyncio.create_task(_mqtt_alarm_keepalive_loop(), name="mqtt-alarm-keepalive")
     asyncio.create_task(_detection_ok_republish_loop(), name="detect-republish")
     asyncio.create_task(_serena_fault_driver_loop(), name="serena-fault-driver")
+    # Cameras configured by ONVIF hostname: resolve them to a current IP (immediately,
+    # then every 10 min) and keep their workers attached to it. No-op when every entry
+    # carries a static `ip`.
+    asyncio.create_task(_hostname_resolve_loop(), name="hostname-resolve")
+    # Automatic periodic rescan — dormant unless scan.rescan_time_interval > 0.
+    asyncio.create_task(_auto_rescan_loop(), name="auto-rescan")
+    _auto_interval = config._rescan_interval()
+    print("[scanner] rescan automatico: "
+          + (f"ogni {_auto_interval:.0f}s dall'ultimo scan" if _auto_interval > 0
+             else "disabilitato (scan.rescan_time_interval=0 — solo rescan manuale)"),
+          flush=True)
 
     if config._is_placeholder_pw(cred.get("pass", "")):
         # Common camera password is still the shipped placeholder. Do NOT start any
@@ -1118,16 +1338,26 @@ async def _main_loop_coro():
         # the Dahua anti-intrusion lockout and block the cameras. The dashboard shows a
         # warning; set a real password in .env (CAMERA_PASSWORD) and
         # restart to enable connections.
+        # Name the SOURCE of the placeholder, not just the file it usually lives in: an
+        # exported CAMERA_PASSWORD wins over .env (load_dotenv override=False), so "cambia
+        # .env e riavvia" would send the operator to re-edit a file that is already right.
         print(f"[onvif] ATTENZIONE: password comune telecamere = "
               f"'{config.DEFAULT_PASSWORD_SENTINEL}' — nessun worker avviato (evito il "
-              f"blocco anti-intrusione). Cambia CAMERA_PASSWORD in .env "
-              f"e riavvia.", flush=True)
+              f"blocco anti-intrusione). "
+              f"{config._placeholder_pw_hint(config._placeholder_pw_var('cameras'))}.",
+              flush=True)
     elif not cams:
         print("[onvif] nessuna telecamera configurata in settings.yaml — nessun worker avviato "
               "(web UI e scan manuale restano disponibili)", flush=True)
     else:
-        print(f"[onvif] avvio {len(cams)} telecamere statiche da {SETTINGS_FILE}", flush=True)
-        for cam in cams:
+        # Static-`ip` cameras start right away. A hostname-configured camera has no
+        # address yet: its worker is deferred to the hostname-resolution task above,
+        # whose first sweep runs immediately (so the delay is one sweep, not 10 min).
+        by_ip   = [c for c in cams if c.get("ip")]
+        by_host = [c for c in cams if c.get("hostname")]
+        print(f"[onvif] avvio {len(by_ip)} telecamere statiche da {SETTINGS_FILE}"
+              + (f" (+{len(by_host)} da risolvere per hostname)" if by_host else ""), flush=True)
+        for cam in by_ip:
             info = {
                 "ip":     cam["ip"],
                 "name":   cam["name"],

@@ -3,6 +3,7 @@
 import asyncio
 import ipaddress
 import os
+import time
 from datetime import datetime
 
 from fastapi import Request
@@ -16,7 +17,9 @@ from ..config import (
     _cfg, _INT_KEYS, _LIST_KEYS,
     _get_cred_fallbacks, _config_name_conflict, _config_add_camera,
     _config_remove_camera, _check_password, _save_settings_yaml,
-    _name_has_reserved_word, _name_voice_collision,
+    _name_has_reserved_word, _name_voice_collision, _config_hostname_conflict,
+    _update_static_camera_entry, _drop_static_camera_entry,
+    _config_has_ip_entry, _register_static_camera,
 )
 from ..state import (
     _lock, _cameras, _event_log, _alarms, _cam_alarms, _removed_ips,
@@ -35,7 +38,9 @@ from ..connect import _safe_close
 def api_cameras(request: Request):
     if not _valid_session(request): return JSONResponse(_401, status_code=401)
     with _lock:
-        return JSONResponse(list(_cameras.values()))
+        # Credential-redacted: see state._CAM_PRIVATE_KEYS. The entry holds the working
+        # `user`/`pass` and this body is readable in any browser network tab or proxy log.
+        return JSONResponse([state._public_cam(c) for c in _cameras.values()])
 
 
 @app.get("/api/events")
@@ -51,10 +56,14 @@ def api_status(request: Request):
     # Snapshot the quarantine list OUTSIDE the lock below — _auth_failures_list()
     # takes _lock itself and the threading.Lock is not reentrant.
     auth_failures = state._auth_failures_list()
+    rescan_interval = config._rescan_interval()
+    rescan_in = (max(0.0, round(scan._last_scan_ts + rescan_interval - time.time(), 1))
+                 if rescan_interval > 0 else None)
     with _lock:
         return JSONResponse({
             "scan_subnet":   _cfg["scan_subnet"],
-            "cameras":       _cameras,
+            # Credential-redacted: see state._CAM_PRIVATE_KEYS.
+            "cameras":       state._public_cameras(_cameras),
             "event_log":     _event_log[-200:],
             # Placeholder-password guard: which credentials still hold the shipped
             # 'default_to_change' sentinel (workers/scan suppressed while true).
@@ -62,9 +71,14 @@ def api_status(request: Request):
             # Cameras quarantined after a login/auth failure — retries suspended so a
             # wrong password can't trip the anti-intrusion lockout. Drives the UI warning.
             "auth_failures": auth_failures,
-            # Additive: True while a manual subnet scan is running — drives the
-            # dashboard's stop-scan button. Existing consumers ignore it.
+            # Additive: True while a subnet scan is running — drives the dashboard's
+            # stop-scan button. Existing consumers ignore it.
             "scan_active":   scan._scan_active,
+            # Automatic-rescan state (additive): the effective interval in seconds
+            # (0 = disabled) and the seconds left before the next one, so the dashboard
+            # can show when it will happen. None when disabled.
+            "rescan_interval": rescan_interval,
+            "rescan_in":       rescan_in,
         })
 
 
@@ -93,6 +107,13 @@ async def api_rename_camera(ip: str, request: Request):
     if not new_name:
         return JSONResponse({"status": "error", "detail": "Nome non valido dopo sanitizzazione"}, status_code=400)
 
+    # A camera configured by ONVIF `hostname` instead of a static `ip` is addressed
+    # here by its RESOLVED IP, and its cameras.list entry has no `ip` key at all — so
+    # every config helper below must locate it by hostname (matching on IP would
+    # render the literal "None" and silently act on "a different camera"). None for a
+    # static-`ip` camera, which keeps the pre-existing behaviour exactly.
+    cfg_hostname = state._hostname_for_ip(ip)
+
     # Serena bridge naming rules — enforced BEFORE touching the device (SetHostname)
     # or settings.yaml, mirroring the name-conflict alert below. The camera name feeds
     # the spoken phrase, so it must not contain 'camera' nor collide (after voice
@@ -103,12 +124,25 @@ async def api_rename_camera(ip: str, request: Request):
              "detail": "Il nome non può contenere 'camera' (usa il nome della stanza, es. 'cucina')"},
             status_code=400,
         )
-    voice_clash = _name_voice_collision(ip, new_name)
+    voice_clash = _name_voice_collision(ip, new_name, cfg_hostname)
     if voice_clash:
         return JSONResponse(
             {"status": "error",
              "detail": f"Il nome '{new_name}' coincide (dopo normalizzazione) con la telecamera {voice_clash}"},
             status_code=400,
+        )
+
+    # Renaming sets the camera's ONVIF device hostname — the value the resolution
+    # sweep matches on. Renaming THIS camera to ANOTHER entry's configured hostname
+    # would make it answer that entry's resolution (and make that entry permanently
+    # ambiguous), so refuse before the device is touched. Its own hostname is fine.
+    host_clash = _config_hostname_conflict(new_name, cfg_hostname)
+    if host_clash:
+        return JSONResponse(
+            {"status": "error",
+             "detail": f"Il nome '{new_name}' è l'hostname configurato della telecamera "
+                       f"{host_clash} — rinominando questa risponderebbe al posto di quella"},
+            status_code=409,
         )
 
     with _lock:
@@ -119,7 +153,7 @@ async def api_rename_camera(ip: str, request: Request):
     # Every rename is persisted to settings.yaml (renaming saves the camera, even
     # one not saved before). Block a name already used by ANOTHER saved camera
     # BEFORE touching the device — protects the unique MQTT/HA identity.
-    clash_ip = _config_name_conflict(ip, new_name)
+    clash_ip = _config_name_conflict(ip, new_name, cfg_hostname)
     if clash_ip:
         return JSONResponse(
             {"status": "error", "detail": f"Nome '{new_name}' già usato dalla telecamera {clash_ip}"},
@@ -162,17 +196,55 @@ async def api_rename_camera(ip: str, request: Request):
         if old_name in _cam_alarms:
             _cam_alarms[new_name] = _cam_alarms.pop(old_name)
 
+    # For a hostname-configured camera the device hostname IS the discovery key, so it
+    # has just changed with the name: rewrite the entry's `hostname` in the same save.
+    # Write what the device actually REPORTS (self-healing when firmware normalises or
+    # truncates the requested name); only a failed verification read leaves a guess.
+    new_hostname = None
+    if cfg_hostname:
+        if actual_name:
+            new_hostname = actual_name
+        else:
+            new_hostname = new_name
+            print(f"[hostname] {ip} — rilettura hostname fallita dopo SetHostname: "
+                  f"scrivo '{new_hostname}' in settings.yaml al posto di '{cfg_hostname}' "
+                  f"senza conferma dal device — verifica la voce se non si risolve", flush=True)
+
     # Renaming persists the camera to settings.yaml — and, if it wasn't saved
     # before, promotes it to a running static worker (mirrors the 💾 button). No
     # manual save needed.
-    ok, msg = _config_add_camera(ip, new_name, int(cam["port"]))
+    ok, msg = _config_add_camera(ip, new_name, int(cam["port"]),
+                                hostname=cfg_hostname, set_hostname=new_hostname)
     if ok:
         _removed_ips.discard(ip)
+        state._operator_removed.discard(ip)   # renaming saves the camera: wanted again
+        # Keep the in-memory static list (what the resolution loop iterates) in step,
+        # and move the cached resolved IP to the new hostname key. Leaving a stale key
+        # would make the next sweep see a never-resolved hostname and spawn a SECOND
+        # worker on the IP that already has one. The worker itself is untouched — the
+        # IP did not change, only the key it is cached under.
+        _update_static_camera_entry(ip, new_name, hostname=cfg_hostname,
+                                    set_hostname=new_hostname)
+        if cfg_hostname and new_hostname:
+            state._rekey_resolved_hostname(cfg_hostname, new_hostname)
         if state._main_loop:
             asyncio.run_coroutine_threadsafe(_promote_static(ip), state._main_loop)
 
     print(f"[onvif] {ip} rinominata: {cam['name']} → {new_name} "
           f"(verifica: {actual_name!r}, settings.yaml: {msg if ok else 'errore'})", flush=True)
+    if not ok and cfg_hostname:
+        # The DEVICE has already been renamed but the config was not: the entry still
+        # names the old hostname and will no longer resolve. Report the rename as
+        # failed and log the device's new hostname so it can be repaired by hand.
+        print(f"[hostname] ATTENZIONE: {ip} ha ora hostname ONVIF "
+              f"'{new_hostname}' ma settings.yaml non è stato aggiornato ({msg}) — "
+              f"correggi a mano 'hostname: {new_hostname}' nella voce '{cfg_hostname}'",
+              flush=True)
+        return JSONResponse({"status": "error", "name": new_name, "actual": actual_name,
+                             "verified": verified, "saved": False,
+                             "detail": f"{msg} — hostname del device ora '{new_hostname}': "
+                                       f"correggi settings.yaml a mano"},
+                            status_code=500)
     return JSONResponse({"status": "ok", "name": new_name, "actual": actual_name,
                          "verified": verified, "saved": ok, "detail": msg})
 
@@ -193,8 +265,14 @@ async def api_save_camera(ip: str, request: Request):
             return JSONResponse({"status": "error", "detail": "Camera non trovata"}, status_code=404)
         name = (body.get("name") or cam.get("name") or "").strip()
         port = int(cam.get("port", 80))
+        dev_hostname = str(cam.get("onvif_hostname", "") or "").strip()
     if not name or name == ip:
         return JSONResponse({"status": "error", "detail": "Assegna prima un nome alla telecamera"}, status_code=400)
+
+    # An already-configured hostname camera is addressed here by its resolved IP; pass
+    # the hostname so its existing entry is updated instead of a duplicate `{ip, name}`
+    # row being appended (None for a static/discovered camera — unchanged behaviour).
+    cfg_hostname = state._hostname_for_ip(ip)
 
     # Serena bridge naming rules (see api_rename_camera). _config_add_camera also
     # enforces these as the shared chokepoint, but surface a clear 400 here.
@@ -204,7 +282,7 @@ async def api_save_camera(ip: str, request: Request):
              "detail": "Il nome non può contenere 'camera' (usa il nome della stanza, es. 'cucina')"},
             status_code=400,
         )
-    voice_clash = _name_voice_collision(ip, name)
+    voice_clash = _name_voice_collision(ip, name, cfg_hostname)
     if voice_clash:
         return JSONResponse(
             {"status": "error",
@@ -212,16 +290,46 @@ async def api_save_camera(ip: str, request: Request):
             status_code=400,
         )
 
-    ok, msg = _config_add_camera(ip, name, port)
+    # Which address form to persist. A camera with NO entry yet is saved as a `hostname:`
+    # entry whenever the device reported an ONVIF hostname, so the periodic resolution
+    # keeps its address current and a DHCP lease change never orphans the entry. An entry
+    # that ALREADY exists keeps its current form: silently converting a static `ip:` entry
+    # to `hostname:` (or back) would change how it is addressed without being asked.
+    fell_back_to_ip = False
+    if cfg_hostname:
+        append_hostname, saved_hostname = None, cfg_hostname       # existing hostname entry
+    elif _config_has_ip_entry(ip):
+        append_hostname, saved_hostname = None, None               # existing static entry
+    else:
+        append_hostname = dev_hostname or None                     # new entry
+        saved_hostname = append_hostname
+        fell_back_to_ip = not append_hostname
+
+    ok, msg = _config_add_camera(ip, name, port, hostname=cfg_hostname,
+                                 append_hostname=append_hostname)
     if not ok:
         return JSONResponse({"status": "error", "detail": msg}, status_code=409)
+    # Make the entry visible to the runtime loops without a restart, and seed the
+    # hostname→IP cache with the address it answers at right now, so the camera keeps
+    # running and a later rename/remove finds its entry by hostname.
+    _register_static_camera(ip, name, hostname=saved_hostname)
+    if saved_hostname:
+        state._set_resolved_ip(saved_hostname, ip)
+    # Saving is the opposite of removing: this camera is wanted again, so let the
+    # automatic rescan see it once more.
+    state._operator_removed.discard(ip)
 
     # Promote to a static worker at runtime (rule-check + detection_ok) on the loop.
     if state._main_loop:
         asyncio.run_coroutine_threadsafe(_promote_static(ip), state._main_loop)
     _removed_ips.discard(ip)
-    print(f"[cameras] {ip} ({name}) — salvata in settings.yaml ({msg})", flush=True)
-    return JSONResponse({"status": "ok", "name": name, "detail": msg})
+    form = f"hostname: {saved_hostname}" if saved_hostname else f"ip: {ip}"
+    print(f"[cameras] {ip} ({name}) — salvata in settings.yaml ({msg}, {form})", flush=True)
+    if fell_back_to_ip:
+        print(f"[cameras] {ip} — nessun hostname ONVIF disponibile: salvata con ip statico "
+              f"(un cambio di lease DHCP richiederà una modifica manuale)", flush=True)
+    return JSONResponse({"status": "ok", "name": name, "detail": msg,
+                         "hostname": saved_hostname or "", "address_form": form})
 
 
 @app.post("/api/cameras/{ip}/remove")
@@ -231,7 +339,19 @@ async def api_remove_camera(ip: str, request: Request):
         return JSONResponse(_401, status_code=401)
     with _lock:
         name = _cameras.get(ip, {}).get("name", ip)
-    removed_cfg = _config_remove_camera(ip)
+    # A hostname-configured camera's entry has no `ip` to match: without the hostname
+    # the entry survives the removal, and since the ENTRY drives resolution the next
+    # sweep respawns the camera within one interval — it would come back by itself.
+    cfg_hostname = state._hostname_for_ip(ip)
+    removed_cfg = _config_remove_camera(ip, hostname=cfg_hostname)
+    if removed_cfg:
+        _drop_static_camera_entry(ip, hostname=cfg_hostname)
+        if cfg_hostname:
+            state._drop_resolved_hostname(cfg_hostname)
+    # Remember the explicit removal so the AUTOMATIC periodic rescan (when enabled) does
+    # not rediscover and respawn this camera within one interval, quietly undoing the
+    # delete. A manual rescan still rediscovers it — that is the operator asking.
+    state._operator_removed.add(ip)
 
     # Runtime teardown on the main loop: cancel worker + rule tasks (closing their
     # ONVIF sessions), stop the attach/keepalive threads, mark detection_ok
@@ -347,7 +467,7 @@ async def api_config_post(request: Request):
     # credential is env-sourced (.env SCAN_USER/SCAN_PASSWORD); a submitted value is
     # silently ignored.
     allowed = {"mqtt_host", "mqtt_port", "mqtt_user", "mqtt_pass", "mqtt_prefix",
-               "scan_subnet"}
+               "scan_subnet", "rescan_time_interval"}
     for k, v in body.items():
         if k not in allowed:
             continue
@@ -366,12 +486,22 @@ async def api_config_post(request: Request):
         except ValueError as e:
             return JSONResponse({"status": "error", "detail": f"Subnet non valida: {e}"}, status_code=400)
 
+    # Reject a negative interval outright rather than silently coercing it to "disabled":
+    # the operator asked for something impossible and should be told.
+    if "rescan_time_interval" in body and int(_cfg["rescan_time_interval"]) < 0:
+        return JSONResponse({"status": "error",
+                             "detail": "rescan_time_interval non può essere negativo "
+                                       "(0 = rescan automatico disabilitato)"},
+                            status_code=400)
+
     _save_settings_yaml()
     _mqtt_init()
     return JSONResponse({
         "status":        "ok",
         "scan_subnet":   _cfg["scan_subnet"],
         "mqtt_host":     _cfg["mqtt_host"],
+        # Effective value after the safety floor, so the caller sees what will be used.
+        "rescan_time_interval": config._rescan_interval(),
     })
 
 

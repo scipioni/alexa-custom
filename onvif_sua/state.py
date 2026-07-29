@@ -65,12 +65,48 @@ class _AuthGate:
 
 
 _auth_gate = _AuthGate()
+
+
+# ── camera-registry serialization guard ───────────────────────────────────────
+# A camera entry in `_cameras` carries its working credential inline (`user`/`pass`,
+# set by worker._new_cam) because every ONVIF/CGI call needs it. That is fine in
+# memory and NOT fine anywhere the registry leaves the process: `data/events.json`
+# and the `GET /api/status` body are both plain text an operator (or a proxy log, or
+# a browser network tab) can read. Both used to emit the whole entry.
+#
+# `_CAM_PRIVATE_KEYS` is the single list of keys that must never cross that line —
+# credentials plus the two bulky/internal fields the disk dump already skipped.
+# Serialize a camera through `_public_cam(cam)` and new sensitive fields stay in
+# by default rather than leaking until someone notices.
+#
+# `creds_tried` is kept: it is already masked at the point it is written
+# (worker.py, `f"{user}/{'*'*len(pwd)}"`) and is the main clue for diagnosing an
+# auth failure. It does disclose the password's length.
+_CAM_PRIVATE_KEYS = frozenset({"user", "pass", "last_events", "_analytics_queried"})
+
+
+def _public_cam(cam: dict) -> dict:
+    """A shallow copy of one camera entry safe to write to disk or return over HTTP."""
+    return {k: v for k, v in cam.items() if k not in _CAM_PRIVATE_KEYS}
+
+
+def _public_cameras(cams: dict[str, dict]) -> dict[str, dict]:
+    """`_public_cam` over the whole registry. Call under `_lock`."""
+    return {ip: _public_cam(cam) for ip, cam in cams.items()}
+
+
 # ── stato in memoria ──────────────────────────────────────────────────────────
 _cameras: dict[str, dict] = {}
 _event_log: list[dict]    = []
 _alarms: dict[str, str]   = {}        # topic-level: {"Alarm uomo a terra": "on"}
 _cam_alarms: dict[str, str] = {}      # per file/mqtt: {"STANZA_11": "on"}
 _removed_ips: set[str]    = set()     # IP in fase di teardown (guardia transitoria)
+# IPs the operator explicitly removed via the API during this process run. Distinct from
+# the transient `_removed_ips` teardown guard: this one is consulted ONLY by the
+# automatic periodic rescan, so a removal is not silently undone one interval later. A
+# MANUAL rescan clears it (an explicit request for a full refresh), and saving/renaming
+# a camera drops its IP from it.
+_operator_removed: set[str] = set()
 _worker_tasks: dict[str, "asyncio.Task"] = {}   # IP → task _camera_worker
 _rule_tasks: dict[str, "asyncio.Task"]   = {}   # IP → task _rule_check_task
 _active_pullpoints: dict[str, object]    = {}   # IP → live PullPoint service (for Unsubscribe on drop/shutdown)
@@ -141,3 +177,76 @@ def _auth_failures_list() -> list[dict]:
     """Snapshot of the current quarantine, sorted by IP (for /api/status)."""
     with _lock:
         return sorted((dict(v) for v in _auth_failed.values()), key=lambda e: e["ip"])
+
+
+# ── hostname → last-resolved IP (RUNTIME ONLY, never persisted) ─────────────────
+# A `cameras.list` entry may carry `hostname` instead of `ip`; the periodic
+# resolution sweep matches the device-reported ONVIF hostname and records the IP it
+# currently answers on here. `settings.yaml` keeps the hostname authoritative — the
+# resolved address is deliberately NOT written back to it. Keyed by the canonical
+# (trimmed + lowercased) hostname so a case difference between the config file and
+# the device can never split one camera across two entries. Guarded by _lock.
+# Each value is {"hostname": <as written in settings.yaml>, "ip": <resolved>} — the
+# as-written spelling is kept so a diagnostic names the entry the way the operator
+# will find it in the file, while every comparison uses the canonical key.
+_hostname_ips: dict[str, dict] = {}
+
+
+def _hostname_key(hostname) -> str:
+    """Canonical key/comparison form of an ONVIF hostname: trimmed + lowercased.
+    The single definition of "same hostname" shared by the resolver, the config
+    helpers and this cache."""
+    return str(hostname or "").strip().lower()
+
+
+def _set_resolved_ip(hostname, ip: str):
+    with _lock:
+        _hostname_ips[_hostname_key(hostname)] = {
+            "hostname": str(hostname or "").strip(), "ip": ip,
+        }
+
+
+def _resolved_ip(hostname) -> Optional[str]:
+    """Last IP this hostname resolved to, or None if it has never resolved."""
+    with _lock:
+        e = _hostname_ips.get(_hostname_key(hostname))
+        return e["ip"] if e else None
+
+
+def _hostname_for_ip(ip: str) -> Optional[str]:
+    """Reverse lookup: the configured hostname currently resolved to `ip` (spelled as
+    in settings.yaml), or None when `ip` belongs to a static-`ip` (or unknown) camera.
+    Every web API path addresses a camera by its runtime IP, so this is how a caller
+    learns that the IP it was handed is really a hostname-configured entry."""
+    with _lock:
+        for key, e in _hostname_ips.items():
+            if e["ip"] == ip:
+                return e["hostname"] or key
+    return None
+
+
+def _drop_resolved_hostname(hostname) -> bool:
+    """Forget a hostname's resolved IP (on removal). True if an entry was dropped."""
+    with _lock:
+        return _hostname_ips.pop(_hostname_key(hostname), None) is not None
+
+
+def _rekey_resolved_hostname(old_hostname, new_hostname) -> bool:
+    """Move a cached resolved IP from `old_hostname` to `new_hostname`, leaving no
+    entry under the old key. Used by the rename path: renaming a camera sets its
+    ONVIF hostname, so the cache key changes while the IP does not — a stale key
+    would make the next sweep treat the camera as never-resolved and spawn a second
+    worker on the IP that already has one. True if a cached IP was moved."""
+    with _lock:
+        old_k, new_k = _hostname_key(old_hostname), _hostname_key(new_hostname)
+        e = _hostname_ips.pop(old_k, None)
+        if e is None:
+            return False
+        _hostname_ips[new_k] = {"hostname": str(new_hostname or "").strip(), "ip": e["ip"]}
+        return True
+
+
+def _resolved_hostnames() -> dict[str, str]:
+    """Snapshot of the canonical hostname → resolved-IP map."""
+    with _lock:
+        return {k: e["ip"] for k, e in _hostname_ips.items()}

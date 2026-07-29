@@ -30,7 +30,7 @@ def test_single_start_emits_once(fake_mqtt, run_cgi):
     run_cgi("10.0.0.1", "cucina", [start_line()])
     calls = _triggers(fake_mqtt)
     assert len(calls) == 1
-    assert calls[0][1] == "caduta cucina"
+    assert calls[0][1] == "caduta_cucina"
 
 
 def test_repeated_starts_while_active_emit_once(fake_mqtt, run_cgi):
@@ -48,7 +48,7 @@ def test_two_cameras_each_emit_own_phrase(fake_mqtt, run_cgi):
     run_cgi("10.0.0.1", "cucina", [start_line()])
     run_cgi("10.0.0.2", "salotto", [start_line()])
     payloads = sorted(c[1] for c in _triggers(fake_mqtt))
-    assert payloads == ["caduta cucina", "caduta salotto"]
+    assert payloads == ["caduta_cucina", "caduta_salotto"]
 
 
 def test_one_active_does_not_block_other(fake_mqtt, run_cgi):

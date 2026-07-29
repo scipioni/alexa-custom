@@ -18,7 +18,7 @@ su conferma o come fail-safe, una chiamata LiveKit.
    ONVIF_SUA  ───pubblica───► │ ◄───sottoscrive───  Serena (alexa-custom)
    (bridge serena)            │                     node_id = <hostname|override>
                               │
-   caduta start ─► <prefix>/<node_id>/trigger/run   : "caduta <stanza>"
+   caduta start ─► <prefix>/<node_id>/trigger/run   : "caduta_<stanza>"
    sensore attivo ─► <prefix>/<node_id>/tts/set     : "sensore uomo a terra <stanza> attivo"
    sensore guasto ─► <prefix>/<node_id>/tts/set     : "attenzione, ... non attivo"
 ```
@@ -61,7 +61,7 @@ viene pubblicato nulla**.
 | `enabled` | `SERENA_ENABLED` | `false` | interruttore generale |
 | `topic_prefix` | `SERENA_TOPIC_PREFIX` | `alexa` | prefisso topic di Serena |
 | `node_id` | `SERENA_NODE_ID` | `""` | node_id di Serena (**obbligatorio**) |
-| `command_template` | `SERENA_COMMAND_TEMPLATE` | `caduta {cam_name}` | frase di caduta → `trigger/run` |
+| `command_template` | `SERENA_COMMAND_TEMPLATE` | `caduta_{cam_name}` | comando di caduta → `trigger/run` |
 | `announce_ready` | `SERENA_ANNOUNCE_READY` | `true` | annuncia "…attivo" 1× per camera quando confermata operativa |
 | `announce_template` | `SERENA_ANNOUNCE_TEMPLATE` | `sensore uomo a terra {cam_name} attivo` | frase annuncio attivo |
 | `announce_fault` | `SERENA_ANNOUNCE_FAULT` | `false` | opt-in: ripete "…non attivo" per un sensore guasto |
@@ -81,7 +81,7 @@ Regole di validazione (al caricamento):
 
 | Evento | Topic | Payload | retain |
 |---|---|---|---|
-| Caduta (start) | `<prefix>/<node_id>/trigger/run` | `caduta <stanza>` | `false`, QoS 1 |
+| Caduta (start) | `<prefix>/<node_id>/trigger/run` | `caduta_<stanza>` | `false`, QoS 1 |
 | Sensore attivo (1× per camera) | `<prefix>/<node_id>/tts/set` | `sensore uomo a terra <stanza> attivo` | `false`, QoS 1 |
 | Sensore guasto (opt-in, ripetuto) | `<prefix>/<node_id>/tts/set` | `attenzione, sensore uomo a terra <stanza> non attivo` | `false`, QoS 1 |
 | Ripristino (dopo ≥1 guasto) | `<prefix>/<node_id>/tts/set` | `sensore uomo a terra <stanza> attivo` | `false`, QoS 1 |
@@ -98,14 +98,49 @@ fa è considerato stantìo e non riemette.
 ### Nome telecamera → frase vocale (importante)
 
 `{cam_name}` è **normalizzato al momento della resa**: minuscolo, `-`/`_` → spazio,
-spazi collassati. Esempio: camera `salotto-1` → frase `caduta salotto 1`. Il nome
-memorizzato e il topic di stato `onvif/<cam>/alarms/fall` non cambiano.
+spazi collassati. Nel **comando di caduta** gli spazi diventano poi `_`, così il payload
+resta un token unico e non pronunciabile: camera `salotto-1` → comando `caduta_salotto_1`.
+Gli **annunci vocali** usano invece la forma con spazi (`salotto 1`), che Piper legge.
+Il nome memorizzato e il topic di stato `onvif/<cam>/alarms/fall` non cambiano.
 
 Vincoli sul nome (applicati da rinomina/salvataggio in dashboard):
 - **non può contenere** la parola `camera` (case-insensitive; blocca anche `telecamera`);
-- non può **collidere** (dopo normalizzazione) con un'altra telecamera.
+- non può **collidere** (dopo normalizzazione) con un'altra telecamera;
+- non può essere uguale all'`hostname` configurato di un'**altra** voce (vedi sotto).
 
 Usa nomi di stanza: `cucina`, `salotto`, `letto`, `bagno`.
+
+### Telecamere configurate per `hostname` (DHCP senza IP fisso)
+
+Una voce di `cameras.list` può dichiarare `hostname:` invece di `ip:` (mai entrambi):
+l'IP corrente viene risolto scansionando `scan.subnet` e confrontando l'hostname ONVIF
+riportato da ogni device (`GetHostname()`, trimmed, case-insensitive) — subito all'avvio,
+poi ogni **10 minuti** e ad ogni scan della subnet. Dettagli completi nel `README.md`.
+
+Ai fini dell'integrazione Serena **non cambia nulla**:
+
+- `name` resta l'**unica** identità usata per la frase vocale, i topic MQTT e la
+  discovery Home Assistant. `hostname` è **solo** la chiave di discovery e non compare
+  in nessun topic né in nessuna frase.
+- `hostname` e `name` possono differire (`hostname: STANZA_11` + `name: cucina`) o
+  coincidere: entrambi i casi sono validi.
+- Se una risoluzione fallisce si **mantiene l'ultimo IP noto** e il worker non viene
+  fermato. Un hostname riportato da **due device** non viene risolto affatto (nessuna
+  scelta arbitraria): meglio una telecamera dichiaratamente giù che una stanza
+  sorvegliata al posto di un'altra.
+- ⚠️ **Attenzione al caso "mai risolto"**: il driver dei guasti itera le telecamere
+  configurate ma salta quelle **senza riga runtime**, e una voce `hostname:` che non si è
+  ancora mai risolta non ne ha nessuna. Quindi una telecamera che all'avvio non viene
+  trovata (spenta, hostname sbagliato, o ambiguo da subito) **non** viene annunciata come
+  guasta: risulta assente dalla dashboard e dal log, ma Serena non lo dice. Una volta
+  risolta almeno una volta, la riga esiste e gli annunci di guasto funzionano
+  normalmente. Con telecamere per hostname, verifica dopo il primo avvio che tutte
+  compaiano in dashboard: quella mancante è silenziosa.
+- **La rinomina imposta l'hostname ONVIF sul device**, quindi rinominare una telecamera
+  configurata per hostname riscrive anche il suo `hostname:` in `settings.yaml` (i due
+  valori convergono; l'hostname di fabbrica originale non è più ricostruibile dalla
+  configurazione ma resta nel log). Una rinomina che collide con l'`hostname` di un'altra
+  voce viene rifiutata.
 
 ---
 
@@ -121,7 +156,7 @@ camera:
 ```yaml
 triggers:
   - commands:
-      - "caduta cucina"        # = command_template reso col nome normalizzato
+      - "caduta_cucina"        # = command_template reso col nome normalizzato
     with_wake: false
     tag: sos
     actions:
@@ -168,7 +203,7 @@ triggers:
 
 Note:
 - I `commands` devono corrispondere alla frase normalizzata. `command_template`
-  `caduta {cam_name}` + camera `letto` → `commands: ["caduta letto"]`.
+  `caduta_{cam_name}` + camera `letto` → `commands: ["caduta_letto"]`.
 - `<room>` nel testo `telegram` è il placeholder del link stanza di Serena (già
   gestito dall'azione `telegram`).
 - Gli annunci "attivo"/"non attivo" arrivano su `tts/set` e vengono pronunciati da
@@ -212,7 +247,7 @@ ONVIF_SUA:
    ```bash
    mosquitto_sub -v -t 'alexa/#'
    ```
-   Deve comparire `alexa/<node_id>/trigger/run  caduta <stanza>`.
+   Deve comparire `alexa/<node_id>/trigger/run  caduta_<stanza>`.
 4. **Entità diagnostica** (Home Assistant, retained): `onvif/serena_bridge/status`
    riporta se il bridge è connesso al broker; attributi `enabled`, `target_topic`,
    `node_id`. Non afferma mai che Serena abbia ricevuto il comando.
@@ -235,7 +270,7 @@ Queste sono le modifiche di **configurazione** che abilitano l'interoperabilità
 
 **Lato Serena (repo `serena`):**
 - `conf.example/actions/user.yaml` — aggiunto un esempio copia-incolla del trigger
-  di caduta (`caduta cucina`) con flusso conferma → chiamata + Telegram e fail-safe.
+  di caduta (`caduta_cucina`) con flusso conferma → chiamata + Telegram e fail-safe.
 - `AGENTS.md` (= `.claude/CLAUDE.md`) — nota che gli allarmi di caduta arrivano via
   `trigger/run` e sono gestiti **solo** in `conf/actions/user.yaml` (nessun codice
   Serena).

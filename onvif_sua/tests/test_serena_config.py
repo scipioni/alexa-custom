@@ -67,7 +67,7 @@ def test_invalid_template_falls_back_to_default(restore_globals, capsys):
     config._cfg["serena_command_template"] = "caduta {room}"
     config._cfg["serena_announce_template"] = "attivo {"
     config._normalize_serena_config()
-    assert config._cfg["serena_command_template"] == "caduta {cam_name}"
+    assert config._cfg["serena_command_template"] == "caduta_{cam_name}"
     assert config._cfg["serena_announce_template"] == "sensore uomo a terra {cam_name} attivo"
     assert "non valido" in capsys.readouterr().out
 
@@ -94,6 +94,24 @@ def test_serena_voice_name_all_separators_falls_back(capsys):
     out = config._serena_voice_name("___")
     assert out == "___"
     assert "normalizza a vuoto" in capsys.readouterr().out
+
+
+# ── 5.1d: trigger-name slug (space-free fall command) ─────────────────────────────
+@pytest.mark.parametrize("raw,expected", [
+    ("Salotto", "salotto"),
+    ("salotto-1", "salotto_1"),
+    ("cucina_piano_terra", "cucina_piano_terra"),
+    ("  Doppio   Spazio ", "doppio_spazio"),
+])
+def test_serena_trigger_name(raw, expected):
+    assert config._serena_trigger_name(raw) == expected
+
+
+def test_serena_trigger_name_never_contains_space():
+    # The whole point: the rendered command must stay a single unutterable token,
+    # so the SOS trigger can only ever arrive over MQTT and never via the STT matcher.
+    for raw in ("salotto-1", "cucina piano terra", "Doppio  Spazio"):
+        assert " " not in config._serena_trigger_name(raw)
 
 
 # ── 5.1c: reserved-word validator ─────────────────────────────────────────────────

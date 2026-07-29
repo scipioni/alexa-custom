@@ -97,7 +97,7 @@ def test_simulate_on_emits_serena_trigger(fake_mqtt, monkeypatch):
     resp = _run(routes.api_simulate_camera("10.0.0.7", _FakeReq({"on": True})))
     assert resp.status_code == 200
     trig = [c for c in fake_mqtt.calls if c[0].endswith("/trigger/run")]
-    assert len(trig) == 1 and trig[0][1] == "caduta soggiorno"
+    assert len(trig) == 1 and trig[0][1] == "caduta_soggiorno"
 
 
 def test_simulate_off_no_trigger(fake_mqtt, monkeypatch):

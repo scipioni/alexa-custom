@@ -1,13 +1,6 @@
 # settings.yaml — file di configurazione unico (modificabile dalla GUI).
 # Le password (telecamere / scan / login GUI) NON stanno qui: vivono in .env.
-# Il blocco 'cameras' è la lista statica delle telecamere (vedi .env.example).
-#cameras:
-#  credentials:
-#    port: 80
-#  list:
-#  - ip: 192.168.1.122
-#    name: camera0
-
+# Il blocco 'cameras' è la lista statica delle telecamere (vedi settings.yaml.example).
 mqtt:
   host: localhost
   port: 1883
@@ -15,18 +8,30 @@ mqtt:
   pass: ''
   prefix: onvif
 scan:
-  subnet: 192.168.1.0/24
+  subnet: 10.1.109.0/24
   concurrency: 48
+  rescan_time_interval: 60  #under 60 will be forced to 60
 cameras:
   credentials:
     port: 80
   list:
-  - ip: 192.168.1.122        # ← IP reale della telecamera "soggiorno"
-    name: soggiorno
-  - ip: 192.168.1.123        # ← IMPOSTA l'IP reale della telecamera "bagno"
-    name: bagno
+  - hostname: bagno1
+    name: bagno1
+  - hostname: cucina1
+    name: cucina1
+  - hostname: bagno2
+    name: bagno2
+  - hostname: cucina2
+    name: cucina2
+  - hostname: bagno3
+    name: bagno3
+  - hostname: cucina3
+    name: cucina3
+  - hostname: soggiorno1
+    name: soggiorno1
+
 web:
-  asset_version: '2'
+  asset_version: '4'
   port: 8081
 tuning:
   liveness_mode: heartbeat
@@ -35,22 +40,15 @@ tuning:
   rule_check_interval: 300
   keepalive_interval: 30
   save_interval: 120
-# ── Serena voice-assistant bridge (opt-in) ──────────────────────────────────────
-# Forward a fall-start to Serena's MQTT command topic so it runs a spoken yes/no
-# confirmation that conditionally starts a LiveKit call. Requires the SAME MQTT
-# broker as `mqtt:` above and a `node_id` matching Serena's (its hostname, or its
-# state.yaml override). All keys below also have SERENA_* env-var equivalents.
-# Camera names must NOT contain 'camera' and are normalized (lowercase, -/_ → space)
-# into the phrase/announcements — use room names (cucina, salotto).
 serena:
-  enabled: true                        # bridge attivo
-  topic_prefix: alexa                  # DEVE combaciare con mqtt.topic_prefix di Serena
-  node_id: galileo                     # DEVE combaciare con mqtt.node_id di Serena
-  command_template: "caduta {cam_name}"          # → alexa/galileo/trigger/run : "caduta soggiorno" / "caduta bagno"
-  announce_ready: true                 # annuncia "…attivo" 1× per camera quando confermata operativa
-  announce_template: "sensore uomo a terra {cam_name} attivo"
-  announce_fault: false                # opt-in: ripete "…non attivo" per un sensore guasto
-  announce_fault_template: "attenzione, sensore uomo a terra {cam_name} non attivo"
-  announce_fault_interval_s: 300       # cadenza di ripetizione mentre è guasto (minimo 30s)
-  announce_fault_grace_s: 60           # attesa prima del primo "non attivo"
-  startup_alarm_max_age_s: 300         # adotta una caduta in corso persistita di recente al riavvio
+  enabled: true
+  topic_prefix: alexa
+  node_id: galileo
+  command_template: caduta_{cam_name}
+  announce_ready: true
+  announce_template: sensore uomo a terra {cam_name} attivo
+  announce_fault: false
+  announce_fault_template: attenzione, sensore uomo a terra {cam_name} non attivo
+  announce_fault_interval_s: 300
+  announce_fault_grace_s: 60
+  startup_alarm_max_age_s: 300

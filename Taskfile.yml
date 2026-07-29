@@ -169,6 +169,42 @@ tasks:
       - task: setup
       - task: audio:setup
       - task: audio:restart
+      
+  gcc:
+    desc: Install gcc and other utility
+    cmds:
+      - |
+        if command -v pacman &>/dev/null; then
+          echo "Arch Linux detected. Installing dependencies via pacman..."
+          sudo pacman -S --needed --noconfirm \
+            gcc \
+            libcairo2-dev \
+            rsync \
+            tmux \
+            pkg-config \
+            python3-dev \
+            libgirepository-2.0-dev \
+            libgirepository1.0-dev \
+            libcairo2-dev 
+        elif command -v apt-get &>/dev/null; then
+          echo "Debian/Ubuntu detected. Installing dependencies via apt-get..."
+          sudo apt-get update && sudo apt-get install -y \
+            gcc \
+            libcairo2-dev \
+            rsync \
+            tmux \
+            pkg-config \
+            python3-dev \
+            libgirepository-2.0-dev \
+            libgirepository1.0-dev \
+            libcairo2-dev 
+        else
+          echo "Unsupported package manager. Please install gcc and development headers manually."
+          exit 1
+        fi
+
+
+
 
   setup:gstreamer:
     desc: Install GStreamer PipeWire plugin, GI typelibs, dev headers, and PyGObject into the venv
@@ -189,6 +225,7 @@ tasks:
         elif command -v apt-get &>/dev/null; then
           echo "Debian/Ubuntu detected. Installing dependencies via apt-get..."
           sudo apt-get update && sudo apt-get install -y \
+            pkg-config \
             gstreamer1.0-pipewire \
             gstreamer1.0-tools \
             gir1.2-gstreamer-1.0 \

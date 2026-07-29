@@ -20,7 +20,7 @@ _SERENA_TEST_DEFAULTS = {
     "serena_enabled": True,
     "serena_topic_prefix": "alexa",
     "serena_node_id": "serena",
-    "serena_command_template": "caduta {cam_name}",
+    "serena_command_template": "caduta_{cam_name}",
     "serena_announce_ready": True,
     "serena_announce_template": "sensore uomo a terra {cam_name} attivo",
     "serena_announce_fault": False,
@@ -55,6 +55,22 @@ class FakeMqtt:
     # convenience for assertions
     def topics(self, suffix):
         return [c for c in self.calls if c[0].endswith(suffix)]
+
+
+@pytest.fixture(autouse=True)
+def isolate_settings_file(tmp_path, monkeypatch):
+    """Point `config.SETTINGS_FILE` at a throwaway path for EVERY test.
+
+    Several code paths persist settings as a side effect (`_config_add_camera`,
+    `_config_remove_camera`, `api_config_post`), and stubbing `config._save_settings_yaml`
+    is not enough: `web/routes.py` binds its own reference at import
+    (`from ..config import _save_settings_yaml`), so patching the attribute on `config`
+    leaves the routes copy live. A test that reaches an unstubbed save would otherwise
+    overwrite the developer's real settings.yaml — including the camera list — with
+    whatever `_cfg`/`_settings_doc` happen to hold. A test that needs to inspect a written
+    file just sets SETTINGS_FILE itself; its own monkeypatch wins over this one.
+    """
+    monkeypatch.setattr(config, "SETTINGS_FILE", str(tmp_path / "settings.yaml"))
 
 
 @pytest.fixture
