@@ -152,6 +152,34 @@ triggers:
           lang: "it-IT"
 
   - commands:
+      - "quando pioverà"
+      - "quando piove"
+    with_wake: false
+    tag: meteo
+    patterns:
+      - "quando pio*"
+    actions:
+      - type: meteo_rain
+        params:
+          city: "Verona"
+          forecast_days: 7
+          lang: "it-IT"
+
+  - commands:
+      - "quando ci sarà il sole"
+      - "quando c'è il sole"
+    with_wake: false
+    tag: meteo
+    patterns:
+      - "quando * sole"
+    actions:
+      - type: meteo_sun
+        params:
+          city: "Verona"
+          forecast_days: 7
+          lang: "it-IT"
+
+  - commands:
       - "dormi"
       - "smetti di ascoltare"
     actions:

@@ -899,7 +899,243 @@ class TestMeteoAction:
         mock_engine.say.assert_called_once()
         spoken_text = mock_engine.say.call_args[0][0]
         # Since it successfully resolved en-US from wake-word group config, it should speak in English!
-        assert "Milano tomorrow the weather will be" in spoken_text
+        # 2026-06-14 is a Sunday — the message includes the weekday and date.
+        assert "Milano tomorrow, Sunday, June 14, the weather will be" in spoken_text
+
+    @pytest.mark.asyncio
+    @patch("alexa_custom.tts.get_engine")
+    @patch("httpx.AsyncClient")
+    async def test_meteo_rain_reports_next_rain(
+        self, mock_client_class, mock_get_engine
+    ):
+        mock_engine = MagicMock()
+        mock_get_engine.return_value = mock_engine
+
+        mock_client = AsyncMock()
+        mock_client_class.return_value.__aenter__.return_value = mock_client
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "current": {"time": "2026-06-13T10:00"},
+            "hourly": {
+                "time": [
+                    "2026-06-13T08:00",  # before "now" → ignored
+                    "2026-06-13T15:00",  # rain, 70% → the answer
+                    "2026-06-13T16:00",
+                ],
+                "weather_code": [0, 80, 80],
+                "precipitation": [0.0, 1.2, 0.8],
+                "precipitation_probability": [0, 70, 60],
+            },
+        }
+        mock_client.get.return_value = mock_resp
+
+        action = ActionEntry(
+            type="meteo_rain", params={"city": "Verona", "lang": "it-IT"}
+        )
+
+        await _run_action(
+            action,
+            ActionContext(telegram_client=MagicMock()),
+            transcript="quando pioverà",
+        )
+
+        mock_engine.say.assert_called_once()
+        spoken_text = mock_engine.say.call_args[0][0]
+        assert "Verona" in spoken_text
+        assert "pioverà oggi" in spoken_text  # same day as current.time
+        assert "verso le 15" in spoken_text
+        assert "70 per cento" in spoken_text
+
+    @pytest.mark.asyncio
+    @patch("alexa_custom.tts.get_engine")
+    @patch("httpx.AsyncClient")
+    async def test_meteo_rain_no_rain(self, mock_client_class, mock_get_engine):
+        mock_engine = MagicMock()
+        mock_get_engine.return_value = mock_engine
+
+        mock_client = AsyncMock()
+        mock_client_class.return_value.__aenter__.return_value = mock_client
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "current": {"time": "2026-06-13T10:00"},
+            "hourly": {
+                "time": ["2026-06-13T11:00", "2026-06-13T12:00"],
+                "weather_code": [0, 1],
+                "precipitation": [0.0, 0.0],
+                "precipitation_probability": [0, 5],
+            },
+        }
+        mock_client.get.return_value = mock_resp
+
+        action = ActionEntry(
+            type="meteo_rain", params={"city": "Verona", "lang": "it-IT"}
+        )
+
+        await _run_action(
+            action,
+            ActionContext(telegram_client=MagicMock()),
+            transcript="quando pioverà",
+        )
+
+        mock_engine.say.assert_called_once()
+        spoken_text = mock_engine.say.call_args[0][0]
+        assert "non è prevista pioggia" in spoken_text
+
+    @pytest.mark.asyncio
+    @patch("alexa_custom.tts.get_engine")
+    @patch("httpx.AsyncClient")
+    async def test_meteo_rain_skips_past_and_trace(
+        self, mock_client_class, mock_get_engine
+    ):
+        mock_engine = MagicMock()
+        mock_get_engine.return_value = mock_engine
+
+        mock_client = AsyncMock()
+        mock_client_class.return_value.__aenter__.return_value = mock_client
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "current": {"time": "2026-06-13T12:00"},
+            "hourly": {
+                "time": [
+                    "2026-06-13T02:00",  # rain but already past → skip
+                    "2026-06-13T13:00",  # 10% trace amount → skip
+                    "2026-06-13T18:00",  # 55% real rain → the answer
+                ],
+                "weather_code": [80, 80, 61],
+                "precipitation": [2.0, 0.1, 0.6],
+                "precipitation_probability": [90, 10, 55],
+            },
+        }
+        mock_client.get.return_value = mock_resp
+
+        action = ActionEntry(
+            type="meteo_rain", params={"city": "Verona", "lang": "it-IT"}
+        )
+
+        await _run_action(
+            action,
+            ActionContext(telegram_client=MagicMock()),
+            transcript="quando pioverà",
+        )
+
+        mock_engine.say.assert_called_once()
+        spoken_text = mock_engine.say.call_args[0][0]
+        assert "verso le 18" in spoken_text
+        assert "55 per cento" in spoken_text
+
+    @pytest.mark.asyncio
+    @patch("alexa_custom.tts.get_engine")
+    @patch("httpx.AsyncClient")
+    async def test_meteo_sun_already_sunny(self, mock_client_class, mock_get_engine):
+        mock_engine = MagicMock()
+        mock_get_engine.return_value = mock_engine
+
+        mock_client = AsyncMock()
+        mock_client_class.return_value.__aenter__.return_value = mock_client
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "current": {"time": "2026-06-13T10:00", "weather_code": 0},
+            "hourly": {
+                "time": ["2026-06-13T10:00", "2026-06-13T11:00"],
+                "weather_code": [0, 0],
+            },
+        }
+        mock_client.get.return_value = mock_resp
+
+        action = ActionEntry(
+            type="meteo_sun", params={"city": "Verona", "lang": "it-IT"}
+        )
+
+        await _run_action(
+            action,
+            ActionContext(telegram_client=MagicMock()),
+            transcript="quando ci sarà il sole",
+        )
+
+        mock_engine.say.assert_called_once()
+        spoken_text = mock_engine.say.call_args[0][0]
+        assert "c'è già il sole" in spoken_text
+
+    @pytest.mark.asyncio
+    @patch("alexa_custom.tts.get_engine")
+    @patch("httpx.AsyncClient")
+    async def test_meteo_sun_next_clear_daytime_hour(
+        self, mock_client_class, mock_get_engine
+    ):
+        mock_engine = MagicMock()
+        mock_get_engine.return_value = mock_engine
+
+        mock_client = AsyncMock()
+        mock_client_class.return_value.__aenter__.return_value = mock_client
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        # Cloudy at night now; a clear hour before dawn is skipped (night),
+        # the first daylight clear hour tomorrow is the answer.
+        mock_resp.json.return_value = {
+            "current": {"time": "2026-06-13T22:00", "weather_code": 3},
+            "hourly": {
+                "time": [
+                    "2026-06-13T23:00",  # overcast
+                    "2026-06-14T06:00",  # clear but before daylight window → skip
+                    "2026-06-14T10:00",  # clear, daytime → the answer
+                ],
+                "weather_code": [3, 0, 0],
+            },
+        }
+        mock_client.get.return_value = mock_resp
+
+        action = ActionEntry(
+            type="meteo_sun", params={"city": "Verona", "lang": "it-IT"}
+        )
+
+        await _run_action(
+            action,
+            ActionContext(telegram_client=MagicMock()),
+            transcript="quando ci sarà il sole",
+        )
+
+        mock_engine.say.assert_called_once()
+        spoken_text = mock_engine.say.call_args[0][0]
+        assert "ci sarà il sole domani" in spoken_text
+        assert "verso le 10" in spoken_text
+
+    @pytest.mark.asyncio
+    @patch("alexa_custom.tts.get_engine")
+    @patch("httpx.AsyncClient")
+    async def test_meteo_sun_no_sun(self, mock_client_class, mock_get_engine):
+        mock_engine = MagicMock()
+        mock_get_engine.return_value = mock_engine
+
+        mock_client = AsyncMock()
+        mock_client_class.return_value.__aenter__.return_value = mock_client
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.json.return_value = {
+            "current": {"time": "2026-06-13T10:00", "weather_code": 3},
+            "hourly": {
+                "time": ["2026-06-13T11:00", "2026-06-13T12:00"],
+                "weather_code": [3, 3],
+            },
+        }
+        mock_client.get.return_value = mock_resp
+
+        action = ActionEntry(
+            type="meteo_sun", params={"city": "Verona", "lang": "it-IT"}
+        )
+
+        await _run_action(
+            action,
+            ActionContext(telegram_client=MagicMock()),
+            transcript="quando ci sarà il sole",
+        )
+
+        mock_engine.say.assert_called_once()
+        spoken_text = mock_engine.say.call_args[0][0]
+        assert "non è previsto sole" in spoken_text
 
 
 @pytest.mark.asyncio

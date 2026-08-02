@@ -1315,19 +1315,22 @@ def _iso_hour(iso_ts: str) -> int:
         return -1
 
 
-@registry.register("meteo")
-async def handle_meteo(
+def _resolve_meteo_location(
     action: ActionEntry,
-    mqtt_client: MQTTClient | None,
-    transcript: str | None = None,
-    actions_config=None,
-    wake_word: str | None = None,
-    **_,
-) -> None:
+    transcript: str | None,
+    wake_word: str | None,
+    actions_config,
+) -> tuple[float, float, str, str, bool]:
+    """Resolve (latitude, longitude, display_city, lang, is_it) for a weather action.
+
+    Shared by the ``meteo`` and ``meteo_rain`` handlers. Coordinates come from
+    explicit params, else a city named in the transcript, else the ``city``
+    param, else Rome. Language comes from the ``lang`` param or the wake word's
+    configured language.
+    """
     latitude = action.params.get("latitude")
     longitude = action.params.get("longitude")
     city_name = action.params.get("city")
-    days_param = action.params.get("days")
 
     lang = action.params.get("lang")
     if not lang:
@@ -1373,6 +1376,24 @@ async def handle_meteo(
     else:
         city_name = city_name or "la tua posizione"
 
+    display_city = city_name.title() if city_name else "Roma"
+    return latitude, longitude, display_city, lang, is_it
+
+
+@registry.register("meteo")
+async def handle_meteo(
+    action: ActionEntry,
+    mqtt_client: MQTTClient | None,
+    transcript: str | None = None,
+    actions_config=None,
+    wake_word: str | None = None,
+    **_,
+) -> None:
+    days_param = action.params.get("days")
+    latitude, longitude, display_city, lang, is_it = _resolve_meteo_location(
+        action, transcript, wake_word, actions_config
+    )
+
     # Resolve forecast day (0 = today, 1 = tomorrow)
     day_index = 1
     day_label = "domani" if is_it else "tomorrow"
@@ -1399,8 +1420,6 @@ async def handle_meteo(
         else:
             day_index = 1
             day_label = "domani" if is_it else "tomorrow"
-
-    display_city = city_name.title() if city_name else "Roma"
 
     url = "https://api.open-meteo.com/v1/forecast"
     params = {
@@ -1504,6 +1523,279 @@ async def handle_meteo(
             )
     else:
         logger.warning("Open-Meteo API returned incomplete daily data")
+
+
+# WMO codes that count as rain for "quando pioverà": drizzle, rain, freezing
+# rain, rain showers and thunderstorms. Snow codes (71-77, 85-86) and fog are
+# intentionally excluded.
+_RAIN_CODES = set(range(51, 68)) | {80, 81, 82, 95, 96, 99}
+
+# WMO codes that count as sun for "quando ci sarà il sole": clear and mainly
+# clear sky only (partly cloudy / overcast are not "sole").
+_SUN_CODES = {0, 1}
+
+# Daylight hours (local time) considered for "sun" — sun at night is meaningless.
+_SUN_DAY_START = 8
+_SUN_DAY_END = 18
+
+
+async def _speak_meteo(mqtt_client: MQTTClient | None, lang: str, msg: str) -> None:
+    """Speak a weather message, toggling the MQTT speaking/idle state around it."""
+    from alexa_custom.tts import get_engine
+
+    if mqtt_client:
+        await mqtt_client.publish(
+            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
+            "speaking",
+        )
+    await asyncio.to_thread(get_engine().say, msg, lang)
+    if mqtt_client:
+        await mqtt_client.publish(
+            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
+            "idle",
+        )
+
+
+def _relative_day_label(iso_date: str, today_iso: str, is_it: bool) -> str:
+    """Spoken day label relative to ``today_iso``: oggi/domani else weekday+date."""
+    try:
+        d = datetime.date.fromisoformat(iso_date)
+        today = datetime.date.fromisoformat(today_iso)
+    except (ValueError, TypeError):
+        return _format_forecast_date(iso_date, is_it)
+    delta = (d - today).days
+    if delta <= 0:
+        return "oggi" if is_it else "today"
+    if delta == 1:
+        return "domani" if is_it else "tomorrow"
+    return _format_forecast_date(iso_date, is_it)
+
+
+@registry.register("meteo_rain")
+async def handle_meteo_rain(
+    action: ActionEntry,
+    mqtt_client: MQTTClient | None,
+    transcript: str | None = None,
+    actions_config=None,
+    wake_word: str | None = None,
+    **_,
+) -> None:
+    """Answer "quando pioverà" — find the next hour with a real chance of rain."""
+    latitude, longitude, display_city, lang, is_it = _resolve_meteo_location(
+        action, transcript, wake_word, actions_config
+    )
+
+    try:
+        forecast_days = int(action.params.get("forecast_days", 7) or 7)
+    except (TypeError, ValueError):
+        forecast_days = 7
+    forecast_days = max(1, min(forecast_days, 16))
+
+    url = "https://api.open-meteo.com/v1/forecast"
+    params = {
+        "latitude": latitude,
+        "longitude": longitude,
+        "hourly": "weather_code,precipitation,precipitation_probability",
+        "current": "temperature_2m",  # gives current.time in the location timezone
+        "timezone": "auto",
+        "forecast_days": forecast_days,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(url, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as e:
+        logger.error(f"Open-Meteo API request failed: {e}")
+        await _speak_meteo(
+            mqtt_client,
+            lang,
+            "Spiacente, impossibile recuperare le informazioni meteo al momento."
+            if is_it
+            else "Sorry, I cannot retrieve weather information at the moment.",
+        )
+        return
+
+    hourly = data.get("hourly", {})
+    times = hourly.get("time", [])
+    codes = hourly.get("weather_code", [])
+    precs = hourly.get("precipitation", [])
+    probs = hourly.get("precipitation_probability", [])
+
+    # "Now" in the location timezone, so we never report rain that already fell.
+    cutoff = data.get("current", {}).get("time") or (times[0] if times else "")
+    today_iso = cutoff[:10] if cutoff else ""
+
+    # First upcoming hour with a rain code AND a meaningful signal: probability
+    # >= 50%, or a real accumulation (>= 0.5 mm) when probability is missing.
+    # This skips 0%-probability trace amounts.
+    first_idx = None
+    for i, ts in enumerate(times):
+        if cutoff and ts < cutoff:
+            continue
+        code = codes[i] if i < len(codes) else 0
+        if code not in _RAIN_CODES:
+            continue
+        prob = probs[i] if i < len(probs) else None
+        prec = precs[i] if i < len(precs) else 0
+        if (prob is not None and prob >= 50) or (prob is None and (prec or 0) >= 0.5):
+            first_idx = i
+            break
+
+    if first_idx is None:
+        if is_it:
+            window = (
+                "nelle prossime 24 ore"
+                if forecast_days == 1
+                else f"nei prossimi {forecast_days} giorni"
+            )
+            await _speak_meteo(
+                mqtt_client, lang, f"A {display_city} non è prevista pioggia {window}."
+            )
+        else:
+            window = (
+                "in the next 24 hours"
+                if forecast_days == 1
+                else f"in the next {forecast_days} days"
+            )
+            await _speak_meteo(
+                mqtt_client, lang, f"No rain is expected in {display_city} {window}."
+            )
+        return
+
+    ts = times[first_idx]
+    when = _relative_day_label(ts[:10], today_iso or ts[:10], is_it)
+    hour = _iso_hour(ts)
+    prob = probs[first_idx] if first_idx < len(probs) else None
+
+    if is_it:
+        prob_phrase = (
+            f", con una probabilità del {int(prob)} per cento"
+            if prob is not None
+            else ""
+        )
+        msg = f"A {display_city} pioverà {when} verso le {hour}{prob_phrase}."
+    else:
+        prob_phrase = f", with a {int(prob)} percent chance" if prob is not None else ""
+        msg = f"In {display_city} it will rain {when} around {hour}:00{prob_phrase}."
+
+    logger.info(f"[meteo_rain action] Saying: {msg}")
+    await _speak_meteo(mqtt_client, lang, msg)
+
+
+@registry.register("meteo_sun")
+async def handle_meteo_sun(
+    action: ActionEntry,
+    mqtt_client: MQTTClient | None,
+    transcript: str | None = None,
+    actions_config=None,
+    wake_word: str | None = None,
+    **_,
+) -> None:
+    """Answer "quando ci sarà il sole" — find the next clear daytime hour."""
+    latitude, longitude, display_city, lang, is_it = _resolve_meteo_location(
+        action, transcript, wake_word, actions_config
+    )
+
+    try:
+        forecast_days = int(action.params.get("forecast_days", 7) or 7)
+    except (TypeError, ValueError):
+        forecast_days = 7
+    forecast_days = max(1, min(forecast_days, 16))
+
+    url = "https://api.open-meteo.com/v1/forecast"
+    params = {
+        "latitude": latitude,
+        "longitude": longitude,
+        "hourly": "weather_code",
+        "current": "weather_code",  # current condition + time in the location tz
+        "timezone": "auto",
+        "forecast_days": forecast_days,
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(url, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+    except Exception as e:
+        logger.error(f"Open-Meteo API request failed: {e}")
+        await _speak_meteo(
+            mqtt_client,
+            lang,
+            "Spiacente, impossibile recuperare le informazioni meteo al momento."
+            if is_it
+            else "Sorry, I cannot retrieve weather information at the moment.",
+        )
+        return
+
+    hourly = data.get("hourly", {})
+    times = hourly.get("time", [])
+    codes = hourly.get("weather_code", [])
+
+    current = data.get("current", {})
+    cutoff = current.get("time") or (times[0] if times else "")
+
+    # Already sunny right now (during the day)? Say so instead of a future time.
+    current_code = current.get("weather_code")
+    if (
+        current_code in _SUN_CODES
+        and _SUN_DAY_START <= _iso_hour(cutoff) <= _SUN_DAY_END
+    ):
+        await _speak_meteo(
+            mqtt_client,
+            lang,
+            f"A {display_city} c'è già il sole."
+            if is_it
+            else f"It's already sunny in {display_city}.",
+        )
+        return
+
+    # First upcoming clear-sky hour within daylight hours.
+    first_idx = None
+    for i, ts in enumerate(times):
+        if cutoff and ts < cutoff:
+            continue
+        if not (_SUN_DAY_START <= _iso_hour(ts) <= _SUN_DAY_END):
+            continue
+        code = codes[i] if i < len(codes) else -1
+        if code in _SUN_CODES:
+            first_idx = i
+            break
+
+    if first_idx is None:
+        if is_it:
+            window = (
+                "nelle prossime 24 ore"
+                if forecast_days == 1
+                else f"nei prossimi {forecast_days} giorni"
+            )
+            await _speak_meteo(
+                mqtt_client, lang, f"A {display_city} non è previsto sole {window}."
+            )
+        else:
+            window = (
+                "in the next 24 hours"
+                if forecast_days == 1
+                else f"in the next {forecast_days} days"
+            )
+            await _speak_meteo(
+                mqtt_client, lang, f"No sun is expected in {display_city} {window}."
+            )
+        return
+
+    ts = times[first_idx]
+    when = _relative_day_label(ts[:10], cutoff[:10] if cutoff else ts[:10], is_it)
+    hour = _iso_hour(ts)
+
+    if is_it:
+        msg = f"A {display_city} ci sarà il sole {when} verso le {hour}."
+    else:
+        msg = f"In {display_city} it will be sunny {when} around {hour}:00."
+
+    logger.info(f"[meteo_sun action] Saying: {msg}")
+    await _speak_meteo(mqtt_client, lang, msg)
 
 
 @registry.register("stop_listening")
