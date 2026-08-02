@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import datetime
 import html
 import logging
 import os
@@ -568,9 +569,9 @@ async def handle_telegram(action: ActionEntry, telegram_client: TelegramClient, 
         # Escape the surrounding text (it may contain "&"/"<"/">") before
         # dropping in the raw anchor tag, so Telegram's HTML parser doesn't
         # choke on unrelated characters in the configured message.
-        text = html.escape(
-            text.replace("<room>", _ROOM_LINK_PLACEHOLDER)
-        ).replace(_ROOM_LINK_PLACEHOLDER, f'<a href="{href}">collegati</a>')
+        text = html.escape(text.replace("<room>", _ROOM_LINK_PLACEHOLDER)).replace(
+            _ROOM_LINK_PLACEHOLDER, f'<a href="{href}">collegati</a>'
+        )
         parse_mode = "HTML"
     await telegram_client.send_message(chat_id, text, parse_mode=parse_mode)
 
@@ -1204,6 +1205,115 @@ WMO_INTERPRETATION_EN: dict[int, str] = {
     99: "Thunderstorm with heavy hail",
 }
 
+# Locale-independent date names (the board may not have Italian locales installed).
+_WEEKDAYS_IT = [
+    "lunedì",
+    "martedì",
+    "mercoledì",
+    "giovedì",
+    "venerdì",
+    "sabato",
+    "domenica",
+]
+_WEEKDAYS_EN = [
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+]
+_MONTHS_IT = [
+    "gennaio",
+    "febbraio",
+    "marzo",
+    "aprile",
+    "maggio",
+    "giugno",
+    "luglio",
+    "agosto",
+    "settembre",
+    "ottobre",
+    "novembre",
+    "dicembre",
+]
+_MONTHS_EN = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+]
+
+
+def _format_forecast_date(iso_date: str, is_it: bool) -> str:
+    """Format an Open-Meteo ``YYYY-MM-DD`` string as a spoken weekday + date.
+
+    Italian: ``martedì 3 agosto``. English: ``Tuesday, August 3``.
+    Returns an empty string if the date cannot be parsed.
+    """
+    try:
+        d = datetime.date.fromisoformat(iso_date)
+    except (ValueError, TypeError):
+        return ""
+    weekday = d.weekday()  # 0 = Monday
+    month = d.month - 1
+    if is_it:
+        return f"{_WEEKDAYS_IT[weekday]} {d.day} {_MONTHS_IT[month]}"
+    return f"{_WEEKDAYS_EN[weekday]}, {_MONTHS_EN[month]} {d.day}"
+
+
+def _representative_day_code(
+    hourly_times: list[str],
+    hourly_codes: list[int],
+    iso_date: str,
+    fallback: int,
+) -> int:
+    """Pick a representative WMO code for the daytime of ``iso_date``.
+
+    Open-Meteo's *daily* weather_code reports the single most severe code of
+    the whole 24 h (e.g. a brief cloudy hour at 04:00), so hot clear days get
+    labelled "coperto". Instead, look at daytime hours (07–20) and:
+      * if any precipitation/thunderstorm code (>= 51) occurs, report the most
+        severe one — never hide rain;
+      * otherwise report the most common sky/fog code (ties broken toward the
+        more overcast code).
+    Falls back to the daily ``fallback`` code if hourly data is unavailable.
+    """
+    day_codes = [
+        c
+        for t, c in zip(hourly_times, hourly_codes)
+        if isinstance(t, str) and t.startswith(iso_date) and 7 <= _iso_hour(t) <= 20
+    ]
+    if not day_codes:
+        return fallback
+
+    precip = [c for c in day_codes if c >= 51]
+    if precip:
+        return max(precip)
+
+    # Most common sky/fog code; on a tie prefer the more overcast (higher) code.
+    counts: dict[int, int] = {}
+    for c in day_codes:
+        counts[c] = counts.get(c, 0) + 1
+    return max(counts, key=lambda c: (counts[c], c))
+
+
+def _iso_hour(iso_ts: str) -> int:
+    """Extract the hour (0-23) from an Open-Meteo ``YYYY-MM-DDTHH:MM`` string."""
+    try:
+        return int(iso_ts[11:13])
+    except (ValueError, IndexError):
+        return -1
+
 
 @registry.register("meteo")
 async def handle_meteo(
@@ -1297,6 +1407,7 @@ async def handle_meteo(
         "latitude": latitude,
         "longitude": longitude,
         "daily": "weather_code,temperature_2m_max,temperature_2m_min",
+        "hourly": "weather_code",
         "timezone": "auto",
         "forecast_days": 2,
     }
@@ -1332,6 +1443,7 @@ async def handle_meteo(
     weather_codes = daily.get("weather_code", [])
     temp_maxs = daily.get("temperature_2m_max", [])
     temp_mins = daily.get("temperature_2m_min", [])
+    dates = daily.get("time", [])
 
     if (
         len(weather_codes) > day_index
@@ -1345,16 +1457,34 @@ async def handle_meteo(
         t_max_int = int(round(t_max))
         t_min_int = int(round(t_min))
 
+        date_phrase = ""
+        iso_date = dates[day_index] if len(dates) > day_index else ""
+        if iso_date:
+            date_phrase = _format_forecast_date(iso_date, is_it)
+
+        # The daily weather_code over-reports cloud/overcast (it takes the worst
+        # code of the full 24 h). Prefer a representative daytime code instead.
+        hourly = data.get("hourly", {})
+        if iso_date:
+            code = _representative_day_code(
+                hourly.get("time", []),
+                hourly.get("weather_code", []),
+                iso_date,
+                fallback=code,
+            )
+
         if is_it:
             desc = WMO_INTERPRETATION.get(code, "tempo variabile")
+            when = f"{day_label}, {date_phrase}," if date_phrase else day_label
             weather_msg = (
-                f"A {display_city} {day_label} il tempo sarà: {desc.lower()}. "
+                f"A {display_city} {when} il tempo sarà: {desc.lower()}. "
                 f"La temperatura minima sarà di {t_min_int} gradi, e la massima di {t_max_int} gradi."
             )
         else:
             desc = WMO_INTERPRETATION_EN.get(code, "variable weather")
+            when = f"{day_label}, {date_phrase}," if date_phrase else day_label
             weather_msg = (
-                f"In {display_city} {day_label} the weather will be: {desc.lower()}. "
+                f"In {display_city} {when} the weather will be: {desc.lower()}. "
                 f"The minimum temperature will be {t_min_int} degrees, and the maximum will be {t_max_int} degrees."
             )
 
