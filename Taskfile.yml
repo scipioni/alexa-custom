@@ -453,7 +453,7 @@ tasks:
   mqtt:setup:
     desc: Install Mosquitto MQTT broker and enable system service
     cmds:
-      - sudo apt-get install -y mosquitto
+      - sudo apt-get install -y mosquitto mosquitto-clients
       - sudo cp setup/mosquitto-serena.conf /etc/mosquitto/conf.d/serena.conf
       - sudo systemctl enable --now mosquitto
       - |
