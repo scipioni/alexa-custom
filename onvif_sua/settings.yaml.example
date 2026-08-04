@@ -80,6 +80,9 @@ web:
   # Token cache-busting degli asset statici: incrementalo dopo aver modificato
   # CSS/JS così le dashboard aperte da giorni ricaricano i file.
   asset_version: '1'
+  # true = bypassa completamente la pagina /login (es. se un reverse proxy gestisce
+  # già l'autenticazione). Default false; sovrascrive GUI_SKIP_LOGIN da .env.
+  skip_login: false
 
 # Tuning della liveness del rilevamento (detection_ok / fall_sensor_online).
 tuning:

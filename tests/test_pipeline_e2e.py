@@ -8,8 +8,10 @@ triggers, and the reply window.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import threading
+import time
 import types
 from collections import deque
 from typing import Any
@@ -17,7 +19,7 @@ from typing import Any
 import pytest
 
 import alexa_custom.stt as _stt_module
-from alexa_custom.actions import ActionEntry, TelegramClient
+from alexa_custom.actions import ActionEntry, TelegramClient, registry
 from alexa_custom.config import (
     ActionsConfig,
     AudioConfig,
@@ -125,6 +127,7 @@ def run_pipeline(
     timeout: float = 5.0,
     silence_beep: bool = True,
     mqtt_client: Any = None,
+    mqtt_trigger_command: str | None = None,
 ) -> list[tuple[str, dict]]:
     """Drive the full recognition pipeline with scripted transcripts.
 
@@ -135,6 +138,12 @@ def run_pipeline(
     silence_beep=True replaces play_wake_beep_async with a no-op: a real tone
     would set the _playback_active gate and make the loop drop FakeProc chunks,
     starving the ScriptedBackend. Pass False only to test the beep path itself.
+
+    mqtt_trigger_command, if given, is delivered through mqtt_client's
+    set_on_command() callback (as a real MQTT trigger/run message would be)
+    from a background thread once the STT worker registers it, then stops the
+    pipeline — script-driven voice matching and MQTT-driven matching are
+    mutually exclusive in a single run_pipeline call, so pass an empty script.
     """
     events: list[tuple[str, dict]] = []
     stop_event = threading.Event()
@@ -142,6 +151,22 @@ def run_pipeline(
 
     scripted = ScriptedBackend(script, stop_event)
     fake_proc = FakeProc(total_chunks=500)
+
+    trigger_thread = None
+    if mqtt_trigger_command is not None:
+        assert mqtt_client is not None, "mqtt_trigger_command needs an mqtt_client"
+
+        def _fire_mqtt_trigger() -> None:
+            deadline = time.monotonic() + timeout
+            while getattr(mqtt_client, "_callback", None) is None:
+                if time.monotonic() > deadline:
+                    return
+                time.sleep(0.01)
+            asyncio.run(mqtt_client._callback({"command": mqtt_trigger_command}))
+            stop_event.set()
+
+        trigger_thread = threading.Thread(target=_fire_mqtt_trigger, daemon=True)
+        trigger_thread.start()
 
     # --- monkeypatches ---
     orig_start_capture = _stt_module.start_capture
@@ -187,6 +212,8 @@ def run_pipeline(
         _stt_module.get_stt_backend = orig_get_backend
         _stt_module.play_wake_beep_async = orig_beep
         _tts_module.get_engine = _orig_get_engine
+        if trigger_thread is not None:
+            trigger_thread.join(timeout=1.0)
 
     return events
 
@@ -595,13 +622,18 @@ class _FakeMqttClient:
 
     def __init__(self) -> None:
         self.states: list[str] = []
+        self._callback = None
 
     def publish_threadsafe(self, topic, payload, retain=False, loop=None):
         if topic == f"{self.topic_prefix}/{self.node_id}/state":
             self.states.append(payload)
 
+    async def publish(self, topic, payload, retain=False):
+        if topic == f"{self.topic_prefix}/{self.node_id}/state":
+            self.states.append(payload)
+
     def set_on_command(self, callback):
-        pass
+        self._callback = callback
 
 
 class TestOperativeStatePublish:
@@ -614,3 +646,43 @@ class TestOperativeStatePublish:
 
         assert mqtt_client.states[0] == "start"
         assert mqtt_client.states.count("start") == 1
+
+
+class TestMqttTriggerRegexEndToEnd:
+    """MQTT trigger/run with a command_regex-matched trigger, end to end:
+    mqtt.py's callback shape -> stt.py's _on_mqtt_command -> match_trigger_regex
+    -> substitute_action_params -> dispatch. Reproduces onvif_sua sending
+    'caduta_bagno' on hub/2q/trigger/run (mirrored locally to trigger/run)."""
+
+    def test_captured_group_substituted_into_action_params(self):
+        received: list[dict] = []
+
+        @registry.register("_capture_test")
+        async def _capture(action, **_):
+            received.append(action.params)
+
+        try:
+            trigger = Trigger(
+                commands=["caduta"],
+                command_regex=["caduta_(?P<stanza>.+)"],
+                actions=[
+                    ActionEntry(
+                        type="_capture_test",
+                        params={"text": "Caduta rilevata in <stanza>"},
+                    )
+                ],
+                with_wake=False,
+            )
+            config = _make_config([trigger])
+            mqtt_client = _FakeMqttClient()
+
+            run_pipeline(
+                [],
+                config,
+                mqtt_client=mqtt_client,
+                mqtt_trigger_command="caduta_bagno",
+            )
+        finally:
+            registry._handlers.pop("_capture_test", None)
+
+        assert received == [{"text": "Caduta rilevata in bagno"}]

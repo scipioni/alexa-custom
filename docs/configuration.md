@@ -301,6 +301,14 @@ triggers:
     actions:
       - type: say
         text: "Buonanotte!"
+
+  - commands: ["caduta"]                 # still needed: commands must not be empty
+    command_regex:                       # MQTT trigger/run only — never voice-matched
+      - "caduta_(?P<stanza>.+)"
+    with_wake: false
+    actions:
+      - type: say
+        text: "Caduta rilevata in <stanza>"
 ```
 
 Trigger fields:
@@ -311,9 +319,39 @@ Trigger fields:
 | `actions` | required | List of action entries |
 | `with_wake` | `true` | `false` = fires without wake word |
 | `patterns` | `[]` | Word-glob patterns (definitive match) |
+| `command_regex` | `[]` | Regex pattern(s) (string or list), matched via `re.fullmatch` against **MQTT `trigger/run` payloads only** — see below |
 | `follow_up` | global | Per-trigger override of `recognition.follow_up` |
 | `min_word_overlap` | global | Per-trigger override of word-overlap guard |
 | `tag` | `""` | Optional grouping tag |
+
+#### `command_regex`: capturing values from MQTT trigger/run
+
+For machine-generated MQTT `trigger/run` payloads (e.g. `onvif_sua` publishing
+`caduta_bagno` on a fall-detection event), `command_regex` matches the raw
+payload with `re.fullmatch` — independently of `commands`/`patterns`, which
+stay purely for spoken/fuzzy voice matching (a regex string is never fed into
+the phonetic matcher or the Vosk grammar). Named groups (`(?P<name>...)`) are
+substituted into every string-valued action param wherever `<name>` appears,
+including inside nested dicts/lists:
+
+```yaml
+triggers:
+  - commands: ["caduta"]                 # commands must be non-empty even
+                                          # when only command_regex is used
+    command_regex: "caduta_(?P<stanza>.+)"
+    with_wake: false
+    actions:
+      - type: say
+        text: "Caduta rilevata in <stanza>"
+```
+
+`mosquitto_pub -t serena/arduino/trigger/run -m "caduta_bagno"` (or the
+mirrored hub topic from `onvif_sua`, see `docs/mqtt_integration.md`) then
+speaks "Caduta rilevata in bagno". A payload with no matching `command_regex`
+falls through to the normal fuzzy voice matcher, so a trigger can carry both a
+spoken `commands` phrase and an MQTT-only `command_regex` at once. Patterns
+are tried in trigger order, first match wins; an invalid regex is logged and
+skipped, not raised.
 
 ### All action types
 

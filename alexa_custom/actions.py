@@ -497,6 +497,76 @@ def match_trigger(
     return trigger
 
 
+def match_trigger_regex(
+    text: str, triggers: list[Trigger]
+) -> tuple[Trigger | None, dict[str, str]]:
+    """Match `text` exactly against each trigger's `command_regex` patterns.
+
+    For machine-generated payloads (e.g. an MQTT trigger/run command like
+    onvif_sua's "caduta_bagno"), not spoken transcripts — command_regex is
+    checked here only, never fed into the phonetic matcher or the Vosk
+    grammar (unlike trigger.commands/patterns, see _trigger_phrases()).
+    Patterns are tried in trigger order, first pattern wins; use re.fullmatch
+    so a stray suffix/prefix on the payload does not falsely match. Returns
+    the matched trigger and its named capture groups (empty dict if no groups
+    or no match).
+    """
+    for trigger in triggers:
+        for pattern in trigger.command_regex:
+            try:
+                m = re.fullmatch(pattern, text)
+            except re.error as e:
+                logger.error(
+                    "Invalid command_regex %r on trigger %r: %s",
+                    pattern,
+                    trigger.phrase,
+                    e,
+                )
+                continue
+            if m:
+                return trigger, m.groupdict()
+    return None, {}
+
+
+def substitute_action_params(
+    actions: list[ActionEntry], values: dict[str, str]
+) -> list[ActionEntry]:
+    """Return a copy of `actions` with "<name>" placeholders replaced by `values`.
+
+    Mirrors the existing "<room>" literal substitution in handle_telegram, but
+    generalized to arbitrary names — used to inject match_trigger_regex()'s
+    capture groups (e.g. "<stanza>" -> "bagno") into action params such as a
+    `say` action's text. Walks nested dicts/lists inside params, and recurses
+    into on_reply/on_else (an `ask` action's reply-window triggers/actions,
+    arbitrarily deep), so a group reaches every action ultimately dispatched
+    from this trigger — not just the outer action's own params.
+    """
+
+    def _sub_value(value: Any) -> Any:
+        if isinstance(value, str):
+            for name, val in values.items():
+                value = value.replace(f"<{name}>", val)
+            return value
+        if isinstance(value, dict):
+            return {k: _sub_value(v) for k, v in value.items()}
+        if isinstance(value, list):
+            return [_sub_value(v) for v in value]
+        return value
+
+    def _sub_action(a: ActionEntry) -> ActionEntry:
+        return dataclasses.replace(
+            a,
+            params=_sub_value(a.params),
+            on_reply=[_sub_trigger(t) for t in a.on_reply],
+            on_else=[_sub_action(e) for e in a.on_else],
+        )
+
+    def _sub_trigger(t: Trigger) -> Trigger:
+        return dataclasses.replace(t, actions=[_sub_action(a) for a in t.actions])
+
+    return [_sub_action(a) for a in actions]
+
+
 _dispatch_depth = 0
 _MAX_DISPATCH_DEPTH = 10
 

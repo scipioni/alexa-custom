@@ -50,6 +50,15 @@ that missed state during an outage still receives the current value afterwards.
 
 > Note: there is no `config/set` topic — MQTT cannot update runtime config. Config changes go through `conf/config.yaml` / `conf/actions/user.yaml` hot-reload or the web dashboard.
 
+`trigger/run` also supports a `command_regex` match, tried first (before the
+fuzzy matcher), for exact machine-generated payloads with named capture
+groups — e.g. `onvif_sua` publishing `caduta_bagno` on
+`hub/2q/trigger/run`/`serena/arduino/trigger/run` matches
+`command_regex: "caduta_(?P<stanza>.+)"` and substitutes `<stanza>` → `bagno`
+into the matched trigger's action params (e.g. a `say` action's `text`). See
+"`command_regex`: capturing values from MQTT trigger/run" in
+`docs/configuration.md`.
+
 ### `node_id` vs `local_id`
 
 `mqtt.node_id` is meant to be **unique per board** (HA entity uniqueness, bridge

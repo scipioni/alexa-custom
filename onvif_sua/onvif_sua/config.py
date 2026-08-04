@@ -397,6 +397,8 @@ def _load_settings_yaml():
             _cfg["asset_version"] = str(web.get("asset_version", _cfg.get("asset_version", "1")))
             if "port" in web:
                 WEB_PORT = int(web["port"])
+            if "skip_login" in web:
+                _cfg["web_skip_login"] = _coerce_bool(web["skip_login"])
         # Behaviour-tuning knobs — authoritative here, env vars are only the defaults.
         tuning = data.get("tuning") or {}
         if isinstance(tuning, dict):
@@ -563,12 +565,18 @@ CAMERA_PASSWORD = os.getenv("CAMERA_PASSWORD", DEFAULT_PASSWORD_SENTINEL)
 SCAN_USER       = os.getenv("SCAN_USER") or CAMERA_USER
 SCAN_PASSWORD   = os.getenv("SCAN_PASSWORD") or CAMERA_PASSWORD
 GUI_PASSWORD    = os.getenv("GUI_PASSWORD", DEFAULT_PASSWORD_SENTINEL)
+# Bypasses the /login gate entirely (every route behaves as already authenticated) —
+# e.g. a LAN-only deployment behind its own reverse-proxy auth. Default false so a
+# fresh install still requires GUI_PASSWORD. settings.yaml `web.skip_login` overrides
+# this at load (see _load_settings_yaml).
+GUI_SKIP_LOGIN  = _coerce_bool(os.getenv("GUI_SKIP_LOGIN", "false"))
 
 # The manual-scan credential is a single env-sourced entry (no multi-credential list).
 _cfg["cam_credentials"] = [{"user": SCAN_USER, "pass": SCAN_PASSWORD}]
 # Web login password: hash GUI_PASSWORD in memory at load. Never read/written to
 # settings.yaml; changing it means editing .env and restarting.
 _cfg["web_password"] = _hash_password(GUI_PASSWORD)
+_cfg["web_skip_login"] = GUI_SKIP_LOGIN
 
 
 def _env_shadows_dotenv(var: str) -> bool:

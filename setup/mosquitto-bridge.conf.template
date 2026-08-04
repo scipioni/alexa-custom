@@ -82,7 +82,10 @@ cleansession false
 
 # Outbound: everything this board publishes, remapped into the hub namespace —
 # local serena/<hostname>/state becomes hub/<hostname>/state on the master.
-topic /# out 0 serena/@BRIDGE_HOSTNAME@ hub/@BRIDGE_HOSTNAME@
+topic /# out 0 serena/@BRIDGE_HOSTNAME@ hub/@BRIDGE_HOSTNAME@/serena
+
+# inoltriamo al bridge i messaggi da onvif-sua
+topic onvif/# out 0 "" hub/@BRIDGE_HOSTNAME@/
 
 # Inbound commands from the master, at QoS 0 so nothing is replayed after an
 # outage (a queued TTS request would make the board speak stale text, and a

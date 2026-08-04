@@ -6,11 +6,14 @@ from alexa_custom.actions import (
     _match_glob_pattern,
     _run_action,
     _trigger_matches_patterns,
+    _trigger_phrases,
     dispatch,
     italian_phonetic,
     match_trigger,
+    match_trigger_regex,
     normalize_text,
     registry,
+    substitute_action_params,
 )
 from alexa_custom.config import ActionEntry, Trigger
 
@@ -713,6 +716,227 @@ class TestGlobPatternConfig:
         raw = [{"phrase": "luci", "actions": [{"type": "log"}], "patterns": "accend*"}]
         with pytest.raises(ConfigError, match="patterns must be a list"):
             _parse_triggers(raw, "test")
+
+
+class TestCommandRegexConfig:
+    def test_command_regex_absent_defaults_to_empty_list(self):
+        from alexa_custom.config import _parse_triggers
+
+        raw = [{"phrase": "chiama", "actions": [{"type": "log"}]}]
+        triggers = _parse_triggers(raw, "test")
+        assert triggers[0].command_regex == []
+
+    def test_command_regex_parsed_as_list(self):
+        from alexa_custom.config import _parse_triggers
+
+        raw = [
+            {
+                "phrase": "caduta",
+                "actions": [{"type": "log"}],
+                "command_regex": ["caduta_(?P<stanza>.+)"],
+            }
+        ]
+        triggers = _parse_triggers(raw, "test")
+        assert triggers[0].command_regex == ["caduta_(?P<stanza>.+)"]
+
+    def test_command_regex_single_string_coerced_to_list(self):
+        from alexa_custom.config import _parse_triggers
+
+        raw = [
+            {
+                "phrase": "caduta",
+                "actions": [{"type": "log"}],
+                "command_regex": "caduta_(?P<stanza>.+)",
+            }
+        ]
+        triggers = _parse_triggers(raw, "test")
+        assert triggers[0].command_regex == ["caduta_(?P<stanza>.+)"]
+
+    def test_command_regex_non_list_non_string_raises_config_error(self):
+        from alexa_custom.config import ConfigError, _parse_triggers
+
+        raw = [
+            {
+                "phrase": "caduta",
+                "actions": [{"type": "log"}],
+                "command_regex": {"not": "valid"},
+            }
+        ]
+        with pytest.raises(ConfigError, match="command_regex must be a string or list"):
+            _parse_triggers(raw, "test")
+
+
+class TestMatchTriggerRegex:
+    def test_matches_and_captures_named_group(self):
+        trigger = Trigger(
+            phrase="caduta",
+            actions=[],
+            command_regex=["caduta_(?P<stanza>.+)"],
+        )
+        matched, groups = match_trigger_regex("caduta_bagno", [trigger])
+        assert matched is trigger
+        assert groups == {"stanza": "bagno"}
+
+    def test_no_match_returns_none_and_empty_groups(self):
+        trigger = Trigger(
+            phrase="caduta",
+            actions=[],
+            command_regex=["caduta_(?P<stanza>.+)"],
+        )
+        matched, groups = match_trigger_regex("altro_evento", [trigger])
+        assert matched is None
+        assert groups == {}
+
+    def test_fullmatch_rejects_partial_suffix(self):
+        # A stray suffix must not falsely match — re.fullmatch, not re.match.
+        trigger = Trigger(phrase="caduta", actions=[], command_regex=["caduta_bagno"])
+        matched, _ = match_trigger_regex("caduta_bagno_extra", [trigger])
+        assert matched is None
+
+    def test_pattern_without_groups_returns_empty_dict(self):
+        trigger = Trigger(phrase="caduta", actions=[], command_regex=["caduta_bagno"])
+        matched, groups = match_trigger_regex("caduta_bagno", [trigger])
+        assert matched is trigger
+        assert groups == {}
+
+    def test_first_matching_trigger_wins(self):
+        first = Trigger(phrase="a", actions=[], command_regex=["caduta_(?P<x>.+)"])
+        second = Trigger(phrase="b", actions=[], command_regex=["caduta_(?P<x>.+)"])
+        matched, _ = match_trigger_regex("caduta_bagno", [first, second])
+        assert matched is first
+
+    def test_invalid_regex_is_skipped_not_raised(self):
+        trigger = Trigger(phrase="bad", actions=[], command_regex=["caduta_(?P<x>"])
+        matched, groups = match_trigger_regex("caduta_bagno", [trigger])
+        assert matched is None
+        assert groups == {}
+
+    def test_empty_triggers_list(self):
+        assert match_trigger_regex("anything", []) == (None, {})
+
+    def test_command_regex_excluded_from_voice_matching_phrases(self):
+        # _trigger_phrases() feeds both the fuzzy voice matcher and the Vosk
+        # grammar (see its docstring) — command_regex must never appear there,
+        # or a raw regex string could leak into spoken-command matching/grammar.
+        trigger = Trigger(
+            commands=["caduta bagno"],
+            command_regex=["caduta_(?P<stanza>.+)"],
+            actions=[],
+        )
+        assert _trigger_phrases(trigger) == ["caduta bagno"]
+
+
+class TestSubstituteActionParams:
+    def test_replaces_placeholder_in_top_level_string(self):
+        actions = [
+            ActionEntry(type="say", params={"text": "Caduta rilevata in <stanza>"})
+        ]
+        result = substitute_action_params(actions, {"stanza": "bagno"})
+        assert result[0].params["text"] == "Caduta rilevata in bagno"
+
+    def test_original_actions_left_untouched(self):
+        actions = [ActionEntry(type="say", params={"text": "in <stanza>"})]
+        substitute_action_params(actions, {"stanza": "bagno"})
+        assert actions[0].params["text"] == "in <stanza>"
+
+    def test_replaces_placeholder_in_nested_dict_and_list(self):
+        actions = [
+            ActionEntry(
+                type="mqtt_publish",
+                params={
+                    "topic": "home/<stanza>/alarm",
+                    "extra": {"nested": ["<stanza> triggered"]},
+                },
+            )
+        ]
+        result = substitute_action_params(actions, {"stanza": "bagno"})
+        assert result[0].params["topic"] == "home/bagno/alarm"
+        assert result[0].params["extra"]["nested"] == ["bagno triggered"]
+
+    def test_no_placeholder_leaves_text_unchanged(self):
+        actions = [ActionEntry(type="say", params={"text": "nessun placeholder"})]
+        result = substitute_action_params(actions, {"stanza": "bagno"})
+        assert result[0].params["text"] == "nessun placeholder"
+
+    def test_multiple_groups_substituted(self):
+        actions = [ActionEntry(type="say", params={"text": "<evento> in <stanza>"})]
+        result = substitute_action_params(
+            actions, {"evento": "caduta", "stanza": "bagno"}
+        )
+        assert result[0].params["text"] == "caduta in bagno"
+
+    def test_substitutes_inside_ask_on_reply(self):
+        # Mirrors conf/actions/user.yaml's "Sensore BAGNO" trigger: an `ask`
+        # action whose on_reply actions also reference the captured group.
+        actions = [
+            ActionEntry(
+                type="ask",
+                params={"text": "Caduta rilevata in <stanza>. Confermi?"},
+                on_reply=[
+                    Trigger(
+                        commands=["si"],
+                        actions=[
+                            ActionEntry(
+                                type="telegram",
+                                params={"text": "Caduta in <stanza> — collegati"},
+                            )
+                        ],
+                    )
+                ],
+            )
+        ]
+        result = substitute_action_params(actions, {"stanza": "bagno"})
+        assert result[0].params["text"] == "Caduta rilevata in bagno. Confermi?"
+        assert (
+            result[0].on_reply[0].actions[0].params["text"]
+            == "Caduta in bagno — collegati"
+        )
+
+    def test_substitutes_inside_on_else_and_nested_ask(self):
+        # on_else can itself hold another `ask` with its own on_reply/on_else —
+        # substitution must recurse through every level, not just one.
+        actions = [
+            ActionEntry(
+                type="ask",
+                params={"text": "in <stanza>?"},
+                on_else=[
+                    ActionEntry(
+                        type="ask",
+                        params={"text": "ripeto: in <stanza>?"},
+                        on_reply=[
+                            Trigger(
+                                commands=["si"],
+                                actions=[
+                                    ActionEntry(
+                                        type="say",
+                                        params={"text": "ok, <stanza>"},
+                                    )
+                                ],
+                            )
+                        ],
+                    )
+                ],
+            )
+        ]
+        result = substitute_action_params(actions, {"stanza": "bagno"})
+        nested_ask = result[0].on_else[0]
+        assert nested_ask.params["text"] == "ripeto: in bagno?"
+        assert nested_ask.on_reply[0].actions[0].params["text"] == "ok, bagno"
+
+    def test_on_reply_on_else_left_untouched_on_original(self):
+        original = ActionEntry(
+            type="ask",
+            params={"text": "in <stanza>"},
+            on_reply=[
+                Trigger(
+                    commands=["si"],
+                    actions=[ActionEntry(type="say", params={"text": "<stanza>"})],
+                )
+            ],
+        )
+        substitute_action_params([original], {"stanza": "bagno"})
+        assert original.params["text"] == "in <stanza>"
+        assert original.on_reply[0].actions[0].params["text"] == "<stanza>"
 
 
 class TestMeteoAction:

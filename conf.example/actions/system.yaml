@@ -4,9 +4,16 @@
 # on_startup is only honoured in this file; it is ignored in all other action files.
 
 on_startup:
+  - type: tone
+    name: startup
+    volume: 0.01   # optional: overrides output volume for this tone only,
+    #   then restores the previous level — does not persist to config
+    settle_ms: 500   # gives the audio hardware time to settle before the first speech
   - type: say
     text: "Sistema pronto"
     lang: "it-IT"
+    volume: 0.01   # optional: overrides output volume for this utterance only,
+    #   then restores the previous level — does not persist to config
 
 # Schema:
 #   triggers:  flat list of triggers

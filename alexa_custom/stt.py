@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import collections
 import concurrent.futures
+import dataclasses
 import json
 import logging
 import os
@@ -20,7 +21,9 @@ from alexa_custom.actions import (
     ActionContext,
     TelegramClient,
     dispatch,
+    match_trigger_regex,
     match_trigger_with_score,
+    substitute_action_params,
 )
 from alexa_custom.audio import play_wake_beep_async
 from alexa_custom.config import (
@@ -358,13 +361,25 @@ def _recognition_loop(
             if not text:
                 logger.warning("MQTT trigger/run: empty command")
                 return
-            trig, score = match_trigger_with_score(
-                text,
-                config.triggers,
-                algorithm=config.recognition.matching_algorithm,
-                threshold=config.recognition.matching_threshold,
-                min_word_overlap=config.recognition.min_word_overlap,
-            )
+
+            # Regex match first: exact, machine-generated payloads (e.g.
+            # onvif_sua's "caduta_bagno") with named capture groups take
+            # priority over the fuzzy voice-style matcher below.
+            trig, groups = match_trigger_regex(text, config.triggers)
+            if trig is not None:
+                score = 100.0
+                if groups:
+                    trig = dataclasses.replace(
+                        trig, actions=substitute_action_params(trig.actions, groups)
+                    )
+            else:
+                trig, score = match_trigger_with_score(
+                    text,
+                    config.triggers,
+                    algorithm=config.recognition.matching_algorithm,
+                    threshold=config.recognition.matching_threshold,
+                    min_word_overlap=config.recognition.min_word_overlap,
+                )
             if trig is None:
                 logger.warning(
                     "MQTT trigger/run: no trigger matched %r (score=%.0f)",

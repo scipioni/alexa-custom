@@ -33,6 +33,11 @@ class Trigger:
     commands: list[str] = field(default_factory=list)  # primary field
     actions: list[ActionEntry] = field(default_factory=list)
     patterns: list[str] = field(default_factory=list)
+    # Regex patterns (may contain named groups, e.g. "caduta_(?P<stanza>.+)")
+    # matched via re.fullmatch against MQTT trigger/run payloads only — never
+    # fed into voice matching (match_trigger_with_score) or the Vosk grammar.
+    # See match_trigger_regex() in actions.py.
+    command_regex: list[str] = field(default_factory=list)
     with_wake: bool = True  # False = fires without a wake word
     follow_up: bool | None = None
     min_word_overlap: float | None = None
@@ -522,6 +527,16 @@ def _parse_triggers(raw_triggers: list[Any], path_prefix: str) -> list[Trigger]:
             raise ConfigError(f"config:{path_prefix}[{i}].patterns must be a list")
         patterns = [str(p) for p in raw_patterns if p]
 
+        # --- command_regex ---
+        raw_command_regex = t.get("command_regex", [])
+        if isinstance(raw_command_regex, str):
+            raw_command_regex = [raw_command_regex]
+        if not isinstance(raw_command_regex, list):
+            raise ConfigError(
+                f"config:{path_prefix}[{i}].command_regex must be a string or list"
+            )
+        command_regex = [str(p) for p in raw_command_regex if p]
+
         # --- with_wake ---
         # New: with_wake: true/false
         # Legacy: wake_words: [] → with_wake=False; wake_words: [ids] → with_wake=True (scoping dropped)
@@ -597,6 +612,7 @@ def _parse_triggers(raw_triggers: list[Any], path_prefix: str) -> list[Trigger]:
                 commands=commands,
                 actions=actions,
                 patterns=patterns,
+                command_regex=command_regex,
                 with_wake=with_wake,
                 follow_up=follow_up_val,
                 min_word_overlap=min_word_overlap_val,
@@ -939,6 +955,7 @@ def _parse_mqtt_config(raw: dict) -> MQTTConfig | None:
     node_id = raw.get("node_id")
     try:
         from pathlib import Path
+
         state_path = Path("conf/state.yaml")
         if state_path.exists():
             with state_path.open() as sf:

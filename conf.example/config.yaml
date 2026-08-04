@@ -13,20 +13,14 @@
 # belong in this list — the STT model matches any of them.
 # Extra phrases can also be added from conf/actions/*.yaml via a 'wake_words:' key.
 wake_words:
-  - "ehi serena"
-  - "ascolta assistente"
-  # - "ehi assistente"
-
-
-# ---------------------------------------------------------------------------
-# Recognition
-# ---------------------------------------------------------------------------
+- ehi serena
+- ascolta assistente
 recognition:
-  wake_window: 8.0          # seconds after a wake word to listen for a command
+  wake_window: 8            # seconds after a wake word to listen for a command
   wake_tone: wake           # tone on wake: wake | startup | success | error | info | warning | none
   call_tone: false          # play rising/falling tones on call connect/disconnect
   matching_algorithm: token_sort_ratio  # token_sort_ratio | token_set_ratio | levenshtein | ratio
-  matching_threshold: 75.0              # similarity threshold (0-100)
+  matching_threshold: 75                # similarity threshold (0-100)
   #   token_sort_ratio (default) is order-tolerant AND length-aware, so a single
   #   word ("sono") cannot falsely match a longer command ("che ore sono").
   #   token_set_ratio scores token-subsets as 100 and is prone to such false fires.
@@ -40,7 +34,7 @@ recognition:
   # min_cmd_words: 1  # minimum word count in the recognised command before fuzzy
   #   trigger matching runs. Raise to 2 to block single-phoneme noise.
   reply_matching_algorithm: levenshtein  # token_sort_ratio | token_set_ratio | levenshtein | ratio
-  reply_matching_threshold: 80.0         # similarity threshold (0-100)
+  reply_matching_threshold: 80           # similarity threshold (0-100)
   # follow_up: false          # re-open command window after a match without re-waking
   # follow_up_timeout: 4.0    # seconds of silence before the follow-up window closes
   # follow_up_max_turns: 5    # max consecutive follow-up turns (runaway guard)
@@ -51,6 +45,9 @@ recognition:
 # ---------------------------------------------------------------------------
 # Single always-on model: continuously transcribes and matches wake words +
 # commands in one pass (no two-stage pipeline).
+  follow_up: false
+  follow_up_timeout: 4
+  follow_up_max_turns: 5
 stt:
   backend: sherpa-onnx      # vosk | sherpa-onnx
   # model_path: models/it
@@ -66,7 +63,7 @@ stt:
   #   Perceived latency ≈ vad_silence_ms + ~130 ms decode.
   fast_vad_ms: 200          # fast endpoint: when the PARTIAL transcript already fully
   #   matches a wake word or a trigger, fire after this many ms of silence instead of
-  #   waiting the full vad_silence_ms (200ms is highly reactive, shaves ~600 ms of latency on every wake
+  #   waiting the full vad_silence_ms (~500 ms lower perceived latency on every wake
   #   and command). Free-form speech (LLM fallback) never matches a trigger, so it
   #   keeps the long fragmentation-safe endpoint. 0 disables. Keep above natural
   #   intra-phrase pauses (~200-300 ms).
@@ -154,7 +151,7 @@ stt:
 tts:
   backend: piper           # piper | pico
   voice: it_IT-paola-medium  # Piper voice name (run 'alexa-setup --piper-voice <name>')
-  preroll_ms: 0            # silence prepended to TTS audio. Set to 0 for instant playback (recommended if soundcard stays warm)
+  preroll_ms: 0            # silence prepended to TTS audio (covers PipeWire cold-start)
 
 # ---------------------------------------------------------------------------
 # Audio hardware
@@ -165,7 +162,7 @@ audio:
   output_device: auto       # 'auto' = first USB sink, a name substring, or 'pipewire' for default
   # keep_sink_alive: false  # silent stream keeping the sink awake: false (default) | true | auto (USB output detected)
   output_volume: 0.5       # speaker volume 0.0–1.0 (set via wpctl, persisted by WirePlumber)
-  input_gain: 1.0           # microphone gain multiplier (raise for quiet preamps, e.g. 3.0 = 300% PulseAudio source)
+  input_gain: 3             # microphone gain multiplier (quiet preamps; 3.0 = 300% PulseAudio source)
   post_playback_ms: 100    # STT gate hold after playback ends (lets echo decay)
   tone_preroll_ms: 50      # silence before tones/beeps (covers PipeWire cold-start)
   playback_latency_ms: 200  # paplay --latency-msec for TTS; <100 wedges the NewPie playback PCM in a permanent ALSA XRUN loop on cold open
@@ -252,14 +249,11 @@ llm:
 # ---------------------------------------------------------------------------
 # Omit this section to disable MQTT entirely.
 mqtt:
-  host: 127.0.0.1          # STESSO broker di ONVIF_SUA (usa l'IP del broker se su host diversi)
+  host: 127.0.0.1        # broker hostname; required to enable MQTT
   port: 1883
-  topic_prefix: alexa      # = serena.topic_prefix in ONVIF_SUA/settings.yaml
-  node_id: galileo         # = serena.node_id in ONVIF_SUA/settings.yaml
-  local_id: arduino        # fixed alias, equivalent to node_id — lets a bridge
-                           # template hardcoded to "<topic_prefix>/arduino/..."
-                           # work unmodified across boards with different node_id
-  queue_max: 200           # max queued outgoing messages while broker is unreachable
+  topic_prefix: serena
+  #node_id: arduino   # defaults to system hostname
+  queue_max: 200         # max queued outgoing messages while broker is unreachable
 
 # ---------------------------------------------------------------------------
 # Web dashboard
@@ -267,8 +261,6 @@ mqtt:
 web:
   port: 8080
   history_file: /tmp/history.jsonl
-  # history_max_entries: 100   # trim history_file to this many most-recent
-  #   entries on every append (0 disables trimming, keep everything)
 
 # ---------------------------------------------------------------------------
 # Action files
@@ -276,7 +268,9 @@ web:
 actions:
   dir: conf/actions                         # directory auto-discovered for .yaml files
   learn_file: conf/actions/learned.yaml    # file the llm_learn action appends to
-  # dump_triggers_dir: /tmp/trigger_dumps  # save pre-trigger audio WAV here on every fire
+  #dump_triggers_dir: /home/arduino/serena/reply_dumps  # save pre-trigger audio WAV here on every fire; also dumps ask-reply audio (reply_*.wav) for offline analysis of dropped "No"/"sì"
+  #   (enabled 2026-07-03 to diagnose first-command-after-idle truncation: the 8s
+  #   pre-trigger buffer of a successful match also contains the failed attempt)
 
 # ---------------------------------------------------------------------------
 # Visual display feedback (Arduino UNO Q only)
@@ -299,3 +293,4 @@ display:
 #   empty_room_timeout: 0      # disconnect after N seconds with no participants (0 = never)
 #   wait_for_participant: true  # join room silently and wait for a remote participant before going live
 #   answer_timeout: 60         # seconds to wait for a participant before disconnecting (wait_for_participant only)
+node_id: ''

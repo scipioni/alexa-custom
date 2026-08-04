@@ -10,6 +10,11 @@
 #     with_wake: true/false  true (default) = fires only after a wake word;
 #                            false = direct match, no wake word required
 #     patterns: [...]        optional word-glob patterns tested before fuzzy matching
+#     command_regex: [...]   optional regex (string or list), matched via re.fullmatch
+#                            against MQTT trigger/run payloads ONLY — never voice
+#                            matched. Named groups (?P<name>...) are substituted as
+#                            "<name>" into every action's params (recursively, incl.
+#                            on_reply/on_else) — see docs/configuration.md
 #     actions: [...]         list of action entries
 
 # ---------------------------------------------------------------------------
@@ -68,7 +73,7 @@ triggers:
   #     - "aggiorna"
   #   actions:
   #     - type: shell
-  #       command: "systemctl --user restart serena-client"
+  #       command: "systemctl --user restart alexa-client"
 
   # - commands:
   #     - "connettiti"
@@ -329,76 +334,76 @@ triggers:
   #     - type: say
   #       text: "Sono contento. Buona giornata!"
 
-  #- commands:
-      #- "chiama Stefano"
-    #with_wake: false
-    #tag: sos
-    #actions:
-      #- type: ask
-        #text: "Vuoi chiamare Stefano?"
-        #lang: "it-IT"
-        #timeout: 5.0
-        #on_reply:
-          #- commands: ["si", "sì", "si si", "sì sì", "va bene", "certo", "ok", "dai"]
-            #actions:
-              #- type: say
-                #text: "Sto chiamando Stefano"
-              #- type: livekit_join
-              #- type: telegram
-                #text: "Collegati con casa <room>"
-          #- commands: ["no", "no no", "no grazie", "annulla"]
-            #actions:
-              #- type: say
-                #text: "Chiamata annullata"
-        #on_else:
-          #- type: say
-            #text: "Non ho capito"
-
-  #- commands:
-      #- "chiama assistenza"
-      #- "aiuto aiuto"
-    #with_wake: false
-    #tag: sos
-    #actions:
-      #- type: ask
-        #text: "Vuoi chiamare assistenza ?"
-        #lang: "it-IT"
-        #timeout: 5.0
-        #on_reply:
-          #- commands: ["si", "sì", "si si", "sì sì", "va bene", "certo", "ok", "dai"]
-            #actions:
-              #- type: say
-                #text: "Sto chiamando l'assistenza"
-              #- type: livekit_join
-              #- type: telegram
-                #text: "Chiamata in corso: <room>"
-          #- commands: ["no", "no no", "no grazie", "annulla"]
-            #actions:
-              #- type: say
-                #text: "Chiamata annullata"
-        #on_else:
-          #- type: say
-            #text: "Non ho capito"
-
-  # ── Allarmi "uomo a terra" inoltrati da ONVIF_SUA ────────────────────────────
-  # ONVIF_SUA (bridge Serena) pubblica su <prefix>/<node_id>/trigger/run il comando
-  # "caduta_<stanza>", dove <stanza> è il NOME NORMALIZZATO della telecamera
-  # (minuscolo, '-'/'_'/spazi → '_'). Il comando è volutamente PRIVO DI SPAZI: è un
-  # token unico non pronunciabile, quindi può arrivare solo via MQTT e non può essere
-  # attivato per sbaglio dalla voce. Serve UN trigger per telecamera, con `commands`
-  # uguale al comando normalizzato. Qui: sensori 'soggiorno' e 'bagno'.
-  # Il flusso: chiede conferma; sì → chiama + Telegram; nessuna risposta → richiede
-  # e, se ancora silenzio, chiama comunque (fail-safe, la persona può essere incapace
-  # di rispondere).
-
-  # ── Sensore SOGGIORNO ──
   - commands:
-      - "caduta_cucina1"
+      - "chiama Stefano"
+      - "chiamo Stefano"
+      - "chiamare Stefano"
+    patterns:
+      - "chiam* stefano"
     with_wake: false
     tag: sos
     actions:
       - type: ask
-        text: "Ho rilevato una persona caduta sul sensore della cucina1. Vuoi che chiami aiuto?"
+        text: "Vuoi chiamare Stefano?"
+        lang: "it-IT"
+        timeout: 5.0
+        on_reply:
+          - commands: ["si", "sì", "si si", "sì sì", "va bene", "certo", "ok", "dai"]
+            actions:
+              - type: say
+                text: "Sto chiamando Stefano"
+              - type: livekit_join
+              - type: telegram
+                text: "Collegati con casa <room>"
+          - commands: ["no", "no no", "no grazie", "annulla"]
+            actions:
+              - type: say
+                text: "Chiamata annullata"
+        on_else:
+          - type: say
+            text: "Non ho capito"
+
+  - commands:
+      - "chiama assistenza"
+      - "aiuto aiuto"
+    patterns:
+      - "chiam* assistenza"
+    with_wake: false
+    tag: sos
+    actions:
+      - type: ask
+        text: "Vuoi chiamare assistenza ?"
+        lang: "it-IT"
+        timeout: 5.0
+        on_reply:
+          - commands: ["si", "sì", "si si", "sì sì", "va bene", "certo", "ok", "dai"]
+            actions:
+              - type: say
+                text: "Sto chiamando l'assistenza"
+              - type: livekit_join
+              - type: telegram
+                text: "Chiamata in corso <room>"
+          - commands: ["no", "no no", "no grazie", "annulla"]
+            actions:
+              - type: say
+                text: "Chiamata annullata"
+        on_else:
+          - type: say
+            text: "Non ho capito"
+
+  # ── Sensore caduta (onvif_sua, MQTT trigger/run) ──
+  # command_regex is matched only against MQTT trigger/run payloads (e.g.
+  # onvif_sua publishing "caduta_bagno" on hub/2q/trigger/run) — never fed
+  # into voice matching, so "commands" below stays a normal spoken phrase.
+  - commands:
+      - "sensore caduta"
+    command_regex:
+      - "caduta_(?P<stanza>.+)"
+    with_wake: false
+    tag: sos
+    actions:
+      - type: ask
+        text: "Ho rilevato una persona caduta sul sensore della stanza <stanza>. Vuoi che chiami aiuto?"
         lang: "it-IT"
         timeout: 8.0
         on_reply:
@@ -408,63 +413,17 @@ triggers:
                 text: "Va bene, sto chiamando aiuto"
               - type: livekit_join
               - type: telegram
-                text: "Caduta rilevata in soggiorno — collegati: <room>"
+                text: "Caduta rilevata in <stanza> — collegati: <room>"
+              - type: shell
+                command: "MSG='emergenza,collegati:<room>' /home/arduino/serena/bin/emergenza.sh"
           - commands: ["no", "no no", "no grazie", "annulla", "sto bene"]
             actions:
               - type: say
-                text: "Va bene, chiamata annullata"
+                text: "Ok, chiamata annullata"
         on_else:
           # Nessuna risposta / non capito → richiedi una volta.
           - type: ask
-            text: "Non ho capito. Vuoi che chiami aiuto?"
-            lang: "it-IT"
-            timeout: 8.0
-            on_reply:
-              - commands: ["si", "sì", "si si", "sì sì", "va bene", "certo", "ok", "dai", "aiuto"]
-                actions:
-                  - type: say
-                    text: "Va bene, sto chiamando aiuto"
-                  - type: livekit_join
-                  - type: telegram
-                    text: "Caduta rilevata in soggiorno — collegati: <room>"
-              - commands: ["no", "no no", "no grazie", "annulla", "sto bene"]
-                actions:
-                  - type: say
-                    text: "Va bene, chiamata annullata"
-            on_else:
-              # Ancora nessuna risposta → chiama comunque (fail-safe).
-              - type: say
-                text: "Non ho ricevuto risposta, chiamo aiuto"
-              - type: livekit_join
-              - type: telegram
-                text: "Caduta rilevata in soggiorno, nessuna risposta — collegati: <room>"
-
-  # ── Sensore BAGNO ──
-  - commands:
-      - "caduta_bagno1"
-    with_wake: false
-    tag: sos
-    actions:
-      - type: ask
-        text: "Ho rilevato una persona caduta sul sensore del bagno1. Vuoi che chiami aiuto?"
-        lang: "it-IT"
-        timeout: 8.0
-        on_reply:
-          - commands: ["si", "sì", "si si", "sì sì", "va bene", "certo", "ok", "dai", "aiuto"]
-            actions:
-              - type: say
-                text: "Va bene, sto chiamando aiuto"
-              - type: livekit_join
-              - type: telegram
-                text: "Caduta rilevata in bagno — collegati: <room>"
-          - commands: ["no", "no no", "no grazie", "annulla", "sto bene"]
-            actions:
-              - type: say
-                text: "Va bene, chiamata annullata"
-        on_else:
-          # Nessuna risposta / non capito → richiedi una volta.
-          - type: ask
-            text: "Non ho capito. Vuoi che chiami aiuto?"
+            text: "Non ho capito..Vuoi che chiami aiuto?"
             lang: "it-IT"
             timeout: 8.0
             on_reply:
@@ -478,60 +437,14 @@ triggers:
               - commands: ["no", "no no", "no grazie", "annulla", "sto bene"]
                 actions:
                   - type: say
-                    text: "Va bene, chiamata annullata"
+                    text: "Ok, chiamata annullata"
             on_else:
               # Ancora nessuna risposta → chiama comunque (fail-safe).
               - type: say
                 text: "Non ho ricevuto risposta, chiamo aiuto"
               - type: livekit_join
               - type: telegram
-                text: "Caduta rilevata in bagno, nessuna risposta — collegati: <room>"
+                text: "Caduta rilevata in <stanza>, nessuna risposta — collegati: <room>"
+              - type: shell
+                command: "MSG='emergenza,collegati:<room>' /home/arduino/serena/bin/emergenza.sh"
 
-
-
-  - commands:
-      - "caduta_soggiorno1"
-    with_wake: false
-    tag: sos
-    actions:
-      - type: ask
-        text: "Ho rilevato una persona caduta sul sensore del soggiorno1. Vuoi che chiami aiuto?"
-        lang: "it-IT"
-        timeout: 8.0
-        on_reply:
-          - commands: ["si", "sì", "si si", "sì sì", "va bene", "certo", "ok", "dai", "aiuto"]
-            actions:
-              - type: say
-                text: "Va bene, sto chiamando aiuto"
-              - type: livekit_join
-              - type: telegram
-                text: "Caduta rilevata in soggiorno — collegati: <room>"
-          - commands: ["no", "no no", "no grazie", "annulla", "sto bene"]
-            actions:
-              - type: say
-                text: "Va bene, chiamata annullata"
-        on_else:
-          # Nessuna risposta / non capito → richiedi una volta.
-          - type: ask
-            text: "Non ho capito. Vuoi che chiami aiuto?"
-            lang: "it-IT"
-            timeout: 8.0
-            on_reply:
-              - commands: ["si", "sì", "si si", "sì sì", "va bene", "certo", "ok", "dai", "aiuto"]
-                actions:
-                  - type: say
-                    text: "Va bene, sto chiamando aiuto"
-                  - type: livekit_join
-                  - type: telegram
-                    text: "Caduta rilevata in soggiorno — collegati: <room>"
-              - commands: ["no", "no no", "no grazie", "annulla", "sto bene"]
-                actions:
-                  - type: say
-                    text: "Va bene, chiamata annullata"
-            on_else:
-              # Ancora nessuna risposta → chiama comunque (fail-safe).
-              - type: say
-                text: "Non ho ricevuto risposta, chiamo aiuto"
-              - type: livekit_join
-              - type: telegram
-                text: "Caduta rilevata in soggiorno, nessuna risposta — collegati: <room>"

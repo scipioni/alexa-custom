@@ -21,6 +21,10 @@ def _session_token() -> str:
 
 
 def _valid_session(request: Request) -> bool:
+    # web.skip_login / GUI_SKIP_LOGIN bypasses the gate entirely — every route below
+    # behaves as already authenticated (e.g. a reverse-proxy already handles auth).
+    if _cfg.get("web_skip_login"):
+        return True
     token = request.cookies.get("onvif_session", "")
     return bool(token) and hmac.compare_digest(token, _session_token())
 
