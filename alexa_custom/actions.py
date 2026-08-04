@@ -639,13 +639,25 @@ async def handle_say(action: ActionEntry, mqtt_client: MQTTClient | None, **_):
 
     text = await _render_text(action.params.get("text", ""))
     lang = action.params.get("lang", "it-IT")
+    volume = action.params.get("volume")
     if text:
         if mqtt_client:
             await mqtt_client.publish(
                 f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
                 "speaking",
             )
-        await asyncio.to_thread(get_engine().say, text, lang)
+        if volume is not None:
+            # Temporary, non-persisted override for this utterance only —
+            # restored to the prior digital volume once speech finishes.
+            from alexa_custom.audio_hw import get_output_volume, set_output_volume
+
+            previous_volume = get_output_volume()
+            set_output_volume(None, None, max(0.0, min(1.0, float(volume))))
+        try:
+            await asyncio.to_thread(get_engine().say, text, lang)
+        finally:
+            if volume is not None:
+                set_output_volume(None, None, previous_volume)
         if mqtt_client:
             await mqtt_client.publish(
                 f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "idle"
@@ -811,7 +823,22 @@ async def handle_tone(action: ActionEntry, **_):
     from alexa_custom.audio import play_tone
 
     name = action.params.get("name", "info")
-    await asyncio.to_thread(play_tone, name)
+    settle_ms = float(action.params.get("settle_ms", 0))
+    volume = action.params.get("volume")
+    if volume is not None:
+        # Temporary, non-persisted override for this tone only — restored to
+        # the prior digital volume once it finishes playing.
+        from alexa_custom.audio_hw import get_output_volume, set_output_volume
+
+        previous_volume = get_output_volume()
+        set_output_volume(None, None, max(0.0, min(1.0, float(volume))))
+    try:
+        await asyncio.to_thread(play_tone, name)
+    finally:
+        if volume is not None:
+            set_output_volume(None, None, previous_volume)
+    if settle_ms > 0:
+        await asyncio.sleep(settle_ms / 1000)
 
 
 @registry.register("set_volume")

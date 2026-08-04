@@ -501,7 +501,7 @@ def detect_connection(card) -> str:
 
 
 def set_output_volume(
-    pulse: pulsectl.Pulse, output_spec: str | None, volume: float
+    pulse: pulsectl.Pulse | None, output_spec: str | None, volume: float
 ) -> None:
     """Set the in-app output volume scalar.
 

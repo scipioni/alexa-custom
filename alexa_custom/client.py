@@ -512,12 +512,6 @@ async def _async_main(
 
     # Execute startup actions
     if actions_config and actions_config.on_startup:
-        # Prime the audio hardware with a short chime before the first speech
-        from alexa_custom.audio import play_tone
-
-        await asyncio.to_thread(play_tone, "startup")
-        await asyncio.sleep(0.5)
-
         logger.info(f"Executing {len(actions_config.on_startup)} startup action(s)")
         from alexa_custom.actions import ActionContext, TelegramClient, _run_action
 
