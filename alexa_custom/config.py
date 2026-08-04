@@ -171,6 +171,13 @@ class AudioConfig:
     )
     post_playback_ms: int = 100
     tone_preroll_ms: int = 50
+    # Buffer paplay requests when streaming TTS to the sink (--latency-msec).
+    # Do NOT lower this below ~100 on the Arduino Uno Q: opening the *closed*
+    # NewPie playback PCM with a 20 ms buffer wedges it in a permanent ALSA
+    # XRUN/recover loop (verified 4/4 cold opens; 200 ms was clean 3/3, and once
+    # the device is open at a healthy period small buffers no longer hurt).
+    # A wedged sink means paplay never drains and every later playback stalls.
+    playback_latency_ms: int = 200
     webrtc: AudioWebRTCConfig = field(default_factory=AudioWebRTCConfig)
     gstreamer: GStreamerCaptureConfig = field(default_factory=GStreamerCaptureConfig)
 
@@ -809,6 +816,7 @@ def _parse_audio_config(raw: dict) -> AudioConfig:
         sample_rates=sample_rates,
         post_playback_ms=int(raw.get("post_playback_ms", 100)),
         tone_preroll_ms=int(raw.get("tone_preroll_ms", 50)),
+        playback_latency_ms=int(raw.get("playback_latency_ms", 200)),
         webrtc=webrtc,
         gstreamer=gstreamer,
     )

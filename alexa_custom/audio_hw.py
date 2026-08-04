@@ -35,6 +35,7 @@ def is_auto_spec(spec: str | None) -> bool:
 class _AudioState:
     post_playback_ms: int = int(os.environ.get("AUDIO_POST_PLAYBACK_MS", "100"))
     tone_preroll_ms: int = int(os.environ.get("AUDIO_TONE_PREROLL_MS", "300"))
+    playback_latency_ms: int = int(os.environ.get("AUDIO_PLAYBACK_LATENCY_MS", "200"))
     samplerate: dict[str, int] = field(
         default_factory=lambda: {"usb": 48000, "bluetooth": 16000}
     )
@@ -198,6 +199,7 @@ def configure(cfg) -> None:
     """Update audio parameters from ActionsConfig."""
     _state.post_playback_ms = int(cfg.audio.post_playback_ms)
     _state.tone_preroll_ms = int(cfg.audio.tone_preroll_ms)
+    _state.playback_latency_ms = int(cfg.audio.playback_latency_ms)
     _state.samplerate = dict(cfg.audio.sample_rates)
     _state.default_card_name = cfg.audio.card_name
     _state.output_volume = cfg.audio.output_volume
@@ -299,6 +301,12 @@ def get_post_playback_ms() -> int:
 
 def get_tone_preroll_ms() -> int:
     return _state.tone_preroll_ms
+
+
+def get_playback_latency_ms() -> int:
+    """paplay --latency-msec for streamed TTS. See AudioConfig for why it must
+    stay large enough to open the USB playback PCM safely."""
+    return _state.playback_latency_ms
 
 
 def get_sample_rates() -> dict[str, int]:

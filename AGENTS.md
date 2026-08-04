@@ -224,14 +224,21 @@ Both SP92 and BT51 use the same named GStreamer profile (`yealink`) but with dif
 - **Problem**: `pw-play --raw --rate N --format f32 -` exits 0 but produces no audio on PipeWire 1.4.2. `-a` (media-type flag) requires an argument and causes pw-play to exit with error, also silently swallowed.
 - **Fix**: `_play_array()` and `_play_raw()` write a temporary s16le WAV file and call `pw-play <tmp.wav>`. Temp file is deleted after playback. Never pipe raw audio to pw-play stdin.
 
-### 7. Automated Audio Tasks
+### 7. Small paplay Buffers Wedge the USB Playback PCM (permanent XRUN)
+- **Problem**: opening the **closed** NewPie playback PCM with a tiny buffer (`paplay --latency-msec=20`) leaves it stuck in a permanent ALSA XRUN/recover loop. `pipewire` then logs `spa.alsa: front:0p: snd_pcm_avail after recover: Broken pipe` every 2 s indefinitely, `/proc/asound/card0/pcm0p/sub0/status` shows `state: XRUN` with a frozen `hw_ptr`, and **every** playback client blocks — `paplay`, `pw-play` and the daemon's TTS alike. Measured: 4/4 cold opens wedged at 20 ms, 3/3 clean at 200 ms. Only the stream that *opens* the device matters — once it is running at a healthy period, later small-buffer streams are fine, which is why the failure looks intermittent.
+- **Symptom to recognise**: the daemon looks dead to MQTT `tts/set` **and** to voice commands while STT still logs transcripts. `TTS (Piper/…)` is logged with no following `TTS playback:` line; a `paplay` child lives for minutes; a daemon thread sits in `anon_pipe_write` (`ps -L -p <pid> -o tid,wchan,comm`).
+- **Fix**: `audio.playback_latency_ms` (default **200**) feeds `paplay --latency-msec` for streamed TTS. Do not lower it below ~100. It costs nothing measurable — playback overhead (wall − audio duration) stayed ~0.2 s.
+- **Guards** (`_say_streaming` in `tts.py`): stdin writes go through `_write_all_bounded()` (non-blocking fd + `select`, 15 s **no-progress** limit — it must bound lack of progress, not total time, because synthesis of a long utterance legitimately takes longer than the audio itself), and the drain wait is `queued_audio + 10 s` instead of a flat 60 s (which both truncated >60 s speech and held the lock 60 s on a stall). On either timeout paplay is killed and `_audio_lock` is released, so a wedged device costs one dropped utterance instead of killing all audio until restart. Metrics: `tts_playback_stalled`, `tts_playback_lock_timeout`.
+- **Recovery** when it does wedge: `pkill -x paplay` (releases `_audio_lock`), then `task audio:restart` (PCM returns to `closed`). Verify with `pw-play <short.wav>` — it must exit 0 promptly. Note `pkill -f "paplay --raw"` can kill your own shell if the pattern matches its command line.
+
+### 8. Automated Audio Tasks
 - Run once after first boot: `task audio:setup` — sets default routing, unmutes hardware mixers, installs `alsa-pcm-unmute.service`, disables USB autosuspend.
 - `task audio:restart`: restarts WirePlumber and restores USB audio routing/mixer levels (use when audio drops mid-session).
 - `task audio:status`: displays a status dashboard for the connected USB audio device.
 - `task audio:doctor`: checks every audio invariant and reports pass/fail.
 - `task audio:test`: plays a test WAV to verify speaker output.
 
-### 8. Testing hot-plug behaviour (replug ≠ unbind)
+### 9. Testing hot-plug behaviour (replug ≠ unbind)
 - `echo <dev> > /sys/bus/usb/drivers/usb/unbind` / `bind` removes the ALSA/PipeWire card but does **NOT** emit udev `ACTION=="add"` events and does not reset `power/` attributes — it tests PipeWire recovery only, not the udev rules.
 - To exercise the udev path (autosuspend + the `SYSTEMD_USER_WANTS=alsa-pcm-unmute.service` replug trigger): `sudo udevadm trigger --action=add /sys/bus/usb/devices/<dev>`.
 - On physical replug, WirePlumber can bring the card up with an **output-only profile** (input marked unavailable while a Bluetooth dongle relinks) — the udev-triggered restore service run is what repairs profile + routing.

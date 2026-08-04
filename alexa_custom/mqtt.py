@@ -35,6 +35,10 @@ class MQTTClient:
         self._run_task: asyncio.Task | None = None
         self._stopping = False
         self._loop: asyncio.AbstractEventLoop | None = None
+        # Last value published on the state topic, for consecutive-duplicate
+        # suppression. Cleared on every (re)connect so the first state after a
+        # reconnect is always sent, even if it repeats the pre-outage value.
+        self._last_state: str | None = None
 
     def set_on_command(
         self, callback: Callable[[dict[str, Any]], Awaitable[None]]
@@ -50,6 +54,10 @@ class MQTTClient:
                 async with aiomqtt.Client(hostname=self.host, port=self.port) as client:
                     self.client = client
                     logger.info(f"Connected to MQTT broker at {self.host}:{self.port}")
+                    # Forget the deduplication baseline: subscribers may have
+                    # missed state while we were disconnected, so the next
+                    # publish must go out even if it repeats the last value.
+                    self._last_state = None
 
                     # 1. Register with Home Assistant
                     await self._publish_discovery()
@@ -180,8 +188,29 @@ class MQTTClient:
                 elif topic.endswith("/trigger/run"):
                     await self._on_command_callback({"command": payload})
 
+    @property
+    def state_topic(self) -> str:
+        return f"{self.topic_prefix}/{self.node_id}/state"
+
     async def publish(self, topic: str, payload: str, retain: bool = False) -> None:
-        """Queue a message for publication, dropping the oldest on overflow."""
+        """Queue a message for publication, dropping the oldest on overflow.
+
+        Consecutive duplicates on the state topic are dropped: "idle" is the
+        resting state the daemon returns to after every wake, dispatch, reply and
+        gate release, so a single spoken reply used to emit it twice in a row, and
+        every copy is forwarded over the QoS-1 bridge to the master broker. Only
+        transitions are published; the state itself is unchanged.
+
+        Deduplicated here rather than at each call site because state is
+        published from ~10 places across stt.py and actions.py, and this is the
+        one path all of them — including publish_threadsafe() — funnel through.
+        """
+        if topic == self.state_topic:
+            if payload == self._last_state:
+                metrics.inc("mqtt_state_deduped")
+                return
+            self._last_state = payload
+
         try:
             self._queue.put_nowait((topic, payload, retain))
         except asyncio.QueueFull:
@@ -196,7 +225,7 @@ class MQTTClient:
 
     async def publish_offline(self) -> None:
         """Publish offline state and disconnect cleanly (called on graceful shutdown)."""
-        state_topic = f"{self.topic_prefix}/{self.node_id}/state"
+        state_topic = self.state_topic
         if self.client:
             try:
                 await asyncio.wait_for(

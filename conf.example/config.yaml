@@ -168,6 +168,7 @@ audio:
   input_gain: 1.0           # microphone gain multiplier (raise for quiet preamps, e.g. 3.0 = 300% PulseAudio source)
   post_playback_ms: 100    # STT gate hold after playback ends (lets echo decay)
   tone_preroll_ms: 50      # silence before tones/beeps (covers PipeWire cold-start)
+  playback_latency_ms: 200  # paplay --latency-msec for TTS; <100 wedges the NewPie playback PCM in a permanent ALSA XRUN loop on cold open
   sample_rates:
     usb: 48000
     bluetooth: 16000

@@ -5,6 +5,7 @@ import collections
 import logging
 import os
 import re
+import select
 import shutil
 import subprocess
 import tempfile
@@ -16,7 +17,12 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from alexa_custom.audio_hw import get_output_volume, get_post_playback_ms
+from alexa_custom import metrics
+from alexa_custom.audio_hw import (
+    get_output_volume,
+    get_playback_latency_ms,
+    get_post_playback_ms,
+)
 from alexa_custom.audio_ops import (
     _audio_lock,
     _play_array,
@@ -31,6 +37,62 @@ logger = logging.getLogger(__name__)
 
 # Directory where Piper voices (.onnx + .onnx.json) are stored.
 PIPER_VOICES_DIR = Path(os.environ.get("PIPER_VOICES_DIR", "models/piper"))
+
+# --- Playback stall guards -------------------------------------------------
+# paplay drains its stdin at realtime, so the pipe only stays full when the
+# output device has stopped consuming altogether — e.g. the USB playback PCM
+# stuck in an ALSA XRUN/recover loop (pipewire logs `snd_pcm_avail after
+# recover: Broken pipe` every 2 s). Writes to the player MUST be bounded: they
+# run while holding _audio_lock, so a single wedged player would otherwise
+# block that write forever and deadlock every later playback — voice replies
+# and MQTT tts/set alike — for the lifetime of the process.
+_WRITE_STALL_TIMEOUT_S = 15.0
+
+# Upper bound on waiting for _audio_lock. Normal contention is one short tone
+# or utterance ahead of us; anything longer means the holder is stuck, and
+# blocking indefinitely here would just propagate the stall to the caller
+# (the MQTT subscriber loop drops its broker keepalive after ~60 s).
+_LOCK_ACQUIRE_TIMEOUT_S = 30.0
+
+
+class _PlaybackStalled(RuntimeError):
+    """The player stopped draining its stdin — the output device is wedged."""
+
+
+def _write_all_bounded(
+    fd: int, data: bytes, timeout: float = _WRITE_STALL_TIMEOUT_S
+) -> None:
+    """Write every byte of ``data`` to non-blocking ``fd``, or raise.
+
+    The timeout restarts on every chunk, so it bounds *lack of progress*, not
+    total duration: a healthy player accepts a chunk every few tens of ms no
+    matter how long the utterance is, while a wedged one trips the timeout once
+    the pipe buffer fills.
+    """
+    view = memoryview(data)
+    while view:
+        _, writable, _ = select.select((), (fd,), (), timeout)
+        if not writable:
+            raise _PlaybackStalled(
+                f"player stopped reading stdin for {timeout:.0f}s, "
+                f"{len(view)} bytes unwritten"
+            )
+        try:
+            written = os.write(fd, view[:65536])
+        except BlockingIOError:
+            continue
+        view = view[written:]
+
+
+def _kill_player(proc: subprocess.Popen | None) -> None:
+    """Terminate a player process, ignoring anything that goes wrong."""
+    if proc is None:
+        return
+    try:
+        proc.kill()
+        proc.wait(timeout=5.0)
+    except Exception:
+        pass
 
 
 class TTSBackend(abc.ABC):
@@ -300,6 +362,8 @@ class PiperTTS(TTSBackend):
         """Stream synthesis chunks to paplay stdin sentence-by-sentence."""
         samplerate: int | None = None
         proc: subprocess.Popen | None = None
+        stdin_fd = -1
+        lock_held = False
         # Playback-timing diagnostics: how long the mic gate is held vs the actual
         # audio duration. A large paplay_wall - audio gap is dead-time in which a
         # fast reply is discarded (the ask-reply barge-in investigation).
@@ -313,6 +377,21 @@ class PiperTTS(TTSBackend):
                     samplerate = chunk_rate
 
                 if proc is None:
+                    # Reserve the audio path BEFORE spawning the player: spawning
+                    # first would leave a paplay connected to the sink while this
+                    # thread waits for the lock. Bounded, so a wedged holder
+                    # degrades to a dropped utterance instead of a hung caller.
+                    if not _audio_lock.acquire(timeout=_LOCK_ACQUIRE_TIMEOUT_S):
+                        metrics.inc("tts_playback_lock_timeout")
+                        logger.error(
+                            "Piper TTS: audio path still busy after %.0fs — "
+                            "dropping %r (a previous playback is stuck; check "
+                            "for a wedged output device)",
+                            _LOCK_ACQUIRE_TIMEOUT_S,
+                            text,
+                        )
+                        return
+                    lock_held = True
                     _t_gate_set = time.monotonic()
                     proc = subprocess.Popen(
                         [
@@ -321,17 +400,28 @@ class PiperTTS(TTSBackend):
                             f"--rate={samplerate}",
                             "--channels=1",
                             "--format=s16le",
-                            "--latency-msec=20",
+                            # Large enough that opening a *closed* USB playback
+                            # PCM negotiates a safe ALSA period — a 20 ms buffer
+                            # wedges the NewPie in a permanent XRUN loop, after
+                            # which paplay never drains (see AudioConfig).
+                            f"--latency-msec={get_playback_latency_ms()}",
                         ],
                         stdin=subprocess.PIPE,
                         stderr=subprocess.DEVNULL,
                     )
-                    _audio_lock.acquire()
+                    assert proc.stdin is not None
+                    # All writes go through _write_all_bounded on the raw fd, so
+                    # the BufferedWriter stays empty and non-blocking mode is
+                    # safe (its only remaining job is close()).
+                    stdin_fd = proc.stdin.fileno()
+                    os.set_blocking(stdin_fd, False)
                     _playback_active.set()
 
                     if self._preroll_ms > 0:
                         n_preroll = samplerate * self._preroll_ms // 1000
-                        proc.stdin.write(bytes(n_preroll * 2))  # type: ignore[union-attr]
+                        _write_all_bounded(
+                            stdin_fd, bytes(n_preroll * 2), _WRITE_STALL_TIMEOUT_S
+                        )
 
                 assert proc.stdin is not None
                 # Digitally scale the audio chunk by the global output volume.
@@ -339,7 +429,9 @@ class PiperTTS(TTSBackend):
                 # (matches _play_array / _play_raw in audio_ops).
                 volume = get_output_volume()
                 scaled_arr = np.clip(arr * volume, -32768, 32767).astype(np.int16)
-                proc.stdin.write(scaled_arr.tobytes())
+                _write_all_bounded(
+                    stdin_fd, scaled_arr.tobytes(), _WRITE_STALL_TIMEOUT_S
+                )
                 n = len(scaled_arr)
                 _samples_written += n
                 if n:
@@ -356,14 +448,27 @@ class PiperTTS(TTSBackend):
             assert proc.stdin is not None
             proc.stdin.close()
             _t_wait_start = time.monotonic()
+            # Bound the drain wait by what is actually still queued. The old flat
+            # 60 s did both things wrong: it truncated utterances longer than a
+            # minute, and it kept a stalled short one alive 60 s while holding
+            # the audio lock.
+            _queued_s = (
+                (_samples_written / samplerate + self._preroll_ms / 1000.0)
+                if samplerate
+                else 0.0
+            )
+            _wait_timeout = max(_queued_s + 10.0, 8.0)
             try:
-                proc.wait(timeout=60.0)
+                proc.wait(timeout=_wait_timeout)
             except subprocess.TimeoutExpired:
+                metrics.inc("tts_playback_stalled")
                 logger.warning(
-                    "Piper TTS (streaming): paplay hang detected, killing process"
+                    "Piper TTS: paplay still alive %.0fs after the last sample "
+                    "(%.1fs queued) — killing; output device likely wedged",
+                    _wait_timeout,
+                    _queued_s,
                 )
-                proc.kill()
-                proc.wait()
+                _kill_player(proc)
             if _diag and samplerate:
                 _t_wait_end = time.monotonic()
                 _wall = _t_wait_end - _t_gate_set
@@ -390,16 +495,21 @@ class PiperTTS(TTSBackend):
             if post_ms > 0:
                 time.sleep(post_ms / 1000.0)
 
+        except _PlaybackStalled as e:
+            metrics.inc("tts_playback_stalled")
+            logger.error(
+                "Piper TTS: output device stalled (%s) — killing paplay. If this "
+                "repeats, the playback PCM is wedged: check "
+                "`cat /proc/asound/card*/pcm*p/sub0/status` for XRUN and run "
+                "`task audio:restart`",
+                e,
+            )
+            _kill_player(proc)
         except Exception as e:
             logger.error(f"Piper TTS (streaming) failed: {e}")
-            if proc is not None:
-                try:
-                    proc.kill()
-                    proc.wait()
-                except Exception:
-                    pass
+            _kill_player(proc)
         finally:
-            if proc is not None:
+            if lock_held:
                 set_playback_level(0.0)
                 _playback_active.clear()
                 _audio_lock.release()

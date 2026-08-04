@@ -1,10 +1,20 @@
+import os
+import threading
+import time
 import unittest
 import wave
 from unittest.mock import patch, MagicMock
 
 import numpy as np
 
-from alexa_custom.tts import PicoTTS, _split_clauses
+from alexa_custom.audio_ops import _audio_lock, _playback_active
+from alexa_custom.tts import (
+    PicoTTS,
+    PiperTTS,
+    _PlaybackStalled,
+    _split_clauses,
+    _write_all_bounded,
+)
 
 
 def _write_test_wav(path: str, samplerate: int = 16000, n_samples: int = 1600) -> None:
@@ -71,6 +81,89 @@ class TestSplitClauses(unittest.TestCase):
         joined = " ".join(_split_clauses(text))
         # Same words, same order, no content lost.
         assert joined.replace(" ", "") == text.replace(" ", "")
+
+
+class TestWriteAllBounded(unittest.TestCase):
+    """A player that stops reading must not block the writer forever.
+
+    Regression: a wedged USB playback PCM left paplay never draining its stdin,
+    so _say_streaming blocked in write() while holding _audio_lock — killing all
+    audio (voice replies and MQTT tts/set) until the process was restarted.
+    """
+
+    def test_raises_when_reader_never_drains(self):
+        r, w = os.pipe()
+        try:
+            os.set_blocking(w, False)
+            # More than any pipe buffer (typically 64 KiB) and nobody reads r.
+            t0 = time.monotonic()
+            with self.assertRaises(_PlaybackStalled):
+                _write_all_bounded(w, b"\x00" * (4 << 20), timeout=0.2)
+            elapsed = time.monotonic() - t0
+            assert elapsed < 5.0, f"blocked {elapsed:.1f}s instead of timing out"
+        finally:
+            os.close(r)
+            os.close(w)
+
+    def test_writes_everything_when_reader_keeps_up(self):
+        r, w = os.pipe()
+        received = bytearray()
+        payload = b"\xab\xcd" * 200_000  # 800 KB — many pipe-buffer refills
+
+        def _drain():
+            while True:
+                chunk = os.read(r, 65536)
+                if not chunk:
+                    return
+                received.extend(chunk)
+
+        reader = threading.Thread(target=_drain, daemon=True)
+        reader.start()
+        try:
+            os.set_blocking(w, False)
+            _write_all_bounded(w, payload, timeout=5.0)
+        finally:
+            os.close(w)
+            reader.join(timeout=5.0)
+            os.close(r)
+
+        assert bytes(received) == payload
+
+
+class TestPiperStallRecovery(unittest.TestCase):
+    """_say_streaming must always give _audio_lock back, stall or not."""
+
+    def _engine(self):
+        engine = PiperTTS.__new__(PiperTTS)  # skip ONNX voice loading
+        engine._voice_name = "test-voice"
+        engine._preroll_ms = 0
+        engine._samplerate = 22050
+        return engine
+
+    @patch("alexa_custom.tts._WRITE_STALL_TIMEOUT_S", 0.2)
+    @patch("alexa_custom.tts.get_output_volume", return_value=1.0)
+    @patch("alexa_custom.tts.subprocess.Popen")
+    def test_stalled_player_releases_audio_lock(self, mock_popen, _vol):
+        r, w = os.pipe()  # nothing ever reads r → the "wedged device" case
+        self.addCleanup(os.close, r)
+
+        proc = MagicMock()
+        proc.stdin = open(w, "wb", buffering=0)
+        proc.poll.return_value = None
+        mock_popen.return_value = proc
+
+        engine = self._engine()
+        # 4 MB of audio: far more than the pipe buffer can absorb.
+        chunk = np.zeros(2 << 20, dtype=np.int16)
+        with patch.object(PiperTTS, "_synthesize", return_value=iter([(chunk, 22050)])):
+            engine._say_streaming("frase di prova", "/usr/bin/paplay")
+
+        # The wedged player was killed and the audio path handed back, so the
+        # next utterance can proceed instead of deadlocking.
+        proc.kill.assert_called_once()
+        assert _audio_lock.acquire(blocking=False), "_audio_lock was not released"
+        _audio_lock.release()
+        assert not _playback_active.is_set()
 
 
 class TestMainSay(unittest.TestCase):
