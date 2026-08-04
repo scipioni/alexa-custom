@@ -12,6 +12,14 @@ logger = logging.getLogger(__name__)
 
 
 class MQTTClient:
+    # State values dropped instead of published. "idle" is the resting state the
+    # daemon returns to after every wake, dispatch, reply and gate release, so it
+    # dominates the state topic while carrying no information — and each one is
+    # forwarded over the bridge to the master broker (where the outbound rule is
+    # QoS 1, so they also queue up during an outage). Consumers should treat the
+    # absence of further state as idle.
+    _SUPPRESSED_STATES = frozenset({"idle"})
+
     def __init__(
         self,
         host: str,
@@ -180,8 +188,22 @@ class MQTTClient:
                 elif topic.endswith("/trigger/run"):
                     await self._on_command_callback({"command": payload})
 
+    @property
+    def state_topic(self) -> str:
+        return f"{self.topic_prefix}/{self.node_id}/state"
+
     async def publish(self, topic: str, payload: str, retain: bool = False) -> None:
-        """Queue a message for publication, dropping the oldest on overflow."""
+        """Queue a message for publication, dropping the oldest on overflow.
+
+        Suppressed states (see _SUPPRESSED_STATES) are dropped here rather than
+        at each call site: state is published from ~10 places across stt.py and
+        actions.py, and this is the one path all of them — including
+        publish_threadsafe() — funnel through.
+        """
+        if payload in self._SUPPRESSED_STATES and topic == self.state_topic:
+            metrics.inc("mqtt_state_suppressed")
+            return
+
         try:
             self._queue.put_nowait((topic, payload, retain))
         except asyncio.QueueFull:
@@ -196,7 +218,7 @@ class MQTTClient:
 
     async def publish_offline(self) -> None:
         """Publish offline state and disconnect cleanly (called on graceful shutdown)."""
-        state_topic = f"{self.topic_prefix}/{self.node_id}/state"
+        state_topic = self.state_topic
         if self.client:
             try:
                 await asyncio.wait_for(
