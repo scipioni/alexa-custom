@@ -1002,7 +1002,9 @@ def run_stt_worker(
 
     if mqtt_client:
         mqtt_client.publish_threadsafe(
-            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "idle", loop=loop
+            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
+            "start",
+            loop=loop,
         )
 
     backend = None

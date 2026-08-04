@@ -4,7 +4,7 @@ The client registers itself with Home Assistant via **MQTT Discovery** on startu
 
 ## Exposed Entities
 
-- **Status (Sensor)**: `idle`, `listening`, `speaking`, `gated` (during calls).
+- **Status (Sensor)**: `start` (once, when the daemon becomes operative), `idle`, `listening`, `speaking`, `gated` (during calls).
 - **Last Command (Sensor)**: Text of the last recognized voice command.
 - **Speak Text (Text)**: Type a message in HA → the speakerphone says it (plain text, not JSON).
 
@@ -23,7 +23,11 @@ Every recognized command publishes to `alexa/<node_id>/command` as JSON:
 ```
 
 State changes publish to `alexa/<node_id>/state`:
-- `idle`, `listening`, `speaking`, `gated` (during calls)
+- `start`, `idle`, `listening`, `speaking`, `gated` (during calls)
+
+`start` is published exactly once per daemon run, as soon as the STT worker
+thread comes up — before the STT model loads or capture starts. The first
+real `idle` follows once the recognition loop actually begins listening.
 
 Only **transitions** are published. `idle` is the resting state the daemon
 returns to from several places (the `say` handler and the recognition loop both
@@ -132,9 +136,11 @@ Config lives in two files:
 | `setup/mosquitto-bridge.conf.template` | the whole `connection` block and topic rules — committed **without** credentials |
 
 `task mqtt:bridge-setup` renders the template with `mqtt.bridge_username` /
-`mqtt.bridge_password` from `conf/secrets.yaml` (git-ignored) into
+`mqtt.bridge_password` from `conf/secrets.yaml` (git-ignored), and this board's
+hostname (`hostname`, overridable with `SERENA_BRIDGE_HOSTNAME=<name>`), into
 `/etc/mosquitto/conf.d/serena-bridge.conf` (owner `mosquitto`, mode 640) and
-restarts the broker.
+restarts the broker. The hostname substitution means the same committed
+template works unmodified on every board — no per-board topic edits.
 
 The credentials cannot be split out of that file: a mosquitto **password file**
 authenticates clients connecting *to* a broker, not what a bridge presents to a
@@ -144,19 +150,24 @@ just `username`/`password` in a separate `conf.d` drop-in fails to start with
 
 ### Topic mapping
 
-The two directions deliberately use **different remote namespaces**:
+The remote namespace root is this board's **hostname** (`2q` on the board this
+was verified on — the stock default on every Arduino Uno Q), not the fixed
+`arduino` local_id alias. `scripts/render-mqtt-bridge.sh` substitutes the
+live `hostname` into the rendered bridge config automatically, so the examples
+below use `2q` but any board renders its own value. The two directions
+deliberately use **different remote namespaces**:
 
 | Direction | Local topic | Topic on the master |
 |---|---|---|
-| out (QoS 0) | `serena/arduino/state`, `serena/arduino/command`, … | `hub/serena/arduino/…` |
-| in (QoS 0) | `serena/arduino/tts/set`, `action/run`, `trigger/run` | `cmd/serena/arduino/…` |
+| out (QoS 0) | `serena/<hostname>/state`, `serena/<hostname>/command`, … | `hub/<hostname>/…` |
+| in (QoS 0) | `serena/arduino/tts/set`, `action/run`, `trigger/run` | `cmd/serena/<hostname>/…` |
 
-The reason is loop safety. The outbound rule forwards every local `serena/#`
-message up, so anything republished locally by the inbound rule is a candidate
-for being sent straight back to the master. In practice mosquitto does not echo a
-message back onto the bridge it arrived on — an inbound
-`cmd/serena/arduino/trigger/run` was observed *not* reappearing as
-`hub/serena/arduino/trigger/run` — but keeping the two directions in separate
+The reason is loop safety. The outbound rule forwards every local
+`serena/<hostname>/*` message up, so anything republished locally by the
+inbound rule is a candidate for being sent straight back to the master. In
+practice mosquitto does not echo a message back onto the bridge it arrived on
+— an inbound `cmd/serena/2q/trigger/run` was observed *not* reappearing as
+`hub/2q/trigger/run` — but keeping the two directions in separate
 remote namespaces means correctness does not depend on that behaviour at all: a
 message the board publishes can never match the topic the board subscribes to.
 Put commands and telemetry in one shared namespace and a single bridge-loop
@@ -165,12 +176,13 @@ regression makes the board speak forever.
 Inbound stays at QoS 0 on purpose, so a command queued during an outage is never
 replayed (a stale TTS request or action firing the moment the link returns).
 
-Local topics must match `mqtt.topic_prefix` / `mqtt.local_id` from
-`conf/config.yaml` — the template's prefixes are `serena/arduino/`, matching
-the `local_id` default. Since the client mirrors every topic across `node_id`
-and `local_id` (see "`node_id` vs `local_id`" above), the template needs no
-changes even when `node_id` differs per board — only change `topic_prefix` /
-`local_id` if you deviate from their defaults.
+Local topics must match `mqtt.topic_prefix` / `mqtt.node_id` from
+`conf/config.yaml` — the template's outbound rule and the `hub`/`cmd` remote
+prefixes use `@BRIDGE_HOSTNAME@`, filled in with this board's `hostname` at
+render time (node_id defaults to hostname too, so they normally already
+agree). If you want the remote namespace to use something other than this
+board's actual hostname, render with
+`SERENA_BRIDGE_HOSTNAME=<name> task mqtt:bridge-setup`.
 
 ### Speaking from the hub
 
@@ -178,12 +190,13 @@ changes even when `node_id` differs per board — only change `topic_prefix` /
 mosquitto_pub -h serena.csgalileo.org -p 8883 \
   --cafile /etc/ssl/certs/ca-certificates.crt \
   -u <bridge_user> -P <bridge_pass> \
-  -t cmd/serena/arduino/tts/set -m "il sistema funziona perfettamente"
+  -t cmd/serena/2q/tts/set -m "il sistema funziona perfettamente"
 ```
 
-Same for the other two inbound topics — `cmd/serena/arduino/trigger/run`
+Same for the other two inbound topics — `cmd/serena/2q/trigger/run`
 (payload = a trigger phrase, e.g. `che ore sono`) and
-`cmd/serena/arduino/action/run` (payload = an action JSON object).
+`cmd/serena/2q/action/run` (payload = an action JSON object). Replace `2q`
+with the target board's own hostname.
 
 Directly on the board, without the hub:
 
@@ -196,13 +209,28 @@ Watch what the board sends up (everything under its hub namespace):
 ```bash
 mosquitto_sub -h serena.csgalileo.org -p 8883 \
   --cafile /etc/ssl/certs/ca-certificates.crt \
-  -u <bridge_user> -P <bridge_pass> -v -t 'hub/serena/#'
+  -u <bridge_user> -P <bridge_pass> -v -t 'hub/2q/#'
 ```
 
 ### Operating notes
 
 - **Check the link**: `ss -tn | grep 8883` shows the established bridge
   connection; TLS/auth failures appear in `sudo journalctl -u mosquitto`.
+- **Bridge connected but nothing arrives remotely**: a live TCP connection on
+  8883 only proves the TLS/auth handshake succeeded — it says nothing about
+  whether the `topic` rules actually match. Confirm with `log_type all` +
+  `connection_messages true` in a temporary conf.d drop-in, restart mosquitto,
+  and look for `Bridge ... doing local SUBSCRIBE on topic <X>` — `<X>` must be
+  the literal topic pattern with no stray characters. **Quoting a non-empty
+  local-prefix/remote-prefix breaks the rule**: mosquitto only special-cases
+  the exactly-empty pair `""` as "no prefix"; `"serena/2q"` is taken literally,
+  quote characters and all, producing a subscription that can never match a
+  real topic (`serena/2q/#`) — the rule then silently forwards nothing, with
+  no error at startup. Verified on this board: `topic /# out 0 "serena/2q"
+  hub/2q` matched nothing until the quotes were removed (`topic /# out 0
+  serena/2q hub/2q`). Once fixed, confirm forwarding with `grep "sending
+  PUBLISH" /var/log/mosquitto/mosquitto.log` (or subscribe to `hub/#` on the
+  remote broker directly).
 - **Connect by hostname, never IP**: the master's Let's Encrypt cert has no IP
   SAN, so an IP address fails hostname verification.
 - **After changing any `topic` rule**, wipe the remote session once. With
@@ -218,13 +246,25 @@ mosquitto_sub -h serena.csgalileo.org -p 8883 \
   ```
 
 - **Additional boards** need a unique `remote_clientid` *and* a unique
-  `node_id` (leave `local_id` at its `arduino` default on every board — the
-  bridge template's hardcoded `serena/arduino/...` local topics keep matching
-  without per-board edits): the default client id derives from the hostname,
-  which is `2q` on every stock Arduino Uno Q, and two boards sharing it repeatedly kick each
-  other off the master.
+  hostname — the outbound `topic` rule and the `hub`/`cmd` remote prefixes are
+  keyed by hostname, and `scripts/render-mqtt-bridge.sh` substitutes it
+  automatically on each board (`task mqtt:bridge-setup` needs no per-board
+  template edit for this). The client id defaults to hostname too, so if two
+  boards share the stock `2q` hostname of a fresh Arduino Uno Q, give each a
+  unique hostname (`sudo hostnamectl set-hostname <name>`) before bridging —
+  otherwise both the client id collision (repeatedly kicking each other off
+  the master) and the remote-namespace collision (`hub/2q/...` from both
+  boards) hit at once.
 - `queue_qos0_messages true` in the local config is what lets the bridge buffer
   anything at all: the daemon publishes at QoS 0 and MQTT delivers at
   `min(publish QoS, subscription QoS)`, so a QoS 1 bridge topic alone queues
   nothing. Measured across a master outage: 0/5 messages survived without it,
   5/5 with it.
+- **If this board also runs onvif_sua** on the same local broker, its bridge
+  rule (`topic onvif/# out 0 "" hub/2q`) is NOT part of this template — it was
+  added directly to the rendered `/etc/mosquitto/conf.d/serena-bridge.conf`
+  and belongs to that project. Re-running `task mqtt:bridge-setup` overwrites
+  the whole rendered file from this template and silently drops that rule —
+  re-add it (and fix its own prefix-concatenation bug: `hub/2q` needs a
+  trailing slash, `hub/2q/`, or it collapses into `hub/2qonvif/#`) after any
+  re-render.

@@ -476,7 +476,7 @@ tasks:
         echo "  # speak from anywhere via the master broker:"
         echo "  mosquitto_pub -h serena.csgalileo.org -p 8883 \\"
         echo "    --cafile /etc/ssl/certs/ca-certificates.crt -u <user> -P <pass> \\"
-        echo "    -t cmd/serena/arduino/tts/set -m 'ciao'"
+        echo "    -t cmd/serena/2q/tts/set -m 'ciao'   # replace '2q' with this board's hostname"
         echo ""
         echo "After changing any 'topic' rule, wipe the remote session once —"
         echo "with cleansession false the master keeps the OLD subscriptions too"

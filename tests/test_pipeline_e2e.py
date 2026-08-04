@@ -124,6 +124,7 @@ def run_pipeline(
     config: ActionsConfig,
     timeout: float = 5.0,
     silence_beep: bool = True,
+    mqtt_client: Any = None,
 ) -> list[tuple[str, dict]]:
     """Drive the full recognition pipeline with scripted transcripts.
 
@@ -178,6 +179,7 @@ def run_pipeline(
             livekit_connected_flag=threading.Event(),
             on_stt_event=_collect,
             stt_ready_event=ready_event,
+            mqtt_client=mqtt_client,
         )
         thread.join(timeout=timeout)
     finally:
@@ -583,3 +585,32 @@ class TestAsyncWakeBeep:
             f"no matched event while tone still playing; got {names}"
         )
         assert tone_started.is_set(), "tone playback was never started"
+
+
+class _FakeMqttClient:
+    """Records publish_threadsafe() calls to the state topic; no real broker."""
+
+    topic_prefix = "alexa"
+    node_id = "test-node"
+
+    def __init__(self) -> None:
+        self.states: list[str] = []
+
+    def publish_threadsafe(self, topic, payload, retain=False, loop=None):
+        if topic == f"{self.topic_prefix}/{self.node_id}/state":
+            self.states.append(payload)
+
+    def set_on_command(self, callback):
+        pass
+
+
+class TestOperativeStatePublish:
+    def test_start_published_once_before_idle(self):
+        """A single 'start' state is published as capture comes up, ahead of
+        the first 'idle' — the daemon's one-time "I'm operative" signal."""
+        mqtt_client = _FakeMqttClient()
+        config = _make_config([_direct(["chiama stefano"])])
+        run_pipeline(["chiama stefano"], config, mqtt_client=mqtt_client)
+
+        assert mqtt_client.states[0] == "start"
+        assert mqtt_client.states.count("start") == 1

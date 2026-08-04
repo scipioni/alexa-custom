@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Render setup/mosquitto-bridge.conf.template into /etc/mosquitto/conf.d/,
-# substituting the bridge credentials from conf/secrets.yaml.
+# substituting the bridge credentials from conf/secrets.yaml and this board's
+# hostname (the remote namespace root — see docs/mqtt_integration.md).
 #
 # The credentials cannot live in setup/mosquitto-serena.conf (committed), and
 # they cannot live in a separate conf.d drop-in either: mosquitto tracks the
@@ -43,15 +44,19 @@ if [[ ${#CREDS[@]} -ne 2 ]]; then
 fi
 USERNAME="${CREDS[0]}"
 PASSWORD="${CREDS[1]}"
+# Same value alexa_custom/mqtt.py falls back to for node_id (socket.gethostname()) —
+# this is the remote namespace root (hub/<hostname>, cmd/serena/<hostname>/...).
+HOSTNAME_VALUE="${SERENA_BRIDGE_HOSTNAME:-$(hostname)}"
 
 # Substitute in python too — sed would treat '&', '\' and the delimiter in a
 # password as syntax.
 TMP="$(mktemp)"
 trap 'rm -f "$TMP"' EXIT
-BRIDGE_USERNAME="$USERNAME" BRIDGE_PASSWORD="$PASSWORD" python3 - "$TEMPLATE" >"$TMP" <<'PY'
+BRIDGE_USERNAME="$USERNAME" BRIDGE_PASSWORD="$PASSWORD" BRIDGE_HOSTNAME="$HOSTNAME_VALUE" \
+  python3 - "$TEMPLATE" >"$TMP" <<'PY'
 import os, sys
 text = open(sys.argv[1]).read()
-for name in ("BRIDGE_USERNAME", "BRIDGE_PASSWORD"):
+for name in ("BRIDGE_USERNAME", "BRIDGE_PASSWORD", "BRIDGE_HOSTNAME"):
     text = text.replace(f"@{name}@", os.environ[name])
 sys.stdout.write(text)
 PY
@@ -63,4 +68,4 @@ fi
 
 # 640 owner mosquitto: the broker must read it, nobody else should.
 sudo install -o mosquitto -g root -m 640 "$TMP" "$TARGET"
-echo "Rendered $TARGET (owner mosquitto, mode 640) for bridge user '$USERNAME'."
+echo "Rendered $TARGET (owner mosquitto, mode 640) for bridge user '$USERNAME', hostname '$HOSTNAME_VALUE'."
