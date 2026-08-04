@@ -82,3 +82,38 @@ action:
     target:
       entity_id: light.kitchen
 ```
+
+## central hub 
+
+listen messages
+```
+mosquitto_sub -h serena.csgalileo.org -p 8883 -u "yyy"  -P "xxx"  -v -t "#"
+```
+
+publish on local arduino
+```
+mosquitto_pub -t serena/arduino/tts/set -m "il sistema funziona perfettamente"
+```
+
+publish on hub
+
+Commands go to `cmd/serena/arduino/...` on the master, not `serena/arduino/...`:
+the bridge subscribes to the `cmd/` namespace and republishes locally under
+`serena/arduino/`, while everything this board *publishes* is remapped the other
+way into `hub/serena/arduino/...`. The two directions use different remote
+namespaces on purpose — sharing one would make an inbound message feed itself
+back through the outbound rule (details in
+`setup/mosquitto-bridge.conf.template`).
+
+```
+mosquitto_pub -h serena.csgalileo.org -p 8883 --cafile /etc/ssl/certs/ca-certificates.crt \
+  -u xxx -P "xxx" -t cmd/serena/arduino/tts/set -m "il sistema funziona perfettamente"
+```
+
+Same for the other two inbound topics: `cmd/serena/arduino/trigger/run` (payload
+= a trigger phrase, e.g. `che ore sono`) and `cmd/serena/arduino/action/run`
+(payload = an action JSON object).
+
+Credentials are the bridge user from `conf/secrets.yaml`
+(`mqtt.bridge_username` / `mqtt.bridge_password`); `task mqtt:bridge-setup`
+renders them into `/etc/mosquitto/conf.d/serena-bridge.conf`.
