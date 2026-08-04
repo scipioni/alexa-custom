@@ -28,7 +28,11 @@ su conferma o come fail-safe, una chiamata LiveKit.
 1. **Stesso broker MQTT** per entrambi i servizi.
 2. **`node_id` combaciante**: il `serena.node_id` di ONVIF_SUA deve essere identico
    al `node_id` di Serena (di default l'hostname del dispositivo Serena, oppure
-   l'override impostato nella sua config/`state.yaml` o dal pannello web).
+   l'override impostato nella sua config/`state.yaml` o dal pannello web). Se
+   `serena.node_id` non è impostato, ONVIF_SUA usa l'hostname della propria board —
+   che combacia automaticamente con quello di Serena quando i due servizi girano
+   sulla stessa board (entrambi usano lo stesso default). Su board separate va
+   impostato esplicitamente.
 
 Contratto **fire-and-forget**: ONVIF_SUA conferma la consegna *al broker*, non che
 Serena abbia ricevuto/agito (nessun ack lato Serena, per scelta di design).
@@ -48,11 +52,11 @@ oppure con variabili d'ambiente `SERENA_*` (default). I flag booleani accettano
 serena:
   enabled: true          # ← accendi il bridge
   topic_prefix: alexa    # = topic_prefix di Serena (default 'alexa')
-  node_id: galileo       # ← OBBLIGATORIO: uguale al node_id di Serena
+  node_id: galileo       # ← uguale al node_id di Serena; se omesso usa l'hostname
+                          #   di questa board (vedi §4)
 ```
 
-Senza `enabled: true`, un `mqtt.host` configurato e un `node_id` non vuoto **non
-viene pubblicato nulla**.
+Senza `enabled: true` e un `mqtt.host` configurato **non viene pubblicato nulla**.
 
 ### Tutte le chiavi (con i default)
 
@@ -60,7 +64,7 @@ viene pubblicato nulla**.
 |---|---|---|---|
 | `enabled` | `SERENA_ENABLED` | `false` | interruttore generale |
 | `topic_prefix` | `SERENA_TOPIC_PREFIX` | `alexa` | prefisso topic di Serena |
-| `node_id` | `SERENA_NODE_ID` | `""` | node_id di Serena (**obbligatorio**) |
+| `node_id` | `SERENA_NODE_ID` | hostname di questa board | node_id di Serena |
 | `command_template` | `SERENA_COMMAND_TEMPLATE` | `caduta_{cam_name}` | comando di caduta → `trigger/run` |
 | `announce_ready` | `SERENA_ANNOUNCE_READY` | `true` | annuncia "…attivo" 1× per camera quando confermata operativa |
 | `announce_template` | `SERENA_ANNOUNCE_TEMPLATE` | `sensore uomo a terra {cam_name} attivo` | frase annuncio attivo |

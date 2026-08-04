@@ -46,6 +46,22 @@ that missed state during an outage still receives the current value afterwards.
 
 > Note: there is no `config/set` topic — MQTT cannot update runtime config. Config changes go through `conf/config.yaml` / `conf/actions/user.yaml` hot-reload or the web dashboard.
 
+### `node_id` vs `local_id`
+
+`mqtt.node_id` is meant to be **unique per board** (HA entity uniqueness, bridge
+namespace isolation — see "Additional boards" below). `mqtt.local_id` (default
+`arduino`) is a **fixed alias**, equivalent to `node_id`, that stays the same
+across every board. The client treats `<topic_prefix>/<node_id>/...` and
+`<topic_prefix>/<local_id>/...` as the same address:
+
+- Command topics (`tts/set`, `action/run`, `trigger/run`) are subscribed under
+  **both** ids — a command published to either is handled identically.
+- Outgoing publishes (`state`, `command`) go out under **both** ids too.
+
+This lets a bridge/automation template hardcoded to `<topic_prefix>/arduino/...`
+keep working unmodified even when `node_id` is set to something board-specific
+(e.g. `galileo`). If `local_id` equals `node_id`, nothing is duplicated.
+
 ---
 
 ## Testing from the CLI
@@ -149,9 +165,12 @@ regression makes the board speak forever.
 Inbound stays at QoS 0 on purpose, so a command queued during an outage is never
 replayed (a stale TTS request or action firing the moment the link returns).
 
-Local topics must match `mqtt.topic_prefix` / `mqtt.node_id` from
-`conf/config.yaml` — the template's prefixes are `serena/arduino/`, so change
-both if you change `node_id`.
+Local topics must match `mqtt.topic_prefix` / `mqtt.local_id` from
+`conf/config.yaml` — the template's prefixes are `serena/arduino/`, matching
+the `local_id` default. Since the client mirrors every topic across `node_id`
+and `local_id` (see "`node_id` vs `local_id`" above), the template needs no
+changes even when `node_id` differs per board — only change `topic_prefix` /
+`local_id` if you deviate from their defaults.
 
 ### Speaking from the hub
 
@@ -199,8 +218,10 @@ mosquitto_sub -h serena.csgalileo.org -p 8883 \
   ```
 
 - **Additional boards** need a unique `remote_clientid` *and* a unique
-  `node_id`: the default client id derives from the hostname, which is `2q` on
-  every stock Arduino Uno Q, and two boards sharing it repeatedly kick each
+  `node_id` (leave `local_id` at its `arduino` default on every board — the
+  bridge template's hardcoded `serena/arduino/...` local topics keep matching
+  without per-board edits): the default client id derives from the hostname,
+  which is `2q` on every stock Arduino Uno Q, and two boards sharing it repeatedly kick each
   other off the master.
 - `queue_qos0_messages true` in the local config is what lets the bridge buffer
   anything at all: the daemon publishes at QoS 0 and MQTT delivers at

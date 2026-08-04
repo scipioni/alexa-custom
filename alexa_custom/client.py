@@ -801,6 +801,7 @@ def _mqtt_settings_from_config(config: ActionsConfig | None) -> dict:
             "port": str(config.mqtt.port),
             "prefix": config.mqtt.topic_prefix,
             "node_id": config.mqtt.node_id,
+            "local_id": config.mqtt.local_id,
             "queue_max": config.mqtt.queue_max,
         }
     return {
@@ -808,6 +809,7 @@ def _mqtt_settings_from_config(config: ActionsConfig | None) -> dict:
         "port": "1883",
         "prefix": "alexa",
         "node_id": None,
+        "local_id": "arduino",
         "queue_max": 200,
     }
 
@@ -856,6 +858,7 @@ def make_mqtt_reload_callback(
                 port=int(current["port"]),
                 topic_prefix=current["prefix"],
                 node_id=current["node_id"],
+                local_id=current["local_id"],
                 queue_max=current["queue_max"],
             )
             asyncio.run_coroutine_threadsafe(new_client.run(), loop)
@@ -1095,6 +1098,7 @@ def main() -> None:
             port=config.mqtt.port,
             topic_prefix=config.mqtt.topic_prefix,
             node_id=config.mqtt.node_id,
+            local_id=config.mqtt.local_id,
             queue_max=config.mqtt.queue_max,
         )
         logger.info("MQTT enabled — broker: %s:%d", config.mqtt.host, config.mqtt.port)

@@ -6,6 +6,7 @@ import hmac
 import os
 import re
 import secrets
+import socket
 import string
 from typing import Optional
 
@@ -321,7 +322,10 @@ def _normalize_serena_config():
             tmpl = default
         _cfg[key] = tmpl
     _cfg["serena_topic_prefix"] = str(_cfg.get("serena_topic_prefix") or "alexa")
-    _cfg["serena_node_id"] = str(_cfg.get("serena_node_id") or "")
+    # Serena itself defaults to socket.gethostname() when its own node_id is
+    # unset, so mirroring that default here makes the bridge line up automatically
+    # when ONVIF_SUA and Serena run on the same host — no manual node_id needed.
+    _cfg["serena_node_id"] = str(_cfg.get("serena_node_id") or "") or socket.gethostname()
 
 
 # Normalize the env-sourced defaults immediately (before any settings.yaml load).

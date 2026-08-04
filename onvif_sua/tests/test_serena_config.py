@@ -1,6 +1,8 @@
 """Tasks 5.1a / 5.1c (config layer): boolean/numeric coercion, template validation,
 voice-name normalization, reserved-word + voice-collision validators, and the
 config-load warnings for hand-edited YAML."""
+import socket
+
 import pytest
 
 from onvif_sua import config
@@ -61,6 +63,19 @@ def test_valid_cam_name_template():
     assert config._valid_cam_name_template("caduta {room}") is False       # unknown placeholder
     assert config._valid_cam_name_template("caduta {") is False            # malformed braces
     assert config._valid_cam_name_template("caduta {}") is False           # positional
+
+
+# ── 5.1a: node_id defaults to the board's hostname when unset ─────────────────────
+def test_node_id_defaults_to_hostname_when_unset(restore_globals):
+    config._cfg["serena_node_id"] = ""
+    config._normalize_serena_config()
+    assert config._cfg["serena_node_id"] == socket.gethostname()
+
+
+def test_node_id_explicit_value_is_preserved(restore_globals):
+    config._cfg["serena_node_id"] = "galileo"
+    config._normalize_serena_config()
+    assert config._cfg["serena_node_id"] == "galileo"
 
 
 def test_invalid_template_falls_back_to_default(restore_globals, capsys):

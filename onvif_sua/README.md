@@ -512,7 +512,9 @@ e pubblica sui topic di comando che Serena già ascolta.
 
 > **Prerequisito**: ONVIF_SUA e Serena devono usare **lo stesso broker MQTT**, e
 > `serena.node_id` deve combaciare con il `node_id` di Serena (di default il suo
-> hostname, oppure l'override in `state.yaml`). È un contratto fire-and-forget: ONVIF
+> hostname, oppure l'override in `state.yaml`). Se `serena.node_id` non è impostato,
+> ONVIF_SUA usa l'hostname della propria board — che combacia automaticamente quando
+> i due servizi girano sulla stessa board. È un contratto fire-and-forget: ONVIF
 > conferma la consegna **al broker**, non che Serena abbia ricevuto/agito.
 
 ### Blocco di configurazione `serena:`
@@ -525,7 +527,7 @@ d'ambiente `SERENA_*` (default). I flag booleani accettano `1/true/yes/on`
 serena:
   enabled: false                       # interruttore generale
   topic_prefix: alexa                  # topic_prefix di Serena
-  node_id: ""                          # node_id di Serena (OBBLIGATORIO — altrimenti nessun invio)
+  node_id: ""                          # node_id di Serena; vuoto = hostname di questa board
   command_template: "caduta_{cam_name}"         # comando di caduta → <prefix>/<node_id>/trigger/run
   announce_ready: true                 # annuncia "…attivo" una volta per camera quando è confermata operativa
   announce_template: "sensore uomo a terra {cam_name} attivo"

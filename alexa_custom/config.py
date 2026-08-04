@@ -293,6 +293,7 @@ class MQTTConfig:
     port: int = 1883
     topic_prefix: str = "alexa"
     node_id: str | None = None
+    local_id: str = "arduino"
     queue_max: int = 200
 
 
@@ -952,6 +953,7 @@ def _parse_mqtt_config(raw: dict) -> MQTTConfig | None:
         port=int(raw.get("port", 1883)),
         topic_prefix=str(raw.get("topic_prefix", "alexa")),
         node_id=str(node_id) if node_id else None,
+        local_id=str(raw.get("local_id") or "arduino"),
         queue_max=int(raw.get("queue_max", 200)),
     )
 

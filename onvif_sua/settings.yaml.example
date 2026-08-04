@@ -98,7 +98,8 @@ tuning:
 serena:
   enabled: false                       # true per attivare il bridge
   topic_prefix: alexa                  # DEVE combaciare con mqtt.topic_prefix di Serena
-  node_id: ''                          # DEVE combaciare con mqtt.node_id di Serena
+  node_id: ''                          # vuoto = hostname di questa board (combacia con Serena
+                                        # se gira sulla stessa board, che usa lo stesso default)
   command_template: "caduta_{cam_name}"
   announce_ready: true                 # annuncia "…attivo" 1× per telecamera confermata
   announce_template: "sensore uomo a terra {cam_name} attivo"

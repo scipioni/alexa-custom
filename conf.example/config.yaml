@@ -256,6 +256,9 @@ mqtt:
   port: 1883
   topic_prefix: alexa      # = serena.topic_prefix in ONVIF_SUA/settings.yaml
   node_id: galileo         # = serena.node_id in ONVIF_SUA/settings.yaml
+  local_id: arduino        # fixed alias, equivalent to node_id — lets a bridge
+                           # template hardcoded to "<topic_prefix>/arduino/..."
+                           # work unmodified across boards with different node_id
   queue_max: 200           # max queued outgoing messages while broker is unreachable
 
 # ---------------------------------------------------------------------------

@@ -87,3 +87,61 @@ class TestStateDeduplication(unittest.TestCase):
 
         asyncio.run(_run())
         assert [p for _, p, _ in _queued(client)] == ["idle"]
+
+
+class TestLocalIdMirroring(unittest.TestCase):
+    """node_id and local_id are equivalent addresses for the same board."""
+
+    def test_default_local_id_matches_node_id_no_duplicate(self):
+        # _client() uses node_id="arduino", matching the local_id default.
+        client = _client()
+
+        async def _run():
+            await client.publish(client.state_topic, "listening")
+
+        asyncio.run(_run())
+        assert [t for t, _, _ in _queued(client)] == ["serena/arduino/state"]
+
+    def test_distinct_local_id_mirrors_state_publish(self):
+        client = MQTTClient(
+            host="127.0.0.1", topic_prefix="serena", node_id="galileo"
+        )
+        assert client.local_id == "arduino"
+
+        async def _run():
+            await client.publish(client.state_topic, "listening")
+
+        asyncio.run(_run())
+        assert sorted(t for t, _, _ in _queued(client)) == [
+            "serena/arduino/state",
+            "serena/galileo/state",
+        ]
+
+    def test_non_node_topics_are_not_mirrored(self):
+        # Discovery config topics don't include node_id in the prefix position
+        # expected by _topic_variants(), so they pass through untouched.
+        client = MQTTClient(
+            host="127.0.0.1", topic_prefix="serena", node_id="galileo"
+        )
+
+        async def _run():
+            await client.publish("homeassistant/sensor/galileo_status/config", "{}")
+
+        asyncio.run(_run())
+        assert [t for t, _, _ in _queued(client)] == [
+            "homeassistant/sensor/galileo_status/config"
+        ]
+
+    def test_explicit_local_id_equal_to_node_id_is_not_duplicated(self):
+        client = MQTTClient(
+            host="127.0.0.1",
+            topic_prefix="serena",
+            node_id="galileo",
+            local_id="galileo",
+        )
+
+        async def _run():
+            await client.publish(client.state_topic, "listening")
+
+        asyncio.run(_run())
+        assert [t for t, _, _ in _queued(client)] == ["serena/galileo/state"]

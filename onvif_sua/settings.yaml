@@ -10,25 +10,25 @@ mqtt:
 scan:
   subnet: 10.1.109.0/24
   concurrency: 48
-  rescan_time_interval: 60  #under 60 will be forced to 60
+  rescan_time_interval: 0  #under 60 will be forced to 60
 cameras:
   credentials:
     port: 80
   list:
-  - hostname: bagno1
-    name: bagno1
-  - hostname: cucina1
-    name: cucina1
-  - hostname: bagno2
-    name: bagno2
-  - hostname: cucina2
-    name: cucina2
-  - hostname: bagno3
-    name: bagno3
-  - hostname: cucina3
-    name: cucina3
-  - hostname: soggiorno1
-    name: soggiorno1
+  - ip: 10.1.109.99
+    name: bagno
+#  - hostname: cucina1
+#    name: cucina1
+#  - hostname: bagno2
+#    name: bagno2
+#  - hostname: cucina2
+#    name: cucina2
+#  - hostname: bagno3
+#    name: bagno3
+#  - hostname: cucina3
+#    name: cucina3
+#  - hostname: soggiorno1
+#    name: soggiorno1
 
 web:
   asset_version: '4'
@@ -42,8 +42,8 @@ tuning:
   save_interval: 120
 serena:
   enabled: true
-  topic_prefix: alexa
-  node_id: galileo
+  topic_prefix: serena
+  node_id: "" # set to hostname when empty
   command_template: caduta_{cam_name}
   announce_ready: true
   announce_template: sensore uomo a terra {cam_name} attivo

@@ -18,12 +18,19 @@ class MQTTClient:
         port: int = 1883,
         topic_prefix: str = "alexa",
         node_id: str | None = None,
+        local_id: str = "arduino",
         queue_max: int = 200,
     ) -> None:
         self.host = host
         self.port = port
         self.topic_prefix = topic_prefix
         self.node_id = node_id or socket.gethostname()
+        # Fixed local alias, independent of the (possibly per-board-unique)
+        # node_id — lets a bridge/automation template hardcoded to
+        # "<topic_prefix>/arduino/..." keep working across boards without
+        # per-board edits. Every command topic and outgoing publish under
+        # node_id is mirrored under local_id (see _topic_variants()).
+        self.local_id = local_id
         self.client: aiomqtt.Client | None = None
         self._queue: asyncio.Queue[tuple[str, str, bool]] = asyncio.Queue(
             maxsize=queue_max
@@ -62,16 +69,16 @@ class MQTTClient:
                     # 1. Register with Home Assistant
                     await self._publish_discovery()
 
-                    # 2. Subscribe to command topics
-                    await client.subscribe(
-                        f"{self.topic_prefix}/{self.node_id}/tts/set"
-                    )
-                    await client.subscribe(
-                        f"{self.topic_prefix}/{self.node_id}/action/run"
-                    )
-                    await client.subscribe(
-                        f"{self.topic_prefix}/{self.node_id}/trigger/run"
-                    )
+                    # 2. Subscribe to command topics, under both the node_id
+                    # and the fixed local_id alias (deduped when they match).
+                    for node in self._ids:
+                        await client.subscribe(f"{self.topic_prefix}/{node}/tts/set")
+                        await client.subscribe(
+                            f"{self.topic_prefix}/{node}/action/run"
+                        )
+                        await client.subscribe(
+                            f"{self.topic_prefix}/{node}/trigger/run"
+                        )
 
                     # 3. Start publisher and subscriber tasks.
                     # Track both so that when one fails (e.g. subscriber raises
@@ -192,25 +199,30 @@ class MQTTClient:
     def state_topic(self) -> str:
         return f"{self.topic_prefix}/{self.node_id}/state"
 
-    async def publish(self, topic: str, payload: str, retain: bool = False) -> None:
-        """Queue a message for publication, dropping the oldest on overflow.
+    @property
+    def _ids(self) -> list[str]:
+        """node_id and local_id, deduplicated, in that order."""
+        if self.local_id == self.node_id:
+            return [self.node_id]
+        return [self.node_id, self.local_id]
 
-        Consecutive duplicates on the state topic are dropped: "idle" is the
-        resting state the daemon returns to after every wake, dispatch, reply and
-        gate release, so a single spoken reply used to emit it twice in a row, and
-        every copy is forwarded over the QoS-1 bridge to the master broker. Only
-        transitions are published; the state itself is unchanged.
+    def _topic_variants(self, topic: str) -> list[str]:
+        """Mirror a `<topic_prefix>/<node_id>/...` topic onto local_id too.
 
-        Deduplicated here rather than at each call site because state is
-        published from ~10 places across stt.py and actions.py, and this is the
-        one path all of them — including publish_threadsafe() — funnel through.
+        node_id and local_id are equivalent addresses for the same board — a
+        board-unique node_id keeps HA entities/bridge namespaces distinct per
+        board, while the fixed local_id alias (default "arduino") lets a
+        bridge/automation template hardcoded to that name work unmodified
+        across boards. Topics that don't match the node_id prefix (e.g.
+        Home Assistant discovery config topics) are left untouched.
         """
-        if topic == self.state_topic:
-            if payload == self._last_state:
-                metrics.inc("mqtt_state_deduped")
-                return
-            self._last_state = payload
+        prefix = f"{self.topic_prefix}/{self.node_id}/"
+        if self.local_id == self.node_id or not topic.startswith(prefix):
+            return [topic]
+        suffix = topic[len(prefix) :]
+        return [topic, f"{self.topic_prefix}/{self.local_id}/{suffix}"]
 
+    def _enqueue(self, topic: str, payload: str, retain: bool) -> None:
         try:
             self._queue.put_nowait((topic, payload, retain))
         except asyncio.QueueFull:
@@ -223,15 +235,40 @@ class MQTTClient:
             )
             self._queue.put_nowait((topic, payload, retain))
 
+    async def publish(self, topic: str, payload: str, retain: bool = False) -> None:
+        """Queue a message for publication, dropping the oldest on overflow.
+
+        Consecutive duplicates on the state topic are dropped: "idle" is the
+        resting state the daemon returns to after every wake, dispatch, reply and
+        gate release, so a single spoken reply used to emit it twice in a row, and
+        every copy is forwarded over the QoS-1 bridge to the master broker. Only
+        transitions are published; the state itself is unchanged.
+
+        Deduplicated here rather than at each call site because state is
+        published from ~10 places across stt.py and actions.py, and this is the
+        one path all of them — including publish_threadsafe() — funnel through.
+
+        The message is mirrored onto the local_id-aliased topic (see
+        _topic_variants()) so node_id and local_id stay equivalent.
+        """
+        if topic == self.state_topic:
+            if payload == self._last_state:
+                metrics.inc("mqtt_state_deduped")
+                return
+            self._last_state = payload
+
+        for t in self._topic_variants(topic):
+            self._enqueue(t, payload, retain)
+
     async def publish_offline(self) -> None:
         """Publish offline state and disconnect cleanly (called on graceful shutdown)."""
-        state_topic = self.state_topic
         if self.client:
             try:
-                await asyncio.wait_for(
-                    self.client.publish(state_topic, "offline", retain=False),
-                    timeout=0.5,
-                )
+                for t in self._topic_variants(self.state_topic):
+                    await asyncio.wait_for(
+                        self.client.publish(t, "offline", retain=False),
+                        timeout=0.5,
+                    )
             except Exception as e:
                 logger.debug("publish_offline: %s", e)
         else:
