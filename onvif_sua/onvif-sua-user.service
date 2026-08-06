@@ -1,0 +1,20 @@
+# systemd --user unit — installed by `task install:systemd` (see Taskfile.yml).
+# Mirrors setup/serena.service in the parent repo: runs in place from this repo
+# checkout via the native uv-managed .venv (`task setup`), as the invoking user
+# (no sudo, no dedicated system account, no /opt install).
+[Unit]
+Description=ONVIF/Dahua fall-detection event bridge (onvif-sua)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/serena/onvif_sua
+ExecStart=%h/serena/onvif_sua/.venv/bin/onvif-sua
+Restart=on-failure
+RestartSec=5
+Environment=PYTHONUNBUFFERED=1
+Environment=TZ=Europe/Rome
+
+[Install]
+WantedBy=default.target

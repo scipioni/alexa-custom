@@ -77,73 +77,37 @@ tasks:
       - uv pip uninstall onvif-sua
 
   install:systemd:
-    desc: "Install a pre-built wheel as a systemd service (needs sudo; run on the target). Vars: PREFIX, SVC_USER, PY"
-    vars:
-      PREFIX: '{{.PREFIX | default "/opt/onvif-sua"}}'
-      SVC_USER: '{{.SVC_USER | default "onvif"}}'
-      PY: '{{.PY | default "python3.13"}}'
+    desc: "Install as a systemd --user service running in place from this checkout's uv venv (same layout as ../setup/serena.service: no sudo, no dedicated user, no /opt install)"
     cmds:
-      # NB: this does NOT depend on `build` — the target may not have uv. It installs
-      # the wheel already present in dist/ (built + copied from the packaging machine).
       - |
         set -e
-        WHEEL=$(ls -t dist/onvif_sua-*.whl 2>/dev/null | head -1)
-        if [ -z "$WHEEL" ]; then
-          echo "!! No wheel in dist/ — run 'task build' on the packaging machine and copy dist/ + requirements.lock here." >&2
+        if [ ! -x .venv/bin/onvif-sua ]; then
+          echo "!! .venv/bin/onvif-sua missing — run 'task setup' first." >&2
           exit 1
         fi
-        if [ ! -f requirements.lock ]; then
-          echo "!! requirements.lock missing — copy it from the packaging machine (produced by 'task build')." >&2
-          exit 1
-        fi
-        echo ">> Installing $WHEEL into {{.PREFIX}} (user: {{.SVC_USER}}, python: {{.PY}})"
-        # 1) dedicated service user + dirs (idempotent)
-        id {{.SVC_USER}} >/dev/null 2>&1 || sudo useradd --system --home {{.PREFIX}} --shell /usr/sbin/nologin {{.SVC_USER}}
-        sudo mkdir -p {{.PREFIX}}/data
-        # 2) venv + wheel pinned by requirements.lock (--upgrade so re-running updates)
-        [ -x {{.PREFIX}}/.venv/bin/python ] || sudo {{.PY}} -m venv {{.PREFIX}}/.venv
-        sudo {{.PREFIX}}/.venv/bin/pip install --upgrade "$WHEEL" -c requirements.lock
-        # 3) config + secrets — cp -n NEVER clobbers an existing .env/settings.yaml
-        sudo cp -n settings.yaml {{.PREFIX}}/settings.yaml
-        sudo cp -n .env.example  {{.PREFIX}}/.env
-        sudo chmod 600 {{.PREFIX}}/.env
-        sudo chown -R {{.SVC_USER}}:{{.SVC_USER}} {{.PREFIX}}
-        # 4) unit — sed the committed file so PREFIX/SVC_USER overrides are honored
-        sed -e 's#/opt/onvif-sua#{{.PREFIX}}#g' \
-            -e 's#^User=onvif$#User={{.SVC_USER}}#' \
-            -e 's#^Group=onvif$#Group={{.SVC_USER}}#' \
-            onvif-sua.service | sudo tee /etc/systemd/system/onvif-sua.service >/dev/null
-        sudo systemctl daemon-reload
+        mkdir -p ~/.config/systemd/user
+        cp onvif-sua-user.service ~/.config/systemd/user/onvif-sua.service
+        systemctl --user daemon-reload
+        systemctl --user enable onvif-sua
         echo
-        echo ">> Installed. NOT started yet — set the real passwords first:"
-        echo "   1) sudo -e {{.PREFIX}}/.env        # CAMERA_PASSWORD, GUI_PASSWORD, ..."
-        echo "   2) sudo systemctl enable --now onvif-sua"
-        echo "   3) journalctl -u onvif-sua -f"
+        echo ">> Installed. NOT started yet — make sure settings.yaml/.env are in place"
+        echo "   (see 'task setup' / .env.example) then:"
+        echo "   1) systemctl --user start   onvif-sua"
+        echo "   2) systemctl --user status  onvif-sua"
+        echo "   3) journalctl --user -fu    onvif-sua"
 
   uninstall:systemd:
-    desc: "Remove the systemd service (needs sudo). Keeps config/data unless PURGE=true. Vars: PREFIX, SVC_USER, PURGE"
-    vars:
-      PREFIX: '{{.PREFIX | default "/opt/onvif-sua"}}'
-      SVC_USER: '{{.SVC_USER | default "onvif"}}'
-      PURGE: '{{.PURGE | default "false"}}'
+    desc: "Remove the systemd --user service (keeps this checkout, settings.yaml, .env, data/)"
     cmds:
       - |
         set -e
         echo ">> Stopping + disabling onvif-sua"
         # `|| true`: succeed even if the service was never enabled/installed.
-        sudo systemctl disable --now onvif-sua 2>/dev/null || true
-        sudo rm -f /etc/systemd/system/onvif-sua.service
-        sudo systemctl daemon-reload
-        sudo systemctl reset-failed onvif-sua 2>/dev/null || true
-        echo ">> Service removed."
-        if [ "{{.PURGE}}" = "true" ]; then
-          echo "!! PURGE=true — deleting {{.PREFIX}} (config, .env SECRETS, data) and user {{.SVC_USER}}"
-          sudo rm -rf {{.PREFIX}}
-          sudo userdel {{.SVC_USER}} 2>/dev/null || true
-          echo ">> Purged {{.PREFIX}} and user {{.SVC_USER}}."
-        else
-          echo ">> Kept {{.PREFIX}} (config/.env/data). Re-run with PURGE=true to delete it too."
-        fi
+        systemctl --user disable --now onvif-sua 2>/dev/null || true
+        rm -f ~/.config/systemd/user/onvif-sua.service
+        systemctl --user daemon-reload
+        systemctl --user reset-failed onvif-sua 2>/dev/null || true
+        echo ">> Service removed (checkout/config/.env/data untouched)."
 
   # ── Docker ─────────────────────────────────────────────────────────────────
   docker:build:

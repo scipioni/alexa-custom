@@ -824,47 +824,90 @@ al boot, avvolgi `onvif-sua` in un servizio `systemd`.
 
 ## Avvio automatico al boot senza Docker (systemd)
 
-Per far partire il servizio all'accensione su un host Linux **senza Docker**, usa il
-unit file `onvif-sua.service` incluso nel repo. La procedura sotto usa l'installazione
-via wheel (sezione precedente) nel layout consigliato `/opt/onvif-sua`.
+Questo repo vive dentro il checkout di `serena` (`serena/onvif_sua`), quindi il modo
+raccomandato per farlo partire al boot è lo stesso di `serena` stesso: un servizio
+**systemd utente** (`systemctl --user`, unit in `~/.config/systemd/user/`) che gira
+sul venv nativo di `uv` **in place** — nessun `sudo`, nessun utente dedicato, nessuna
+installazione in `/opt`. Vedi `setup/serena.service` nel repo padre per il layout
+gemello.
 
-> **Scorciatoia (`task install:systemd`)** — se sul target hai `go-task` e Python 3.13,
-> i passi 1–4 sono automatizzati. Copia sul target il repo con la cartella `dist/`
-> (wheel prodotto da `task build` sulla macchina di packaging) e `requirements.lock`, poi:
-> ```bash
-> task install:systemd                 # default: PREFIX=/opt/onvif-sua, SVC_USER=onvif, PY=python3.13
-> # override: task install:systemd PREFIX=/srv/onvif SVC_USER=camsvc PY=python3.13
-> ```
-> Il task crea utente+cartelle, installa il wheel vincolato a `requirements.lock`, copia
-> `settings.yaml`/`.env` **senza sovrascrivere** eventuali file esistenti (`cp -n`, così i
-> segreti non si perdono), installa il unit e fa `daemon-reload`. **Non** avvia il servizio:
-> ti ricorda di impostare le password reali in `.env` e poi `systemctl enable --now`.
-> I passi manuali qui sotto restano la referenza (e servono se non usi go-task).
-
-### 1. Layout e utente dedicato
+### Setup
 
 ```bash
-# utente di servizio non-root (nessuna porta privilegiata: la web UI è la 8081)
-sudo useradd --system --home /opt/onvif-sua --shell /usr/sbin/nologin onvif
-sudo mkdir -p /opt/onvif-sua/data
+task setup                    # crea .venv (Python 3.13) e installa da uv.lock
+# settings.yaml e .env sono già nel repo (o creali da .env.example) — restano lì,
+# python-dotenv li trova risalendo dalla posizione del pacchetto installato nel .venv
+task install:systemd          # copia onvif-sua-user.service → ~/.config/systemd/user/onvif-sua.service, enable
 ```
 
-### 2. Installa il pacchetto nel venv
+Poi:
 
 ```bash
-# crea il venv (Python 3.13) e installa il wheel VINCOLATO al constraints file
+systemctl --user start   onvif-sua   # avvia subito
+systemctl --user status  onvif-sua   # stato + ultime righe
+journalctl --user -fu    onvif-sua   # log in tempo reale
+```
+
+La web UI è su `http://<host>:8081/`. Il servizio si riavvia da solo su crash
+(`Restart=on-failure`) e riparte ad ogni boot (assumendo login/linger utente attivo —
+vedi sotto).
+
+> **Utente senza login continuo?** Un servizio `systemd --user` normalmente si ferma
+> quando l'ultima sessione dell'utente si chiude. Se questo host non tiene una sessione
+> sempre aperta (es. niente autologin grafico), abilita il linger una volta:
+> `loginctl enable-linger $USER` — così i servizi utente restano attivi anche senza
+> sessioni interattive, esattamente come per `serena`.
+
+### Aggiornamenti
+
+```bash
+git pull                      # o comunque aggiorni il checkout
+task setup                    # risincronizza il venv
+systemctl --user restart onvif-sua
+```
+
+### Disinstallazione
+
+```bash
+task uninstall:systemd        # ferma+disabilita il servizio, rimuove il unit
+```
+
+Il checkout, `settings.yaml`, `.env` e `data/` **non vengono toccati** — solo il unit
+systemd viene rimosso.
+
+### Alternativa: installazione system-wide via wheel (deployment su flotta multi-host)
+
+Per un deployment **su host separati dal checkout di `serena`** (es. una flotta di
+bridge dedicati, ciascuno con il proprio utente non-root e nessun accesso al repo),
+resta disponibile il layout a wheel + utente di servizio dedicato in `/opt/onvif-sua`,
+con il unit file `onvif-sua.service` incluso nel repo. Questa via è **solo manuale**
+(nessuna scorciatoia Task — `install:systemd`/`uninstall:systemd` ora puntano al flusso
+utente sopra):
+
+```bash
+# 1) utente di servizio non-root (nessuna porta privilegiata: la web UI è la 8081)
+sudo useradd --system --home /opt/onvif-sua --shell /usr/sbin/nologin onvif
+sudo mkdir -p /opt/onvif-sua/data
+
+# 2) venv + wheel VINCOLATO al constraints file (build con `task build`)
 sudo python3.13 -m venv /opt/onvif-sua/.venv
 sudo /opt/onvif-sua/.venv/bin/pip install \
     /percorso/onvif_sua-1.0.0-py3-none-any.whl -c /percorso/requirements.lock
-```
 
-### 3. Configurazione e segreti
-
-```bash
+# 3) configurazione e segreti
 sudo cp settings.yaml /opt/onvif-sua/settings.yaml     # config (senza password)
 sudo cp .env.example  /opt/onvif-sua/.env              # poi EDITA le password reali
 sudo chmod 600 /opt/onvif-sua/.env                     # i segreti non leggibili da altri
 sudo chown -R onvif:onvif /opt/onvif-sua               # tutto all'utente di servizio
+
+# 4) installa e avvia il servizio
+sudo cp onvif-sua.service /etc/systemd/system/onvif-sua.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now onvif-sua        # abilita al boot + avvia subito
+
+# 5) verifica
+systemctl status onvif-sua
+journalctl -u onvif-sua -f
 ```
 
 > Il servizio risolve `settings.yaml` e `data/` **relativi alla WorkingDirectory**
@@ -875,25 +918,7 @@ sudo chown -R onvif:onvif /opt/onvif-sua               # tutto all'utente di ser
 > systemd. Se usi una cartella diversa, aggiorna
 > `WorkingDirectory`/`ExecStart`/`ReadWritePaths` (e l'eventuale `EnvironmentFile`) nel unit.
 
-### 4. Installa e avvia il servizio
-
-```bash
-sudo cp onvif-sua.service /etc/systemd/system/onvif-sua.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now onvif-sua        # abilita al boot + avvia subito
-```
-
-### 5. Verifica
-
-```bash
-systemctl status onvif-sua        # stato + ultime righe
-journalctl -u onvif-sua -f        # log in tempo reale (equivalente a docker logs -f)
-```
-
-La web UI è su `http://<host>:8081/`. Il servizio si riavvia da solo su crash
-(`Restart=on-failure`) e riparte ad ogni boot.
-
-### Aggiornamenti
+Aggiornamenti:
 
 ```bash
 sudo /opt/onvif-sua/.venv/bin/pip install --upgrade \
@@ -901,35 +926,15 @@ sudo /opt/onvif-sua/.venv/bin/pip install --upgrade \
 sudo systemctl restart onvif-sua
 ```
 
-### Disinstallazione
-
-```bash
-task uninstall:systemd                 # ferma+disabilita il servizio, rimuove il unit
-# per cancellare ANCHE config/.env/data e l'utente:
-task uninstall:systemd PURGE=true
-```
-
-Senza `PURGE=true` la cartella `/opt/onvif-sua` (config, `.env` con i **segreti**, `data/`)
-viene **conservata**, così una reinstallazione riparte dalla stessa configurazione.
-Equivalente manuale del solo distacco del servizio:
+Disinstallazione (manuale — mantiene config/.env/data):
 
 ```bash
 sudo systemctl disable --now onvif-sua
 sudo rm /etc/systemd/system/onvif-sua.service
 sudo systemctl daemon-reload
+# per cancellare ANCHE config/.env/data e l'utente:
+sudo rm -rf /opt/onvif-sua && sudo userdel onvif
 ```
-
-### Variante: installazione nativa con `uv` (checkout del repo)
-
-Se sul target hai `uv` e il checkout del repo invece del wheel, nel unit sostituisci
-`ExecStart` (righe alternative già commentate nel file):
-
-```ini
-WorkingDirectory=/opt/onvif-sua                       # la cartella del repo (con pyproject.toml)
-ExecStart=/usr/local/bin/uv run --frozen onvif-sua    # usa `which uv` per il path esatto
-```
-
-e assicurati di aver eseguito `uv sync --frozen` una volta in quella cartella.
 
 ---
 
