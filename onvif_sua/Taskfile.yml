@@ -76,6 +76,33 @@ tasks:
     cmds:
       - uv pip uninstall onvif-sua
 
+  publish:
+    desc: "Build + publish the wheel to the private package registry (.pypi.env — see .pypi.env.example)"
+    cmds:
+      # Depend on build so requirements.lock is always refreshed before publish,
+      # not just whatever happened to be in dist/ from an earlier build.
+      - task: build
+      - |
+        set -e
+        if [ ! -f .pypi.env ]; then
+          echo "!! .pypi.env not found — copy .pypi.env.example and fill in your values." >&2
+          exit 1
+        fi
+        set -a
+        source .pypi.env
+        set +a
+        if [ -z "$PYPI_INDEX_URL" ] || [ -z "$PYPI_USERNAME" ] || [ -z "$PYPI_PASSWORD" ]; then
+          echo "!! Missing PYPI_INDEX_URL/PYPI_USERNAME/PYPI_PASSWORD in .pypi.env — nothing published." >&2
+          exit 1
+        fi
+        if ! ls dist/*.whl >/dev/null 2>&1; then
+          echo "!! No wheel in dist/ — 'task build' should have produced one." >&2
+          exit 1
+        fi
+        echo ">> Publishing $(ls dist/*.whl dist/*.tar.gz 2>/dev/null) to $PYPI_INDEX_URL"
+        UV_PUBLISH_URL="$PYPI_INDEX_URL" UV_PUBLISH_USERNAME="$PYPI_USERNAME" UV_PUBLISH_PASSWORD="$PYPI_PASSWORD" \
+          uv publish
+
   install:systemd:
     desc: "Install as a systemd --user service running in place from this checkout's uv venv (same layout as ../setup/serena.service: no sudo, no dedicated user, no /opt install)"
     cmds:

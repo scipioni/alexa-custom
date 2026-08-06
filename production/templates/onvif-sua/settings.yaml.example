@@ -1,0 +1,113 @@
+# settings.yaml.example — copia commentata di riferimento.
+#
+# Copia questo file in `settings.yaml` e adattalo. Il file vivo è letto E RISCRITTO
+# dall'app (pagina Impostazioni, salvataggio/rinomina/rimozione telecamera) con
+# yaml.safe_dump, che NON preserva i commenti: dopo il primo salvataggio da GUI il
+# `settings.yaml` resta corretto ma perde ogni commento. Questo file non viene mai
+# toccato dall'app, quindi è qui che vive la documentazione delle chiavi.
+#
+# Le password (telecamere / scan / login GUI) NON stanno qui: vivono in .env
+# (vedi .env.example). Una variabile già esportata nell'ambiente vince su .env.
+
+mqtt:
+  host: localhost              # broker MQTT; stringa vuota = MQTT disabilitato
+  port: 1883
+  user: ''
+  pass: ''
+  prefix: onvif                # prefisso dei topic: <prefix>/<nome camera>/...
+
+scan:
+  # Subnet usata da TUTTI gli scan: rescan manuale, rescan automatico e risoluzione
+  # degli hostname. La credenziale è in .env (SCAN_USER / SCAN_PASSWORD).
+  subnet: 192.168.110.0/24
+  concurrency: 48              # probe paralleli
+  # Rescan automatico: secondi che devono passare DALL'ULTIMO scan (manuale o
+  # automatico) prima che ne parta un altro.
+  #   0  = disabilitato (default) — lo scanner parte solo dal pulsante in dashboard
+  #   >0 = minimo 60s; un valore inferiore viene alzato a 60 con un warning, perché
+  #        uno scan autentica su OGNI host della subnet e una cadenza troppo alta
+  #        rischia il blocco anti-intrusione Dahua.
+  # Un rescan automatico NON re-aggiunge una telecamera rimossa dall'operatore
+  # (il rescan manuale sì, ed è quello il modo per riscoprirla).
+  rescan_time_interval: 0
+
+cameras:
+  credentials:
+    port: 80                   # porta ONVIF comune; user/pass sono in .env
+  list:
+    # Ogni voce richiede `name` ed ESATTAMENTE UNA fra `ip:` e `hostname:`.
+    # Una voce con entrambi, o con nessuno dei due, viene ignorata con diagnostica.
+    #
+    # `name` è l'identità della telecamera: topic MQTT, entità Home Assistant, stato
+    # allarme persistito e frase vocale Serena. Non può contenere la parola 'camera'
+    # e viene normalizzato (minuscolo, -/_ → spazio) nella frase vocale: usa nomi di
+    # stanza (cucina, soggiorno, bagno).
+
+    # (a) Indirizzo fisso — comportamento classico, nessuna risoluzione.
+    #- ip: 192.168.110.248
+    #  name: soggiorno
+
+    # (b) Hostname ONVIF — per subnet in DHCP senza IP riservati.
+    #     DEVE essere il valore che il device restituisce per GetHostname(), NON
+    #     l'hostname mostrato nella pagina web della telecamera e NON un nome DNS:
+    #     su alcune firmware Dahua sono campi diversi (la pagina web diceva 'cucina'
+    #     mentre ONVIF riportava 'IPC'). Per sapere cosa riporta davvero:
+    #         uv run python tools/onvif_hostname_probe.py <IP>
+    #     L'IP corrente viene risolto all'avvio, ogni 10 minuti e ad ogni scan; se
+    #     cambia, il worker viene spostato. L'IP risolto NON viene mai scritto qui.
+    #     Due device che riportano lo stesso hostname → telecamera non risolta (non
+    #     se ne indovina una): assegna hostname distinti con la rinomina da dashboard.
+    #- hostname: STANZA_11
+    #  name: cucina
+
+  - hostname: bagno1
+    name: bagno1
+  - hostname: cucina1
+    name: cucina1
+  - hostname: bagno2
+    name: bagno2
+  - hostname: cucina2
+    name: cucina2
+  - hostname: bagno3
+    name: bagno3
+  - hostname: cucina3
+    name: cucina3
+  - hostname: soggiorno1
+    name: soggiorno1
+
+web:
+  port: 8081
+  # Token cache-busting degli asset statici: incrementalo dopo aver modificato
+  # CSS/JS così le dashboard aperte da giorni ricaricano i file.
+  asset_version: '1'
+  # true = bypassa completamente la pagina /login (es. se un reverse proxy gestisce
+  # già l'autenticazione). Default false; sovrascrive GUI_SKIP_LOGIN da .env.
+  skip_login: false
+
+# Tuning della liveness del rilevamento (detection_ok / fall_sensor_online).
+tuning:
+  liveness_mode: heartbeat     # heartbeat | keepalive (firmware senza heartbeat)
+  heartbeat_interval: 15       # N secondi richiesti alla telecamera
+  heartbeat_gap_factor: 3      # silenzio > factor × N ⇒ stream non vivo
+  rule_check_interval: 300     # ogni quanto verificare che la regola sia abilitata
+  keepalive_interval: 30       # solo in liveness_mode: keepalive
+  save_interval: 120           # ogni quanto salvare events.json
+
+# ── Bridge verso Serena (assistente vocale) — opt-in ────────────────────────────
+# Inoltra l'inizio di una caduta al topic comandi di Serena, che esegue una conferma
+# vocale sì/no e all'occorrenza avvia una chiamata LiveKit. Richiede lo STESSO broker
+# MQTT del blocco `mqtt:` e un `node_id` uguale a quello di Serena (il suo hostname,
+# o l'override nel suo state.yaml). Tutte le chiavi hanno un equivalente SERENA_*.
+serena:
+  enabled: false                       # true per attivare il bridge
+  topic_prefix: alexa                  # DEVE combaciare con mqtt.topic_prefix di Serena
+  node_id: ''                          # vuoto = hostname di questa board (combacia con Serena
+                                        # se gira sulla stessa board, che usa lo stesso default)
+  command_template: "caduta_{cam_name}"
+  announce_ready: true                 # annuncia "…attivo" 1× per telecamera confermata
+  announce_template: "sensore uomo a terra {cam_name} attivo"
+  announce_fault: false                # opt-in: ripete "…non attivo" per un sensore guasto
+  announce_fault_template: "attenzione, sensore uomo a terra {cam_name} non attivo"
+  announce_fault_interval_s: 300       # cadenza di ripetizione (minimo 30s)
+  announce_fault_grace_s: 60           # attesa prima del primo "non attivo"
+  startup_alarm_max_age_s: 300         # adotta al riavvio una caduta persistita di recente

@@ -1,0 +1,261 @@
+# conf/actions/system.yaml — system-provided actions
+#
+# This file is loaded first (highest priority).
+# on_startup is only honoured in this file; it is ignored in all other action files.
+
+on_startup:
+  - type: tone
+    name: startup
+    volume: 0.01   # optional: overrides output volume for this tone only,
+    #   then restores the previous level — does not persist to config
+    settle_ms: 500   # gives the audio hardware time to settle before the first speech
+  - type: say
+    text: "Sistema pronto"
+    lang: "it-IT"
+    volume: 0.01   # optional: overrides output volume for this utterance only,
+    #   then restores the previous level — does not persist to config
+
+# Schema:
+#   triggers:  flat list of triggers
+#     commands: [...]        list of recognised phrases (first is the canonical name)
+#     with_wake: true/false  true (default) = fires only after a wake word;
+#                            false = direct match, no wake word required
+#     patterns: [...]        optional word-glob patterns tested before fuzzy matching
+#     actions: [...]         list of action entries
+
+# ---------------------------------------------------------------------------
+# Triggers
+# ---------------------------------------------------------------------------
+triggers:
+  - commands:
+      - "che ore sono"
+      - "che ora sono"
+      - "le ore sono"
+    with_wake: false
+    patterns:
+      - "* ore son*"
+      - "ore son*"
+    actions:
+      - type: say
+        text: "$(date +'Sono le %H e %M')"
+
+  - commands:
+      - "che giorno è"
+      - "che giorno è oggi"
+    with_wake: false
+    actions:
+      - type: say
+        text: "$(LC_ALL=it_IT.UTF-8 date +'Oggi è %A %d %B %Y')"
+
+  - commands:
+      - "dimmi qualcosa"
+    actions:
+      - type: say
+        text: "$(/usr/games/fortune /home/arduino/serena/docs)"
+
+
+  - commands:
+      - "riavvia"
+    patterns:
+      - "riavvi*"
+    actions:
+      - type: say
+        text: "riavvio il sistema"
+      - type: restart
+
+  - commands:
+      - "chatta con me"
+    actions:
+      - type: llm_chat
+
+  - commands:
+      - "impara nuovo comando"
+    patterns:
+      - "impara * comando"
+      - "impara * quando"
+    actions:
+      - type: llm_learn
+
+  - commands:
+      - "volume basso"
+    tag: speaker
+    actions:
+      - type: set_volume
+        mode: absolute
+        value: 0.1
+      - type: say
+        text: "volume basso"
+
+  - commands:
+      - "volume medio"
+      - "volume media"
+      - "due media"
+    tag: speaker
+    actions:
+      - type: set_volume
+        mode: absolute
+        value: 0.5
+      - type: say
+        text: "volume medio"
+
+  - commands:
+      - "volume alto"
+    tag: speaker
+    actions:
+      - type: set_volume
+        mode: absolute
+        value: 0.9
+      - type: say
+        text: "volume alto"
+
+  - commands:
+      - "alza il volume"
+    tag: speaker
+    actions:
+      - type: set_volume
+        mode: up
+        step: 0.1
+      - type: say
+        text: "volume più alto"
+
+  - commands:
+      - "abbassa il volume"
+      - "abbasso il volume"
+      - "abbassare il volume"
+    tag: speaker
+    actions:
+      - type: set_volume
+        mode: down
+        step: 0.1
+      - type: say
+        text: "volume più basso"
+
+  - commands:
+      - "che tempo farà domani"
+    with_wake: false
+    tag: meteo
+    patterns:
+      - "che tempo * domani"
+      - "* tempo * domani"
+    actions:
+      - type: meteo
+        params:
+          city: "Verona"
+          days: "domani"
+          lang: "it-IT"
+
+  - commands:
+      - "che tempo farà oggi"
+    with_wake: false
+    tag: meteo
+    patterns:
+      - "che tempo * oggi"
+      - "* tempo * oggi"
+    actions:
+      - type: meteo
+        params:
+          city: "Verona"
+          days: "oggi"
+          lang: "it-IT"
+
+  - commands:
+      - "quando pioverà"
+      - "quando piove"
+    with_wake: false
+    tag: meteo
+    patterns:
+      - "quando pio*"
+    actions:
+      - type: meteo_rain
+        params:
+          city: "Verona"
+          forecast_days: 7
+          lang: "it-IT"
+
+  - commands:
+      - "quando ci sarà il sole"
+      - "quando c'è il sole"
+    with_wake: false
+    tag: meteo
+    patterns:
+      - "quando * sole"
+    actions:
+      - type: meteo_sun
+        params:
+          city: "Verona"
+          forecast_days: 7
+          lang: "it-IT"
+
+  - commands:
+      - "dormi"
+      - "smetti di ascoltare"
+    actions:
+      - type: say
+        text: "Va bene, vado a dormire. Dì 'svégliati adesso' per riattivarmi."
+      - type: stop_listening
+
+  - commands:
+      - "svegliati adesso"
+      - "attiva ascolto"
+    with_wake: false
+    actions:
+      - type: start_listening
+      - type: say
+        text: "Sono sveglia, pronta ad ascoltare!"
+
+  - commands:
+      - "come stai"
+    patterns:
+      - "come * sistema"
+      - "stato * sistema"
+      - "temperatura"
+    actions:
+      - type: system_info
+
+#  - commands:
+#      - "calibra sentibilità microfono"
+#    tag: microfono
+#    actions:
+#      - type: calibrate_input_gain
+#        sentence: "uno due tre quattro cinque"
+#        gain_low: 0.2
+#        gain_mid: 1.5
+#        gain_high: 3.0
+#        listen_timeout: 6.0
+#        settle_ms: 500
+
+  - commands:
+      - "calibra microfono"
+    tag: microfono
+    dispatch_timeout: 600   # multi-condition calibration takes ~3 min — far past
+    #   the 90 s recognition.dispatch_timeout default that would kill it mid-run
+    actions:
+      - type: calibrate_microphone_complete
+        sentence: "uno due tre quattro cinque"
+        gain_low: 0.2
+        gain_mid: 1.5
+        gain_high: 3.0
+        listen_timeout: 6.0
+        settle_ms: 500
+        # Every winner is scored across ALL conditions (worst-case by default),
+        # so the saved settings are a real compromise between near speech, far
+        # speech, and room noise — add e.g. "accendi la televisione e ripeti"
+        # to calibrate against your actual noise source.
+        conditions:
+          - "parla a voce normale, vicino al dispositivo"
+          - "adesso parla da lontano, dall'altra parte della stanza"
+        aggregate: min       # min (worst-case, default) | mean
+        # allow_agc: false   # WebRTC AGC candidates are excluded: AGC winds up
+        #   on idle silence and garbles the first command (see AGENTS.md)
+
+  - commands:
+      - "registra messaggio"
+      - "test audio"
+      - "registra audio"
+    patterns:
+      - "registra* * messaggio"
+      - "regis* messaggio"
+    actions:
+      - type: record_and_playback
+        params:
+          duration: 7.0

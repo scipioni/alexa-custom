@@ -1,0 +1,22 @@
+# systemd --user unit — installed by `task systemd:install` (see production/Taskfile.yml).
+# Mirrors ../setup/serena.service (dev checkout layout) but points at the
+# production venv installed by `task pypi:install` instead of a git checkout's
+# .venv — no sudo, no dedicated system account, no /opt install.
+[Unit]
+Description=alexa-custom LiveKit voice client (production)
+After=pipewire.service pipewire-pulse.service alsa-pcm-unmute.service
+Wants=pipewire.service pipewire-pulse.service
+
+[Service]
+Type=simple
+WorkingDirectory=%h/apps/alexa-custom
+ExecStartPre=-/usr/bin/wpctl set-volume @DEFAULT_SINK@ 1.0
+ExecStart=%h/apps/alexa-custom/.venv/bin/serena
+Restart=on-failure
+RestartSec=5s
+Environment=PYTHONUNBUFFERED=1
+Environment=LANG=it
+Environment=LOG_LEVEL=DEBUG
+
+[Install]
+WantedBy=default.target

@@ -785,6 +785,28 @@ Il wheel contiene **solo il codice** (moduli Python + `web/templates` + `web/sta
 grazie ai glob `package-data` di `pyproject.toml`). **Non** contiene `settings.yaml`,
 `.env` né `data/`: sono configurazione/segreti/stato e vanno forniti sul target.
 
+### Pubblicare su un registro privato
+
+```bash
+task publish        # richiede .pypi.env (vedi .pypi.env.example) — build + uv publish
+```
+
+Legge `PYPI_INDEX_URL` / `PYPI_USERNAME` / `PYPI_PASSWORD` da `.pypi.env`
+(copiato da `.pypi.env.example`, git-ignored — **file separato da `.env`**: `.env`
+va distribuito su ogni installazione, questo no). `PYPI_INDEX_URL` accetta
+**qualsiasi indice compatibile con PyPI** ("simple" API): un registro package
+di Gitea, uno di GitLab, devpi, Nexus, ecc. — nessuna integrazione specifica
+per il registro.
+
+Per installare i package pubblicati su una board di produzione **senza
+checkout** (systemd `--user`, nessun sudo), vedi
+[→ Production Deployment](../production/README.md).
+
+> **Prima di pubblicare**, se questa release ha toccato qualcosa che
+> `../production/setup/` porta come copia forkata (vedi
+> `../production/setup/SOURCES.md`), esegui `task check:drift` nel repo
+> **root** — fallisce rumorosamente se le copie sono fuori sincrono.
+
 ### Installare sul PC di destinazione (Python 3.13)
 
 ```bash

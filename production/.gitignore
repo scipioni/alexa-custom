@@ -1,0 +1,2 @@
+# Private package registry credentials. Only .env.example is committed.
+.env

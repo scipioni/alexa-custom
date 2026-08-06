@@ -1,5 +1,7 @@
 # Secrets — camera / scan / web GUI passwords. Only .env.example is committed.
 .env
+# Private package registry credentials (task publish). Only .pypi.env.example is committed.
+.pypi.env
 .claude
 .opencode
 .venv

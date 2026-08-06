@@ -146,6 +146,32 @@ Optimized for the **Arduino Uno Q**, but runs on any Linux system with PipeWire.
 | [→ Hardware Setup](docs/setup_hardware.md) | PipeWire configuration, board-specific fixes |
 | [→ Home Assistant](docs/homeassistant.md) | Mosquitto + HA Core setup, connecting Serena |
 | [→ Troubleshooting](docs/troubleshooting.md) | Common issues: audio, connection, permissions |
+| [→ Production Deployment](production/README.md) | Fresh-board bootstrap from the private package registry, no git checkout |
+
+---
+
+## 📦 Releasing & Publishing
+
+```bash
+task release:patch    # or release:minor / release:major — bumps pyproject.toml, commits, tags
+task build             # wheel + sdist into dist/
+task release:publish   # uploads dist/ to the private package registry
+```
+
+`release:publish` reads `pypi.index_url` / `pypi.username` / `pypi.password`
+from `conf/secrets.yaml` (see `conf.example/secrets.yaml` for the template) —
+never committed. `index_url` accepts **any PyPI-compatible "simple" index**:
+a Gitea package registry, a GitLab package registry, devpi, Nexus, etc. — no
+registry-specific setup is required beyond that URL and credentials.
+
+For deploying a released version to a fresh production board (no dev
+checkout, systemd `--user` services for both `serena` and `onvif-sua`), see
+[→ Production Deployment](production/README.md).
+
+> **Before publishing**, if this release touches anything under `setup/` or
+> `scripts/` that `production/setup/` also carries a forked copy of (see
+> `production/setup/SOURCES.md`), run `task check:drift` first — it fails
+> loudly if the production bundle's copies have fallen out of sync.
 
 ---
 

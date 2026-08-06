@@ -1,0 +1,450 @@
+# conf/actions/user.yaml — user-defined triggers and wake words
+#
+# Edit freely. This file is hot-reloaded every ~config_poll_interval seconds.
+# The learning agent (llm_learn) appends new commands to conf/actions/learned.yaml.
+#
+# Schema:
+#   wake_words:  extra wake phrases (flat string list, merged with conf/config.yaml)
+#   triggers:    flat list of triggers
+#     commands: [...]        list of recognised phrases (first is the canonical name)
+#     with_wake: true/false  true (default) = fires only after a wake word;
+#                            false = direct match, no wake word required
+#     patterns: [...]        optional word-glob patterns tested before fuzzy matching
+#     command_regex: [...]   optional regex (string or list), matched via re.fullmatch
+#                            against MQTT trigger/run payloads ONLY — never voice
+#                            matched. Named groups (?P<name>...) are substituted as
+#                            "<name>" into every action's params (recursively, incl.
+#                            on_reply/on_else) — see docs/configuration.md
+#     actions: [...]         list of action entries
+
+# ---------------------------------------------------------------------------
+# Extra wake words (optional)
+# Flat list of additional phrases merged into the global wake-word list.
+# ---------------------------------------------------------------------------
+#wake_words:
+#- "aiuto"
+#  - "aiutami"
+
+# ---------------------------------------------------------------------------
+# Triggers
+# ---------------------------------------------------------------------------
+triggers:
+  # - commands:
+  #     - "di qualcosa"
+  #   actions:
+  #     - type: say
+  #       text: "Ciao dal sistema vocale"
+  #       lang: "it-IT"
+
+  # # One-shot LLM narration — speaks the reply, no listening loop
+  # # Requires llm: configured in config.yaml. Falls back to literal TTS if LLM is unavailable.
+  # - commands:
+  #     - "dimmi qualcosa di interessante"
+  #   actions:
+  #     - type: say-with-llm
+  #       prompt: "Dimmi una curiosità scientifica poco nota"
+  #       lang: "it-IT"
+
+  # # File narration — reads a file and asks the LLM to summarise it
+  # - commands:
+  #     - "leggi le note"
+  #   actions:
+  #     - type: say-with-llm
+  #       file: "/home/user/notes.txt"
+  #       prompt: "Riassumi queste note in modo conciso"
+  #       max_chars: 2000     # default: 4000 — caps how many chars are read from file
+  #       lang: "it-IT"
+
+  # # Model override — uses a different Ollama model for this trigger only
+  # - commands:
+  #     - "scrivi una poesia"
+  #   actions:
+  #     - type: say-with-llm
+  #       prompt: "Scrivi una breve poesia sul tramonto"
+  #       model: "mistral:7b"  # overrides llm.model from config.yaml
+
+  # - commands:
+  #     - "suona"
+  #   actions:
+  #     - type: tone
+  #       name: info
+
+  # - commands:
+  #     - "aggiorna"
+  #   actions:
+  #     - type: shell
+  #       command: "systemctl --user restart alexa-client"
+
+  # - commands:
+  #     - "connettiti"
+  #   actions:
+  #     - type: livekit_join
+
+  # - commands:
+  #     - "manda messaggio"
+  #   actions:
+  #     - type: telegram
+  #       text: "Messaggio vocale ricevuto"
+
+  - commands:
+      - "attiva microfono normale"
+      - "microfono normale"
+    patterns:
+      - "attiv* * microfon* normal*"
+      - "microfon* normal*"
+    tag: microfono
+    actions:
+      - type: set_audio_profile
+        profile: normal
+        say: "Microfono impostato su normale"
+        lang: "it-IT"
+
+  - commands:
+      - "attiva microfono sensibile"
+      - "microfono sensibile"
+    patterns:
+      - "attiv* * microfon* sensibil*"
+      - "microfon* sensibil*"
+    tag: microfono
+    actions:
+      - type: set_audio_profile
+        profile: sensitive
+        say: "Microfono impostato su sensibile"
+        lang: "it-IT"
+
+  - commands:
+      - "accendi la luce"
+    patterns:
+      - "accend* * luc*"          # accendi/accenda/accendere … luci/luce
+      - "mett* * luc*"            # metti/mettere la luce
+    tag: luci
+    actions:
+      - type: mqtt_publish
+        topic: "home/light/set"
+        payload: "ON"
+
+# ---------------------------------------------------------------------------
+# Follow-up — per-trigger override
+#
+# When recognition.follow_up is enabled globally, individual triggers can
+# override the behaviour:
+#   follow_up: false   — do not open a follow-up window after this command
+#   follow_up: true    — always open the window, even if the global flag is off
+# ---------------------------------------------------------------------------
+
+  # - commands:
+  #     - "buonanotte"
+  #   follow_up: false        # close the conversation after this command
+  #   actions:
+  #     - type: say
+  #       text: "Buonanotte!"
+
+# ---------------------------------------------------------------------------
+# Domotica — esempi con pattern word-glob
+#
+# I pattern vengono testati PRIMA della corrispondenza fuzzy.
+# Sintassi:
+#   accend*    = parola che inizia con "accend" (accendi/accenda/accendere/…)
+#   *          = qualsiasi numero di parole intermedie (anche zero)
+#   luci       = token letterale — abbinato foneticamente (luce ≈ luci)
+# ---------------------------------------------------------------------------
+
+  # # Luci
+  # - commands:
+  #     - "spegni le luci"
+  #   patterns:
+  #     - "spegn* * luc*"
+  #   actions:
+  #     - type: mqtt_publish
+  #       topic: "home/light/set"
+  #       payload: "OFF"
+
+  # # Riscaldamento
+  # - commands:
+  #     - "alza il riscaldamento"
+  #   patterns:
+  #     - "alz* * riscaldament*"
+  #     - "aumenta * temperatura"
+  #     - "ho * freddo"
+  #   actions:
+  #     - type: mqtt_publish
+  #       topic: "home/climate/heat"
+  #       payload: "UP"
+
+  # - commands:
+  #     - "abbassa il riscaldamento"
+  #   patterns:
+  #     - "abbass* * riscaldament*"
+  #     - "diminuisc* * temperatura"
+  #     - "ho * caldo"
+  #   actions:
+  #     - type: mqtt_publish
+  #       topic: "home/climate/heat"
+  #       payload: "DOWN"
+
+  # # Tapparelle
+  # - commands:
+  #     - "alza le tapparelle"
+  #   patterns:
+  #     - "alz* * tapparell*"
+  #     - "apr* * tapparell*"
+  #   actions:
+  #     - type: mqtt_publish
+  #       topic: "home/shutters"
+  #       payload: "UP"
+
+  # - commands:
+  #     - "abbassa le tapparelle"
+  #   patterns:
+  #     - "abbass* * tapparell*"
+  #     - "chiud* * tapparell*"
+  #   actions:
+  #     - type: mqtt_publish
+  #       topic: "home/shutters"
+  #       payload: "DOWN"
+
+  # # Televisione
+  # - commands:
+  #     - "accendi la tv"
+  #   patterns:
+  #     - "accend* * tv"
+  #     - "accend* * televisor*"
+  #     - "mett* * tv"
+  #   actions:
+  #     - type: mqtt_publish
+  #       topic: "home/tv"
+  #       payload: "ON"
+
+  # - commands:
+  #     - "spegni la tv"
+  #   patterns:
+  #     - "spegn* * tv"
+  #     - "spegn* * televisor*"
+  #   actions:
+  #     - type: mqtt_publish
+  #       topic: "home/tv"
+  #       payload: "OFF"
+
+# ---------------------------------------------------------------------------
+# Assistenza anziani — pattern ampi per massimizzare il riconoscimento
+#
+# Per i trigger di emergenza la priorità è il RECALL: meglio un falso
+# positivo raro che perdere una richiesta di aiuto reale.
+# ---------------------------------------------------------------------------
+
+  # # Emergenza medica
+  # - commands:
+  #     - "chiama il medico"
+  #   patterns:
+  #     - "chiam* * medico"
+  #     - "ho * bisogno * medico"
+  #     - "serve * medico"
+  #   actions:
+  #     - type: telegram
+  #       text: "⚠️ Richiesta di aiuto: chiamare il medico"
+  #     - type: say
+  #       text: "Sto avvisando i tuoi familiari."
+
+  # - commands:
+  #     - "chiama i soccorsi"
+  #   patterns:
+  #     - "chiam* * carabinier*"
+  #     - "chiam* * polizia"
+  #     - "chiam* * emergenza"
+  #     - "chiam* * soccorso"
+  #   actions:
+  #     - type: telegram
+  #       text: "🚨 Emergenza: richiesta aiuto urgente"
+  #     - type: say
+  #       text: "Sto chiamando i soccorsi."
+
+  # # Non sto bene
+  # - commands:
+  #     - "non sto bene"
+  #   patterns:
+  #     - "non * bene"
+  #     - "sto * male"
+  #     - "mi * male"
+  #   actions:
+  #     - type: telegram
+  #       text: "⚠️ Non si sente bene"
+  #     - type: say
+  #       text: "Ho avvisato i tuoi familiari. Come posso aiutarti?"
+
+  # # Caduta
+  # - commands:
+  #     - "sono caduto"
+  #   patterns:
+  #     - "son* cadat*"
+  #     - "son* cadut*"
+  #     - "mi son* fat* male"
+  #   actions:
+  #     - type: telegram
+  #       text: "🚨 Possibile caduta — verificare immediatamente"
+  #     - type: say
+  #       text: "Avviso i tuoi familiari. Cerca di non muoverti."
+
+  # # Chiamata familiare
+  # - commands:
+  #     - "chiama la famiglia"
+  #   patterns:
+  #     - "chiam* * figli*"
+  #     - "chiam* * famiglia"
+  #     - "voglio * parlar* * figli*"
+  #   actions:
+  #     - type: livekit_join
+
+  # # Medicine
+  # - commands:
+  #     - "ho preso le medicine"
+  #   patterns:
+  #     - "pres* * medicin*"
+  #     - "pres* * farmac*"
+  #     - "pres* * pastiglie"
+  #   actions:
+  #     - type: mqtt_publish
+  #       topic: "care/medication/taken"
+  #       payload: "true"
+  #     - type: say
+  #       text: "Perfetto, ho segnato che hai preso le medicine."
+
+  # - commands:
+  #     - "non ho preso le medicine"
+  #   patterns:
+  #     - "non * pres* * medicin*"
+  #     - "dimentica* * medicin*"
+  #   actions:
+  #     - type: say
+  #       text: "Ti ricordo di prendere le medicine adesso."
+  #     - type: mqtt_publish
+  #       topic: "care/medication/missed"
+  #       payload: "true"
+
+  # # Check-in benessere
+  # - commands:
+  #     - "sto bene grazie"
+  #   patterns:
+  #     - "sto * bene"
+  #     - "mi sent* * bene"
+  #     - "tutto * bene"
+  #   actions:
+  #     - type: mqtt_publish
+  #       topic: "care/checkin/status"
+  #       payload: "ok"
+  #     - type: say
+  #       text: "Sono contento. Buona giornata!"
+
+  - commands:
+      - "chiama Stefano"
+      - "chiamo Stefano"
+      - "chiamare Stefano"
+    patterns:
+      - "chiam* stefano"
+    with_wake: false
+    tag: sos
+    actions:
+      - type: ask
+        text: "Vuoi chiamare Stefano?"
+        lang: "it-IT"
+        timeout: 5.0
+        on_reply:
+          - commands: ["si", "sì", "si si", "sì sì", "va bene", "certo", "ok", "dai"]
+            actions:
+              - type: say
+                text: "Sto chiamando Stefano"
+              - type: livekit_join
+              - type: telegram
+                text: "Collegati con casa <room>"
+          - commands: ["no", "no no", "no grazie", "annulla"]
+            actions:
+              - type: say
+                text: "Chiamata annullata"
+        on_else:
+          - type: say
+            text: "Non ho capito"
+
+  - commands:
+      - "chiama assistenza"
+      - "aiuto aiuto"
+    patterns:
+      - "chiam* assistenza"
+    with_wake: false
+    tag: sos
+    actions:
+      - type: ask
+        text: "Vuoi chiamare assistenza ?"
+        lang: "it-IT"
+        timeout: 5.0
+        on_reply:
+          - commands: ["si", "sì", "si si", "sì sì", "va bene", "certo", "ok", "dai"]
+            actions:
+              - type: say
+                text: "Sto chiamando l'assistenza"
+              - type: livekit_join
+              - type: telegram
+                text: "Chiamata in corso <room>"
+          - commands: ["no", "no no", "no grazie", "annulla"]
+            actions:
+              - type: say
+                text: "Chiamata annullata"
+        on_else:
+          - type: say
+            text: "Non ho capito"
+
+  # ── Sensore caduta (onvif_sua, MQTT trigger/run) ──
+  # command_regex is matched only against MQTT trigger/run payloads (e.g.
+  # onvif_sua publishing "caduta_bagno" on hub/2q/trigger/run) — never fed
+  # into voice matching, so "commands" below stays a normal spoken phrase.
+  - commands:
+      - "sensore caduta"
+    command_regex:
+      - "caduta_(?P<stanza>.+)"
+    with_wake: false
+    tag: sos
+    actions:
+      - type: ask
+        text: "Ho rilevato una persona caduta sul sensore della stanza <stanza>. Vuoi che chiami aiuto?"
+        lang: "it-IT"
+        timeout: 8.0
+        on_reply:
+          - commands: ["si", "sì", "si si", "sì sì", "va bene", "certo", "ok", "dai", "aiuto"]
+            actions:
+              - type: say
+                text: "Va bene, sto chiamando aiuto"
+              - type: livekit_join
+              - type: telegram
+                text: "Caduta rilevata in <stanza> — collegati: <room>"
+              - type: shell
+                command: "MSG='emergenza,collegati:<room>' /home/arduino/serena/bin/emergenza.sh"
+          - commands: ["no", "no no", "no grazie", "annulla", "sto bene"]
+            actions:
+              - type: say
+                text: "Ok, chiamata annullata"
+        on_else:
+          # Nessuna risposta / non capito → richiedi una volta.
+          - type: ask
+            text: "Non ho capito..Vuoi che chiami aiuto?"
+            lang: "it-IT"
+            timeout: 8.0
+            on_reply:
+              - commands: ["si", "sì", "si si", "sì sì", "va bene", "certo", "ok", "dai", "aiuto"]
+                actions:
+                  - type: say
+                    text: "Va bene, sto chiamando aiuto"
+                  - type: livekit_join
+                  - type: telegram
+                    text: "Caduta rilevata in bagno — collegati: <room>"
+              - commands: ["no", "no no", "no grazie", "annulla", "sto bene"]
+                actions:
+                  - type: say
+                    text: "Ok, chiamata annullata"
+            on_else:
+              # Ancora nessuna risposta → chiama comunque (fail-safe).
+              - type: say
+                text: "Non ho ricevuto risposta, chiamo aiuto"
+              - type: livekit_join
+              - type: telegram
+                text: "Caduta rilevata in <stanza>, nessuna risposta — collegati: <room>"
+              - type: shell
+                command: "MSG='emergenza,collegati:<room>' /home/arduino/serena/bin/emergenza.sh"
+

@@ -1,0 +1,114 @@
+# ===========================================================================
+# MQTT Bridge to the central master broker (TLS) — TEMPLATE
+# ===========================================================================
+# Rendered by `task mqtt:bridge-setup` into
+# /etc/mosquitto/conf.d/serena-bridge.conf, substituting @BRIDGE_USERNAME@ and
+# @BRIDGE_PASSWORD@ from conf/secrets.yaml (mqtt.bridge_username /
+# mqtt.bridge_password). Never write credentials into this template — it is
+# committed. Edit the template, then re-run the task; editing the rendered file
+# directly is lost on the next run.
+#
+# Connects this local broker as a client of the central master, bi-directionally
+# forwarding state, commands and TTS requests for this board's topics.
+#
+# If this board also runs onvif_sua sharing the same local broker/bridge, its
+# rule (`topic onvif/# out 0 "" hub/<hostname>`) lives in the rendered file too
+# but is NOT part of this template — it belongs to that project, not serena.
+connection central_master_bridge
+
+# Connect by HOSTNAME, not by IP. The master serves a Let's Encrypt cert for
+# CN=serena.csgalileo.org with no IP SAN, so a literal IP fails hostname
+# verification. The name resolves to several swarm node IPs; mosquitto uses the
+# first address the resolver returns and re-resolves on every retry, so a node
+# going away is recovered from on a subsequent attempt.
+address serena.csgalileo.org:8883
+
+# TLS: verify the master's Let's Encrypt chain against the system CA bundle.
+bridge_cafile /etc/ssl/certs/ca-certificates.crt
+bridge_insecure false
+
+username @BRIDGE_USERNAME@
+password @BRIDGE_PASSWORD@
+
+start_type automatic
+restart_timeout 10
+
+# Persistent session: the master queues messages for this bridge while it is
+# offline. Requires a stable, GLOBALLY UNIQUE client id — the default is derived
+# from the hostname, which is "2q" on every stock Arduino Uno Q. Two boards
+# sharing a client id would repeatedly kick each other off the master.
+# CHANGE THIS on every additional board.
+#remote_clientid serena_living_room
+cleansession false
+# notifications true
+#
+# TRAP: with cleansession false the MASTER keeps this bridge's subscriptions
+# across reconnects. Editing the 'topic' rules below therefore ADDS the new
+# subscriptions without removing the old ones — an obsolete
+# 'serena/living_room/# both 0' rule kept delivering every topic twice and
+# silently defeated the in/out split. After changing any topic rule, wipe the
+# remote session once:
+#   sed -i 's/^cleansession false/cleansession true/' this-template
+#   task mqtt:bridge-setup                # connects clean, master drops old subs
+#   sed -i 's/^cleansession true/cleansession false/' this-template
+#   task mqtt:bridge-setup
+
+# --- Bridging topic rules ---
+# Syntax: topic <pattern> <direction> <qos> <local-prefix> <remote-prefix>
+# Direction: 'both' (forward + receive), 'out' (only publish), 'in' (only subscribe)
+#
+# Split by direction deliberately, rather than one 'both' catch-all. Local topics
+# must match mqtt.topic_prefix / mqtt.node_id from conf/config.yaml
+# (serena / arduino) and mirror what alexa_custom/mqtt.py publishes and
+# subscribes to.
+#
+# Remote namespace is keyed by this board's HOSTNAME (matching the convention
+# used by onvif_sua's hostname-default node_id), not by the fixed "arduino"
+# local_id alias. @BRIDGE_HOSTNAME@ below is substituted by
+# scripts/render-mqtt-bridge.sh at render time (defaults to `hostname`, e.g.
+# "2q" on a stock Arduino Uno Q) — every board renders its own value
+# automatically, no manual edit needed. Override with
+# SERENA_BRIDGE_HOSTNAME=<name> task mqtt:bridge-setup if this board's
+# hostname isn't the value you want in the remote namespace.
+#
+# TRAP: mosquitto's `topic` line does NOT strip quote characters from
+# local-prefix/remote-prefix — EXCEPT it special-cases an exactly-empty pair
+# `""` as "no prefix". A quoted NON-empty prefix like `"serena/2q"` is taken
+# completely literally (quote characters included), so the resulting local
+# subscription can never match a real topic and the rule silently forwards
+# nothing — verified via `log_type all`: it logged
+# `doing local SUBSCRIBE on topic "serena/2q"/#` (literal quotes) instead of
+# `serena/2q/#`. Write a non-empty prefix bare, with NO quotes at all.
+
+# Outbound: everything this board publishes, remapped into the hub namespace —
+# local serena/<hostname>/state becomes hub/<hostname>/state on the master.
+topic /# out 0 serena/@BRIDGE_HOSTNAME@ hub/@BRIDGE_HOSTNAME@/serena
+
+# inoltriamo al bridge i messaggi da onvif-sua
+topic onvif/# out 0 "" hub/@BRIDGE_HOSTNAME@/
+
+# Inbound commands from the master, at QoS 0 so nothing is replayed after an
+# outage (a queued TTS request would make the board speak stale text, and a
+# queued action would fire the moment the link returns).
+#
+# The remote prefix is "cmd/serena/<hostname>/", NOT "hub/<hostname>",
+# deliberately. The rule above forwards every local serena/<hostname>/...
+# message to hub/<hostname>/..., so anything the inbound rule republishes
+# locally is a candidate for going straight back to the master. Mosquitto
+# does not appear to echo a message back onto the bridge it arrived on (an
+# inbound cmd/serena/<hostname>/trigger/run was observed not reappearing as
+# hub/<hostname>/trigger/run), but separate namespaces per direction mean
+# correctness does not depend on that: a topic this board publishes can
+# never be a topic this board subscribes to. Share one namespace and a single
+# bridge-loop regression makes the board speak forever.
+#
+#   mosquitto_pub -h serena.csgalileo.org -p 8883 \
+#     --cafile /etc/ssl/certs/ca-certificates.crt -u <user> -P <pass> \
+#     -t cmd/serena/<hostname>/tts/set -m "il sistema funziona perfettamente"
+topic tts/set     in 0 serena/arduino/ cmd/serena/@BRIDGE_HOSTNAME@/
+topic action/run  in 0 serena/arduino/ cmd/serena/@BRIDGE_HOSTNAME@/
+topic trigger/run in 0 serena/arduino/ cmd/serena/@BRIDGE_HOSTNAME@/
+
+# (Optional) Forward Home Assistant auto-discovery configs to register this
+# board on a remote HA instance.
+# topic homeassistant/# out 0

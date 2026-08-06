@@ -1,0 +1,233 @@
+# go-task (https://taskfile.dev) — standalone provisioning surface for a
+# production board. Deliberately NOT the same Taskfile as the repo root or
+# onvif_sua/: this one assumes no git checkout of either project's source is
+# present (see README.md, "Fetching production/ onto a board"). Task names
+# intentionally mirror the root Taskfile's (audio:setup, mqtt:setup,
+# mqtt:bridge-setup) — same effect, ported to run without a checkout. See
+# ../openspec/changes/production-deploy/design.md, Decision 4, for why these
+# are separate Taskfiles rather than one shared surface.
+version: '3'
+
+tasks:
+  default:
+    desc: List available tasks
+    cmds:
+      - task --list
+    silent: true
+
+  pypi:install:
+    desc: "Install alexa-custom and onvif-sua from the private registry into ~/apps/*/.venv (no git checkout needed). Vars: ALEXA_CUSTOM_VERSION, ONVIF_SUA_VERSION (default: latest)"
+    vars:
+      ALEXA_CUSTOM_VERSION: '{{.ALEXA_CUSTOM_VERSION | default ""}}'
+      ONVIF_SUA_VERSION: '{{.ONVIF_SUA_VERSION | default ""}}'
+    cmds:
+      - |
+        set -e
+        if [ ! -f .env ]; then
+          echo "!! .env not found — copy .env.example to .env and fill in PYPI_INDEX_URL." >&2
+          exit 1
+        fi
+        set -a
+        source .env
+        set +a
+        if [ -z "${PYPI_INDEX_URL:-}" ]; then
+          echo "!! PYPI_INDEX_URL is not set in .env." >&2
+          exit 1
+        fi
+        INDEX_URL="$PYPI_INDEX_URL"
+        if [ -n "${PYPI_USERNAME:-}" ] && [ -n "${PYPI_PASSWORD:-}" ]; then
+          # uv/pip expect embedded credentials for an authenticated index: scheme://user:pass@host/...
+          SCHEME="${INDEX_URL%%://*}"
+          REST="${INDEX_URL#*://}"
+          INDEX_URL="${SCHEME}://${PYPI_USERNAME}:${PYPI_PASSWORD}@${REST}"
+        fi
+
+        install_app() {
+          local pkg="$1" venv_dir="$2" version="$3" spec="$1"
+          [ -n "$version" ] && spec="${pkg}==${version}"
+          mkdir -p "$(dirname "$venv_dir")"
+          [ -x "$venv_dir/bin/python" ] || uv venv --python 3.13 "$venv_dir"
+          echo ">> Installing $spec into $venv_dir"
+          uv pip install --python "$venv_dir/bin/python" --upgrade --index-url "$INDEX_URL" "$spec"
+        }
+        install_app alexa-custom "$HOME/apps/alexa-custom/.venv" "{{.ALEXA_CUSTOM_VERSION}}"
+        install_app onvif-sua    "$HOME/apps/onvif-sua/.venv"    "{{.ONVIF_SUA_VERSION}}"
+        echo ""
+        echo ">> Installed. No alexa_custom/ or onvif_sua/ source checkout was used or is required."
+
+  config:init:
+    desc: "Seed ~/apps/<app> config from templates/ — never overwrites an existing file"
+    cmds:
+      - |
+        set -e
+        mkdir -p "$HOME/apps/alexa-custom/conf"
+        cp -n templates/alexa-custom/config.yaml "$HOME/apps/alexa-custom/conf/config.yaml"
+        cp -n templates/alexa-custom/secrets.yaml.example "$HOME/apps/alexa-custom/conf/secrets.yaml"
+        cp -rn templates/alexa-custom/actions "$HOME/apps/alexa-custom/conf/" 2>/dev/null || true
+        chmod 600 "$HOME/apps/alexa-custom/conf/secrets.yaml"
+
+        mkdir -p "$HOME/apps/onvif-sua/data"
+        cp -n templates/onvif-sua/settings.yaml.example "$HOME/apps/onvif-sua/settings.yaml"
+        cp -n templates/onvif-sua/.env.example "$HOME/apps/onvif-sua/.env"
+        chmod 600 "$HOME/apps/onvif-sua/.env"
+        echo ""
+        echo ">> Config seeded. Review/edit before starting services:"
+        echo "   ~/apps/alexa-custom/conf/{config.yaml,secrets.yaml,actions/}"
+        echo "   ~/apps/onvif-sua/{settings.yaml,.env}"
+
+  audio:setup:
+    desc: Configure any USB conference speakerphone (NewPie, Yealink, EMEET, ...) as default sink/source, unmute hardware, install restore service, disable USB autosuspend
+    cmds:
+      # Remove any stale switch-on-connect drop-ins (module not available on this board)
+      - rm -f ~/.config/pipewire/pipewire.conf.d/99-switch-on-connect.conf
+      - rm -f ~/.config/pipewire/pipewire-pulse.conf.d/99-switch-on-connect.conf
+      # Install udev rule to disable autosuspend on hot-plug (fires when device connects mid-session)
+      - sudo cp setup/99-usb-audio-no-autosuspend.rules /etc/udev/rules.d/99-usb-audio-no-autosuspend.rules
+      - sudo udevadm control --reload-rules
+      # Install system service to disable autosuspend at boot (udev fires too early during enumeration
+      # and can cause a power spike; the service runs after multi-user.target instead)
+      - sudo cp setup/usb-audio-autosuspend.service /etc/systemd/system/usb-audio-autosuspend.service
+      - sudo systemctl daemon-reload
+      - sudo systemctl enable --now usb-audio-autosuspend.service
+      # Install the device-agnostic restore script + user service. See setup/usb-audio-restore.sh
+      # for the full policy (same file as the root repo's — see setup/SOURCES.md).
+      - mkdir -p ~/.local/bin
+      - install -m 755 setup/usb-audio-restore.sh ~/.local/bin/serena-usb-audio-restore
+      - mkdir -p ~/.config/systemd/user
+      - cp setup/alsa-pcm-unmute.service ~/.config/systemd/user/alsa-pcm-unmute.service
+      - systemctl --user daemon-reload
+      - systemctl --user enable alsa-pcm-unmute.service
+      # Install WirePlumber rule to keep USB audio nodes always active
+      - mkdir -p ~/.config/wireplumber/wireplumber.conf.d
+      - cp setup/51-usb-audio-no-suspend.conf ~/.config/wireplumber/wireplumber.conf.d/51-usb-audio-no-suspend.conf
+      # Select the best card profile now, then apply it
+      - ~/.local/bin/serena-usb-audio-restore --select-profile
+      - systemctl --user restart wireplumber && sleep 3
+      - systemctl --user restart alsa-pcm-unmute.service
+      - |
+        CARD=$(pactl list cards short | awk '$2 ~ /^alsa_card\.usb-/ {print $2; exit}')
+        [ -n "$CARD" ] && echo "USB audio configured: $CARD" || echo "WARNING: no USB audio card detected"
+
+  audio:restart:
+    desc: Restart WirePlumber and restore USB audio routing, mixer levels, and autosuspend
+    cmds:
+      - systemctl --user restart wireplumber && sleep 3
+      - systemctl --user restart alsa-pcm-unmute.service
+      - sudo systemctl restart usb-audio-autosuspend.service || true
+
+  mqtt:setup:
+    desc: Install Mosquitto MQTT broker and enable system service
+    cmds:
+      - sudo apt-get install -y mosquitto mosquitto-clients
+      - sudo cp setup/mosquitto-serena.conf /etc/mosquitto/conf.d/serena.conf
+      - sudo systemctl enable --now mosquitto
+      - |
+        echo ""
+        echo "Mosquitto running on 0.0.0.0:1883 (no auth). Useful commands:"
+        echo "  task mqtt:status              # check service status"
+        echo "  task mqtt:restart             # restart broker"
+        echo "  mosquitto_sub -h localhost -t '#' -v   # watch all topics"
+
+  mqtt:bridge-setup:
+    desc: "Render the central-broker bridge config from ~/apps/alexa-custom/conf/secrets.yaml and restart Mosquitto — run AFTER editing that file's mqtt.bridge_username/bridge_password"
+    cmds:
+      - ./setup/render-mqtt-bridge.sh
+      - sudo systemctl restart mosquitto
+      - |
+        echo ""
+        echo "Bridge config installed. Verify with:"
+        echo "  ss -tn | grep 8883                     # bridge connected to the master"
+        echo "  sudo journalctl -u mosquitto -n 20      # auth/TLS errors show here"
+
+  mqtt:restart:
+    desc: Restart Mosquitto MQTT broker
+    cmds:
+      - sudo systemctl restart mosquitto
+
+  mqtt:status:
+    desc: Show Mosquitto MQTT broker service status
+    cmds:
+      - sudo systemctl status mosquitto
+
+  systemd:install:
+    desc: "Install and enable systemd --user units for both apps (not started — see 'task systemd:start')"
+    cmds:
+      - |
+        set -e
+        if [ ! -x "$HOME/apps/alexa-custom/.venv/bin/serena" ]; then
+          echo "!! ~/apps/alexa-custom/.venv/bin/serena missing — run 'task pypi:install' first." >&2
+          exit 1
+        fi
+        if [ ! -x "$HOME/apps/onvif-sua/.venv/bin/onvif-sua" ]; then
+          echo "!! ~/apps/onvif-sua/.venv/bin/onvif-sua missing — run 'task pypi:install' first." >&2
+          exit 1
+        fi
+        mkdir -p ~/.config/systemd/user
+        cp templates/alexa-custom.service ~/.config/systemd/user/alexa-custom.service
+        cp templates/onvif-sua.service ~/.config/systemd/user/onvif-sua.service
+        systemctl --user daemon-reload
+        systemctl --user enable alexa-custom onvif-sua
+        echo ""
+        echo ">> Both services installed and enabled, NOT started yet."
+
+  systemd:start:
+    desc: Start both production services
+    cmds:
+      - systemctl --user start alexa-custom onvif-sua
+
+  systemd:stop:
+    desc: Stop both production services
+    cmds:
+      - systemctl --user stop alexa-custom onvif-sua
+
+  systemd:status:
+    desc: Show status of both production services
+    cmds:
+      - systemctl --user status alexa-custom onvif-sua
+
+  systemd:logs:
+    desc: Follow logs for both production services
+    cmds:
+      - journalctl --user -fu alexa-custom -u onvif-sua
+
+  bootstrap:
+    desc: "Full one-shot provisioning: install packages, seed config, set up audio + local MQTT broker, install systemd units. Does NOT run mqtt:bridge-setup or start services — see final output"
+    cmds:
+      - task: pypi:install
+      - task: config:init
+      - task: audio:setup
+      - task: mqtt:setup
+      - task: systemd:install
+      - |
+        echo ""
+        echo "=================================================================="
+        echo ">> Bootstrap complete. Before starting services:"
+        echo "   1) Edit ~/apps/alexa-custom/conf/secrets.yaml — mqtt.bridge_username/"
+        echo "      bridge_password are required before the next step can succeed."
+        echo "      Also review config.yaml/actions/ and ~/apps/onvif-sua/{settings.yaml,.env}."
+        echo "   2) task mqtt:bridge-setup   # connects this board's broker to the master"
+        echo "   3) task systemd:start"
+        echo "   4) task systemd:status  /  task systemd:logs"
+        echo "=================================================================="
+
+  update:
+    desc: "Reinstall latest (or pinned VERSION) packages from the registry and restart both services. Vars: ALEXA_CUSTOM_VERSION, ONVIF_SUA_VERSION"
+    vars:
+      ALEXA_CUSTOM_VERSION: '{{.ALEXA_CUSTOM_VERSION | default ""}}'
+      ONVIF_SUA_VERSION: '{{.ONVIF_SUA_VERSION | default ""}}'
+    cmds:
+      - task: pypi:install
+        vars: { ALEXA_CUSTOM_VERSION: '{{.ALEXA_CUSTOM_VERSION}}', ONVIF_SUA_VERSION: '{{.ONVIF_SUA_VERSION}}' }
+      - systemctl --user restart alexa-custom onvif-sua
+
+  uninstall:
+    desc: "Remove both systemd --user units (keeps ~/apps/*, config, secrets, data untouched)"
+    cmds:
+      - |
+        set -e
+        echo ">> Stopping + disabling alexa-custom and onvif-sua"
+        systemctl --user disable --now alexa-custom onvif-sua 2>/dev/null || true
+        rm -f ~/.config/systemd/user/alexa-custom.service ~/.config/systemd/user/onvif-sua.service
+        systemctl --user daemon-reload
+        systemctl --user reset-failed alexa-custom onvif-sua 2>/dev/null || true
+        echo ">> Both services removed (~/apps/alexa-custom, ~/apps/onvif-sua untouched)."

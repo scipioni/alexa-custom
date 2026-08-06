@@ -1,0 +1,20 @@
+[Unit]
+Description=Restore USB audio profile, routing and mixer levels after PipeWire initialises
+After=wireplumber.service
+
+[Service]
+Type=oneshot
+# Device-agnostic restore: waits for any USB audio card (NewPie, Yealink,
+# EMEET, ...), applies the persisted/best card profile, polls for the source
+# node (Bluetooth-dongle devices can take minutes to link after a reboot),
+# forces default routing via pw-metadata, and re-applies 100%/unmute to all
+# volume-capable ALSA mixer controls for 20 s to catch WirePlumber's late ACP
+# profile reset. Full logic lives in the script (installed by `task audio:setup`).
+ExecStart=%h/.local/bin/serena-usb-audio-restore
+# No RemainAfterExit: the unit must return to inactive after each run so the
+# udev SYSTEMD_USER_WANTS trigger (99-usb-audio-no-autosuspend.rules) can
+# start it again when the device is replugged mid-session.
+TimeoutStartSec=360
+
+[Install]
+WantedBy=default.target

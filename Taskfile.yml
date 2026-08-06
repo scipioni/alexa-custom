@@ -85,6 +85,37 @@ tasks:
         echo "Tag ${TAG} deleted and release commit reverted"
         echo "Push with: git push && git push origin :refs/tags/${TAG}"
 
+  build:
+    desc: "Build the wheel + sdist into dist/ (run after a release: bump)"
+    cmds:
+      - rm -rf dist/
+      - uv build
+
+  release:publish:
+    desc: "Publish dist/ (built by 'task build') to the private package registry (conf/secrets.yaml's pypi: block)"
+    cmds:
+      - |
+        set -e
+        if [ ! -f conf/secrets.yaml ]; then
+          echo "!! conf/secrets.yaml not found — copy conf.example/secrets.yaml and fill in the pypi: block." >&2
+          exit 1
+        fi
+        PYPI_BLOCK=$(awk '/^pypi:/{flag=1; next} /^[^ ]/{flag=0} flag' conf/secrets.yaml)
+        INDEX_URL=$(echo "$PYPI_BLOCK" | grep -E '^\s*index_url:' | sed -E 's/^\s*index_url:\s*//; s/\s*#.*//; s/["'"'"']//g')
+        USERNAME=$(echo "$PYPI_BLOCK" | grep -E '^\s*username:' | sed -E 's/^\s*username:\s*//; s/\s*#.*//; s/["'"'"']//g')
+        PASSWORD=$(echo "$PYPI_BLOCK" | grep -E '^\s*password:' | sed -E 's/^\s*password:\s*//; s/\s*#.*//; s/["'"'"']//g')
+        if [ -z "$INDEX_URL" ] || [ -z "$USERNAME" ] || [ -z "$PASSWORD" ]; then
+          echo "!! Missing pypi.index_url/username/password in conf/secrets.yaml — nothing published." >&2
+          exit 1
+        fi
+        if ! ls dist/*.whl >/dev/null 2>&1; then
+          echo "!! No wheel in dist/ — run 'task build' first." >&2
+          exit 1
+        fi
+        echo ">> Publishing $(ls dist/*.whl dist/*.tar.gz 2>/dev/null) to $INDEX_URL"
+        UV_PUBLISH_URL="$INDEX_URL" UV_PUBLISH_USERNAME="$USERNAME" UV_PUBLISH_PASSWORD="$PASSWORD" \
+          uv publish
+
   _release:
     internal: true
     cmds:
@@ -601,6 +632,39 @@ tasks:
     desc: Show Home Assistant user service status
     cmds:
       - systemctl --user status homeassistant
+
+  check:drift:
+    desc: "Diff production/setup/ forked scripts against their source-of-truth counterparts (see production/setup/SOURCES.md) — run before publishing a release if setup/ or scripts/ changed"
+    cmds:
+      - |
+        set -e
+        # Pairs mirror production/setup/SOURCES.md. render-mqtt-bridge.sh is
+        # deliberately excluded — it has a permanent, documented default-path
+        # difference from scripts/render-mqtt-bridge.sh (see that file's header).
+        PAIRS="
+        setup/usb-audio-restore.sh:production/setup/usb-audio-restore.sh
+        setup/99-usb-audio-no-autosuspend.rules:production/setup/99-usb-audio-no-autosuspend.rules
+        setup/usb-audio-autosuspend.service:production/setup/usb-audio-autosuspend.service
+        setup/alsa-pcm-unmute.service:production/setup/alsa-pcm-unmute.service
+        setup/51-usb-audio-no-suspend.conf:production/setup/51-usb-audio-no-suspend.conf
+        setup/mosquitto-serena.conf:production/setup/mosquitto-serena.conf
+        setup/mosquitto-bridge.conf.template:production/setup/mosquitto-bridge.conf.template
+        "
+        DRIFTED=0
+        for pair in $PAIRS; do
+          SRC="${pair%%:*}"
+          FORK="${pair##*:}"
+          if ! diff -q "$SRC" "$FORK" >/dev/null 2>&1; then
+            echo "DRIFT: $SRC != $FORK"
+            DRIFTED=1
+          fi
+        done
+        if [ "$DRIFTED" = "1" ]; then
+          echo ""
+          echo "!! production/setup/ has drifted from its source of truth — sync the files above." >&2
+          exit 1
+        fi
+        echo "No drift — all production/setup/ forks match their source of truth."
 
   clean:
     desc: Clean up temporary files
