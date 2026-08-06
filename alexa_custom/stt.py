@@ -433,11 +433,7 @@ def _recognition_loop(
 
     def _publish_state(state: str) -> None:
         if mqtt_client:
-            mqtt_client.publish_threadsafe(
-                f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
-                state,
-                loop=loop,
-            )
+            mqtt_client.publish_state_threadsafe(state, loop=loop)
 
     def _dispatch_trigger(
         trigger: Trigger,
@@ -1016,11 +1012,7 @@ def run_stt_worker(
     _log_activation_phrases(current_config)
 
     if mqtt_client:
-        mqtt_client.publish_threadsafe(
-            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
-            "start",
-            loop=loop,
-        )
+        mqtt_client.publish_state_threadsafe("start", loop=loop)
 
     backend = None
     _load_backoff = 10.0

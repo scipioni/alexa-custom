@@ -300,6 +300,10 @@ class MQTTConfig:
     node_id: str | None = None
     local_id: str = "arduino"
     queue_max: int = 200
+    # Periodic {"state": "alive"} liveness ping on the state topic, so a
+    # monitor can tell the daemon is up even during hours of silence with no
+    # real state transitions. 0 disables it.
+    heartbeat_interval_s: float = 3600.0
 
 
 @dataclass
@@ -972,6 +976,7 @@ def _parse_mqtt_config(raw: dict) -> MQTTConfig | None:
         node_id=str(node_id) if node_id else None,
         local_id=str(raw.get("local_id") or "arduino"),
         queue_max=int(raw.get("queue_max", 200)),
+        heartbeat_interval_s=_get_float(raw, "heartbeat_interval_s", 3600.0),
     )
 
 

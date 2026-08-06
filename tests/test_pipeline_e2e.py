@@ -615,7 +615,7 @@ class TestAsyncWakeBeep:
 
 
 class _FakeMqttClient:
-    """Records publish_threadsafe() calls to the state topic; no real broker."""
+    """Records publish_state()/publish_state_threadsafe() calls; no real broker."""
 
     topic_prefix = "alexa"
     node_id = "test-node"
@@ -623,6 +623,12 @@ class _FakeMqttClient:
     def __init__(self) -> None:
         self.states: list[str] = []
         self._callback = None
+
+    def publish_state_threadsafe(self, state, retain=False, loop=None):
+        self.states.append(state)
+
+    async def publish_state(self, state, retain=False):
+        self.states.append(state)
 
     def publish_threadsafe(self, topic, payload, retain=False, loop=None):
         if topic == f"{self.topic_prefix}/{self.node_id}/state":

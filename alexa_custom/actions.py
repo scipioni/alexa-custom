@@ -712,10 +712,7 @@ async def handle_say(action: ActionEntry, mqtt_client: MQTTClient | None, **_):
     volume = action.params.get("volume")
     if text:
         if mqtt_client:
-            await mqtt_client.publish(
-                f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
-                "speaking",
-            )
+            await mqtt_client.publish_state("speaking")
         if volume is not None:
             # Temporary, non-persisted override for this utterance only —
             # restored to the prior digital volume once speech finishes.
@@ -729,9 +726,7 @@ async def handle_say(action: ActionEntry, mqtt_client: MQTTClient | None, **_):
             if volume is not None:
                 set_output_volume(None, None, previous_volume)
         if mqtt_client:
-            await mqtt_client.publish(
-                f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "idle"
-            )
+            await mqtt_client.publish_state("idle")
 
 
 @registry.register("ask")
@@ -755,15 +750,10 @@ async def handle_ask(
         logger.warning("ask action: no listen_fn available")
         if text:
             if mqtt_client:
-                await mqtt_client.publish(
-                    f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
-                    "speaking",
-                )
+                await mqtt_client.publish_state("speaking")
             await asyncio.to_thread(get_engine().say, text, lang)
         if mqtt_client:
-            await mqtt_client.publish(
-                f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "idle"
-            )
+            await mqtt_client.publish_state("idle")
         return
 
     # Use constrained grammar if triggers are defined to improve accuracy (e.g., 'si' vs 'se').
@@ -772,9 +762,7 @@ async def handle_ask(
     phrases = [p for t in action.on_reply for p in _trigger_phrases(t)]
 
     if text and mqtt_client:
-        await mqtt_client.publish(
-            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "speaking"
-        )
+        await mqtt_client.publish_state("speaking")
 
     # Run listen in parallel with TTS: capture discards frames in-flight while
     # the playback gate is set (no pipe backlog accumulation), then restarts
@@ -793,9 +781,7 @@ async def handle_ask(
         await asyncio.to_thread(get_engine().say, text, lang)
 
     if mqtt_client:
-        await mqtt_client.publish(
-            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "listening"
-        )
+        await mqtt_client.publish_state("listening")
 
     transcript = await listen_task
     if transcript:
@@ -883,9 +869,7 @@ async def handle_ask(
         await asyncio.to_thread(play_timeout_beep)
 
     if mqtt_client:
-        await mqtt_client.publish(
-            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "idle"
-        )
+        await mqtt_client.publish_state("idle")
 
 
 @registry.register("tone")
@@ -1057,10 +1041,7 @@ async def handle_llm_chat(
                 _pending = ""
             else:
                 if mqtt_client:
-                    await mqtt_client.publish(
-                        f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
-                        "listening",
-                    )
+                    await mqtt_client.publish_state("listening")
                 turn_text = (await listen_fn(10.0, flush_ms=300)).strip()
             if not turn_text:
                 break
@@ -1072,10 +1053,7 @@ async def handle_llm_chat(
             if on_stt_event:
                 on_stt_event("llm_thinking", {"transcript": turn_text})
             if mqtt_client:
-                await mqtt_client.publish(
-                    f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
-                    "speaking",
-                )
+                await mqtt_client.publish_state("speaking")
 
             async def _say(text: str) -> None:
                 await asyncio.to_thread(get_tts().say, text, lang)
@@ -1092,9 +1070,7 @@ async def handle_llm_chat(
                 on_stt_event("llm_reply", {"transcript": turn_text, "reply": reply})
     finally:
         if mqtt_client:
-            await mqtt_client.publish(
-                f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "idle"
-            )
+            await mqtt_client.publish_state("idle")
 
 
 @registry.register("llm_learn")
@@ -1543,16 +1519,10 @@ async def handle_meteo(
         from alexa_custom.tts import get_engine
 
         if mqtt_client:
-            await mqtt_client.publish(
-                f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
-                "speaking",
-            )
+            await mqtt_client.publish_state("speaking")
         await asyncio.to_thread(get_engine().say, fail_msg, lang)
         if mqtt_client:
-            await mqtt_client.publish(
-                f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
-                "idle",
-            )
+            await mqtt_client.publish_state("idle")
         return
 
     daily = data.get("daily", {})
@@ -1608,16 +1578,10 @@ async def handle_meteo(
         from alexa_custom.tts import get_engine
 
         if mqtt_client:
-            await mqtt_client.publish(
-                f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
-                "speaking",
-            )
+            await mqtt_client.publish_state("speaking")
         await asyncio.to_thread(get_engine().say, weather_msg, lang)
         if mqtt_client:
-            await mqtt_client.publish(
-                f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
-                "idle",
-            )
+            await mqtt_client.publish_state("idle")
     else:
         logger.warning("Open-Meteo API returned incomplete daily data")
 
@@ -1641,16 +1605,10 @@ async def _speak_meteo(mqtt_client: MQTTClient | None, lang: str, msg: str) -> N
     from alexa_custom.tts import get_engine
 
     if mqtt_client:
-        await mqtt_client.publish(
-            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
-            "speaking",
-        )
+        await mqtt_client.publish_state("speaking")
     await asyncio.to_thread(get_engine().say, msg, lang)
     if mqtt_client:
-        await mqtt_client.publish(
-            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state",
-            "idle",
-        )
+        await mqtt_client.publish_state("idle")
 
 
 def _relative_day_label(iso_date: str, today_iso: str, is_it: bool) -> str:
@@ -2038,14 +1996,10 @@ async def handle_system_info(
     text = _format_system_info_italian(vitals)
     logger.info("system_info: %s", text)
     if mqtt_client:
-        await mqtt_client.publish(
-            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "speaking"
-        )
+        await mqtt_client.publish_state("speaking")
     await asyncio.to_thread(get_engine().say, text, "it-IT")
     if mqtt_client:
-        await mqtt_client.publish(
-            f"{mqtt_client.topic_prefix}/{mqtt_client.node_id}/state", "idle"
-        )
+        await mqtt_client.publish_state("idle")
 
 
 @registry.register("restart")

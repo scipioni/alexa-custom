@@ -803,6 +803,7 @@ def _mqtt_settings_from_config(config: ActionsConfig | None) -> dict:
             "node_id": config.mqtt.node_id,
             "local_id": config.mqtt.local_id,
             "queue_max": config.mqtt.queue_max,
+            "heartbeat_interval_s": config.mqtt.heartbeat_interval_s,
         }
     return {
         "host": None,
@@ -811,6 +812,7 @@ def _mqtt_settings_from_config(config: ActionsConfig | None) -> dict:
         "node_id": None,
         "local_id": "arduino",
         "queue_max": 200,
+        "heartbeat_interval_s": 3600.0,
     }
 
 
@@ -860,6 +862,7 @@ def make_mqtt_reload_callback(
                 node_id=current["node_id"],
                 local_id=current["local_id"],
                 queue_max=current["queue_max"],
+                heartbeat_interval_s=current["heartbeat_interval_s"],
             )
             asyncio.run_coroutine_threadsafe(new_client.run(), loop)
             client_holder[0] = new_client
@@ -1100,6 +1103,7 @@ def main() -> None:
             node_id=config.mqtt.node_id,
             local_id=config.mqtt.local_id,
             queue_max=config.mqtt.queue_max,
+            heartbeat_interval_s=config.mqtt.heartbeat_interval_s,
         )
         logger.info("MQTT enabled — broker: %s:%d", config.mqtt.host, config.mqtt.port)
     else:

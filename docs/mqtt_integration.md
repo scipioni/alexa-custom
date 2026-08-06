@@ -4,7 +4,7 @@ The client registers itself with Home Assistant via **MQTT Discovery** on startu
 
 ## Exposed Entities
 
-- **Status (Sensor)**: `start` (once, when the daemon becomes operative), `idle`, `listening`, `speaking`, `gated` (during calls).
+- **Status (Sensor)**: `start` (once, when the daemon becomes operative), `idle`, `listening`, `speaking`, `gated` (during calls), `alive` (periodic liveness ping, see below).
 - **Last Command (Sensor)**: Text of the last recognized voice command.
 - **Speak Text (Text)**: Type a message in HA → the speakerphone says it (plain text, not JSON).
 
@@ -22,8 +22,16 @@ Every recognized command publishes to `alexa/<node_id>/command` as JSON:
 {"text": "accendi la luce", "wake_word": "ehi galileo", "timestamp": 1234567890.1}
 ```
 
-State changes publish to `alexa/<node_id>/state`:
-- `start`, `idle`, `listening`, `speaking`, `gated` (during calls)
+State changes publish to `alexa/<node_id>/state` as JSON:
+
+```json
+{"state": "idle", "timestamp": 1234567890.1}
+```
+
+`state` is one of `start`, `idle`, `listening`, `speaking`, `gated` (during
+calls), `alive`, or `offline`. The Home Assistant discovery config for the
+Status sensor carries a `value_template: "{{ value_json.state }}"` so HA
+shows the bare state name, not the raw JSON.
 
 `start` is published exactly once per daemon run, as soon as the STT worker
 thread comes up — before the STT model loads or capture starts. The first
@@ -32,13 +40,25 @@ real `idle` follows once the recognition loop actually begins listening.
 Only **transitions** are published. `idle` is the resting state the daemon
 returns to from several places (the `say` handler and the recognition loop both
 do), so a single spoken reply used to emit `speaking`, `idle`, `idle`. The
-duplicate is now dropped in `MQTTClient.publish()` and counted as
-`mqtt_state_deduped` (visible on the dashboard's `/metrics`). Consumers must
-therefore treat "no new state" as "unchanged", not as idle-again. The
-deduplication baseline is cleared on every broker (re)connect, so a subscriber
-that missed state during an outage still receives the current value afterwards.
+duplicate is now dropped in `MQTTClient.publish_state()` — compared on the
+`state` field, not the full JSON payload, since every payload embeds a fresh
+timestamp — and counted as `mqtt_state_deduped` (visible on the dashboard's
+`/metrics`). Consumers must therefore treat "no new state" as "unchanged", not
+as idle-again. The deduplication baseline is cleared on every broker
+(re)connect, so a subscriber that missed state during an outage still
+receives the current value afterwards.
 
 `offline` is published once on graceful shutdown, bypassing the deduplication.
+
+`alive` is published every `mqtt.heartbeat_interval_s` (default `3600`, i.e.
+hourly; `0` disables it) as a liveness ping — proof the daemon is still up
+even during long stretches with no real state transitions. It also bypasses
+the deduplication (`force=True` in `MQTTClient.publish_state()`), since a
+periodic signal that gets silently dropped for "repeating" the last value
+defeats its own purpose. Because it's published on the same topic as the
+operational states above, the Status sensor briefly shows `alive` on each
+tick, and the next real transition afterwards always re-fires (harmless,
+just an extra publish) since the dedup baseline moved.
 
 ### 2. HA → Client (Listening)
 

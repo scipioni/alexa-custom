@@ -219,37 +219,62 @@ class TestLoadConfig:
             tmp_path,
             MINIMAL_CONFIG + "mqtt:\n  host: 127.0.0.1\n  node_id: original_id\n",
         )
-        
+
         # Write a mock state.yaml with a node_id override
         state_dir = tmp_path / "conf"
         state_dir.mkdir(parents=True, exist_ok=True)
         state_file = state_dir / "state.yaml"
         with open(state_file, "w") as sf:
             sf.write("node_id: overridden_id_from_state_yaml\n")
-            
+
         # Mock Path in alexa_custom/config.py to look at our temporary state.yaml
         from pathlib import Path
+
         original_exists = Path.exists
         original_open = Path.open
-        
+
         def mock_exists(self_path):
             if "state.yaml" in str(self_path):
                 return True
             return original_exists(self_path)
-            
+
         def mock_open(self_path, *args, **kwargs):
             if "state.yaml" in str(self_path):
                 return open(state_file, *args, **kwargs)
             return original_open(self_path, *args, **kwargs)
-            
+
         monkeypatch.setattr(Path, "exists", mock_exists)
         monkeypatch.setattr(Path, "open", mock_open)
-        
+
         from alexa_custom.config import load_config
+
         result = load_config(cfg_path)
         assert result is not None
         assert result.mqtt is not None
         assert result.mqtt.node_id == "overridden_id_from_state_yaml"
+
+    def test_mqtt_heartbeat_interval_defaults_to_one_hour(self, tmp_path):
+        cfg_path = self._make_config(
+            tmp_path, MINIMAL_CONFIG + "mqtt:\n  host: 127.0.0.1\n"
+        )
+        from alexa_custom.config import load_config
+
+        result = load_config(cfg_path)
+        assert result is not None
+        assert result.mqtt is not None
+        assert result.mqtt.heartbeat_interval_s == 3600.0
+
+    def test_mqtt_heartbeat_interval_overridden(self, tmp_path):
+        cfg_path = self._make_config(
+            tmp_path,
+            MINIMAL_CONFIG + "mqtt:\n  host: 127.0.0.1\n  heartbeat_interval_s: 120\n",
+        )
+        from alexa_custom.config import load_config
+
+        result = load_config(cfg_path)
+        assert result is not None
+        assert result.mqtt is not None
+        assert result.mqtt.heartbeat_interval_s == 120.0
 
     def test_wake_word_parsed_as_string(self, tmp_path):
         cfg_path = self._make_config(tmp_path)

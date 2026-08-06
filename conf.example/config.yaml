@@ -254,6 +254,7 @@ mqtt:
   topic_prefix: serena
   #node_id: arduino   # defaults to system hostname
   queue_max: 200         # max queued outgoing messages while broker is unreachable
+  heartbeat_interval_s: 3600   # periodic {"state": "alive"} ping on the state topic; 0 disables
 
 # ---------------------------------------------------------------------------
 # Web dashboard
